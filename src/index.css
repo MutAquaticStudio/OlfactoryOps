@@ -828,6 +828,9 @@ kbd {
 .formula-lines,
 .resolved-table,
 .lot-table,
+.brand-list,
+.member-list,
+.session-list,
 .usage-preview,
 .weighing-table,
 .weighing-evidence,
@@ -845,6 +848,9 @@ kbd {
 .formula-line,
 .resolved-row,
 .lot-row,
+.brand-row-card,
+.member-row,
+.session-row,
 .history-row,
 .allocation-row,
 .weighing-row,
@@ -876,6 +882,15 @@ kbd {
 .document-row,
 .lot-row {
   grid-template-columns: 0.72fr minmax(0, 1fr) auto auto auto;
+}
+
+.member-row,
+.session-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.brand-row-card {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .audit-row {
@@ -920,6 +935,9 @@ kbd {
 .resolved-row span,
 .material-row span,
 .lot-row span,
+.brand-row-card span,
+.member-row span,
+.session-row span,
 .history-row span,
 .audit-row span,
 .movement-row span,
@@ -933,6 +951,9 @@ kbd {
 .audit-row > div,
 .document-row > div,
 .lot-row > div,
+.brand-row-card > div,
+.member-row > div,
+.session-row > div,
 .formula-card > div,
 .formula-line > div,
 .resolved-row > div,
@@ -1034,7 +1055,8 @@ kbd {
 
 .inventory-grid,
 .lab-grid,
-.documents-grid {
+.documents-grid,
+.identity-grid {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
 }
 
@@ -1060,6 +1082,59 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.032);
+}
+
+.tenant-summary {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.tenant-summary span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.tenant-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.42fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.security-result {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  font-size: 0.84rem;
+}
+
+.security-result span {
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.security-result.is-allowed {
+  color: var(--green);
+  border: 1px solid rgba(55, 214, 160, 0.24);
+  background: rgba(55, 214, 160, 0.08);
+}
+
+.security-result.is-blocked {
+  color: var(--red);
+  border: 1px solid rgba(242, 88, 95, 0.24);
+  background: rgba(242, 88, 95, 0.08);
+}
+
+.security-result.is-review {
+  color: var(--amber);
+  border: 1px solid rgba(245, 176, 76, 0.24);
+  background: rgba(245, 176, 76, 0.08);
 }
 
 .record-card {
@@ -1458,6 +1533,7 @@ input[type='range'] {
   .inventory-grid,
   .lab-grid,
   .documents-grid,
+  .identity-grid,
   .generic-grid {
     grid-template-columns: 1fr;
     grid-template-areas: none;
@@ -1504,6 +1580,9 @@ input[type='range'] {
   .formula-line,
   .resolved-row,
   .material-row,
+  .brand-row-card,
+  .member-row,
+  .session-row,
   .allocation-row,
   .weighing-row,
   .weighing-evidence-row {
@@ -1512,6 +1591,7 @@ input[type='range'] {
   }
 
   .slider-row,
+  .tenant-form-row,
   .weighing-controls {
     grid-template-columns: 1fr;
   }

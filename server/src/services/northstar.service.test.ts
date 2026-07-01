@@ -128,6 +128,69 @@ describe('NorthStarService', () => {
     expect(service.permissionProbe('inventory.adjust', 'Owner').data.allowed).toBe(true)
   })
 
+  it('scopes the tenant console to the active organization', () => {
+    const service = new NorthStarService()
+    const result = service.tenantConsole().data
+
+    expect(result.organization.id).toBe('org-nxl')
+    expect(result.brands.every((brand) => brand.organizationId === 'org-nxl')).toBe(true)
+    expect(result.memberships.every((membership) => membership.organizationId === 'org-nxl')).toBe(true)
+    expect(result.sessions.every((session) => session.organizationId === 'org-nxl')).toBe(true)
+    expect(result.rolePolicies.some((policy) => policy.role === 'Owner')).toBe(true)
+    expect(result.invariant).toContain('active session')
+  })
+
+  it('invites tenant members without creating a usable credential', () => {
+    const service = new NorthStarService()
+    const result = service.inviteMember({
+      email: 'new.viewer@noxel.is',
+      name: 'New Viewer',
+      role: 'Viewer',
+      brandIds: ['brand-nxl'],
+    }).data
+
+    expect(result.membership.status).toBe('INVITED')
+    expect(result.membership.organizationId).toBe('org-nxl')
+    expect(result.audit.action).toBe('membership.invite')
+    expect(result.invariant).toContain('invitee sets password')
+    expect(() => service.login('new.viewer@noxel.is')).toThrow(ForbiddenException)
+  })
+
+  it('blocks cross-tenant brand grants during member invite', () => {
+    const service = new NorthStarService()
+
+    expect(() =>
+      service.inviteMember({
+        email: 'leaky.viewer@noxel.is',
+        role: 'Viewer',
+        brandIds: ['brand-other'],
+      }),
+    ).toThrow(ForbiddenException)
+  })
+
+  it('deactivates members by revoking their active sessions', () => {
+    const service = new NorthStarService()
+    const result = service.setMembershipStatus('MBR-LAB', 'DEACTIVATED').data
+    const consoleState = service.tenantConsole().data
+
+    expect(result.membership.status).toBe('DEACTIVATED')
+    expect(result.revokedSessions.some((session) => session.id === 'SES-0002')).toBe(true)
+    expect(consoleState.sessions.find((session) => session.id === 'SES-0002')?.status).toBe('REVOKED')
+    expect(result.invariant).toContain('revoke active sessions')
+    expect(() => service.login('lab@noxel.is')).toThrow(ForbiddenException)
+  })
+
+  it('prevents deactivating the last active Owner and audits session revocation', () => {
+    const service = new NorthStarService()
+
+    expect(() => service.setMembershipStatus('MBR-OWNER', 'DEACTIVATED')).toThrow(UnprocessableEntityException)
+
+    const revoked = service.revokeSession('SES-0002').data
+    expect(revoked.session.status).toBe('REVOKED')
+    expect(revoked.audit.action).toBe('session.revoke')
+    expect(revoked.invariant).toContain('tenant-scoped')
+  })
+
   it('updates customization settings and increments numbering through the sequence service', () => {
     const service = new NorthStarService()
 

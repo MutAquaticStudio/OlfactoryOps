@@ -2,7 +2,9 @@ import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityE
 import {
   auditEvents,
   apiKeys,
+  authSessions,
   billingPlan,
+  brands,
   canDownloadDocument,
   commercialSkus,
   createSignedDocumentUrl,
@@ -17,7 +19,9 @@ import {
   initialLots,
   initialMovements,
   materials,
+  memberships,
   numberingSequences,
+  organizations,
   orderRequiredGrams,
   phases,
   planLabUsage,
@@ -38,6 +42,7 @@ import {
   type Allocation,
   type AuditEvent,
   type AuthSession,
+  type BrandRecord,
   type DocumentRecord,
   type FeatureFlagRecord,
   type Formula,
@@ -45,7 +50,9 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type MembershipRecord,
   type NumberingSequenceRecord,
+  type OrganizationRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
   type SalesOrderRecord,
@@ -83,7 +90,10 @@ export class NorthStarService {
   private usageHistory: UsageRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
-  private sessions: AuthSession[] = []
+  private organizationRecords: OrganizationRecord[] = structuredClone(organizations)
+  private brandRecords: BrandRecord[] = structuredClone(brands)
+  private membershipRecords: MembershipRecord[] = structuredClone(memberships)
+  private sessions: AuthSession[] = structuredClone(authSessions)
   private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
   private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
   private sequences: NumberingSequenceRecord[] = structuredClone(numberingSequences)
@@ -396,19 +406,36 @@ export class NorthStarService {
   }
 
   login(email = 'owner@noxel.is') {
+    const normalizedEmail = email.trim().toLowerCase()
+    const membership = this.membershipRecords.find((item) => item.email.toLowerCase() === normalizedEmail)
+    if (!membership || membership.status !== 'ACTIVE') {
+      this.recordAudit('auth.login', normalizedEmail, 'api:auth', 'blocked')
+      throw new ForbiddenException('Tenant membership must be active before login')
+    }
+    const brandId = membership.brandIds[0]
+    if (!brandId) {
+      throw new UnprocessableEntityException('Membership must include at least one brand scope')
+    }
+
     const issuedAt = new Date()
     const session: AuthSession = {
       id: `SES-${String(this.sessions.length + 1).padStart(4, '0')}`,
-      userId: 'usr-owner',
-      email,
-      organizationId: 'org-nxl',
-      brandId: 'brand-nxl',
-      role: 'Owner',
+      userId: membership.userId,
+      email: membership.email,
+      organizationId: membership.organizationId,
+      brandId,
+      role: membership.role,
       issuedAt: issuedAt.toISOString(),
       expiresAt: new Date(issuedAt.getTime() + tenantSecurityPolicy.sessionTimeoutMinutes * 60_000).toISOString(),
-      mfaVerified: true,
+      status: 'ACTIVE',
+      mfaVerified: membership.mfaEnabled,
+      ipAddress: '203.0.113.24',
+      userAgent: 'API Client',
     }
     this.sessions = [session, ...this.sessions]
+    this.membershipRecords = this.membershipRecords.map((item) =>
+      item.id === membership.id ? { ...item, lastActiveAt: issuedAt.toISOString() } : item,
+    )
     this.recordAudit('auth.login', session.userId, 'api:auth', 'allowed')
     return { data: { session, securityPolicy: tenantSecurityPolicy } }
   }
@@ -430,6 +457,157 @@ export class NorthStarService {
 
   securityPolicy() {
     return { data: tenantSecurityPolicy }
+  }
+
+  tenantConsole() {
+    const session = this.currentSession()
+    const organization = this.organizationRecords.find((item) => item.id === session.organizationId)
+    if (!organization) {
+      throw new NotFoundException(`Organization ${session.organizationId} was not found`)
+    }
+
+    return {
+      data: {
+        organization,
+        brands: this.brandRecords.filter((item) => item.organizationId === session.organizationId),
+        memberships: this.membershipRecords.filter((item) => item.organizationId === session.organizationId),
+        sessions: this.sessions.filter((item) => item.organizationId === session.organizationId),
+        rolePolicies: rolePolicies.filter((item) => item.scope === 'organization'),
+        securityPolicy: tenantSecurityPolicy,
+        audit: this.auditEvents
+          .filter((event) =>
+            ['auth.login', 'membership.invite', 'membership.status.update', 'session.revoke', 'security.tenantProbe', 'security.permissionProbe'].includes(
+              event.action,
+            ),
+          )
+          .slice(0, 8),
+        invariant: 'tenant console reads only the organization bound to the active session',
+      },
+    }
+  }
+
+  inviteMember(body: { email?: string; name?: string; role?: string; brandIds?: string[] }) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    const email = body.email?.trim().toLowerCase()
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new UnprocessableEntityException('Invite email must be valid')
+    }
+
+    const role = body.role?.trim() || 'Viewer'
+    const rolePolicy = rolePolicies.find((item) => item.role === role && item.scope === 'organization')
+    if (!rolePolicy) {
+      throw new UnprocessableEntityException('Invite role must be an organization role')
+    }
+
+    const existing = this.membershipRecords.find(
+      (item) => item.organizationId === session.organizationId && item.email.toLowerCase() === email,
+    )
+    if (existing && existing.status !== 'DEACTIVATED') {
+      throw new UnprocessableEntityException('Member is already active or invited in this tenant')
+    }
+
+    const tenantBrandIds = new Set(
+      this.brandRecords.filter((item) => item.organizationId === session.organizationId).map((item) => item.id),
+    )
+    const brandIds = body.brandIds?.length ? body.brandIds : [session.brandId]
+    if (brandIds.some((brandId) => !tenantBrandIds.has(brandId))) {
+      throw new ForbiddenException('Invite cannot grant access to another tenant brand')
+    }
+
+    const timestamp = new Date().toISOString()
+    const membership: MembershipRecord = {
+      id: `MBR-${String(this.membershipRecords.length + 1).padStart(4, '0')}`,
+      userId: `usr-${email.split('@')[0].replace(/[^a-z0-9-]/gi, '').toLowerCase()}`,
+      email,
+      name: body.name?.trim() || email,
+      organizationId: session.organizationId,
+      brandIds,
+      role,
+      status: 'INVITED',
+      mfaEnabled: false,
+      lastActiveAt: 'never',
+      invitedAt: timestamp,
+    }
+
+    this.membershipRecords = existing
+      ? this.membershipRecords.map((item) => (item.id === existing.id ? membership : item))
+      : [membership, ...this.membershipRecords]
+    const audit = this.recordAudit('membership.invite', email, session.userId, 'allowed')
+    return {
+      data: {
+        membership,
+        audit,
+        invariant: 'admin invite creates membership only; invitee sets password and MFA later',
+      },
+    }
+  }
+
+  setMembershipStatus(id: string, status: MembershipRecord['status']) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    if (status !== 'ACTIVE' && status !== 'DEACTIVATED') {
+      throw new UnprocessableEntityException('Membership status can only be ACTIVE or DEACTIVATED here')
+    }
+
+    const membership = this.membershipRecords.find(
+      (item) => item.id === id && item.organizationId === session.organizationId,
+    )
+    if (!membership) {
+      throw new NotFoundException(`Membership ${id} was not found`)
+    }
+    if (membership.role === 'Owner' && status === 'DEACTIVATED') {
+      const activeOwners = this.membershipRecords.filter(
+        (item) =>
+          item.organizationId === session.organizationId &&
+          item.role === 'Owner' &&
+          item.status === 'ACTIVE' &&
+          item.id !== membership.id,
+      )
+      if (activeOwners.length === 0) {
+        throw new UnprocessableEntityException('Cannot deactivate the last active Owner')
+      }
+    }
+
+    const updatedMembership = { ...membership, status }
+    this.membershipRecords = this.membershipRecords.map((item) =>
+      item.id === id ? updatedMembership : item,
+    )
+    let revokedSessions: AuthSession[] = []
+    if (status === 'DEACTIVATED') {
+      revokedSessions = this.revokeSessionsForEmail(membership.email)
+    }
+    const audit = this.recordAudit('membership.status.update', membership.email, session.userId, 'allowed')
+
+    return {
+      data: {
+        membership: updatedMembership,
+        revokedSessions,
+        audit,
+        invariant: 'deactivated memberships revoke active sessions inside the same tenant',
+      },
+    }
+  }
+
+  revokeSession(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    const target = this.sessions.find((item) => item.id === id && item.organizationId === session.organizationId)
+    if (!target) {
+      throw new NotFoundException(`Session ${id} was not found`)
+    }
+    const now = new Date().toISOString()
+    const revoked = { ...target, status: 'REVOKED' as const, expiresAt: now }
+    this.sessions = this.sessions.map((item) => (item.id === id ? revoked : item))
+    const audit = this.recordAudit('session.revoke', target.userId, session.userId, 'allowed')
+
+    return {
+      data: {
+        session: revoked,
+        audit,
+        invariant: 'session revocation is tenant-scoped and audited',
+      },
+    }
   }
 
   tenantProbe(resourceOrganizationId: string) {
@@ -1017,10 +1195,32 @@ export class NorthStarService {
   }
 
   private currentSession() {
-    if (this.sessions[0]) {
-      return this.sessions[0]
+    const activeSession = this.sessions.find((item) => item.status === 'ACTIVE')
+    if (activeSession) {
+      return activeSession
     }
     return this.login().data.session
+  }
+
+  private requirePermission(role: string, permission: string) {
+    if (!roleHasPermission(role, permission)) {
+      throw new ForbiddenException(`Role ${role} cannot perform ${permission}`)
+    }
+  }
+
+  private revokeSessionsForEmail(email: string) {
+    const normalizedEmail = email.toLowerCase()
+    const now = new Date().toISOString()
+    const revokedSessions: AuthSession[] = []
+    this.sessions = this.sessions.map((session) => {
+      if (session.email.toLowerCase() !== normalizedEmail || session.status !== 'ACTIVE') {
+        return session
+      }
+      const revoked = { ...session, status: 'REVOKED' as const, expiresAt: now }
+      revokedSessions.push(revoked)
+      return revoked
+    })
+    return revokedSessions
   }
 
   private permissionsForRole(role: string) {

@@ -179,6 +179,38 @@ export interface AuditEvent {
   outcome: 'allowed' | 'blocked' | 'review'
 }
 
+export interface OrganizationRecord {
+  id: string
+  name: string
+  slug: string
+  plan: 'Free' | 'Pro' | 'Team' | 'Enterprise'
+  status: 'ACTIVE' | 'FROZEN' | 'SUSPENDED'
+  primaryContact: string
+  createdAt: string
+}
+
+export interface BrandRecord {
+  id: string
+  organizationId: string
+  name: string
+  status: 'ACTIVE' | 'ARCHIVED'
+  defaultCurrency: string
+}
+
+export interface MembershipRecord {
+  id: string
+  userId: string
+  email: string
+  name: string
+  organizationId: string
+  brandIds: string[]
+  role: string
+  status: 'ACTIVE' | 'INVITED' | 'DEACTIVATED'
+  mfaEnabled: boolean
+  lastActiveAt: string
+  invitedAt?: string
+}
+
 export interface RolePolicy {
   role: string
   scope: 'organization' | 'platform'
@@ -203,7 +235,10 @@ export interface AuthSession {
   role: string
   issuedAt: string
   expiresAt: string
+  status: 'ACTIVE' | 'REVOKED'
   mfaVerified: boolean
+  ipAddress: string
+  userAgent: string
 }
 
 export interface TenantSettingsRecord {
@@ -375,7 +410,7 @@ export const statusMeta: Record<DomainStatus, { label: string; color: string }> 
 export const phases: Phase[] = [
   { id: 0, name: 'Architecture Blueprint', domain: 'platform', goal: 'Bounded contexts, invariants, permission map', gate: 'Baseline approved', status: 'stable', securityLayer: 'L0', coverage: 100 },
   { id: 1, name: 'Platform Foundation', domain: 'platform', goal: 'Shell, API convention, health, logging', gate: 'Health and shell green', status: 'active', securityLayer: 'L1', coverage: 88 },
-  { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'testing', securityLayer: 'L2/L4', coverage: 80 },
+  { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'active', securityLayer: 'L2/L4', coverage: 86 },
   { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 76 },
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 82 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
@@ -416,17 +451,17 @@ export const domains: DomainModule[] = [
     name: 'Identity & Security',
     shortName: 'Security',
     responsibility: 'Auth, sessions, MFA, permission guard, tenant and brand guard',
-    status: 'testing',
-    health: 80,
-    risk: 'Tenant and permission probes live; full cookie auth remains next gate',
+    status: 'active',
+    health: 86,
+    risk: 'Tenant console, invite-only membership, session revocation, and probes live; secure cookies remain next gate',
     owner: 'Security',
     entities: ['User', 'Membership', 'Role', 'Permission', 'Session', 'MFASecret'],
-    features: ['Secure sessions', 'RBAC matrix', 'MFA enforcement', 'Suspicious login alert'],
+    features: ['Tenant console', 'Invite-only membership', 'Session revocation', 'RBAC matrix', 'MFA enforcement', 'Suspicious login alert'],
     invariants: ['INV-SEC-001 auth default', 'INV-SEC-004 tenant query scope', 'INV-SEC-011 no deploy if tenant tests fail'],
-    apis: ['/api/v1/auth/login', '/api/v1/auth/mfa/verify', '/api/v1/me'],
+    apis: ['/api/v1/auth/login', '/api/v1/me', '/api/v1/security/tenant-console', '/api/v1/security/members/invite', '/api/v1/security/sessions/:id/revoke'],
     permissions: ['security.manageUsers', 'security.viewAuditLog'],
-    screens: ['Login', 'MFA', 'Users and roles', 'Security policy'],
-    activity: 'Tenant probe blocks cross-org access and Owner permission probe passes',
+    screens: ['Login', 'MFA', 'Tenant console', 'Users and roles', 'Security policy'],
+    activity: 'Tenant console can invite members, block cross-org probes, and revoke sessions',
   },
   {
     key: 'customization',
@@ -949,6 +984,73 @@ export const auditEvents: AuditEvent[] = [
   { id: 'AUD-9141', at: '2026-06-29 15:38', actor: 'Viewer', action: 'document.download', entity: 'DOC-121', requestId: 'req_49fb11', outcome: 'blocked' },
 ]
 
+export const organizations: OrganizationRecord[] = [
+  {
+    id: 'org-nxl',
+    name: 'NOXELIS Lab',
+    slug: 'noxelis',
+    plan: 'Team',
+    status: 'ACTIVE',
+    primaryContact: 'owner@noxel.is',
+    createdAt: '2026-01-08T03:20:00.000Z',
+  },
+  {
+    id: 'org-other',
+    name: 'External Demo Tenant',
+    slug: 'external-demo',
+    plan: 'Free',
+    status: 'ACTIVE',
+    primaryContact: 'owner@example.com',
+    createdAt: '2026-02-14T08:00:00.000Z',
+  },
+]
+
+export const brands: BrandRecord[] = [
+  { id: 'brand-nxl', organizationId: 'org-nxl', name: 'NOXELIS', status: 'ACTIVE', defaultCurrency: 'USD' },
+  { id: 'brand-atelier', organizationId: 'org-nxl', name: 'Atelier Trials', status: 'ACTIVE', defaultCurrency: 'USD' },
+  { id: 'brand-other', organizationId: 'org-other', name: 'External Brand', status: 'ACTIVE', defaultCurrency: 'USD' },
+]
+
+export const memberships: MembershipRecord[] = [
+  {
+    id: 'MBR-OWNER',
+    userId: 'usr-owner',
+    email: 'owner@noxel.is',
+    name: 'Thuan Le Minh',
+    organizationId: 'org-nxl',
+    brandIds: ['brand-nxl', 'brand-atelier'],
+    role: 'Owner',
+    status: 'ACTIVE',
+    mfaEnabled: true,
+    lastActiveAt: '2026-07-01T08:44:00.000Z',
+  },
+  {
+    id: 'MBR-LAB',
+    userId: 'usr-lab',
+    email: 'lab@noxel.is',
+    name: 'Bench Chemist',
+    organizationId: 'org-nxl',
+    brandIds: ['brand-nxl'],
+    role: 'Lab Manager',
+    status: 'ACTIVE',
+    mfaEnabled: true,
+    lastActiveAt: '2026-07-01T07:31:00.000Z',
+  },
+  {
+    id: 'MBR-VIEWER',
+    userId: 'usr-viewer',
+    email: 'viewer@noxel.is',
+    name: 'Read Only Reviewer',
+    organizationId: 'org-nxl',
+    brandIds: ['brand-nxl'],
+    role: 'Viewer',
+    status: 'INVITED',
+    mfaEnabled: false,
+    lastActiveAt: 'never',
+    invitedAt: '2026-06-30T10:02:00.000Z',
+  },
+]
+
 export const rolePolicies: RolePolicy[] = [
   {
     role: 'Owner',
@@ -1021,6 +1123,37 @@ export const tenantSettings: TenantSettingsRecord = {
   defaultUnit: 'g',
   defaultDilutionPercent: 10,
 }
+
+export const authSessions: AuthSession[] = [
+  {
+    id: 'SES-0001',
+    userId: 'usr-owner',
+    email: 'owner@noxel.is',
+    organizationId: 'org-nxl',
+    brandId: 'brand-nxl',
+    role: 'Owner',
+    issuedAt: '2026-07-01T07:44:00.000Z',
+    expiresAt: '2026-07-01T08:44:00.000Z',
+    status: 'ACTIVE',
+    mfaVerified: true,
+    ipAddress: '203.0.113.18',
+    userAgent: 'Codex Desktop / Chrome',
+  },
+  {
+    id: 'SES-0002',
+    userId: 'usr-lab',
+    email: 'lab@noxel.is',
+    organizationId: 'org-nxl',
+    brandId: 'brand-nxl',
+    role: 'Lab Manager',
+    issuedAt: '2026-07-01T06:31:00.000Z',
+    expiresAt: '2026-07-01T07:31:00.000Z',
+    status: 'ACTIVE',
+    mfaVerified: true,
+    ipAddress: '203.0.113.42',
+    userAgent: 'Windows Lab Terminal',
+  },
+]
 
 export const featureFlags: FeatureFlagRecord[] = [
   { key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },

@@ -119,6 +119,26 @@ export class NorthStarController {
     return this.northStar.securityPolicy()
   }
 
+  @Get('security/tenant-console')
+  tenantConsole() {
+    return this.northStar.tenantConsole()
+  }
+
+  @Post('security/members/invite')
+  inviteMember(@Body() body: { email?: string; name?: string; role?: string; brandIds?: string[] }) {
+    return this.northStar.inviteMember(body)
+  }
+
+  @Patch('security/members/:id/status')
+  setMembershipStatus(@Param('id') id: string, @Body() body: { status?: 'ACTIVE' | 'DEACTIVATED' }) {
+    return this.northStar.setMembershipStatus(id, body.status ?? 'DEACTIVATED')
+  }
+
+  @Post('security/sessions/:id/revoke')
+  revokeSession(@Param('id') id: string) {
+    return this.northStar.revokeSession(id)
+  }
+
   @Get('security/tenant-probe')
   tenantProbe(@Query('organizationId') organizationId = 'org-nxl') {
     return this.northStar.tenantProbe(organizationId)

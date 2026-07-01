@@ -47,6 +47,8 @@ import {
 } from 'recharts'
 import {
   auditEvents,
+  authSessions,
+  brands,
   documents,
   domains,
   evaporationCurve,
@@ -57,16 +59,22 @@ import {
   initialLots,
   initialMovements,
   materials,
+  memberships,
   phases,
   planLabUsage,
   readinessStats,
   records,
   resolveFormulaWithCatalog,
+  rolePolicies,
   statusMeta,
   storageLocations,
   stockSummary,
+  tenantSecurityPolicy,
+  organizations,
   type Allocation,
   type AuditEvent,
+  type AuthSession,
+  type BrandRecord,
   type DocumentRecord,
   type DomainKey,
   type DomainModule,
@@ -76,8 +84,12 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type MembershipRecord,
+  type OrganizationRecord,
   type ResolvedLeaf,
+  type RolePolicy,
   type SignedDocumentUrl,
+  type TenantSecurityPolicy,
 } from './data/northStar'
 
 type UsageRecord = {
@@ -110,6 +122,23 @@ type DocumentDownloadResponse = {
   signedUrl: SignedDocumentUrl
   audit: AuditEvent
   invariant: string
+}
+
+type TenantConsoleResponse = {
+  organization: OrganizationRecord
+  brands: BrandRecord[]
+  memberships: MembershipRecord[]
+  sessions: AuthSession[]
+  rolePolicies: RolePolicy[]
+  securityPolicy: TenantSecurityPolicy
+  audit: AuditEvent[]
+  invariant: string
+}
+
+type SecurityProbeResult = {
+  status: 'allowed' | 'blocked' | 'review'
+  title: string
+  detail: string
 }
 
 const domainIcons: Record<DomainKey, LucideIcon> = {
@@ -1275,7 +1304,8 @@ function DomainWorkspace({
       {domain.key === 'documents' && <DocumentsWorkspace />}
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
-      {!['materials', 'formulas', 'inventory', 'labUsage', 'documents', 'costing', 'analytics'].includes(domain.key) && (
+      {domain.key === 'identity' && <IdentityWorkspace />}
+      {!['identity', 'materials', 'formulas', 'inventory', 'labUsage', 'documents', 'costing', 'analytics'].includes(domain.key) && (
         <GenericDomainWorkspace domain={domain} onOpenModal={onOpenModal} />
       )}
     </div>
@@ -2038,6 +2068,336 @@ function GenericDomainWorkspace({
             </button>
           )}
         </div>
+      </Panel>
+    </div>
+  )
+}
+
+function memberStatus(status: MembershipRecord['status']): DomainStatus {
+  if (status === 'ACTIVE') {
+    return 'stable'
+  }
+  if (status === 'INVITED') {
+    return 'review'
+  }
+  return 'draft'
+}
+
+function sessionStatus(status: AuthSession['status']): DomainStatus {
+  return status === 'ACTIVE' ? 'stable' : 'draft'
+}
+
+function IdentityWorkspace() {
+  const fallbackTenant = useMemo<TenantConsoleResponse>(() => {
+    const organization = organizations.find((item) => item.id === 'org-nxl') ?? organizations[0]!
+    return {
+      organization,
+      brands: brands.filter((item) => item.organizationId === organization.id),
+      memberships: memberships.filter((item) => item.organizationId === organization.id),
+      sessions: authSessions.filter((item) => item.organizationId === organization.id),
+      rolePolicies: rolePolicies.filter((item) => item.scope === 'organization'),
+      securityPolicy: tenantSecurityPolicy,
+      audit: auditEvents.filter((event) => event.action.includes('auth') || event.action.includes('security')),
+      invariant: 'local tenant seed fallback',
+    }
+  }, [])
+  const [tenantData, setTenantData] = useState<TenantConsoleResponse>(fallbackTenant)
+  const [tenantStatus, setTenantStatus] = useState('Loading tenant console')
+  const [inviteEmail, setInviteEmail] = useState('new.viewer@noxel.is')
+  const [inviteRole, setInviteRole] = useState('Viewer')
+  const [permissionRole, setPermissionRole] = useState('Viewer')
+  const [permissionName, setPermissionName] = useState('inventory.adjust')
+  const [probeResult, setProbeResult] = useState<SecurityProbeResult | null>(null)
+  const permissionOptions = Array.from(
+    new Set(tenantData.rolePolicies.flatMap((policy) => policy.permissions)),
+  ).sort()
+
+  async function refreshTenantConsole(nextStatus = 'Tenant console synced from API') {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/tenant-console`)
+      if (!response.ok) {
+        throw new Error('Tenant console API failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<TenantConsoleResponse>
+      setTenantData(payload.data)
+      setTenantStatus(nextStatus)
+    } catch {
+      setTenantStatus('Using local tenant seed until API is reachable')
+    }
+  }
+
+  useEffect(() => {
+    void refreshTenantConsole()
+  }, [])
+
+  async function inviteTenantMember() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/members/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: inviteEmail,
+          role: inviteRole,
+          brandIds: [tenantData.brands[0]?.id ?? 'brand-nxl'],
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Invite failed')
+      }
+      setInviteEmail('')
+      await refreshTenantConsole('Invite created; credential remains invite-only')
+    } catch {
+      setTenantStatus('Invite blocked by tenant membership policy')
+    }
+  }
+
+  async function updateMemberStatus(memberId: string, status: MembershipRecord['status']) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/members/${memberId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!response.ok) {
+        throw new Error('Membership status update failed')
+      }
+      await refreshTenantConsole(status === 'DEACTIVATED' ? 'Member deactivated and sessions revoked' : 'Member activated')
+    } catch {
+      setTenantStatus('Membership status update blocked by tenant policy')
+    }
+  }
+
+  async function revokeTenantSession(sessionId: string) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/sessions/${sessionId}/revoke`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('Session revoke failed')
+      }
+      await refreshTenantConsole('Session revoked and audit event recorded')
+    } catch {
+      setTenantStatus('Session revoke blocked by tenant policy')
+    }
+  }
+
+  async function runTenantProbe(organizationId: string) {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/security/tenant-probe?organizationId=${encodeURIComponent(organizationId)}`,
+      )
+      if (!response.ok) {
+        throw new Error('Tenant probe blocked')
+      }
+      setProbeResult({
+        status: 'allowed',
+        title: 'Tenant probe allowed',
+        detail: `Current session can access ${organizationId}`,
+      })
+    } catch {
+      setProbeResult({
+        status: 'blocked',
+        title: 'Tenant probe blocked',
+        detail: `Current session cannot access ${organizationId}`,
+      })
+    } finally {
+      void refreshTenantConsole('Tenant probe recorded in audit trail')
+    }
+  }
+
+  async function runPermissionProbe() {
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/security/permission-probe?role=${encodeURIComponent(permissionRole)}&permission=${encodeURIComponent(permissionName)}`,
+      )
+      if (!response.ok) {
+        throw new Error('Permission probe blocked')
+      }
+      setProbeResult({
+        status: 'allowed',
+        title: 'Permission allowed',
+        detail: `${permissionRole} can perform ${permissionName}`,
+      })
+    } catch {
+      setProbeResult({
+        status: 'blocked',
+        title: 'Permission blocked',
+        detail: `${permissionRole} cannot perform ${permissionName}`,
+      })
+    } finally {
+      void refreshTenantConsole('Permission probe recorded in audit trail')
+    }
+  }
+
+  return (
+    <div className="workspace-grid identity-grid">
+      <Panel title="Tenant Boundary" icon={Building2}>
+        <div className="tenant-summary">
+          <span className="mono-small">{tenantData.organization.id}</span>
+          <strong>{tenantData.organization.name}</strong>
+          <span>
+            {tenantData.organization.plan} / {tenantData.organization.status} / {tenantData.organization.slug}.olfactoryops
+          </span>
+        </div>
+        <div className="tag-row">
+          <DataTag label="Contact" value={tenantData.organization.primaryContact} />
+          <DataTag label="Brands" value={String(tenantData.brands.length)} tone="blue" />
+          <DataTag label="Session TTL" value={`${tenantData.securityPolicy.sessionTimeoutMinutes}m`} tone="green" />
+        </div>
+        <div className="brand-list">
+          {tenantData.brands.map((brand) => (
+            <div className="brand-row-card" key={brand.id}>
+              <div>
+                <strong>{brand.name}</strong>
+                <span>{brand.id}</span>
+              </div>
+              <StatusBadge status={brand.status === 'ACTIVE' ? 'stable' : 'draft'} label={brand.status} />
+            </div>
+          ))}
+        </div>
+        <div className="action-row">
+          <button className="primary-button" type="button" onClick={() => void runTenantProbe('org-nxl')}>
+            Probe current tenant
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void runTenantProbe('org-other')}>
+            Probe external tenant
+          </button>
+        </div>
+        {probeResult && (
+          <div className={`security-result is-${probeResult.status}`}>
+            <strong>{probeResult.title}</strong>
+            <span>{probeResult.detail}</span>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Members & Roles" icon={UsersRound}>
+        <div className="tenant-form-row">
+          <label className="field-row">
+            <span>Invite email</span>
+            <input
+              aria-label="Invite email"
+              value={inviteEmail}
+              onChange={(event) => setInviteEmail(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Role</span>
+            <select aria-label="Invite role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value)}>
+              {tenantData.rolePolicies.map((policy) => (
+                <option key={policy.role} value={policy.role}>
+                  {policy.role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void inviteTenantMember()} disabled={!inviteEmail.trim()}>
+            <Plus size={16} />
+            Invite
+          </button>
+        </div>
+
+        <div className="member-list">
+          {tenantData.memberships.map((member) => (
+            <div className="member-row" key={member.id}>
+              <div>
+                <strong>{member.name}</strong>
+                <span>
+                  {member.email} / {member.role}
+                </span>
+              </div>
+              <StatusBadge status={memberStatus(member.status)} label={member.status} />
+              <DataTag label="MFA" value={member.mfaEnabled ? 'On' : 'Pending'} tone={member.mfaEnabled ? 'green' : 'amber'} />
+              {member.status === 'ACTIVE' ? (
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void updateMemberStatus(member.id, 'DEACTIVATED')}
+                  disabled={member.role === 'Owner'}
+                >
+                  Deactivate
+                </button>
+              ) : (
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void updateMemberStatus(member.id, 'ACTIVE')}
+                >
+                  Activate
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Session Control" icon={LockKeyhole}>
+        <div className="session-list">
+          {tenantData.sessions.map((session) => (
+            <div className="session-row" key={session.id}>
+              <div>
+                <strong>{session.email}</strong>
+                <span>
+                  {session.ipAddress} / {session.userAgent}
+                </span>
+              </div>
+              <StatusBadge status={sessionStatus(session.status)} label={session.status} />
+              <span className="mono-value">{new Date(session.expiresAt).toLocaleTimeString()}</span>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void revokeTenantSession(session.id)}
+                disabled={session.status === 'REVOKED'}
+              >
+                Revoke
+              </button>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Permission Probe" icon={ShieldCheck}>
+        <div className="tenant-form-row">
+          <label className="field-row">
+            <span>Role</span>
+            <select
+              aria-label="Permission role"
+              value={permissionRole}
+              onChange={(event) => setPermissionRole(event.target.value)}
+            >
+              {tenantData.rolePolicies.map((policy) => (
+                <option key={policy.role} value={policy.role}>
+                  {policy.role}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Permission</span>
+            <select
+              aria-label="Permission name"
+              value={permissionName}
+              onChange={(event) => setPermissionName(event.target.value)}
+            >
+              {permissionOptions.map((permission) => (
+                <option key={permission} value={permission}>
+                  {permission}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void runPermissionProbe()}>
+            Run probe
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>{tenantStatus}</li>
+          <li>{tenantData.invariant}</li>
+          <li>MFA required for Owner/Admin: {tenantData.securityPolicy.mfaRequiredForOwnerAdmin ? 'yes' : 'no'}</li>
+          <li>IP allowlist: {tenantData.securityPolicy.ipAllowlist.join(', ')}</li>
+        </ul>
+      </Panel>
+
+      <Panel className="wide" title="Tenant Security Audit" icon={ClipboardCheck}>
+        <AuditList events={tenantData.audit.length > 0 ? tenantData.audit : auditEvents} />
       </Panel>
     </div>
   )
