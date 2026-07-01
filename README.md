@@ -9,6 +9,8 @@ OlfactoryOps is a full North Star product scaffold for a fragrance R&D operating
 - Domain workspaces for Platform, Identity/Security, Customization, Material Intelligence, Formula R&D, Inventory, Lab Usage, Documents, Production, Procurement, Commerce, Orders, Costing, Analytics, and SaaS/Enterprise.
 - Client-side domain engine for `resolve()`, formula cost roll-up, evaporation curve, inventory stock summary, and FEFO lab usage planning.
 - Interactive lab usage commit/reverse flow that creates immutable-style movement records in local UI state.
+- NestJS/Fastify API foundation for health, roadmap, materials, formula resolve, inventory summary, movement ledger, and lab usage commit/reverse.
+- Vitest coverage for the core domain invariants.
 - Concept reference saved at `docs/concepts/north-star-console.png`.
 
 ## Commands
@@ -16,9 +18,12 @@ OlfactoryOps is a full North Star product scaffold for a fragrance R&D operating
 ```bash
 npm install
 npm run dev
+npm run dev:api
 npm run build
+npm run build:api
+npm run test
 ```
 
 ## Notes
 
-This is the North Star product scaffold and interaction layer. The next implementation layer should add the NestJS/Prisma/PostgreSQL backend, move the domain functions into transactional services, and replace local UI state with tenant-scoped API calls.
+This is the North Star product scaffold and first API foundation. The next implementation layer should add Prisma/PostgreSQL persistence, tenant-scoped auth/session guards, and database-backed transaction boundaries for inventory movement, lab usage, documents, and audit logs.
