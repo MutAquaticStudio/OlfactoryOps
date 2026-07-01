@@ -61,7 +61,7 @@ import {
   planLabUsage,
   readinessStats,
   records,
-  resolveFormula,
+  resolveFormulaWithCatalog,
   statusMeta,
   stockSummary,
   type Allocation,
@@ -71,6 +71,7 @@ import {
   type DomainModule,
   type DomainStatus,
   type Formula,
+  type FormulaLine,
   type InventoryLot,
   type InventoryMovement,
   type ResolvedLeaf,
@@ -86,7 +87,7 @@ type UsageRecord = {
   allocations: Allocation[]
 }
 
-type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | 'newFormula' | 'receiveStock' | null
+type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | 'newFormula' | 'formulaLine' | 'receiveStock' | null
 
 type ApiEnvelope<T> = {
   data: T
@@ -157,14 +158,22 @@ function App() {
   const [batchGrams, setBatchGrams] = useState(12.5)
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
   const [newFormulaTargetGrams, setNewFormulaTargetGrams] = useState(100)
+  const [newLineMaterialId, setNewLineMaterialId] = useState(materials[0]?.id ?? '')
+  const [newLineGrams, setNewLineGrams] = useState(5)
   const [receiveMaterialId, setReceiveMaterialId] = useState(materials[0]?.id ?? '')
   const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
   const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
   const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
 
   const selectedDomain = domains.find((domain) => domain.key === activeKey)
-  const selectedFormula = formulas.find((formula) => formula.id === 'frm-0421')!
-  const resolvedLeaves = useMemo(() => resolveFormula(selectedFormula.id), [selectedFormula.id])
+  const selectedFormula = useMemo(() => {
+    const fallbackFormula = formulas.find((formula) => formula.id === 'frm-0421')!
+    return formulaRecords.find((formula) => formula.id === activeFormulaId) ?? fallbackFormula
+  }, [activeFormulaId, formulaRecords])
+  const resolvedLeaves = useMemo(
+    () => resolveFormulaWithCatalog(selectedFormula.id, formulaRecords),
+    [formulaRecords, selectedFormula.id],
+  )
   const totals = useMemo(() => formulaTotals(resolvedLeaves), [resolvedLeaves])
   const curve = useMemo(() => evaporationCurve(resolvedLeaves), [resolvedLeaves])
   const labPlan = useMemo(
@@ -191,7 +200,7 @@ function App() {
   }, [])
 
   function commitLabUsage() {
-    if (labPlan.shortfalls.length > 0) {
+    if (labPlan.shortfalls.length > 0 || resolvedLeaves.length === 0) {
       return
     }
 
@@ -313,6 +322,31 @@ function App() {
     setModal(null)
   }
 
+  function addFormulaMaterialLine() {
+    const material = materials.find((item) => item.id === newLineMaterialId)
+    const formula = formulaRecords.find((item) => item.id === activeFormulaId)
+    const grams = Number(newLineGrams)
+
+    if (!material || !formula || !Number.isFinite(grams) || grams <= 0) {
+      return
+    }
+
+    const line: FormulaLine = {
+      id: `${formula.id}-line-${formula.lines.length + 1}-${Date.now()}`,
+      label: material.name,
+      materialId: material.id,
+      grams,
+    }
+
+    setFormulaRecords((current) =>
+      current.map((item) => (item.id === formula.id ? { ...item, lines: [...item.lines, line] } : item)),
+    )
+    setSelectedMaterialId(material.id)
+    setNewLineGrams(5)
+    setActiveKey('formulas')
+    setModal(null)
+  }
+
   function receiveStockLot() {
     const material = materials.find((item) => item.id === receiveMaterialId)
     const quantityGrams = Number(receiveQuantityGrams)
@@ -405,6 +439,7 @@ function App() {
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
                   onNewFormula={() => setModal('newFormula')}
+                  onAddFormulaLine={() => setModal('formulaLine')}
                   onReceiveStock={() => setModal('receiveStock')}
                 />
               </motion.div>
@@ -461,6 +496,48 @@ function App() {
               onChange={(event) => setNewFormulaTargetGrams(Number(event.target.value))}
             />
           </label>
+        </div>
+      </BlackPopup>
+
+      <BlackPopup
+        open={modal === 'formulaLine'}
+        title="Add formula ingredient"
+        description="Adds a raw material line to the active formula. This recalculates resolve, cost, and evaporation without touching stock."
+        actionLabel="Add Ingredient"
+        onClose={() => setModal(null)}
+        onAction={addFormulaMaterialLine}
+        actionDisabled={!newLineMaterialId || newLineGrams <= 0}
+      >
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="Formula line material"
+              value={newLineMaterialId}
+              onChange={(event) => setNewLineMaterialId(event.target.value)}
+            >
+              {materials.map((material) => (
+                <option key={material.id} value={material.id}>
+                  {material.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Line grams</span>
+            <input
+              aria-label="Formula line grams"
+              min={0.01}
+              step={0.01}
+              type="number"
+              value={newLineGrams}
+              onChange={(event) => setNewLineGrams(Number(event.target.value))}
+            />
+          </label>
+          <div className="popup-grid">
+            <Metric label="Active formula" value={selectedFormula.code} />
+            <Metric label="Target" value={formatGrams(selectedFormula.targetGrams)} />
+          </div>
         </div>
       </BlackPopup>
 
@@ -738,6 +815,7 @@ function DomainWorkspace({
   onReverse,
   onOpenModal,
   onNewFormula,
+  onAddFormulaLine,
   onReceiveStock,
 }: {
   domain: DomainModule
@@ -760,6 +838,7 @@ function DomainWorkspace({
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
   onNewFormula: () => void
+  onAddFormulaLine: () => void
   onReceiveStock: () => void
 }) {
   return (
@@ -779,6 +858,7 @@ function DomainWorkspace({
           curve={curve}
           onSelectMaterial={setSelectedMaterialId}
           onNewFormula={onNewFormula}
+          onAddLine={onAddFormulaLine}
         />
       )}
       {domain.key === 'inventory' && (
@@ -908,6 +988,7 @@ function FormulaWorkspace({
   curve,
   onSelectMaterial,
   onNewFormula,
+  onAddLine,
 }: {
   formulaRecords: Formula[]
   activeFormulaId: string
@@ -917,13 +998,13 @@ function FormulaWorkspace({
   curve: ReturnType<typeof evaporationCurve>
   onSelectMaterial: (id: string) => void
   onNewFormula: () => void
+  onAddLine: () => void
 }) {
   const fallbackFormula = formulas.find((item) => item.id === 'frm-0421')!
   const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0] ?? fallbackFormula
-  const hasResolvedModel = formula.id === 'frm-0421'
-  const activeLeaves = hasResolvedModel ? resolvedLeaves : []
-  const activeTotals = hasResolvedModel ? totals : formulaTotals([])
-  const activeCurve = hasResolvedModel ? curve : evaporationCurve([])
+  const activeLeaves = resolvedLeaves
+  const activeTotals = totals
+  const activeCurve = curve
 
   return (
     <div className="workspace-grid formula-grid">
@@ -957,7 +1038,20 @@ function FormulaWorkspace({
         </div>
       </Panel>
 
-      <Panel className="formula-editor" title={`${formula.code} ${formula.name}`} icon={FlaskConical} right={<StatusBadge status={formula.status} />}>
+      <Panel
+        className="formula-editor"
+        title={`${formula.code} ${formula.name}`}
+        icon={FlaskConical}
+        right={
+          <div className="action-row">
+            <StatusBadge status={formula.status} />
+            <button className="ghost-button small" type="button" onClick={onAddLine}>
+              <Plus size={14} />
+              Add Line
+            </button>
+          </div>
+        }
+      >
         <div className="formula-lines">
           {formula.lines.length > 0 ? (
             formula.lines.map((line) => (
@@ -967,13 +1061,13 @@ function FormulaWorkspace({
                   <span>{line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}</span>
                 </div>
                 <div className="mono-value">{formatGrams(line.grams)}</div>
-                <div className="mono-value">{line.grams.toFixed(1)}%</div>
+                <div className="mono-value">{((line.grams / formula.targetGrams) * 100).toFixed(1)}%</div>
               </div>
             ))
           ) : (
             <div className="empty-state">
               <strong>Draft created. No formula lines yet.</strong>
-              <span>Add line editing is the next R&D step; this draft does not consume stock.</span>
+              <span>Use Add Line to add raw materials. Formula editing does not consume stock.</span>
             </div>
           )}
         </div>

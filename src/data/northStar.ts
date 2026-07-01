@@ -1145,7 +1145,6 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
 }
 
 const materialById = new Map(materials.map((material) => [material.id, material]))
-const formulaById = new Map(formulas.map((formula) => [formula.id, formula]))
 
 export function formatGrams(value: number) {
   return `${value.toFixed(value >= 10 ? 1 : 2)}g`
@@ -1220,8 +1219,9 @@ export function createSignedDocumentUrl(
   }
 }
 
-export function resolveFormula(formulaId: string): ResolvedLeaf[] {
-  const root = formulaById.get(formulaId)
+export function resolveFormulaWithCatalog(formulaId: string, formulaCatalog: Formula[] = formulas): ResolvedLeaf[] {
+  const formulaLookup = new Map(formulaCatalog.map((formula) => [formula.id, formula]))
+  const root = formulaLookup.get(formulaId)
   if (!root) {
     return []
   }
@@ -1229,7 +1229,12 @@ export function resolveFormula(formulaId: string): ResolvedLeaf[] {
 
   const leaves: ResolvedLeaf[] = []
 
-  function walk(formula: Formula, scale: number, path: string[]) {
+  function walk(formula: Formula, scale: number, path: string[], trail: Set<string>) {
+    if (trail.has(formula.id)) {
+      return
+    }
+    const nextTrail = new Set(trail).add(formula.id)
+
     formula.lines.forEach((line) => {
       const lineGrams = line.grams * scale
       if (line.materialId) {
@@ -1251,16 +1256,16 @@ export function resolveFormula(formulaId: string): ResolvedLeaf[] {
       }
 
       if (line.childFormulaId) {
-        const child = formulaById.get(line.childFormulaId)
+        const child = formulaLookup.get(line.childFormulaId)
         if (!child) {
           return
         }
-        walk(child, lineGrams / child.targetGrams, [...path, line.label])
+        walk(child, lineGrams / child.targetGrams, [...path, line.label], nextTrail)
       }
     })
   }
 
-  walk(root, 1, [root.code])
+  walk(root, 1, [root.code], new Set<string>())
 
   return Array.from(
     leaves.reduce((map, leaf) => {
@@ -1276,6 +1281,10 @@ export function resolveFormula(formulaId: string): ResolvedLeaf[] {
       return map
     }, new Map<string, ResolvedLeaf>()).values(),
   ).sort((a, b) => b.effectivePercent - a.effectivePercent)
+}
+
+export function resolveFormula(formulaId: string): ResolvedLeaf[] {
+  return resolveFormulaWithCatalog(formulaId, formulas)
 }
 
 export function formulaTotals(leaves: ResolvedLeaf[]) {

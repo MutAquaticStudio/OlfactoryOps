@@ -35,6 +35,14 @@ export class NorthStarController {
     return this.northStar.createFormulaDraft(body)
   }
 
+  @Post('formulas/:id/lines')
+  addFormulaLine(
+    @Param('id') id: string,
+    @Body() body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+  ) {
+    return this.northStar.addFormulaLine(id, body)
+  }
+
   @Get('formulas/:id/resolve')
   resolveFormula(@Param('id') id: string) {
     return this.northStar.resolveFormula(id)

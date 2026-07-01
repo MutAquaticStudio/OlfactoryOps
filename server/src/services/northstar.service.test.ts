@@ -82,6 +82,22 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
+  it('adds formula ingredient lines and resolves draft cost without consuming inventory', () => {
+    const service = new NorthStarService()
+    const formula = service.createFormulaDraft({ name: 'Line Test Accord', targetGrams: 80 }).data.formula
+    const beforeMovements = service.inventoryMovements().data.length
+    const result = service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 16 }).data
+    const resolved = service.resolveFormula(formula.id).data
+
+    expect(result.line.label).toBe('Hedione')
+    expect(result.formula.lines).toHaveLength(1)
+    expect(result.leaves[0]?.materialId).toBe('mat-hedione')
+    expect(result.totals.totalGrams).toBe(16)
+    expect(resolved.leaves[0]?.effectivePercent).toBe(20)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(result.invariant).toContain('does not create inventory movement')
+  })
+
   it('receives direct inventory receipts through lot and IN movement', () => {
     const service = new NorthStarService()
     const beforeMovements = service.inventoryMovements().data.length

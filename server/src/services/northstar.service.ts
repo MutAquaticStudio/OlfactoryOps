@@ -23,7 +23,7 @@ import {
   planLabUsage,
   productionBatches,
   purchaseOrders,
-  resolveFormula,
+  resolveFormulaWithCatalog,
   roleHasPermission,
   rolePolicies,
   salesOrders,
@@ -41,6 +41,7 @@ import {
   type DocumentRecord,
   type FeatureFlagRecord,
   type Formula,
+  type FormulaLine,
   type InventoryLot,
   type InventoryMovement,
   type NumberingSequenceRecord,
@@ -116,6 +117,61 @@ export class NorthStarService {
     return { data: { formula, invariant: 'formula draft creation does not create inventory movement' } }
   }
 
+  addFormulaLine(
+    id: string,
+    body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+  ) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+
+    const grams = Number(body.grams ?? 0)
+    if (!Number.isFinite(grams) || grams <= 0) {
+      throw new UnprocessableEntityException('Formula line grams must be greater than 0')
+    }
+    if (Boolean(body.materialId) === Boolean(body.childFormulaId)) {
+      throw new UnprocessableEntityException('Formula line must reference exactly one material or child formula')
+    }
+
+    const material = body.materialId ? materials.find((item) => item.id === body.materialId) : undefined
+    if (body.materialId && !material) {
+      throw new NotFoundException(`Material ${body.materialId} was not found`)
+    }
+
+    const childFormula = body.childFormulaId
+      ? this.formulaRecords.find((item) => item.id === body.childFormulaId)
+      : undefined
+    if (body.childFormulaId && !childFormula) {
+      throw new NotFoundException(`Child formula ${body.childFormulaId} was not found`)
+    }
+    if (body.childFormulaId === id) {
+      throw new UnprocessableEntityException('Formula cannot contain itself as a child formula')
+    }
+
+    const line: FormulaLine = {
+      id: `${id}-line-${formula.lines.length + 1}-${Date.now()}`,
+      label: body.label?.trim() || material?.name || childFormula?.name || 'Formula line',
+      grams,
+      ...(material ? { materialId: material.id } : {}),
+      ...(childFormula ? { childFormulaId: childFormula.id } : {}),
+    }
+    const updatedFormula = { ...formula, lines: [...formula.lines, line] }
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords)
+
+    this.recordAudit('formula.line.create', updatedFormula.code, 'api:perfumer', 'allowed')
+    return {
+      data: {
+        formula: updatedFormula,
+        line,
+        leaves,
+        totals: formulaTotals(leaves),
+        invariant: 'formula line save does not create inventory movement',
+      },
+    }
+  }
+
   material(id: string) {
     const material = materials.find((item) => item.id === id)
     if (!material) {
@@ -130,7 +186,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${id} was not found`)
     }
-    const leaves = initialFormulas.some((item) => item.id === id) ? resolveFormula(id) : []
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords)
     return {
       data: {
         formula,
@@ -365,7 +421,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
-    const leaves = initialFormulas.some((item) => item.id === formulaId) ? resolveFormula(formulaId) : []
+    const leaves = resolveFormulaWithCatalog(formulaId, this.formulaRecords)
     const plan = planLabUsage(leaves, this.lots, grams, formula.targetGrams)
     return {
       data: {
@@ -520,7 +576,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${batch.formulaId} was not found`)
     }
-    const leaves = initialFormulas.some((item) => item.id === batch.formulaId) ? resolveFormula(batch.formulaId) : []
+    const leaves = resolveFormulaWithCatalog(batch.formulaId, this.formulaRecords)
     const plan = planLabUsage(leaves, this.lots, batch.targetGrams, formula.targetGrams)
     if (plan.shortfalls.length > 0) {
       throw new UnprocessableEntityException({ message: 'Production cannot consume while shortfalls exist', shortfalls: plan.shortfalls })
