@@ -1,26 +1,52 @@
 import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
 import {
   auditEvents,
+  apiKeys,
+  billingPlan,
   canDownloadDocument,
+  commercialSkus,
   createSignedDocumentUrl,
   documentRequiredPermissions,
   documents,
   domains,
+  featureFlags,
+  formatSequenceValue,
   formulaTotals,
   formulas,
   formatGrams,
   initialLots,
   initialMovements,
   materials,
+  numberingSequences,
+  orderRequiredGrams,
   phases,
   planLabUsage,
+  productionBatches,
+  purchaseOrders,
   resolveFormula,
+  roleHasPermission,
+  rolePolicies,
+  salesOrders,
+  skuAvailability,
+  ssoConfig,
   stockSummary,
+  suppliers,
+  tenantScopeAllows,
+  tenantSecurityPolicy,
+  tenantSettings,
+  webhooks,
   type Allocation,
   type AuditEvent,
+  type AuthSession,
   type DocumentRecord,
+  type FeatureFlagRecord,
   type InventoryLot,
   type InventoryMovement,
+  type NumberingSequenceRecord,
+  type ProductionBatchRecord,
+  type PurchaseOrderRecord,
+  type SalesOrderRecord,
+  type TenantSettingsRecord,
 } from '../../../src/data/northStar.js'
 
 type UsageRecord = {
@@ -40,6 +66,13 @@ export class NorthStarService {
   private usageHistory: UsageRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
+  private sessions: AuthSession[] = []
+  private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
+  private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
+  private sequences: NumberingSequenceRecord[] = structuredClone(numberingSequences)
+  private productionBatchRecords: ProductionBatchRecord[] = structuredClone(productionBatches)
+  private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
+  private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
   private auditCounter = auditEvents.length
 
   phases() {
@@ -85,6 +118,97 @@ export class NorthStarService {
 
   inventoryMovements() {
     return { data: this.movements }
+  }
+
+  login(email = 'owner@noxel.is') {
+    const issuedAt = new Date()
+    const session: AuthSession = {
+      id: `SES-${String(this.sessions.length + 1).padStart(4, '0')}`,
+      userId: 'usr-owner',
+      email,
+      organizationId: 'org-nxl',
+      brandId: 'brand-nxl',
+      role: 'Owner',
+      issuedAt: issuedAt.toISOString(),
+      expiresAt: new Date(issuedAt.getTime() + tenantSecurityPolicy.sessionTimeoutMinutes * 60_000).toISOString(),
+      mfaVerified: true,
+    }
+    this.sessions = [session, ...this.sessions]
+    this.recordAudit('auth.login', session.userId, 'api:auth', 'allowed')
+    return { data: { session, securityPolicy: tenantSecurityPolicy } }
+  }
+
+  me() {
+    const session = this.currentSession()
+    return {
+      data: {
+        session,
+        permissions: this.permissionsForRole(session.role),
+        securityPolicy: tenantSecurityPolicy,
+      },
+    }
+  }
+
+  auditLogs() {
+    return { data: this.auditEvents }
+  }
+
+  securityPolicy() {
+    return { data: tenantSecurityPolicy }
+  }
+
+  tenantProbe(resourceOrganizationId: string) {
+    const session = this.currentSession()
+    const allowed = tenantScopeAllows(session.organizationId, resourceOrganizationId)
+    this.recordAudit('security.tenantProbe', resourceOrganizationId, session.userId, allowed ? 'allowed' : 'blocked')
+    if (!allowed) {
+      throw new ForbiddenException('Tenant guard blocked cross-organization access')
+    }
+    return { data: { allowed, organizationId: session.organizationId, resourceOrganizationId } }
+  }
+
+  permissionProbe(permission: string, role = 'Viewer') {
+    const allowed = roleHasPermission(role, permission)
+    this.recordAudit('security.permissionProbe', permission, role, allowed ? 'allowed' : 'blocked')
+    if (!allowed) {
+      throw new ForbiddenException(`Role ${role} cannot perform ${permission}`)
+    }
+    return { data: { allowed, role, permission } }
+  }
+
+  settings() {
+    return { data: this.settingsRecord }
+  }
+
+  updateSettings(patch: Partial<TenantSettingsRecord>) {
+    this.settingsRecord = {
+      ...this.settingsRecord,
+      ...patch,
+      organizationId: this.settingsRecord.organizationId,
+    }
+    this.recordAudit('customization.settings.update', this.settingsRecord.organizationId, 'api:owner', 'allowed')
+    return { data: this.settingsRecord }
+  }
+
+  featureFlags() {
+    return { data: this.flagRecords }
+  }
+
+  numberingSequences() {
+    return { data: this.sequences }
+  }
+
+  nextNumber(key: string) {
+    const sequence = this.sequences.find((item) => item.key === key)
+    if (!sequence) {
+      throw new NotFoundException(`Numbering sequence ${key} was not found`)
+    }
+    const value = formatSequenceValue(sequence)
+    this.sequences = this.sequences.map((item) =>
+      item.key === key ? { ...item, nextValue: item.nextValue + 1 } : item,
+    )
+    this.recordAudit('customization.sequence.next', key, 'api:owner', 'allowed')
+    return { data: { key, value, invariant: 'numbering increments through a single sequence service' } }
   }
 
   documents() {
@@ -258,6 +382,252 @@ export class NorthStarService {
     }
   }
 
+  productionBatches() {
+    return { data: this.productionBatchRecords }
+  }
+
+  createProductionBatch(formulaId = 'frm-0421', targetGrams = 25) {
+    const formula = formulas.find((item) => item.id === formulaId)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${formulaId} was not found`)
+    }
+    const id = this.nextNumber('batch').data.value
+    const batch: ProductionBatchRecord = {
+      id,
+      formulaId,
+      formulaCode: formula.code,
+      status: 'WEIGHING',
+      targetGrams,
+      consumedGrams: 0,
+      qcStatus: 'PENDING',
+      owner: 'Manufacturing',
+    }
+    this.productionBatchRecords = [batch, ...this.productionBatchRecords]
+    this.recordAudit('production.batch.create', id, 'api:manufacturing', 'allowed')
+    return { data: batch }
+  }
+
+  consumeProductionBatch(id: string) {
+    const batch = this.productionBatchRecords.find((item) => item.id === id)
+    if (!batch) {
+      throw new NotFoundException(`Production batch ${id} was not found`)
+    }
+    if (batch.consumedGrams > 0) {
+      throw new UnprocessableEntityException(`Production batch ${id} has already consumed inventory`)
+    }
+    const formula = formulas.find((item) => item.id === batch.formulaId)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${batch.formulaId} was not found`)
+    }
+    const plan = planLabUsage(resolveFormula(batch.formulaId), this.lots, batch.targetGrams, formula.targetGrams)
+    if (plan.shortfalls.length > 0) {
+      throw new UnprocessableEntityException({ message: 'Production cannot consume while shortfalls exist', shortfalls: plan.shortfalls })
+    }
+
+    const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
+    const timestamp = new Date().toISOString()
+    const movements = plan.allocations.map((allocation, index) => {
+      const lot = lotMap.get(allocation.lotId)
+      if (!lot) {
+        throw new NotFoundException(`Lot ${allocation.lotId} was not found`)
+      }
+      lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
+      return {
+        id: `MOV-PROD-${id}-${index + 1}`,
+        at: timestamp,
+        type: 'PRODUCTION_CONSUMPTION' as const,
+        direction: 'OUT' as const,
+        materialId: allocation.materialId,
+        lotId: allocation.lotId,
+        quantityGrams: allocation.allocatedGrams,
+        balanceAfter: lot.quantityGrams,
+        ref: id,
+        actor: 'api:manufacturing',
+      }
+    })
+
+    this.lots = Array.from(lotMap.values())
+    this.movements = [...movements, ...this.movements]
+    this.productionBatchRecords = this.productionBatchRecords.map((item) =>
+      item.id === id ? { ...item, consumedGrams: batch.targetGrams, status: 'MACERATION' } : item,
+    )
+    this.recordAudit('production.batch.consume', id, 'api:manufacturing', 'allowed')
+    return { data: { batchId: id, movements, invariant: 'production consumption is separate from lab usage' } }
+  }
+
+  qcProductionBatch(id: string, result: 'PASSED' | 'FAILED' = 'PASSED') {
+    const batch = this.productionBatchRecords.find((item) => item.id === id)
+    if (!batch) {
+      throw new NotFoundException(`Production batch ${id} was not found`)
+    }
+    const status = result === 'PASSED' ? 'RELEASED' : 'QC'
+    this.productionBatchRecords = this.productionBatchRecords.map((item) =>
+      item.id === id ? { ...item, qcStatus: result, status } : item,
+    )
+    this.recordAudit('production.batch.qc', id, 'api:qc', result === 'PASSED' ? 'allowed' : 'review')
+    return { data: this.productionBatchRecords.find((item) => item.id === id)! }
+  }
+
+  suppliers() {
+    return { data: suppliers }
+  }
+
+  purchaseOrders() {
+    return { data: this.purchaseOrderRecords }
+  }
+
+  receivePurchaseOrder(id: string) {
+    const order = this.purchaseOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Purchase order ${id} was not found`)
+    }
+    const material = materials.find((item) => item.id === order.materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${order.materialId} was not found`)
+    }
+    if (order.status === 'RECEIVED') {
+      throw new UnprocessableEntityException(`Purchase order ${id} has already been received`)
+    }
+
+    const lot: InventoryLot = {
+      id: `lot-${order.id.toLowerCase()}`,
+      materialId: order.materialId,
+      lotNumber: `L-${order.id}`,
+      quantityGrams: order.quantityGrams,
+      reservedGrams: 0,
+      receivedDate: new Date().toISOString().slice(0, 10),
+      expiryDate: '2028-12-31',
+      qualityStatus: 'APPROVED',
+      location: 'Receiving Bay',
+      unitCost: material.costPerGram,
+    }
+    const movement: InventoryMovement = {
+      id: `MOV-PO-${id}`,
+      at: new Date().toISOString(),
+      type: 'RECEIPT',
+      direction: 'IN',
+      materialId: order.materialId,
+      lotId: lot.id,
+      quantityGrams: order.quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: id,
+      actor: 'api:procurement',
+    }
+    this.lots = [lot, ...this.lots]
+    this.movements = [movement, ...this.movements]
+    this.purchaseOrderRecords = this.purchaseOrderRecords.map((item) =>
+      item.id === id ? { ...item, receivedGrams: item.quantityGrams, status: 'RECEIVED' } : item,
+    )
+    this.recordAudit('procurement.po.receive', id, 'api:procurement', 'allowed')
+    return { data: { lot, movement, invariant: 'goods receipt creates lot and IN movement' } }
+  }
+
+  catalogSkus() {
+    return { data: skuAvailability(commercialSkus, this.lots) }
+  }
+
+  orders() {
+    return { data: this.salesOrderRecords }
+  }
+
+  reserveOrder(id: string) {
+    const order = this.salesOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    const sku = commercialSkus.find((item) => item.id === order.skuId)
+    if (!sku) {
+      throw new NotFoundException(`SKU ${order.skuId} was not found`)
+    }
+    const requiredGrams = orderRequiredGrams(order)
+    const allocations = this.pickLotsForMaterial(sku.materialId, requiredGrams)
+    const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
+    allocations.forEach((allocation) => {
+      const lot = lotMap.get(allocation.lotId)
+      if (lot) {
+        lot.reservedGrams += allocation.allocatedGrams
+      }
+    })
+    this.lots = Array.from(lotMap.values())
+    this.salesOrderRecords = this.salesOrderRecords.map((item) =>
+      item.id === id ? { ...item, reservedGrams: requiredGrams, status: 'RESERVED' } : item,
+    )
+    this.recordAudit('orders.reserve', id, 'api:fulfillment', 'allowed')
+    return { data: { orderId: id, allocations, invariant: 'reservation changes reserved stock but creates no InventoryMovement' } }
+  }
+
+  fulfillOrder(id: string) {
+    const order = this.salesOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (order.status !== 'RESERVED') {
+      throw new UnprocessableEntityException(`Sales order ${id} must be reserved before fulfillment`)
+    }
+    const sku = commercialSkus.find((item) => item.id === order.skuId)
+    if (!sku) {
+      throw new NotFoundException(`SKU ${order.skuId} was not found`)
+    }
+    const allocations = this.pickLotsForMaterial(sku.materialId, order.reservedGrams, true)
+    const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
+    const movements: InventoryMovement[] = allocations.map((allocation, index) => {
+      const lot = lotMap.get(allocation.lotId)
+      if (!lot) {
+        throw new NotFoundException(`Lot ${allocation.lotId} was not found`)
+      }
+      lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
+      lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
+      return {
+        id: `MOV-FUL-${id}-${index + 1}`,
+        at: new Date().toISOString(),
+        type: 'FULFILLMENT',
+        direction: 'OUT',
+        materialId: allocation.materialId,
+        lotId: allocation.lotId,
+        quantityGrams: allocation.allocatedGrams,
+        balanceAfter: lot.quantityGrams,
+        ref: id,
+        actor: 'api:fulfillment',
+      }
+    })
+    this.lots = Array.from(lotMap.values())
+    this.movements = [...movements, ...this.movements]
+    this.salesOrderRecords = this.salesOrderRecords.map((item) =>
+      item.id === id ? { ...item, fulfilledGrams: order.reservedGrams, status: 'FULFILLED' } : item,
+    )
+    this.recordAudit('orders.fulfill', id, 'api:fulfillment', 'allowed')
+    return { data: { orderId: id, movements, invariant: 'fulfillment creates OUT movement after reservation' } }
+  }
+
+  billingPlan() {
+    return { data: billingPlan }
+  }
+
+  ssoConfig() {
+    return { data: ssoConfig }
+  }
+
+  apiKeys() {
+    return { data: apiKeys }
+  }
+
+  webhooks() {
+    return { data: webhooks }
+  }
+
+  auditExport() {
+    const audit = this.recordAudit('audit.export', 'ORG-NXL', 'api:owner', 'allowed')
+    return {
+      data: {
+        id: `AUD-EXP-${audit.id}`,
+        format: 'JSON',
+        status: 'QUEUED',
+        scope: 'ORG-NXL',
+        audit,
+      },
+    }
+  }
+
   private recordDocumentDownloadAudit(
     document: DocumentRecord,
     actor: string,
@@ -271,6 +641,84 @@ export class NorthStarService {
       action: 'document.download',
       entity: document.id,
       requestId: `req_doc_${String(this.auditCounter).padStart(4, '0')}`,
+      outcome,
+    }
+    this.auditEvents = [event, ...this.auditEvents]
+    return event
+  }
+
+  private currentSession() {
+    if (this.sessions[0]) {
+      return this.sessions[0]
+    }
+    return this.login().data.session
+  }
+
+  private permissionsForRole(role: string) {
+    return rolePolicies.find((policy) => policy.role === role)?.permissions ?? []
+  }
+
+  private pickLotsForMaterial(materialId: string, requiredGrams: number, reservedOnly = false) {
+    const material = materials.find((item) => item.id === materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${materialId} was not found`)
+    }
+    const allocations: Allocation[] = []
+    let remaining = requiredGrams
+    const eligibleLots = this.lots
+      .filter((lot) => lot.materialId === materialId && lot.qualityStatus === 'APPROVED')
+      .sort((a, b) => {
+        const expirySort = a.expiryDate.localeCompare(b.expiryDate)
+        return expirySort || a.receivedDate.localeCompare(b.receivedDate)
+      })
+
+    eligibleLots.forEach((lot) => {
+      if (remaining <= 0) {
+        return
+      }
+      const available = reservedOnly ? lot.reservedGrams : Math.max(0, lot.quantityGrams - lot.reservedGrams)
+      const allocatedGrams = Math.min(available, remaining)
+      if (allocatedGrams <= 0) {
+        return
+      }
+      remaining -= allocatedGrams
+      allocations.push({
+        materialId,
+        materialName: material.name,
+        requiredGrams,
+        lotId: lot.id,
+        lotNumber: lot.lotNumber,
+        allocatedGrams,
+        balanceAfter: lot.quantityGrams - allocatedGrams,
+      })
+    })
+
+    if (remaining > 0.0001) {
+      throw new UnprocessableEntityException({
+        message: 'Insufficient eligible inventory',
+        materialId,
+        requiredGrams,
+        availableGrams: requiredGrams - remaining,
+      })
+    }
+
+    return allocations
+  }
+
+  private recordAudit(
+    action: string,
+    entity: string,
+    actor: string,
+    outcome: AuditEvent['outcome'],
+  ) {
+    this.auditCounter += 1
+    const event: AuditEvent = {
+      id: `AUD-GEN-${String(this.auditCounter).padStart(4, '0')}`,
+      at: new Date().toISOString(),
+      actor,
+      action,
+      entity,
+      requestId: `req_gen_${String(this.auditCounter).padStart(4, '0')}`,
       outcome,
     }
     this.auditEvents = [event, ...this.auditEvents]

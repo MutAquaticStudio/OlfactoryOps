@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common'
+import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
 
 @Controller()
@@ -40,6 +40,61 @@ export class NorthStarController {
     return this.northStar.inventoryMovements()
   }
 
+  @Post('auth/login')
+  login(@Body() body: { email?: string }) {
+    return this.northStar.login(body.email)
+  }
+
+  @Get('me')
+  me() {
+    return this.northStar.me()
+  }
+
+  @Get('audit-logs')
+  auditLogs() {
+    return this.northStar.auditLogs()
+  }
+
+  @Get('security/policy')
+  securityPolicy() {
+    return this.northStar.securityPolicy()
+  }
+
+  @Get('security/tenant-probe')
+  tenantProbe(@Query('organizationId') organizationId = 'org-nxl') {
+    return this.northStar.tenantProbe(organizationId)
+  }
+
+  @Get('security/permission-probe')
+  permissionProbe(@Query('permission') permission = 'inventory.adjust', @Query('role') role = 'Viewer') {
+    return this.northStar.permissionProbe(permission, role)
+  }
+
+  @Get('settings')
+  settings() {
+    return this.northStar.settings()
+  }
+
+  @Patch('settings')
+  updateSettings(@Body() body: Record<string, unknown>) {
+    return this.northStar.updateSettings(body)
+  }
+
+  @Get('feature-flags')
+  featureFlags() {
+    return this.northStar.featureFlags()
+  }
+
+  @Get('numbering-sequences')
+  numberingSequences() {
+    return this.northStar.numberingSequences()
+  }
+
+  @Post('numbering-sequences/:key/next')
+  nextNumber(@Param('key') key: string) {
+    return this.northStar.nextNumber(key)
+  }
+
   @Get('documents')
   documents() {
     return this.northStar.documents()
@@ -68,5 +123,85 @@ export class NorthStarController {
   @Post('lab-usage/reverse-latest')
   reverseLatestLabUsage() {
     return this.northStar.reverseLatestLabUsage()
+  }
+
+  @Get('production/batches')
+  productionBatches() {
+    return this.northStar.productionBatches()
+  }
+
+  @Post('production/batches')
+  createProductionBatch(@Body() body: { formulaId?: string; targetGrams?: number }) {
+    return this.northStar.createProductionBatch(body.formulaId, body.targetGrams)
+  }
+
+  @Post('production/batches/:id/consume')
+  consumeProductionBatch(@Param('id') id: string) {
+    return this.northStar.consumeProductionBatch(id)
+  }
+
+  @Post('production/batches/:id/qc')
+  qcProductionBatch(@Param('id') id: string, @Body() body: { result?: 'PASSED' | 'FAILED' }) {
+    return this.northStar.qcProductionBatch(id, body.result)
+  }
+
+  @Get('suppliers')
+  suppliers() {
+    return this.northStar.suppliers()
+  }
+
+  @Get('purchase-orders')
+  purchaseOrders() {
+    return this.northStar.purchaseOrders()
+  }
+
+  @Post('purchase-orders/:id/receive')
+  receivePurchaseOrder(@Param('id') id: string) {
+    return this.northStar.receivePurchaseOrder(id)
+  }
+
+  @Get('catalog/skus')
+  catalogSkus() {
+    return this.northStar.catalogSkus()
+  }
+
+  @Get('orders')
+  orders() {
+    return this.northStar.orders()
+  }
+
+  @Post('orders/:id/reserve')
+  reserveOrder(@Param('id') id: string) {
+    return this.northStar.reserveOrder(id)
+  }
+
+  @Post('orders/:id/fulfill')
+  fulfillOrder(@Param('id') id: string) {
+    return this.northStar.fulfillOrder(id)
+  }
+
+  @Get('billing/plan')
+  billingPlan() {
+    return this.northStar.billingPlan()
+  }
+
+  @Get('sso-config')
+  ssoConfig() {
+    return this.northStar.ssoConfig()
+  }
+
+  @Get('api-keys')
+  apiKeys() {
+    return this.northStar.apiKeys()
+  }
+
+  @Get('webhooks')
+  webhooks() {
+    return this.northStar.webhooks()
+  }
+
+  @Post('audit/export')
+  auditExport() {
+    return this.northStar.auditExport()
   }
 }

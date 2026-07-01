@@ -170,6 +170,138 @@ export interface AuditEvent {
   outcome: 'allowed' | 'blocked' | 'review'
 }
 
+export interface RolePolicy {
+  role: string
+  scope: 'organization' | 'platform'
+  mfaRequired: boolean
+  permissions: string[]
+}
+
+export interface TenantSecurityPolicy {
+  organizationId: string
+  mfaRequiredForOwnerAdmin: boolean
+  sessionTimeoutMinutes: number
+  ipAllowlist: string[]
+  passwordPolicy: string
+}
+
+export interface AuthSession {
+  id: string
+  userId: string
+  email: string
+  organizationId: string
+  brandId: string
+  role: string
+  issuedAt: string
+  expiresAt: string
+  mfaVerified: boolean
+}
+
+export interface TenantSettingsRecord {
+  organizationId: string
+  locale: string
+  timezone: string
+  currency: string
+  defaultUnit: 'g' | 'ml'
+  defaultDilutionPercent: number
+}
+
+export interface FeatureFlagRecord {
+  key: string
+  label: string
+  enabled: boolean
+  phase: number
+}
+
+export interface NumberingSequenceRecord {
+  key: string
+  pattern: string
+  nextValue: number
+  scope: 'organization' | 'brand'
+}
+
+export interface ProductionBatchRecord {
+  id: string
+  formulaId: string
+  formulaCode: string
+  status: 'PLANNED' | 'WEIGHING' | 'MACERATION' | 'QC' | 'RELEASED'
+  targetGrams: number
+  consumedGrams: number
+  qcStatus: 'PENDING' | 'PASSED' | 'FAILED'
+  owner: string
+}
+
+export interface SupplierRecord {
+  id: string
+  name: string
+  status: DomainStatus
+  country: string
+  leadTimeDays: number
+}
+
+export interface PurchaseOrderRecord {
+  id: string
+  supplierId: string
+  materialId: string
+  quantityGrams: number
+  receivedGrams: number
+  status: 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'RECEIVED'
+  expectedDate: string
+}
+
+export interface CommercialSkuRecord {
+  id: string
+  materialId: string
+  name: string
+  packSizeGrams: number
+  price: number
+  tier: 'Studio' | 'Lab' | 'Bulk'
+}
+
+export interface SalesOrderRecord {
+  id: string
+  skuId: string
+  customer: string
+  quantity: number
+  reservedGrams: number
+  fulfilledGrams: number
+  status: 'DRAFT' | 'RESERVED' | 'FULFILLED' | 'BACKORDER'
+}
+
+export interface BillingPlanRecord {
+  id: string
+  name: string
+  seats: number
+  storageGb: number
+  apiQuota: number
+  monthlyPrice: number
+}
+
+export interface SsoConfigRecord {
+  id: string
+  provider: 'OIDC' | 'SAML'
+  domain: string
+  status: 'draft' | 'verified'
+  roleMapping: Record<string, string>
+}
+
+export interface ApiKeyRecord {
+  id: string
+  label: string
+  lastFour: string
+  scopes: string[]
+  rotatedAt: string
+  status: 'active' | 'revoked'
+}
+
+export interface WebhookRecord {
+  id: string
+  url: string
+  events: string[]
+  status: 'active' | 'paused'
+  lastDelivery: string
+}
+
 export interface BusinessRecord {
   id: string
   label: string
@@ -210,20 +342,20 @@ export const statusMeta: Record<DomainStatus, { label: string; color: string }> 
 export const phases: Phase[] = [
   { id: 0, name: 'Architecture Blueprint', domain: 'platform', goal: 'Bounded contexts, invariants, permission map', gate: 'Baseline approved', status: 'stable', securityLayer: 'L0', coverage: 100 },
   { id: 1, name: 'Platform Foundation', domain: 'platform', goal: 'Shell, API convention, health, logging', gate: 'Health and shell green', status: 'active', securityLayer: 'L1', coverage: 88 },
-  { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'review', securityLayer: 'L2/L4', coverage: 74 },
-  { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'testing', securityLayer: 'L0', coverage: 64 },
+  { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'testing', securityLayer: 'L2/L4', coverage: 80 },
+  { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 76 },
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 82 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, summary', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 80 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'testing', securityLayer: 'L5', coverage: 70 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, download audit', gate: 'Access and download logged', status: 'testing', securityLayer: 'L5', coverage: 62 },
-  { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'draft', securityLayer: 'L5', coverage: 48 },
-  { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'draft', securityLayer: 'L4/L5', coverage: 44 },
-  { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'draft', securityLayer: 'L4', coverage: 42 },
-  { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'draft', securityLayer: 'L5', coverage: 40 },
+  { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'testing', securityLayer: 'L5', coverage: 64 },
+  { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'testing', securityLayer: 'L4/L5', coverage: 62 },
+  { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'testing', securityLayer: 'L4', coverage: 58 },
+  { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'testing', securityLayer: 'L5', coverage: 62 },
   { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'testing', securityLayer: 'L4/L5', coverage: 58 },
   { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'testing', securityLayer: 'L4', coverage: 56 },
-  { id: 15, name: 'SaaS Readiness', domain: 'saas', goal: 'Billing, SSO, SCIM, API keys, audit export', gate: 'Enterprise controls present', status: 'review', securityLayer: 'L6/L7/L8', coverage: 52 },
+  { id: 15, name: 'SaaS Readiness', domain: 'saas', goal: 'Billing, SSO, SCIM, API keys, audit export', gate: 'Enterprise controls present', status: 'testing', securityLayer: 'L6/L7/L8', coverage: 66 },
 ]
 
 export const domains: DomainModule[] = [
@@ -251,9 +383,9 @@ export const domains: DomainModule[] = [
     name: 'Identity & Security',
     shortName: 'Security',
     responsibility: 'Auth, sessions, MFA, permission guard, tenant and brand guard',
-    status: 'review',
-    health: 74,
-    risk: 'UI policy modeled; backend guard implementation is next gate',
+    status: 'testing',
+    health: 80,
+    risk: 'Tenant and permission probes live; full cookie auth remains next gate',
     owner: 'Security',
     entities: ['User', 'Membership', 'Role', 'Permission', 'Session', 'MFASecret'],
     features: ['Secure sessions', 'RBAC matrix', 'MFA enforcement', 'Suspicious login alert'],
@@ -261,7 +393,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/auth/login', '/api/v1/auth/mfa/verify', '/api/v1/me'],
     permissions: ['security.manageUsers', 'security.viewAuditLog'],
     screens: ['Login', 'MFA', 'Users and roles', 'Security policy'],
-    activity: 'Owner MFA required for billing and SSO changes',
+    activity: 'Tenant probe blocks cross-org access and Owner permission probe passes',
   },
   {
     key: 'customization',
@@ -269,9 +401,9 @@ export const domains: DomainModule[] = [
     name: 'Customization Core',
     shortName: 'Customization',
     responsibility: 'Tenant settings, feature flags, custom fields, numbering, branding',
-    status: 'testing',
-    health: 64,
-    risk: 'Numbering preview present; atomic backend increment pending',
+    status: 'active',
+    health: 76,
+    risk: 'Settings and numbering API live; custom field forms remain next gate',
     owner: 'Product Ops',
     entities: ['CustomFieldDefinition', 'NumberingSequence', 'BrandingConfig', 'WorkflowDefinition'],
     features: ['Numbering pattern', 'Workflow policy', 'Feature flags', 'Export branding'],
@@ -279,7 +411,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/settings', '/api/v1/custom-fields', '/api/v1/numbering-sequences'],
     permissions: ['customization.manage'],
     screens: ['Tenant settings', 'Fields', 'Branding', 'Workflow'],
-    activity: 'Formula sequence FRM-#### bound to brand NXL',
+    activity: 'Formula sequence increments through backend sequence service',
   },
   {
     key: 'materials',
@@ -377,9 +509,9 @@ export const domains: DomainModule[] = [
     name: 'Production Batch',
     shortName: 'Production',
     responsibility: 'Approved formula to production batch, QC, lifecycle, yield',
-    status: 'draft',
-    health: 48,
-    risk: 'Lifecycle and QC objects scaffolded',
+    status: 'testing',
+    health: 64,
+    risk: 'Batch create/consume/QC API live; full lifecycle UI remains next gate',
     owner: 'Manufacturing',
     entities: ['ProductionBatch', 'BatchConsumption', 'QCRecord'],
     features: ['Scale batch', 'Consume lots', 'QC checkpoint', 'Yield reconcile'],
@@ -387,7 +519,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/batches', '/api/v1/batches/:id/consume', '/api/v1/batches/:id/qc'],
     permissions: ['production.view', 'production.consume', 'production.qc'],
     screens: ['Batch timeline', 'QC record', 'Batch cost'],
-    activity: 'BTH-2025-118 waiting for filtration checkpoint',
+    activity: 'Production consumption writes PRODUCTION_CONSUMPTION movements',
   },
   {
     key: 'procurement',
@@ -395,9 +527,9 @@ export const domains: DomainModule[] = [
     name: 'Procurement',
     shortName: 'Procurement',
     responsibility: 'Supplier, PO, goods receipt, inventory receipt, price history',
-    status: 'draft',
-    health: 44,
-    risk: 'PO state machine shell ready',
+    status: 'testing',
+    health: 62,
+    risk: 'Supplier and PO receipt API live; quote/RFQ remains next gate',
     owner: 'Procurement',
     entities: ['Supplier', 'PurchaseOrder', 'POLine', 'GoodsReceipt', 'PriceHistory'],
     features: ['Low-stock to PO', 'Goods receipt', 'Price history', 'Supplier master'],
@@ -405,7 +537,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/suppliers', '/api/v1/purchase-orders', '/api/v1/purchase-orders/:id/receive'],
     permissions: ['procurement.view', 'procurement.manage'],
     screens: ['Supplier list', 'PO board', 'Goods receipt'],
-    activity: 'PO-2026-014 queued for Ambroxan restock',
+    activity: 'PO-2026-014 receipt creates lot and IN movement',
   },
   {
     key: 'commerce',
@@ -413,9 +545,9 @@ export const domains: DomainModule[] = [
     name: 'Aroma Materials Commerce',
     shortName: 'Commerce',
     responsibility: 'SKU, pack size, price list, quote, sample, neutral labels',
-    status: 'draft',
-    health: 42,
-    risk: 'Catalog uses inventory availability, no separate stock',
+    status: 'testing',
+    health: 58,
+    risk: 'Catalog availability API reads inventory; quote/sample flow remains next gate',
     owner: 'Commercial',
     entities: ['CommercialSKU', 'PackSize', 'PriceList', 'Sample', 'Quote'],
     features: ['SKU availability', 'Pack conversion', 'Price tiers', 'Quote/sample'],
@@ -423,7 +555,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/catalog/skus', '/api/v1/price-lists', '/api/v1/quotes'],
     permissions: ['commerce.view', 'commerce.manage'],
     screens: ['Catalog', 'Quote builder', 'Sample queue'],
-    activity: 'SKU-ISO-050 price tier linked to lot valuation',
+    activity: 'SKU availability derives from approved lot summary',
   },
   {
     key: 'orders',
@@ -431,9 +563,9 @@ export const domains: DomainModule[] = [
     name: 'Orders & Fulfillment',
     shortName: 'Orders',
     responsibility: 'Sales order, reservation, shipment, fulfillment movement',
-    status: 'draft',
-    health: 40,
-    risk: 'Reservation model shown separately from movement',
+    status: 'testing',
+    health: 62,
+    risk: 'Reserve and fulfill APIs live; shipment docs remain next gate',
     owner: 'Fulfillment',
     entities: ['SalesOrder', 'OrderLine', 'StockReservation', 'Shipment'],
     features: ['Reserve stock', 'Release reservation', 'Fulfill OUT', 'Partial/backorder'],
@@ -441,7 +573,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/orders', '/api/v1/orders/:id/reserve', '/api/v1/orders/:id/fulfill'],
     permissions: ['orders.view', 'orders.reserve', 'orders.fulfill'],
     screens: ['Order queue', 'Reservation drawer', 'Shipment'],
-    activity: 'SO-2026-092 reserved 3 packs without movement',
+    activity: 'SO-2026-092 reserve creates no movement; fulfill creates OUT movement',
   },
   {
     key: 'costing',
@@ -485,9 +617,9 @@ export const domains: DomainModule[] = [
     name: 'SaaS & Enterprise Readiness',
     shortName: 'SaaS',
     responsibility: 'Billing, plans, SSO, SCIM, API keys, webhooks, audit export, platform admin',
-    status: 'review',
-    health: 52,
-    risk: 'Enterprise readiness map present; live integrations pending',
+    status: 'testing',
+    health: 66,
+    risk: 'Plan, SSO, API key, webhook, audit export APIs live; external integrations pending',
     owner: 'Enterprise',
     entities: ['Plan', 'Subscription', 'UsageMeter', 'SSOConfig', 'SCIMToken', 'ApiKey', 'Webhook'],
     features: ['Plan limit', 'SSO/SCIM', 'API key rotation', 'Audit export', 'Platform admin'],
@@ -495,7 +627,7 @@ export const domains: DomainModule[] = [
     apis: ['/api/v1/billing/plan', '/api/v1/sso-config', '/api/v1/audit/export', '/api/v1/platform/tenants'],
     permissions: ['billing.manage', 'security.sso.manage', 'audit.export'],
     screens: ['Billing', 'SSO/SCIM', 'API keys', 'Platform console'],
-    activity: 'Audit export JSON queued for SOC 2 evidence',
+    activity: 'Audit export queues tenant-scoped SOC 2 evidence job',
   },
 ]
 
@@ -773,6 +905,181 @@ export const auditEvents: AuditEvent[] = [
   { id: 'AUD-9141', at: '2026-06-29 15:38', actor: 'Viewer', action: 'document.download', entity: 'DOC-121', requestId: 'req_49fb11', outcome: 'blocked' },
 ]
 
+export const rolePolicies: RolePolicy[] = [
+  {
+    role: 'Owner',
+    scope: 'organization',
+    mfaRequired: true,
+    permissions: [
+      'audit.export',
+      'billing.manage',
+      'commerce.manage',
+      'customization.manage',
+      'documents.download',
+      'documents.manage',
+      'finance.viewMargin',
+      'formulas.viewSensitive',
+      'inventory.adjust',
+      'inventory.commitLabUsage',
+      'inventory.receive',
+      'inventory.reverseLabUsage',
+      'orders.fulfill',
+      'orders.reserve',
+      'procurement.manage',
+      'production.consume',
+      'production.qc',
+      'security.apiKeys.manage',
+      'security.manageUsers',
+      'security.sso.manage',
+    ],
+  },
+  {
+    role: 'Lab Manager',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: [
+      'documents.download',
+      'formulas.viewSensitive',
+      'inventory.commitLabUsage',
+      'inventory.receive',
+      'inventory.reverseLabUsage',
+      'production.consume',
+      'production.qc',
+    ],
+  },
+  {
+    role: 'Viewer',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: ['documents.view', 'materials.view', 'formulas.view', 'inventory.view'],
+  },
+  {
+    role: 'Platform Admin',
+    scope: 'platform',
+    mfaRequired: true,
+    permissions: ['platform.tenants.manage', 'platform.flags.manage', 'platform.impersonation.audit'],
+  },
+]
+
+export const tenantSecurityPolicy: TenantSecurityPolicy = {
+  organizationId: 'org-nxl',
+  mfaRequiredForOwnerAdmin: true,
+  sessionTimeoutMinutes: 60,
+  ipAllowlist: ['203.0.113.0/24'],
+  passwordPolicy: 'min-14-with-breach-check',
+}
+
+export const tenantSettings: TenantSettingsRecord = {
+  organizationId: 'org-nxl',
+  locale: 'en-US',
+  timezone: 'Asia/Bangkok',
+  currency: 'USD',
+  defaultUnit: 'g',
+  defaultDilutionPercent: 10,
+}
+
+export const featureFlags: FeatureFlagRecord[] = [
+  { key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
+  { key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
+  { key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
+]
+
+export const numberingSequences: NumberingSequenceRecord[] = [
+  { key: 'formula', pattern: 'FRM-####', nextValue: 422, scope: 'brand' },
+  { key: 'batch', pattern: 'BTH-YYYY-###', nextValue: 119, scope: 'brand' },
+  { key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
+  { key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
+]
+
+export const productionBatches: ProductionBatchRecord[] = [
+  {
+    id: 'BTH-2025-118',
+    formulaId: 'frm-0421',
+    formulaCode: 'FRM-0421',
+    status: 'WEIGHING',
+    targetGrams: 25,
+    consumedGrams: 0,
+    qcStatus: 'PENDING',
+    owner: 'Manufacturing',
+  },
+]
+
+export const suppliers: SupplierRecord[] = [
+  { id: 'SUP-003', name: 'Aroma Supplier EU', status: 'stable', country: 'FR', leadTimeDays: 21 },
+  { id: 'SUP-007', name: 'Citrus Naturals Lab', status: 'review', country: 'IT', leadTimeDays: 14 },
+]
+
+export const purchaseOrders: PurchaseOrderRecord[] = [
+  {
+    id: 'PO-2026-014',
+    supplierId: 'SUP-003',
+    materialId: 'mat-bergamot',
+    quantityGrams: 100,
+    receivedGrams: 0,
+    status: 'ORDERED',
+    expectedDate: '2026-07-18',
+  },
+]
+
+export const commercialSkus: CommercialSkuRecord[] = [
+  { id: 'SKU-ISO-050', materialId: 'mat-iso', name: 'Iso E Super 50g', packSizeGrams: 50, price: 18, tier: 'Studio' },
+  { id: 'SKU-BER-025', materialId: 'mat-bergamot', name: 'Bergamot FCF 25g', packSizeGrams: 25, price: 16, tier: 'Studio' },
+]
+
+export const salesOrders: SalesOrderRecord[] = [
+  {
+    id: 'SO-2026-092',
+    skuId: 'SKU-ISO-050',
+    customer: 'Maison Trial Studio',
+    quantity: 1,
+    reservedGrams: 0,
+    fulfilledGrams: 0,
+    status: 'DRAFT',
+  },
+]
+
+export const billingPlan: BillingPlanRecord = {
+  id: 'PLAN-GROWTH',
+  name: 'Growth',
+  seats: 12,
+  storageGb: 100,
+  apiQuota: 25000,
+  monthlyPrice: 249,
+}
+
+export const ssoConfig: SsoConfigRecord = {
+  id: 'SSO-NXL',
+  provider: 'OIDC',
+  domain: 'noxel.is',
+  status: 'verified',
+  roleMapping: {
+    'noxel-admins': 'Owner',
+    'noxel-lab': 'Lab Manager',
+    'noxel-viewers': 'Viewer',
+  },
+}
+
+export const apiKeys: ApiKeyRecord[] = [
+  {
+    id: 'KEY-PRIMARY',
+    label: 'Production integration',
+    lastFour: '9AF2',
+    scopes: ['materials.read', 'orders.write', 'webhooks.read'],
+    rotatedAt: '2026-06-18T09:00:00Z',
+    status: 'active',
+  },
+]
+
+export const webhooks: WebhookRecord[] = [
+  {
+    id: 'WH-ORDERS',
+    url: 'https://ops.noxel.is/hooks/orders',
+    events: ['order.reserved', 'order.fulfilled', 'document.downloaded'],
+    status: 'active',
+    lastDelivery: '2026-06-30T08:44:00Z',
+  },
+]
+
 export const records: Record<DomainKey, BusinessRecord[]> = {
   dashboard: [],
   platform: [
@@ -846,6 +1153,39 @@ export function formatGrams(value: number) {
 
 export function formatCurrency(value: number) {
   return `$${value.toFixed(2)}`
+}
+
+export function roleHasPermission(role: string, permission: string) {
+  return rolePolicies.some((policy) => policy.role === role && policy.permissions.includes(permission))
+}
+
+export function tenantScopeAllows(sessionOrganizationId: string, resourceOrganizationId: string) {
+  return sessionOrganizationId === resourceOrganizationId
+}
+
+export function formatSequenceValue(sequence: NumberingSequenceRecord, value = sequence.nextValue) {
+  const padded = String(value).padStart(4, '0')
+  if (sequence.pattern.includes('YYYY')) {
+    return sequence.pattern.replace('YYYY', '2026').replace('###', String(value).padStart(3, '0'))
+  }
+  return sequence.pattern.replace('####', padded)
+}
+
+export function skuAvailability(skus: CommercialSkuRecord[], lots: InventoryLot[] = initialLots) {
+  const summary = stockSummary(lots)
+  return skus.map((sku) => {
+    const stock = summary.find((item) => item.material.id === sku.materialId)
+    return {
+      ...sku,
+      availableGrams: stock?.available ?? 0,
+      canSellPacks: Math.floor((stock?.available ?? 0) / sku.packSizeGrams),
+    }
+  })
+}
+
+export function orderRequiredGrams(order: SalesOrderRecord, skus: CommercialSkuRecord[] = commercialSkus) {
+  const sku = skus.find((item) => item.id === order.skuId)
+  return sku ? sku.packSizeGrams * order.quantity : 0
 }
 
 export const documentSignedUrlTtlSeconds = 300

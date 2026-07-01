@@ -11,6 +11,7 @@ OlfactoryOps is a full North Star product scaffold for a fragrance R&D operating
 - Interactive lab usage commit/reverse flow that creates immutable-style movement records in local UI state.
 - NestJS/Fastify API foundation for health, roadmap, materials, formula resolve, inventory summary, movement ledger, and lab usage commit/reverse.
 - Documents & Compliance API foundation for private document metadata, short-lived signed URL issuance, and download audit evidence.
+- Backfilled API foundations for missing North Star phases: tenant/security probes, customization settings/numbering, production batch consumption, procurement receiving, catalog SKU availability, order reservation/fulfillment, and enterprise audit export controls.
 - Vitest coverage for the core domain invariants.
 - Concept reference saved at `docs/concepts/north-star-console.png`.
 
