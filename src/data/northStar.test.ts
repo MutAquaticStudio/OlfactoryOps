@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaporationCurve,
+  canDownloadDocument,
+  documentRequiredPermissions,
+  documents,
   formulaTotals,
   formulas,
   initialLots,
@@ -59,5 +62,14 @@ describe('North Star domain invariants', () => {
       expect(point.Base).toBeGreaterThanOrEqual(0)
       expect(point.Base).toBeLessThanOrEqual(100)
     })
+  })
+
+  it('requires sensitive formula permission for highly confidential document downloads', () => {
+    const formulaExport = documents.find((document) => document.id === 'DOC-121')
+    expect(formulaExport).toBeDefined()
+
+    expect(documentRequiredPermissions(formulaExport!)).toEqual(['documents.download', 'formulas.viewSensitive'])
+    expect(canDownloadDocument(formulaExport!, ['documents.download'])).toBe(false)
+    expect(canDownloadDocument(formulaExport!, ['documents.download', 'formulas.viewSensitive'])).toBe(true)
   })
 })

@@ -135,15 +135,29 @@ export interface InventoryMovement {
   actor: string
 }
 
+export type DocumentSensitivity = 'Internal' | 'Confidential' | 'Highly Confidential'
+
 export interface DocumentRecord {
   id: string
   type: 'SDS' | 'CoA' | 'IFRA' | 'Invoice' | 'Formula Export' | 'Batch Record'
   title: string
   linkedTo: string
   version: string
-  sensitivity: 'Internal' | 'Confidential' | 'Highly Confidential'
+  sensitivity: DocumentSensitivity
   lastAccessed: string
   downloads: number
+  storageKey: string
+  mimeType: string
+  sizeKb: number
+  checksum: string
+  owner: string
+}
+
+export interface SignedDocumentUrl {
+  url: string
+  expiresAt: string
+  ttlSeconds: number
+  method: 'GET'
 }
 
 export interface AuditEvent {
@@ -690,10 +704,66 @@ export const initialMovements: InventoryMovement[] = [
 ]
 
 export const documents: DocumentRecord[] = [
-  { id: 'DOC-118', type: 'SDS', title: 'Iso E Super SDS', linkedTo: 'mat-iso', version: 'v3', sensitivity: 'Confidential', lastAccessed: '2026-06-29 10:44', downloads: 8 },
-  { id: 'DOC-119', type: 'CoA', title: 'Hedione CoA HED-2026-011', linkedTo: 'lot-hed-001', version: 'v1', sensitivity: 'Confidential', lastAccessed: '2026-06-30 08:31', downloads: 3 },
-  { id: 'DOC-121', type: 'Formula Export', title: 'FRM-0421 v12 Export', linkedTo: 'frm-0421', version: 'v12', sensitivity: 'Highly Confidential', lastAccessed: '2026-06-30 09:22', downloads: 2 },
-  { id: 'DOC-124', type: 'Batch Record', title: 'BTH-2025-118 QC Record', linkedTo: 'BTH-2025-118', version: 'v2', sensitivity: 'Internal', lastAccessed: '2026-06-27 16:45', downloads: 5 },
+  {
+    id: 'DOC-118',
+    type: 'SDS',
+    title: 'Iso E Super SDS',
+    linkedTo: 'mat-iso',
+    version: 'v3',
+    sensitivity: 'Confidential',
+    lastAccessed: '2026-06-29 10:44',
+    downloads: 8,
+    storageKey: 'org-nxl/materials/mat-iso/sds-v3.pdf',
+    mimeType: 'application/pdf',
+    sizeKb: 412,
+    checksum: 'sha256:9a41c4df0c-doc118',
+    owner: 'Lab Data',
+  },
+  {
+    id: 'DOC-119',
+    type: 'CoA',
+    title: 'Hedione CoA HED-2026-011',
+    linkedTo: 'lot-hed-001',
+    version: 'v1',
+    sensitivity: 'Confidential',
+    lastAccessed: '2026-06-30 08:31',
+    downloads: 3,
+    storageKey: 'org-nxl/lots/lot-hed-001/coa-v1.pdf',
+    mimeType: 'application/pdf',
+    sizeKb: 188,
+    checksum: 'sha256:20ce81ed11-doc119',
+    owner: 'QC',
+  },
+  {
+    id: 'DOC-121',
+    type: 'Formula Export',
+    title: 'FRM-0421 v12 Export',
+    linkedTo: 'frm-0421',
+    version: 'v12',
+    sensitivity: 'Highly Confidential',
+    lastAccessed: '2026-06-30 09:22',
+    downloads: 2,
+    storageKey: 'org-nxl/formulas/frm-0421/export-v12.pdf',
+    mimeType: 'application/pdf',
+    sizeKb: 96,
+    checksum: 'sha256:7cf4f54e21-doc121',
+    owner: 'Compliance',
+  },
+  {
+    id: 'DOC-124',
+    type: 'Batch Record',
+    title: 'BTH-2025-118 QC Record',
+    linkedTo: 'BTH-2025-118',
+    version: 'v2',
+    sensitivity: 'Internal',
+    lastAccessed: '2026-06-27 16:45',
+    downloads: 5,
+    storageKey: 'org-nxl/batches/bth-2025-118/qc-record-v2.pdf',
+    mimeType: 'application/pdf',
+    sizeKb: 265,
+    checksum: 'sha256:a8f6d0bb77-doc124',
+    owner: 'Manufacturing',
+  },
 ]
 
 export const auditEvents: AuditEvent[] = [
@@ -776,6 +846,38 @@ export function formatGrams(value: number) {
 
 export function formatCurrency(value: number) {
   return `$${value.toFixed(2)}`
+}
+
+export const documentSignedUrlTtlSeconds = 300
+
+export function documentRequiredPermissions(document: DocumentRecord) {
+  const permissions = ['documents.download']
+  if (document.sensitivity === 'Highly Confidential') {
+    permissions.push('formulas.viewSensitive')
+  }
+  return permissions
+}
+
+export function canDownloadDocument(document: DocumentRecord, permissions: string[]) {
+  const permissionSet = new Set(permissions)
+  return documentRequiredPermissions(document).every((permission) => permissionSet.has(permission))
+}
+
+export function createSignedDocumentUrl(
+  document: DocumentRecord,
+  now = new Date(),
+  ttlSeconds = documentSignedUrlTtlSeconds,
+): SignedDocumentUrl {
+  const expiresAt = new Date(now.getTime() + ttlSeconds * 1000)
+  const expires = Math.floor(expiresAt.getTime() / 1000)
+  const signature = `${document.id}-${document.version}-${expires}`.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  return {
+    url: `https://files.olfactoryops.local/private/${encodeURIComponent(document.id)}?expires=${expires}&signature=${signature}`,
+    expiresAt: expiresAt.toISOString(),
+    ttlSeconds,
+    method: 'GET',
+  }
 }
 
 export function resolveFormula(formulaId: string): ResolvedLeaf[] {

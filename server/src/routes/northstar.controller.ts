@@ -40,6 +40,21 @@ export class NorthStarController {
     return this.northStar.inventoryMovements()
   }
 
+  @Get('documents')
+  documents() {
+    return this.northStar.documents()
+  }
+
+  @Get('documents/download-audit')
+  documentDownloadAudit() {
+    return this.northStar.documentDownloadAudit()
+  }
+
+  @Post('documents/:id/signed-url')
+  requestDocumentSignedUrl(@Param('id') id: string) {
+    return this.northStar.requestDocumentSignedUrl(id)
+  }
+
   @Get('lab-usage/plan')
   labUsagePlan(@Query('formulaId') formulaId = 'frm-0421', @Query('grams') grams = '12.5') {
     return this.northStar.labUsagePlan(formulaId, Number(grams))

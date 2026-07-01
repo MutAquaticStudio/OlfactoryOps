@@ -65,12 +65,14 @@ import {
   stockSummary,
   type Allocation,
   type AuditEvent,
+  type DocumentRecord,
   type DomainKey,
   type DomainModule,
   type DomainStatus,
   type InventoryLot,
   type InventoryMovement,
   type ResolvedLeaf,
+  type SignedDocumentUrl,
 } from './data/northStar'
 
 type UsageRecord = {
@@ -83,6 +85,17 @@ type UsageRecord = {
 }
 
 type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | null
+
+type ApiEnvelope<T> = {
+  data: T
+}
+
+type DocumentDownloadResponse = {
+  document: DocumentRecord
+  signedUrl: SignedDocumentUrl
+  audit: AuditEvent
+  invariant: string
+}
 
 const domainIcons: Record<DomainKey, LucideIcon> = {
   dashboard: Gauge,
@@ -125,6 +138,8 @@ const shellMotion = {
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.35 },
 }
+
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
 
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
@@ -865,31 +880,131 @@ function LabUsageWorkspace({
 }
 
 function DocumentsWorkspace() {
+  const [documentRows, setDocumentRows] = useState<DocumentRecord[]>(documents)
+  const [downloadAudits, setDownloadAudits] = useState<AuditEvent[]>(
+    auditEvents.filter((event) => event.action === 'document.download'),
+  )
+  const [downloadResult, setDownloadResult] = useState<DocumentDownloadResponse | null>(null)
+  const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState('Live API sync pending')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadDocuments() {
+      try {
+        const [documentsResponse, auditResponse] = await Promise.all([
+          fetch(`${apiBaseUrl}/documents`, { signal: controller.signal }),
+          fetch(`${apiBaseUrl}/documents/download-audit`, { signal: controller.signal }),
+        ])
+
+        if (!documentsResponse.ok || !auditResponse.ok) {
+          throw new Error('Documents API returned a non-OK response')
+        }
+
+        const documentsPayload = (await documentsResponse.json()) as ApiEnvelope<DocumentRecord[]>
+        const auditPayload = (await auditResponse.json()) as ApiEnvelope<AuditEvent[]>
+
+        setDocumentRows(documentsPayload.data)
+        setDownloadAudits(auditPayload.data)
+        setStatusMessage('Synced from live Documents API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setStatusMessage('Using local seed until Documents API is reachable')
+        }
+      }
+    }
+
+    void loadDocuments()
+
+    return () => controller.abort()
+  }, [])
+
+  async function requestSignedUrl(documentId: string) {
+    setLoadingDocumentId(documentId)
+    setStatusMessage('Checking permission before signing URL')
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/signed-url`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('Signed URL request was blocked')
+      }
+
+      const payload = (await response.json()) as ApiEnvelope<DocumentDownloadResponse>
+      setDocumentRows((current) =>
+        current.map((document) => (document.id === documentId ? payload.data.document : document)),
+      )
+      setDownloadAudits((current) => [payload.data.audit, ...current.filter((event) => event.id !== payload.data.audit.id)])
+      setDownloadResult(payload.data)
+      setStatusMessage('Signed URL issued and download audit recorded')
+    } catch {
+      setStatusMessage('Could not sign URL from API; permission gate or server unavailable')
+    } finally {
+      setLoadingDocumentId(null)
+    }
+  }
+
   return (
     <div className="workspace-grid documents-grid">
       <Panel title="Document Center" icon={FileLock2}>
         <div className="document-list">
-          {documents.map((document) => (
+          {documentRows.map((document) => (
             <div className="document-row" key={document.id}>
+              <span className="mono-value">{document.id}</span>
               <div>
                 <strong>{document.title}</strong>
                 <span>
-                  {document.type} / {document.linkedTo}
+                  {document.type} / {document.linkedTo} / {document.sizeKb}KB
                 </span>
               </div>
               <DataTag label={document.sensitivity} value={document.version} />
               <span className="mono-value">{document.downloads} downloads</span>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void requestSignedUrl(document.id)}
+                disabled={loadingDocumentId === document.id}
+              >
+                <KeyRound size={14} />
+                {loadingDocumentId === document.id ? 'Signing' : 'Sign URL'}
+              </button>
             </div>
           ))}
         </div>
       </Panel>
+      <Panel title="Signed Access" icon={KeyRound}>
+        {downloadResult ? (
+          <div className="signed-card">
+            <div>
+              <span className="mono-small">{downloadResult.document.id}</span>
+              <strong>{downloadResult.document.title}</strong>
+              <span>{downloadResult.invariant}</span>
+            </div>
+            <div className="signed-url">{downloadResult.signedUrl.url}</div>
+            <div className="tag-row">
+              <DataTag label="TTL" value={`${downloadResult.signedUrl.ttlSeconds}s`} tone="blue" />
+              <DataTag label="Expires" value={new Date(downloadResult.signedUrl.expiresAt).toLocaleTimeString()} />
+              <DataTag label="Audit" value={downloadResult.audit.requestId} tone="green" />
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <strong>No signed URL yet</strong>
+            <span>Select a document to create a short-lived tenant-scoped access URL.</span>
+          </div>
+        )}
+      </Panel>
       <Panel title="Download Policy" icon={ShieldCheck}>
         <div className="policy-list">
+          <li>{statusMessage}</li>
           <li>Private bucket only, no public object URL</li>
           <li>Signed URL created after permission check</li>
           <li>Formula exports are Highly Confidential</li>
           <li>DownloadAuditLog records actor, IP, requestId</li>
         </div>
+      </Panel>
+      <Panel title="Download Audit" icon={ClipboardCheck}>
+        <AuditList events={downloadAudits.slice(0, 4)} />
       </Panel>
     </div>
   )

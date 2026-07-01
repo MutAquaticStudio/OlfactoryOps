@@ -1,5 +1,10 @@
-import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
+import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
 import {
+  auditEvents,
+  canDownloadDocument,
+  createSignedDocumentUrl,
+  documentRequiredPermissions,
+  documents,
   domains,
   formulaTotals,
   formulas,
@@ -12,6 +17,8 @@ import {
   resolveFormula,
   stockSummary,
   type Allocation,
+  type AuditEvent,
+  type DocumentRecord,
   type InventoryLot,
   type InventoryMovement,
 } from '../../../src/data/northStar.js'
@@ -31,6 +38,9 @@ export class NorthStarService {
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
   private usageHistory: UsageRecord[] = []
+  private documentRecords: DocumentRecord[] = structuredClone(documents)
+  private auditEvents: AuditEvent[] = structuredClone(auditEvents)
+  private auditCounter = auditEvents.length
 
   phases() {
     return { data: phases }
@@ -75,6 +85,54 @@ export class NorthStarService {
 
   inventoryMovements() {
     return { data: this.movements }
+  }
+
+  documents() {
+    return { data: this.documentRecords }
+  }
+
+  documentDownloadAudit() {
+    return { data: this.auditEvents.filter((event) => event.action === 'document.download') }
+  }
+
+  requestDocumentSignedUrl(
+    id: string,
+    context: { actor?: string; permissions?: string[]; ip?: string } = {},
+  ) {
+    const document = this.documentRecords.find((item) => item.id === id)
+    if (!document) {
+      throw new NotFoundException(`Document ${id} was not found`)
+    }
+
+    const actor = context.actor ?? 'api:compliance'
+    const permissions = context.permissions ?? ['documents.view', 'documents.download', 'formulas.viewSensitive']
+    const allowed = canDownloadDocument(document, permissions)
+    const audit = this.recordDocumentDownloadAudit(document, actor, allowed ? 'allowed' : 'blocked')
+
+    if (!allowed) {
+      throw new ForbiddenException({
+        message: 'Document download permission denied',
+        requiredPermissions: documentRequiredPermissions(document),
+        audit,
+      })
+    }
+
+    const signedUrl = createSignedDocumentUrl(document)
+    const updatedDocument = {
+      ...document,
+      downloads: document.downloads + 1,
+      lastAccessed: new Date().toISOString(),
+    }
+    this.documentRecords = this.documentRecords.map((item) => (item.id === id ? updatedDocument : item))
+
+    return {
+      data: {
+        document: updatedDocument,
+        signedUrl,
+        audit,
+        invariant: 'permission checked before signing; private object URL never exposed',
+      },
+    }
   }
 
   labUsagePlan(formulaId: string, grams: number) {
@@ -198,5 +256,24 @@ export class NorthStarService {
         invariant: 'reverse by compensation; original OUT remains',
       },
     }
+  }
+
+  private recordDocumentDownloadAudit(
+    document: DocumentRecord,
+    actor: string,
+    outcome: AuditEvent['outcome'],
+  ) {
+    this.auditCounter += 1
+    const event: AuditEvent = {
+      id: `AUD-DOC-${String(this.auditCounter).padStart(4, '0')}`,
+      at: new Date().toISOString(),
+      actor,
+      action: 'document.download',
+      entity: document.id,
+      requestId: `req_doc_${String(this.auditCounter).padStart(4, '0')}`,
+      outcome,
+    }
+    this.auditEvents = [event, ...this.auditEvents]
+    return event
   }
 }
