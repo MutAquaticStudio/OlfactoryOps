@@ -70,6 +70,35 @@ describe('NorthStarService', () => {
     expect(second.value).toBe('FRM-0423')
   })
 
+  it('creates formula drafts without consuming inventory', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const result = service.createFormulaDraft({ name: 'Midnight Vetiver', targetGrams: 50 }).data
+
+    expect(result.formula.code).toBe('FRM-0422')
+    expect(result.formula.status).toBe('draft')
+    expect(result.invariant).toContain('does not create inventory movement')
+    expect(service.formulas().data[0]?.id).toBe(result.formula.id)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('receives direct inventory receipts through lot and IN movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const receipt = service.receiveInventoryReceipt({
+      materialId: 'mat-iso',
+      lotNumber: 'L-ISO-999',
+      quantityGrams: 25,
+      expiryDate: '2028-01-01',
+    }).data
+
+    expect(receipt.lot.lotNumber).toBe('L-ISO-999')
+    expect(receipt.movement.direction).toBe('IN')
+    expect(receipt.summary?.available).toBeGreaterThan(232)
+    expect(receipt.invariant).toContain('immutable IN movement')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements + 1)
+  })
+
   it('runs production consumption separately from lab usage', () => {
     const service = new NorthStarService()
     const batch = service.createProductionBatch('frm-0421', 25).data

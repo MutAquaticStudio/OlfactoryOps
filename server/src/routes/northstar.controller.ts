@@ -25,9 +25,29 @@ export class NorthStarController {
     return this.northStar.material(id)
   }
 
+  @Get('formulas')
+  formulas() {
+    return this.northStar.formulas()
+  }
+
+  @Post('formulas')
+  createFormulaDraft(@Body() body: { name?: string; targetGrams?: number; owner?: string }) {
+    return this.northStar.createFormulaDraft(body)
+  }
+
   @Get('formulas/:id/resolve')
   resolveFormula(@Param('id') id: string) {
     return this.northStar.resolveFormula(id)
+  }
+
+  @Get('formulas/:id/cost')
+  formulaCost(@Param('id') id: string) {
+    return this.northStar.formulaCost(id)
+  }
+
+  @Get('lots')
+  lots() {
+    return this.northStar.lotsList()
   }
 
   @Get('inventory/summary')
@@ -38,6 +58,13 @@ export class NorthStarController {
   @Get('inventory/movements')
   inventoryMovements() {
     return this.northStar.inventoryMovements()
+  }
+
+  @Post('inventory/receipts')
+  receiveInventoryReceipt(
+    @Body() body: { materialId?: string; lotNumber?: string; quantityGrams?: number; expiryDate?: string },
+  ) {
+    return this.northStar.receiveInventoryReceipt(body)
   }
 
   @Post('auth/login')

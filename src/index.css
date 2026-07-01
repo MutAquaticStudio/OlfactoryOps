@@ -48,7 +48,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -355,6 +356,7 @@ strong {
 .command-button,
 .material-row,
 .phase-card,
+.formula-card,
 .workflow-step,
 .domain-cell,
 .resolved-row {
@@ -610,6 +612,41 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.field-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-row span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.field-row input,
+.field-row select {
+  min-width: 0;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  outline: none;
+}
+
+.field-row input:focus,
+.field-row select:focus {
+  border-color: rgba(77, 155, 255, 0.46);
+  box-shadow: 0 0 0 3px rgba(77, 155, 255, 0.12);
+}
+
 .primary-button,
 .ghost-button {
   display: inline-flex;
@@ -787,6 +824,7 @@ kbd {
 .document-list,
 .provenance-list,
 .card-list,
+.formula-library,
 .formula-lines,
 .resolved-table,
 .lot-table,
@@ -801,6 +839,7 @@ kbd {
 .movement-row,
 .document-row,
 .provenance-item,
+.formula-card,
 .formula-line,
 .resolved-row,
 .lot-row,
@@ -841,6 +880,7 @@ kbd {
 .provenance-item,
 .material-row,
 .resolved-row,
+.formula-card,
 .formula-line {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
@@ -851,10 +891,12 @@ kbd {
 }
 
 .material-row.is-active,
+.formula-card.is-active,
 .resolved-row:hover,
 .phase-card:hover,
 .domain-cell:hover,
 .workflow-step:hover,
+.formula-card:hover,
 .material-row:hover {
   border-color: rgba(77, 155, 255, 0.26);
   background: rgba(77, 155, 255, 0.075);
@@ -865,6 +907,7 @@ kbd {
 }
 
 .formula-line span,
+.formula-card span,
 .resolved-row span,
 .material-row span,
 .lot-row span,
@@ -881,6 +924,7 @@ kbd {
 .audit-row > div,
 .document-row > div,
 .lot-row > div,
+.formula-card > div,
 .formula-line > div,
 .resolved-row > div,
 .material-row > div,
@@ -1018,6 +1062,11 @@ kbd {
   font-size: 0.78rem;
 }
 
+.formula-card {
+  width: 100%;
+  text-align: left;
+}
+
 .mono-card {
   color: var(--blue-bright);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -1066,8 +1115,7 @@ input[type='range'] {
   accent-color: var(--blue);
 }
 
-.shortfall-box,
-.empty-state {
+.shortfall-box {
   display: grid;
   gap: 6px;
   padding: 12px;
@@ -1075,6 +1123,23 @@ input[type='range'] {
   border: 1px solid rgba(245, 176, 76, 0.25);
   border-radius: 14px;
   background: rgba(245, 176, 76, 0.07);
+}
+
+.empty-state {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 12px;
+  color: var(--text);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.024);
+}
+
+.empty-state span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+  line-height: 1.45;
 }
 
 .usage-preview.is-compact {

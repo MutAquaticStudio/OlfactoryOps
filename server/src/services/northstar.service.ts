@@ -12,7 +12,7 @@ import {
   featureFlags,
   formatSequenceValue,
   formulaTotals,
-  formulas,
+  formulas as initialFormulas,
   formatGrams,
   initialLots,
   initialMovements,
@@ -40,6 +40,7 @@ import {
   type AuthSession,
   type DocumentRecord,
   type FeatureFlagRecord,
+  type Formula,
   type InventoryLot,
   type InventoryMovement,
   type NumberingSequenceRecord,
@@ -63,6 +64,7 @@ type UsageRecord = {
 export class NorthStarService {
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
+  private formulaRecords: Formula[] = structuredClone(initialFormulas)
   private usageHistory: UsageRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
@@ -87,6 +89,33 @@ export class NorthStarService {
     return { data: materials }
   }
 
+  formulas() {
+    return { data: this.formulaRecords }
+  }
+
+  createFormulaDraft(body: { name?: string; targetGrams?: number; owner?: string }) {
+    const targetGrams = Number(body.targetGrams ?? 100)
+    if (!Number.isFinite(targetGrams) || targetGrams <= 0) {
+      throw new UnprocessableEntityException('Formula targetGrams must be greater than 0')
+    }
+
+    const sequence = this.nextNumber('formula').data
+    const formula: Formula = {
+      id: sequence.value.toLowerCase(),
+      code: sequence.value,
+      name: body.name?.trim() || 'Untitled Formula',
+      version: 'v1',
+      status: 'draft',
+      targetGrams,
+      owner: body.owner?.trim() || 'Thuan Le Minh',
+      lines: [],
+    }
+
+    this.formulaRecords = [formula, ...this.formulaRecords]
+    this.recordAudit('formula.create', formula.code, formula.owner, 'allowed')
+    return { data: { formula, invariant: 'formula draft creation does not create inventory movement' } }
+  }
+
   material(id: string) {
     const material = materials.find((item) => item.id === id)
     if (!material) {
@@ -97,11 +126,11 @@ export class NorthStarService {
   }
 
   resolveFormula(id: string) {
-    const formula = formulas.find((item) => item.id === id)
+    const formula = this.formulaRecords.find((item) => item.id === id)
     if (!formula) {
       throw new NotFoundException(`Formula ${id} was not found`)
     }
-    const leaves = resolveFormula(id)
+    const leaves = initialFormulas.some((item) => item.id === id) ? resolveFormula(id) : []
     return {
       data: {
         formula,
@@ -112,12 +141,84 @@ export class NorthStarService {
     }
   }
 
+  formulaCost(id: string) {
+    const resolved = this.resolveFormula(id).data
+    return {
+      data: {
+        formula: resolved.formula,
+        totals: resolved.totals,
+        invariant: 'cost is derived from resolved formula leaves',
+      },
+    }
+  }
+
+  lotsList() {
+    return { data: this.lots }
+  }
+
   inventorySummary() {
     return { data: stockSummary(this.lots) }
   }
 
   inventoryMovements() {
     return { data: this.movements }
+  }
+
+  receiveInventoryReceipt(body: {
+    materialId?: string
+    lotNumber?: string
+    quantityGrams?: number
+    expiryDate?: string
+  }) {
+    const materialId = body.materialId ?? materials[0]?.id
+    const material = materials.find((item) => item.id === materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${materialId} was not found`)
+    }
+
+    const quantityGrams = Number(body.quantityGrams ?? 0)
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      throw new UnprocessableEntityException('Inventory receipt quantityGrams must be greater than 0')
+    }
+
+    const timestamp = new Date().toISOString()
+    const lot: InventoryLot = {
+      id: `lot-api-${Date.now()}`,
+      materialId: material.id,
+      lotNumber: body.lotNumber?.trim() || `L-${material.cas.replaceAll('-', '')}`,
+      quantityGrams,
+      reservedGrams: 0,
+      receivedDate: timestamp.slice(0, 10),
+      expiryDate: body.expiryDate ?? '2028-12-31',
+      qualityStatus: 'APPROVED',
+      location: 'Receiving Bay',
+      unitCost: material.costPerGram,
+    }
+    const movement: InventoryMovement = {
+      id: `MOV-REC-${String(this.movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'RECEIPT',
+      direction: 'IN',
+      materialId: material.id,
+      lotId: lot.id,
+      quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: `GR-API-${String(this.lots.length + 42).padStart(3, '0')}`,
+      actor: 'api:inventory',
+    }
+
+    this.lots = [lot, ...this.lots]
+    this.movements = [movement, ...this.movements]
+    this.recordAudit('inventory.receive', lot.lotNumber, 'api:inventory', 'allowed')
+
+    return {
+      data: {
+        lot,
+        movement,
+        summary: stockSummary(this.lots).find((item) => item.material.id === material.id),
+        invariant: 'inventory receipt creates lot and immutable IN movement',
+      },
+    }
   }
 
   login(email = 'owner@noxel.is') {
@@ -260,11 +361,11 @@ export class NorthStarService {
   }
 
   labUsagePlan(formulaId: string, grams: number) {
-    const formula = formulas.find((item) => item.id === formulaId)
+    const formula = this.formulaRecords.find((item) => item.id === formulaId)
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
-    const leaves = resolveFormula(formulaId)
+    const leaves = initialFormulas.some((item) => item.id === formulaId) ? resolveFormula(formulaId) : []
     const plan = planLabUsage(leaves, this.lots, grams, formula.targetGrams)
     return {
       data: {
@@ -278,7 +379,7 @@ export class NorthStarService {
   }
 
   commitLabUsage(formulaId: string, grams: number) {
-    const formula = formulas.find((item) => item.id === formulaId)
+    const formula = this.formulaRecords.find((item) => item.id === formulaId)
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
@@ -387,7 +488,7 @@ export class NorthStarService {
   }
 
   createProductionBatch(formulaId = 'frm-0421', targetGrams = 25) {
-    const formula = formulas.find((item) => item.id === formulaId)
+    const formula = this.formulaRecords.find((item) => item.id === formulaId)
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
@@ -415,11 +516,12 @@ export class NorthStarService {
     if (batch.consumedGrams > 0) {
       throw new UnprocessableEntityException(`Production batch ${id} has already consumed inventory`)
     }
-    const formula = formulas.find((item) => item.id === batch.formulaId)
+    const formula = this.formulaRecords.find((item) => item.id === batch.formulaId)
     if (!formula) {
       throw new NotFoundException(`Formula ${batch.formulaId} was not found`)
     }
-    const plan = planLabUsage(resolveFormula(batch.formulaId), this.lots, batch.targetGrams, formula.targetGrams)
+    const leaves = initialFormulas.some((item) => item.id === batch.formulaId) ? resolveFormula(batch.formulaId) : []
+    const plan = planLabUsage(leaves, this.lots, batch.targetGrams, formula.targetGrams)
     if (plan.shortfalls.length > 0) {
       throw new UnprocessableEntityException({ message: 'Production cannot consume while shortfalls exist', shortfalls: plan.shortfalls })
     }

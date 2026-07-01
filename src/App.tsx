@@ -22,6 +22,7 @@ import {
   Menu,
   PackageCheck,
   PackageSearch,
+  Plus,
   Play,
   RotateCcw,
   Search,
@@ -69,6 +70,7 @@ import {
   type DomainKey,
   type DomainModule,
   type DomainStatus,
+  type Formula,
   type InventoryLot,
   type InventoryMovement,
   type ResolvedLeaf,
@@ -84,7 +86,7 @@ type UsageRecord = {
   allocations: Allocation[]
 }
 
-type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | null
+type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | 'newFormula' | 'receiveStock' | null
 
 type ApiEnvelope<T> = {
   data: T
@@ -147,10 +149,18 @@ function App() {
   const [modal, setModal] = useState<ModalKind>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedMaterialId, setSelectedMaterialId] = useState('mat-iso')
+  const [formulaRecords, setFormulaRecords] = useState<Formula[]>(() => structuredClone(formulas))
+  const [activeFormulaId, setActiveFormulaId] = useState('frm-0421')
   const [lots, setLots] = useState<InventoryLot[]>(initialLots)
   const [movements, setMovements] = useState<InventoryMovement[]>(initialMovements)
   const [usageHistory, setUsageHistory] = useState<UsageRecord[]>([])
   const [batchGrams, setBatchGrams] = useState(12.5)
+  const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
+  const [newFormulaTargetGrams, setNewFormulaTargetGrams] = useState(100)
+  const [receiveMaterialId, setReceiveMaterialId] = useState(materials[0]?.id ?? '')
+  const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
+  const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
+  const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
 
   const selectedDomain = domains.find((domain) => domain.key === activeKey)
   const selectedFormula = formulas.find((formula) => formula.id === 'frm-0421')!
@@ -264,6 +274,87 @@ function App() {
     )
   }
 
+  function nextFormulaCode() {
+    const usedCodes = new Set(formulaRecords.map((formula) => formula.code))
+    const nextNumber = formulaRecords.reduce((max, formula) => {
+      const match = /^FRM-(\d+)$/.exec(formula.code)
+      return match ? Math.max(max, Number(match[1]) + 1) : max
+    }, 422)
+    let candidate = nextNumber
+    let code = `FRM-${String(candidate).padStart(4, '0')}`
+
+    while (usedCodes.has(code)) {
+      candidate += 1
+      code = `FRM-${String(candidate).padStart(4, '0')}`
+    }
+
+    return code
+  }
+
+  function createFormulaDraft() {
+    const targetGrams = Math.max(1, Number(newFormulaTargetGrams) || 100)
+    const code = nextFormulaCode()
+    const draft: Formula = {
+      id: code.toLowerCase(),
+      code,
+      name: newFormulaName.trim() || 'Untitled Formula',
+      version: 'v1',
+      status: 'draft',
+      targetGrams,
+      owner: 'Thuan Le Minh',
+      lines: [],
+    }
+
+    setFormulaRecords((current) => [draft, ...current])
+    setActiveFormulaId(draft.id)
+    setNewFormulaName('Untitled Accord')
+    setNewFormulaTargetGrams(100)
+    setActiveKey('formulas')
+    setModal(null)
+  }
+
+  function receiveStockLot() {
+    const material = materials.find((item) => item.id === receiveMaterialId)
+    const quantityGrams = Number(receiveQuantityGrams)
+
+    if (!material || !Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const lot: InventoryLot = {
+      id: `lot-ui-${Date.now()}`,
+      materialId: material.id,
+      lotNumber: receiveLotNumber.trim() || `L-${material.cas.replaceAll('-', '')}`,
+      quantityGrams,
+      reservedGrams: 0,
+      receivedDate: timestamp.slice(0, 10),
+      expiryDate: receiveExpiryDate || '2028-12-31',
+      qualityStatus: 'APPROVED',
+      location: 'Receiving Bay',
+      unitCost: material.costPerGram,
+    }
+    const movement: InventoryMovement = {
+      id: `MOV-REC-${String(movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'RECEIPT',
+      direction: 'IN',
+      materialId: material.id,
+      lotId: lot.id,
+      quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: `GR-UI-${String(lots.length + 42).padStart(3, '0')}`,
+      actor: 'Inventory Manager',
+    }
+
+    setLots((current) => [lot, ...current])
+    setMovements((current) => [movement, ...current])
+    setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
+    setReceiveQuantityGrams(25)
+    setActiveKey('inventory')
+    setModal(null)
+  }
+
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
@@ -298,6 +389,9 @@ function App() {
                   lots={lots}
                   movements={movements}
                   stock={stock}
+                  formulaRecords={formulaRecords}
+                  activeFormulaId={activeFormulaId}
+                  setActiveFormulaId={setActiveFormulaId}
                   resolvedLeaves={resolvedLeaves}
                   totals={totals}
                   curve={curve}
@@ -310,6 +404,8 @@ function App() {
                   onCommit={() => setModal('commit')}
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
+                  onNewFormula={() => setModal('newFormula')}
+                  onReceiveStock={() => setModal('receiveStock')}
                 />
               </motion.div>
             ) : null}
@@ -334,6 +430,93 @@ function App() {
         actionDisabled={labPlan.shortfalls.length > 0}
       >
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} compact />
+      </BlackPopup>
+
+      <BlackPopup
+        open={modal === 'newFormula'}
+        title="New formula draft"
+        description="Creates a draft formula shell. Saving a formula never consumes inventory; only lab usage or production movements do."
+        actionLabel="Create Formula"
+        onClose={() => setModal(null)}
+        onAction={createFormulaDraft}
+        actionDisabled={!newFormulaName.trim() || newFormulaTargetGrams <= 0}
+      >
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Formula name</span>
+            <input
+              aria-label="Formula name"
+              value={newFormulaName}
+              onChange={(event) => setNewFormulaName(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Target grams</span>
+            <input
+              aria-label="Formula target grams"
+              min={1}
+              step={1}
+              type="number"
+              value={newFormulaTargetGrams}
+              onChange={(event) => setNewFormulaTargetGrams(Number(event.target.value))}
+            />
+          </label>
+        </div>
+      </BlackPopup>
+
+      <BlackPopup
+        open={modal === 'receiveStock'}
+        title="Receive stock / create lot"
+        description="Creates an approved inventory lot and a matching immutable RECEIPT movement."
+        actionLabel="Create Lot"
+        onClose={() => setModal(null)}
+        onAction={receiveStockLot}
+        actionDisabled={!receiveMaterialId || receiveQuantityGrams <= 0}
+      >
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="Receipt material"
+              value={receiveMaterialId}
+              onChange={(event) => setReceiveMaterialId(event.target.value)}
+            >
+              {materials.map((material) => (
+                <option key={material.id} value={material.id}>
+                  {material.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Lot number</span>
+            <input
+              aria-label="Receipt lot number"
+              value={receiveLotNumber}
+              onChange={(event) => setReceiveLotNumber(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Quantity grams</span>
+            <input
+              aria-label="Receipt quantity grams"
+              min={0.1}
+              step={0.1}
+              type="number"
+              value={receiveQuantityGrams}
+              onChange={(event) => setReceiveQuantityGrams(Number(event.target.value))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Expiry date</span>
+            <input
+              aria-label="Receipt expiry date"
+              type="date"
+              value={receiveExpiryDate}
+              onChange={(event) => setReceiveExpiryDate(event.target.value)}
+            />
+          </label>
+        </div>
       </BlackPopup>
 
       <BlackPopup
@@ -539,6 +722,9 @@ function DomainWorkspace({
   lots,
   movements,
   stock,
+  formulaRecords,
+  activeFormulaId,
+  setActiveFormulaId,
   resolvedLeaves,
   totals,
   curve,
@@ -551,11 +737,16 @@ function DomainWorkspace({
   onCommit,
   onReverse,
   onOpenModal,
+  onNewFormula,
+  onReceiveStock,
 }: {
   domain: DomainModule
   lots: InventoryLot[]
   movements: InventoryMovement[]
   stock: ReturnType<typeof stockSummary>
+  formulaRecords: Formula[]
+  activeFormulaId: string
+  setActiveFormulaId: (id: string) => void
   resolvedLeaves: ResolvedLeaf[]
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
@@ -568,6 +759,8 @@ function DomainWorkspace({
   onCommit: () => void
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
+  onNewFormula: () => void
+  onReceiveStock: () => void
 }) {
   return (
     <div className="domain-page">
@@ -578,13 +771,19 @@ function DomainWorkspace({
       )}
       {domain.key === 'formulas' && (
         <FormulaWorkspace
+          formulaRecords={formulaRecords}
+          activeFormulaId={activeFormulaId}
+          onSelectFormula={setActiveFormulaId}
           resolvedLeaves={resolvedLeaves}
           totals={totals}
           curve={curve}
           onSelectMaterial={setSelectedMaterialId}
+          onNewFormula={onNewFormula}
         />
       )}
-      {domain.key === 'inventory' && <InventoryWorkspace lots={lots} movements={movements} stock={stock} />}
+      {domain.key === 'inventory' && (
+        <InventoryWorkspace lots={lots} movements={movements} stock={stock} onReceiveStock={onReceiveStock} />
+      )}
       {domain.key === 'labUsage' && (
         <LabUsageWorkspace
           labPlan={labPlan}
@@ -701,61 +900,128 @@ function MaterialWorkspace({
 }
 
 function FormulaWorkspace({
+  formulaRecords,
+  activeFormulaId,
+  onSelectFormula,
   resolvedLeaves,
   totals,
   curve,
   onSelectMaterial,
+  onNewFormula,
 }: {
+  formulaRecords: Formula[]
+  activeFormulaId: string
+  onSelectFormula: (id: string) => void
   resolvedLeaves: ResolvedLeaf[]
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
   onSelectMaterial: (id: string) => void
+  onNewFormula: () => void
 }) {
-  const formula = formulas.find((item) => item.id === 'frm-0421')!
+  const fallbackFormula = formulas.find((item) => item.id === 'frm-0421')!
+  const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0] ?? fallbackFormula
+  const hasResolvedModel = formula.id === 'frm-0421'
+  const activeLeaves = hasResolvedModel ? resolvedLeaves : []
+  const activeTotals = hasResolvedModel ? totals : formulaTotals([])
+  const activeCurve = hasResolvedModel ? curve : evaporationCurve([])
+
   return (
     <div className="workspace-grid formula-grid">
-      <Panel className="formula-editor" title={`${formula.code} ${formula.name}`} icon={FlaskConical} right={<StatusBadge status={formula.status} />}>
-        <div className="formula-lines">
-          {formula.lines.map((line) => (
-            <div className="formula-line" key={line.id}>
+      <Panel
+        className="wide"
+        title="Formula Library"
+        icon={FlaskConical}
+        right={
+          <button className="primary-button" type="button" onClick={onNewFormula}>
+            <Plus size={15} />
+            New Formula
+          </button>
+        }
+      >
+        <div className="formula-library">
+          {formulaRecords.map((item) => (
+            <button
+              className={`formula-card ${item.id === formula.id ? 'is-active' : ''}`}
+              key={item.id}
+              type="button"
+              onClick={() => onSelectFormula(item.id)}
+            >
               <div>
-                <strong>{line.label}</strong>
-                <span>{line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}</span>
+                <strong>{item.code}</strong>
+                <span>{item.name}</span>
               </div>
-              <div className="mono-value">{formatGrams(line.grams)}</div>
-              <div className="mono-value">{line.grams.toFixed(1)}%</div>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title="Resolved Leaves" icon={Layers3}>
-        <div className="resolved-table">
-          {resolvedLeaves.map((leaf) => (
-            <button className="resolved-row" key={leaf.materialId} type="button" onClick={() => onSelectMaterial(leaf.materialId)}>
-              <div>
-                <strong>{leaf.materialName}</strong>
-                <span>{leaf.sourcePath}</span>
-              </div>
-              <span className="mono-value">{leaf.effectivePercent.toFixed(2)}%</span>
-              <span className="mono-value">{formatCurrency(leaf.cost)}</span>
+              <StatusBadge status={item.status} />
+              <span className="mono-value">{formatGrams(item.targetGrams)}</span>
             </button>
           ))}
         </div>
       </Panel>
 
+      <Panel className="formula-editor" title={`${formula.code} ${formula.name}`} icon={FlaskConical} right={<StatusBadge status={formula.status} />}>
+        <div className="formula-lines">
+          {formula.lines.length > 0 ? (
+            formula.lines.map((line) => (
+              <div className="formula-line" key={line.id}>
+                <div>
+                  <strong>{line.label}</strong>
+                  <span>{line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}</span>
+                </div>
+                <div className="mono-value">{formatGrams(line.grams)}</div>
+                <div className="mono-value">{line.grams.toFixed(1)}%</div>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state">
+              <strong>Draft created. No formula lines yet.</strong>
+              <span>Add line editing is the next R&D step; this draft does not consume stock.</span>
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Resolved Leaves" icon={Layers3}>
+        <div className="resolved-table">
+          {activeLeaves.length > 0 ? (
+            activeLeaves.map((leaf) => (
+              <button className="resolved-row" key={leaf.materialId} type="button" onClick={() => onSelectMaterial(leaf.materialId)}>
+                <div>
+                  <strong>{leaf.materialName}</strong>
+                  <span>{leaf.sourcePath}</span>
+                </div>
+                <span className="mono-value">{leaf.effectivePercent.toFixed(2)}%</span>
+                <span className="mono-value">{formatCurrency(leaf.cost)}</span>
+              </button>
+            ))
+          ) : (
+            <div className="empty-state">
+              <strong>No resolved leaves yet.</strong>
+              <span>Create ingredients in the formula editor before cost and IFRA rollups run.</span>
+            </div>
+          )}
+        </div>
+      </Panel>
+
       <Panel title="Cost Roll-up" icon={BadgeDollarSign}>
         <div className="metric-grid">
-          <Metric label="Target" value={formatGrams(totals.totalGrams)} />
-          <Metric label="Formula cost" value={formatCurrency(totals.totalCost)} />
-          <Metric label="Cost / gram" value={formatCurrency(totals.costPerGram)} />
-          <Metric label="50g bottle" value={formatCurrency(totals.costPerBottle)} />
+          <Metric label="Target" value={formatGrams(formula.targetGrams)} />
+          <Metric label="Resolved grams" value={formatGrams(activeTotals.totalGrams)} />
+          <Metric label="Formula cost" value={formatCurrency(activeTotals.totalCost)} />
+          <Metric label="Cost / gram" value={formatCurrency(activeTotals.costPerGram)} />
         </div>
       </Panel>
 
       <Panel title="Evaporation Curve" icon={Activity}>
-        <EvaporationChart curve={curve} />
-        <p className="caveat">Raoult ideal-mix. Directional model, not lab-measured perception.</p>
+        {activeLeaves.length > 0 ? (
+          <>
+            <EvaporationChart curve={activeCurve} />
+            <p className="caveat">Raoult ideal-mix. Directional model, not lab-measured perception.</p>
+          </>
+        ) : (
+          <div className="empty-state">
+            <strong>Curve waits for resolved ingredients.</strong>
+            <span>The volatility model will activate after the draft has material lines.</span>
+          </div>
+        )}
       </Panel>
     </div>
   )
@@ -765,14 +1031,25 @@ function InventoryWorkspace({
   lots,
   movements,
   stock,
+  onReceiveStock,
 }: {
   lots: InventoryLot[]
   movements: InventoryMovement[]
   stock: ReturnType<typeof stockSummary>
+  onReceiveStock: () => void
 }) {
   return (
     <div className="workspace-grid inventory-grid">
-      <Panel title="Stock Summary" icon={Boxes}>
+      <Panel
+        title="Stock Summary"
+        icon={Boxes}
+        right={
+          <button className="primary-button" type="button" onClick={onReceiveStock}>
+            <Plus size={15} />
+            Create New
+          </button>
+        }
+      >
         <div className="stock-grid">
           {stock.map((item) => (
             <div className="stock-card" key={item.material.id}>
@@ -786,7 +1063,15 @@ function InventoryWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Lots" icon={PackageCheck}>
+      <Panel
+        title="Lots"
+        icon={PackageCheck}
+        right={
+          <button className="ghost-button small" type="button" onClick={onReceiveStock}>
+            Receive Stock
+          </button>
+        }
+      >
         <div className="lot-table">
           {lots.map((lot) => {
             const material = materials.find((item) => item.id === lot.materialId)
