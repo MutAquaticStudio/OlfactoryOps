@@ -490,7 +490,7 @@ export class NorthStarService {
     }
 
     const actor = context.actor ?? 'api:compliance'
-    const permissions = context.permissions ?? ['documents.view', 'documents.download', 'formulas.viewSensitive']
+    const permissions = context.permissions ?? ['documents.download']
     const allowed = canDownloadDocument(document, permissions)
     const audit = this.recordDocumentDownloadAudit(document, actor, allowed ? 'allowed' : 'blocked')
 

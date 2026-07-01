@@ -36,6 +36,7 @@ describe('NorthStarService', () => {
   it('blocks highly confidential document downloads without sensitive permission and keeps audit evidence', () => {
     const service = new NorthStarService()
 
+    expect(() => service.requestDocumentSignedUrl('DOC-121')).toThrow(ForbiddenException)
     expect(() =>
       service.requestDocumentSignedUrl('DOC-121', {
         actor: 'api:viewer',
