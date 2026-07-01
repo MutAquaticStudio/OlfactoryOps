@@ -1,0 +1,455 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum QualityStatus {
+  APPROVED
+  QUARANTINE
+  EXPIRED
+  REJECTED
+}
+
+enum MovementType {
+  RECEIPT
+  LAB_CONSUMPTION
+  REVERSAL
+  PRODUCTION_CONSUMPTION
+  FULFILLMENT
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum MovementDirection {
+  IN
+  OUT
+}
+
+enum FormulaStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  ACTIVE
+  ARCHIVED
+}
+
+enum DocumentType {
+  SDS
+  COA
+  IFRA
+  INVOICE
+  FORMULA_EXPORT
+  BATCH_RECORD
+}
+
+enum Sensitivity {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  HIGHLY_CONFIDENTIAL
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brands       Brand[]
+  users        User[]
+  roles        Role[]
+  materials    Material[]
+  formulas     Formula[]
+  lots         InventoryLot[]
+  movements    InventoryMovement[]
+  documents    Document[]
+  auditLogs    AuditLog[]
+  labUsages    FormulaLabUsage[]
+  batches      ProductionBatch[]
+  purchaseOrders PurchaseOrder[]
+  salesOrders  SalesOrder[]
+}
+
+model Brand {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  code           String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  materials    Material[]
+  formulas     Formula[]
+  lots         InventoryLot[]
+  documents    Document[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model User {
+  id             String   @id @default(cuid())
+  organizationId String
+  email          String
+  displayName    String
+  passwordHash   String?
+  mfaEnabled     Boolean  @default(false)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships  Membership[]
+  auditLogs    AuditLog[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+model Role {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships  Membership[]
+  permissions  RolePermission[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  code        String @unique
+  description String
+
+  roles RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model Membership {
+  id     String @id @default(cuid())
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model Material {
+  id             String   @id @default(cuid())
+  organizationId String
+  brandId        String?
+  name           String
+  cas            String?
+  family         String?
+  vaporPressure  Decimal?
+  density        Decimal?
+  molecularWeight Decimal?
+  logP           Decimal?
+  ifraLimit      Decimal?
+  costPerGram    Decimal?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  brand        Brand?       @relation(fields: [brandId], references: [id])
+  molecules    Molecule[]
+  formulaLines FormulaLine[]
+  lots         InventoryLot[]
+  movements    InventoryMovement[]
+  documents    Document[]
+  provenance   ProvenanceRecord[]
+
+  @@index([organizationId])
+  @@index([organizationId, name])
+  @@index([organizationId, cas])
+}
+
+model Molecule {
+  id         String  @id @default(cuid())
+  materialId String
+  name       String
+  cas        String?
+  percent    Decimal
+
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@index([materialId])
+}
+
+model Formula {
+  id             String        @id @default(cuid())
+  organizationId String
+  brandId        String?
+  code           String
+  name           String
+  status         FormulaStatus @default(DRAFT)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  brand        Brand?           @relation(fields: [brandId], references: [id])
+  versions     FormulaVersion[]
+  childLines   FormulaLine[]    @relation("ChildFormula")
+  documents    Document[]
+  labUsages    FormulaLabUsage[]
+  batches      ProductionBatch[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model FormulaVersion {
+  id        String   @id @default(cuid())
+  formulaId String
+  version   Int
+  targetGrams Decimal
+  createdAt DateTime @default(now())
+  approvedAt DateTime?
+
+  formula Formula       @relation(fields: [formulaId], references: [id], onDelete: Cascade)
+  lines   FormulaLine[]
+  labUsages FormulaLabUsage[]
+
+  @@unique([formulaId, version])
+}
+
+model FormulaLine {
+  id               String  @id @default(cuid())
+  formulaVersionId String
+  materialId       String?
+  childFormulaId   String?
+  label            String
+  grams            Decimal
+  sortOrder        Int     @default(0)
+
+  formulaVersion FormulaVersion @relation(fields: [formulaVersionId], references: [id], onDelete: Cascade)
+  material       Material?      @relation(fields: [materialId], references: [id])
+  childFormula   Formula?       @relation("ChildFormula", fields: [childFormulaId], references: [id])
+
+  @@index([formulaVersionId])
+  @@index([materialId])
+  @@index([childFormulaId])
+}
+
+model InventoryLot {
+  id             String        @id @default(cuid())
+  organizationId String
+  brandId        String?
+  materialId     String
+  lotNumber      String
+  quantityGrams  Decimal
+  reservedGrams  Decimal       @default(0)
+  unitCost       Decimal?
+  receivedDate   DateTime
+  expiryDate     DateTime?
+  qualityStatus  QualityStatus @default(QUARANTINE)
+  location       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  brand        Brand?       @relation(fields: [brandId], references: [id])
+  material     Material     @relation(fields: [materialId], references: [id])
+  movements    InventoryMovement[]
+  reservations StockReservation[]
+
+  @@unique([organizationId, lotNumber])
+  @@index([organizationId])
+  @@index([materialId])
+}
+
+model InventoryMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  materialId     String
+  lotId          String
+  type           MovementType
+  direction      MovementDirection
+  quantityGrams  Decimal
+  balanceBefore  Decimal?
+  balanceAfter   Decimal
+  refType        String
+  refId          String
+  actorId        String?
+  requestId      String?
+  createdAt      DateTime          @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  material     Material     @relation(fields: [materialId], references: [id])
+  lot          InventoryLot @relation(fields: [lotId], references: [id])
+
+  @@index([organizationId])
+  @@index([lotId])
+  @@index([refType, refId])
+}
+
+model StockReservation {
+  id             String   @id @default(cuid())
+  organizationId String
+  lotId          String
+  refType        String
+  refId          String
+  quantityGrams  Decimal
+  releasedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  lot InventoryLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([lotId])
+  @@index([refType, refId])
+}
+
+model FormulaLabUsage {
+  id               String   @id @default(cuid())
+  organizationId   String
+  formulaId        String
+  formulaVersionId String
+  status           String
+  committedAt      DateTime @default(now())
+  reversedAt       DateTime?
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  formula        Formula        @relation(fields: [formulaId], references: [id])
+  formulaVersion FormulaVersion @relation(fields: [formulaVersionId], references: [id])
+
+  @@index([organizationId])
+  @@index([formulaVersionId])
+}
+
+model Document {
+  id             String      @id @default(cuid())
+  organizationId String
+  brandId        String?
+  materialId     String?
+  formulaId      String?
+  type           DocumentType
+  title          String
+  objectKey      String
+  version        String
+  sensitivity    Sensitivity  @default(CONFIDENTIAL)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  brand        Brand?       @relation(fields: [brandId], references: [id])
+  material     Material?    @relation(fields: [materialId], references: [id])
+  formula      Formula?     @relation(fields: [formulaId], references: [id])
+
+  @@index([organizationId])
+  @@index([materialId])
+  @@index([formulaId])
+}
+
+model ProvenanceRecord {
+  id         String   @id @default(cuid())
+  materialId String
+  field      String
+  source     String
+  version    String
+  sourcedAt  DateTime
+
+  material Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@index([materialId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorId        String?
+  action         String
+  entityType     String
+  entityId       String
+  requestId      String?
+  ipAddress      String?
+  beforeJson     Json?
+  afterJson      Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id])
+
+  @@index([organizationId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model ProductionBatch {
+  id             String   @id @default(cuid())
+  organizationId String
+  formulaId      String
+  code           String
+  status         String
+  targetGrams    Decimal
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  formula      Formula      @relation(fields: [formulaId], references: [id])
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model Supplier {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([organizationId, name])
+}
+
+model PurchaseOrder {
+  id             String   @id @default(cuid())
+  organizationId String
+  supplierId     String
+  code           String
+  status         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+
+  @@unique([organizationId, code])
+}
+
+model SalesOrder {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  status         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, code])
+}
