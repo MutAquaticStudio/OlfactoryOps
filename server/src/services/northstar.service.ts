@@ -220,6 +220,110 @@ export class NorthStarService {
     return { data: this.movements }
   }
 
+  adjustInventory(body: {
+    lotId?: string
+    direction?: 'IN' | 'OUT'
+    quantityGrams?: number
+    reason?: string
+  }) {
+    const lot = this.lots.find((item) => item.id === body.lotId)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${body.lotId} was not found`)
+    }
+
+    const quantityGrams = Number(body.quantityGrams ?? 0)
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      throw new UnprocessableEntityException('Adjustment quantityGrams must be greater than 0')
+    }
+
+    const direction = body.direction ?? 'OUT'
+    if (direction !== 'IN' && direction !== 'OUT') {
+      throw new UnprocessableEntityException('Adjustment direction must be IN or OUT')
+    }
+
+    const nextQuantity =
+      direction === 'IN' ? lot.quantityGrams + quantityGrams : lot.quantityGrams - quantityGrams
+    if (nextQuantity < lot.reservedGrams) {
+      throw new UnprocessableEntityException({
+        message: 'Adjustment would create negative available stock',
+        lotId: lot.id,
+        reservedGrams: lot.reservedGrams,
+        requestedQuantityGrams: quantityGrams,
+      })
+    }
+
+    const timestamp = new Date().toISOString()
+    const updatedLot = { ...lot, quantityGrams: nextQuantity }
+    const movement: InventoryMovement = {
+      id: `MOV-ADJ-${String(this.movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'ADJUSTMENT',
+      direction,
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams,
+      balanceAfter: nextQuantity,
+      ref: body.reason?.trim() || 'Cycle count adjustment',
+      actor: 'api:inventory',
+    }
+
+    this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+    this.movements = [movement, ...this.movements]
+    this.recordAudit('inventory.adjust', lot.lotNumber, 'api:inventory', 'allowed')
+
+    return {
+      data: {
+        lot: updatedLot,
+        movement,
+        summary: stockSummary(this.lots).find((item) => item.material.id === lot.materialId),
+        invariant: 'inventory adjustment changes stock only through immutable movement',
+      },
+    }
+  }
+
+  transferInventory(body: { lotId?: string; toLocation?: string }) {
+    const lot = this.lots.find((item) => item.id === body.lotId)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${body.lotId} was not found`)
+    }
+
+    const toLocation = body.toLocation?.trim()
+    if (!toLocation) {
+      throw new UnprocessableEntityException('Transfer toLocation is required')
+    }
+    if (toLocation === lot.location) {
+      throw new UnprocessableEntityException('Transfer target location must be different from current location')
+    }
+
+    const timestamp = new Date().toISOString()
+    const updatedLot = { ...lot, location: toLocation }
+    const movement: InventoryMovement = {
+      id: `MOV-XFER-${String(this.movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'TRANSFER',
+      direction: 'MOVE',
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams: lot.quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: `${lot.location} -> ${toLocation}`,
+      actor: 'api:inventory',
+    }
+
+    this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+    this.movements = [movement, ...this.movements]
+    this.recordAudit('inventory.transfer', lot.lotNumber, 'api:inventory', 'allowed')
+
+    return {
+      data: {
+        lot: updatedLot,
+        movement,
+        summary: stockSummary(this.lots).find((item) => item.material.id === lot.materialId),
+        invariant: 'inventory transfer records movement evidence without changing stock quantity',
+      },
+    }
+  }
+
   receiveInventoryReceipt(body: {
     materialId?: string
     lotNumber?: string

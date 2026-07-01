@@ -75,6 +75,18 @@ export class NorthStarController {
     return this.northStar.receiveInventoryReceipt(body)
   }
 
+  @Post('inventory/adjustments')
+  adjustInventory(
+    @Body() body: { lotId?: string; direction?: 'IN' | 'OUT'; quantityGrams?: number; reason?: string },
+  ) {
+    return this.northStar.adjustInventory(body)
+  }
+
+  @Post('inventory/transfers')
+  transferInventory(@Body() body: { lotId?: string; toLocation?: string }) {
+    return this.northStar.transferInventory(body)
+  }
+
   @Post('auth/login')
   login(@Body() body: { email?: string }) {
     return this.northStar.login(body.email)

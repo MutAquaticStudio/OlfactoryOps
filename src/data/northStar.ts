@@ -126,13 +126,22 @@ export interface InventoryMovement {
     | 'PRODUCTION_CONSUMPTION'
     | 'FULFILLMENT'
     | 'ADJUSTMENT'
-  direction: 'IN' | 'OUT'
+    | 'TRANSFER'
+  direction: 'IN' | 'OUT' | 'MOVE'
   materialId: string
   lotId: string
   quantityGrams: number
   balanceAfter: number
   ref: string
   actor: string
+}
+
+export interface StorageLocation {
+  id: string
+  name: string
+  zone: string
+  condition: string
+  capacityGrams: number
 }
 
 export type DocumentSensitivity = 'Internal' | 'Confidential' | 'Highly Confidential'
@@ -826,6 +835,17 @@ export const initialLots: InventoryLot[] = [
   { id: 'lot-rose-002', materialId: 'mat-roseoxide', lotNumber: 'L-ROX-006', quantityGrams: 6, reservedGrams: 0, receivedDate: '2026-04-18', expiryDate: '2027-04-18', qualityStatus: 'APPROVED', location: 'Vault C', unitCost: 0.28 },
   { id: 'lot-van-001', materialId: 'mat-vanillin', lotNumber: 'L-VAN-021', quantityGrams: 80, reservedGrams: 3, receivedDate: '2026-02-03', expiryDate: '2029-02-03', qualityStatus: 'APPROVED', location: 'Dry Shelf 1', unitCost: 0.038 },
   { id: 'lot-eth-001', materialId: 'mat-ethanol', lotNumber: 'L-ETH-210', quantityGrams: 1400, reservedGrams: 100, receivedDate: '2026-02-01', expiryDate: '2028-02-01', qualityStatus: 'APPROVED', location: 'Flammable Cabinet', unitCost: 0.012 },
+]
+
+export const storageLocations: StorageLocation[] = [
+  { id: 'loc-cold-a', name: 'Cold Room A', zone: 'Warehouse', condition: '15-18C / dark', capacityGrams: 5000 },
+  { id: 'loc-amber-2', name: 'Amber Shelf 2', zone: 'Lab', condition: 'Ambient / amber glass', capacityGrams: 2400 },
+  { id: 'loc-fridge-b', name: 'Fridge B', zone: 'QC', condition: '4-8C / citrus oils', capacityGrams: 1600 },
+  { id: 'loc-vault-c', name: 'Vault C', zone: 'Restricted', condition: 'Locked / high value', capacityGrams: 1200 },
+  { id: 'loc-dry-1', name: 'Dry Shelf 1', zone: 'Warehouse', condition: 'Low humidity', capacityGrams: 3200 },
+  { id: 'loc-flammable', name: 'Flammable Cabinet', zone: 'Safety', condition: 'Fire-rated', capacityGrams: 10000 },
+  { id: 'loc-qc-tray', name: 'QC Tray', zone: 'Quality', condition: 'Quarantine review', capacityGrams: 800 },
+  { id: 'loc-receiving', name: 'Receiving Bay', zone: 'Inbound', condition: 'Inspection pending', capacityGrams: 3000 },
 ]
 
 export const initialMovements: InventoryMovement[] = [

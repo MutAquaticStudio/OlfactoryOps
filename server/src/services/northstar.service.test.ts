@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common'
+import { ForbiddenException, UnprocessableEntityException } from '@nestjs/common'
 import { describe, expect, it } from 'vitest'
 import { NorthStarService } from './northstar.service'
 
@@ -113,6 +113,51 @@ describe('NorthStarService', () => {
     expect(receipt.summary?.available).toBeGreaterThan(232)
     expect(receipt.invariant).toContain('immutable IN movement')
     expect(service.inventoryMovements().data.length).toBe(beforeMovements + 1)
+  })
+
+  it('adjusts stock only through immutable adjustment movements and blocks negative availability', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const adjustment = service.adjustInventory({
+      lotId: 'lot-hed-001',
+      direction: 'OUT',
+      quantityGrams: 6,
+      reason: 'Cycle count variance',
+    }).data
+
+    expect(adjustment.lot.quantityGrams).toBe(180)
+    expect(adjustment.movement.type).toBe('ADJUSTMENT')
+    expect(adjustment.movement.direction).toBe('OUT')
+    expect(adjustment.summary?.available).toBe(180)
+    expect(adjustment.invariant).toContain('only through immutable movement')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements + 1)
+
+    expect(() =>
+      service.adjustInventory({
+        lotId: 'lot-iso-001',
+        direction: 'OUT',
+        quantityGrams: 240,
+        reason: 'Invalid write down',
+      }),
+    ).toThrow(UnprocessableEntityException)
+  })
+
+  it('transfers lots between storage locations without changing stock quantity', () => {
+    const service = new NorthStarService()
+    const beforeSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-ambroxan')
+    const transfer = service.transferInventory({
+      lotId: 'lot-amb-001',
+      toLocation: 'Cold Room A',
+    }).data
+    const afterSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-ambroxan')
+
+    expect(transfer.lot.location).toBe('Cold Room A')
+    expect(transfer.movement.type).toBe('TRANSFER')
+    expect(transfer.movement.direction).toBe('MOVE')
+    expect(transfer.movement.balanceAfter).toBe(38)
+    expect(afterSummary?.available).toBe(beforeSummary?.available)
+    expect(afterSummary?.current).toBe(beforeSummary?.current)
+    expect(transfer.invariant).toContain('without changing stock quantity')
   })
 
   it('runs production consumption separately from lab usage', () => {

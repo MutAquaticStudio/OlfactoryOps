@@ -63,6 +63,7 @@ import {
   records,
   resolveFormulaWithCatalog,
   statusMeta,
+  storageLocations,
   stockSummary,
   type Allocation,
   type AuditEvent,
@@ -87,7 +88,16 @@ type UsageRecord = {
   allocations: Allocation[]
 }
 
-type ModalKind = 'commit' | 'auditExport' | 'ssoPolicy' | 'newFormula' | 'formulaLine' | 'receiveStock' | null
+type ModalKind =
+  | 'commit'
+  | 'auditExport'
+  | 'ssoPolicy'
+  | 'newFormula'
+  | 'formulaLine'
+  | 'receiveStock'
+  | 'inventoryAdjustment'
+  | 'inventoryTransfer'
+  | null
 
 type ApiEnvelope<T> = {
   data: T
@@ -164,6 +174,12 @@ function App() {
   const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
   const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
   const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
+  const [adjustmentLotId, setAdjustmentLotId] = useState(initialLots[0]?.id ?? '')
+  const [adjustmentDirection, setAdjustmentDirection] = useState<'IN' | 'OUT'>('OUT')
+  const [adjustmentQuantityGrams, setAdjustmentQuantityGrams] = useState(5)
+  const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
+  const [transferLotId, setTransferLotId] = useState(initialLots[0]?.id ?? '')
+  const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
 
   const selectedDomain = domains.find((domain) => domain.key === activeKey)
   const selectedFormula = useMemo(() => {
@@ -182,6 +198,12 @@ function App() {
   )
   const stock = useMemo(() => stockSummary(lots), [lots])
   const stats = useMemo(() => readinessStats(), [])
+  const selectedAdjustmentLot = lots.find((lot) => lot.id === adjustmentLotId)
+  const selectedTransferLot = lots.find((lot) => lot.id === transferLotId)
+  const adjustmentWouldGoNegative =
+    adjustmentDirection === 'OUT' &&
+    selectedAdjustmentLot !== undefined &&
+    selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
 
   useEffect(() => {
     function handleKeys(event: KeyboardEvent) {
@@ -389,6 +411,71 @@ function App() {
     setModal(null)
   }
 
+  function adjustInventoryLot() {
+    const lot = lots.find((item) => item.id === adjustmentLotId)
+    const quantityGrams = Number(adjustmentQuantityGrams)
+
+    if (!lot || !Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      return
+    }
+
+    const nextQuantity =
+      adjustmentDirection === 'IN' ? lot.quantityGrams + quantityGrams : lot.quantityGrams - quantityGrams
+    if (nextQuantity < lot.reservedGrams) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const movement: InventoryMovement = {
+      id: `MOV-ADJ-${String(movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'ADJUSTMENT',
+      direction: adjustmentDirection,
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams,
+      balanceAfter: nextQuantity,
+      ref: adjustmentReason.trim() || 'Cycle count correction',
+      actor: 'Inventory Manager',
+    }
+
+    setLots((current) =>
+      current.map((item) => (item.id === lot.id ? { ...item, quantityGrams: nextQuantity } : item)),
+    )
+    setMovements((current) => [movement, ...current])
+    setAdjustmentQuantityGrams(5)
+    setActiveKey('inventory')
+    setModal(null)
+  }
+
+  function transferInventoryLot() {
+    const lot = lots.find((item) => item.id === transferLotId)
+    const toLocation = transferLocation.trim()
+
+    if (!lot || !toLocation || lot.location === toLocation) {
+      return
+    }
+
+    const timestamp = new Date().toISOString()
+    const movement: InventoryMovement = {
+      id: `MOV-XFER-${String(movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'TRANSFER',
+      direction: 'MOVE',
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams: lot.quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: `${lot.location} -> ${toLocation}`,
+      actor: 'Inventory Manager',
+    }
+
+    setLots((current) => current.map((item) => (item.id === lot.id ? { ...item, location: toLocation } : item)))
+    setMovements((current) => [movement, ...current])
+    setActiveKey('inventory')
+    setModal(null)
+  }
+
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
@@ -441,6 +528,8 @@ function App() {
                   onNewFormula={() => setModal('newFormula')}
                   onAddFormulaLine={() => setModal('formulaLine')}
                   onReceiveStock={() => setModal('receiveStock')}
+                  onAdjustStock={() => setModal('inventoryAdjustment')}
+                  onTransferStock={() => setModal('inventoryTransfer')}
                 />
               </motion.div>
             ) : null}
@@ -593,6 +682,120 @@ function App() {
               onChange={(event) => setReceiveExpiryDate(event.target.value)}
             />
           </label>
+        </div>
+      </BlackPopup>
+
+      <BlackPopup
+        open={modal === 'inventoryAdjustment'}
+        title="Adjust stock"
+        description="Creates an immutable ADJUSTMENT movement. Available stock cannot go negative."
+        actionLabel="Create Adjustment"
+        onClose={() => setModal(null)}
+        onAction={adjustInventoryLot}
+        actionDisabled={!adjustmentLotId || adjustmentQuantityGrams <= 0 || adjustmentWouldGoNegative}
+      >
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Lot</span>
+            <select
+              aria-label="Adjustment lot"
+              value={adjustmentLotId}
+              onChange={(event) => setAdjustmentLotId(event.target.value)}
+            >
+              {lots.map((lot) => {
+                const material = materials.find((item) => item.id === lot.materialId)
+                return (
+                  <option key={lot.id} value={lot.id}>
+                    {lot.lotNumber} / {material?.name} / {formatGrams(lot.quantityGrams)}
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Direction</span>
+            <select
+              aria-label="Adjustment direction"
+              value={adjustmentDirection}
+              onChange={(event) => setAdjustmentDirection(event.target.value as 'IN' | 'OUT')}
+            >
+              <option value="OUT">OUT - write down</option>
+              <option value="IN">IN - correction gain</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Quantity grams</span>
+            <input
+              aria-label="Adjustment quantity grams"
+              min={0.1}
+              step={0.1}
+              type="number"
+              value={adjustmentQuantityGrams}
+              onChange={(event) => setAdjustmentQuantityGrams(Number(event.target.value))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Reason</span>
+            <input
+              aria-label="Adjustment reason"
+              value={adjustmentReason}
+              onChange={(event) => setAdjustmentReason(event.target.value)}
+            />
+          </label>
+          {adjustmentWouldGoNegative && (
+            <div className="empty-state compact">
+              <strong>Blocked by INV-005 no negative stock.</strong>
+              <span>Reduce the write-down or release reservations first.</span>
+            </div>
+          )}
+        </div>
+      </BlackPopup>
+
+      <BlackPopup
+        open={modal === 'inventoryTransfer'}
+        title="Transfer lot"
+        description="Moves a lot between storage locations and records TRANSFER / MOVE evidence without changing stock."
+        actionLabel="Confirm Transfer"
+        onClose={() => setModal(null)}
+        onAction={transferInventoryLot}
+        actionDisabled={!transferLotId || !transferLocation.trim() || selectedTransferLot?.location === transferLocation}
+      >
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Lot</span>
+            <select
+              aria-label="Transfer lot"
+              value={transferLotId}
+              onChange={(event) => setTransferLotId(event.target.value)}
+            >
+              {lots.map((lot) => {
+                const material = materials.find((item) => item.id === lot.materialId)
+                return (
+                  <option key={lot.id} value={lot.id}>
+                    {lot.lotNumber} / {material?.name} / {lot.location}
+                  </option>
+                )
+              })}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>To location</span>
+            <select
+              aria-label="Transfer location"
+              value={transferLocation}
+              onChange={(event) => setTransferLocation(event.target.value)}
+            >
+              {storageLocations.map((location) => (
+                <option key={location.id} value={location.name}>
+                  {location.name} / {location.condition}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="popup-grid">
+            <Metric label="Movement type" value="TRANSFER" />
+            <Metric label="Quantity effect" value="No stock delta" />
+          </div>
         </div>
       </BlackPopup>
 
@@ -817,6 +1020,8 @@ function DomainWorkspace({
   onNewFormula,
   onAddFormulaLine,
   onReceiveStock,
+  onAdjustStock,
+  onTransferStock,
 }: {
   domain: DomainModule
   lots: InventoryLot[]
@@ -840,6 +1045,8 @@ function DomainWorkspace({
   onNewFormula: () => void
   onAddFormulaLine: () => void
   onReceiveStock: () => void
+  onAdjustStock: () => void
+  onTransferStock: () => void
 }) {
   return (
     <div className="domain-page">
@@ -862,7 +1069,14 @@ function DomainWorkspace({
         />
       )}
       {domain.key === 'inventory' && (
-        <InventoryWorkspace lots={lots} movements={movements} stock={stock} onReceiveStock={onReceiveStock} />
+        <InventoryWorkspace
+          lots={lots}
+          movements={movements}
+          stock={stock}
+          onReceiveStock={onReceiveStock}
+          onAdjustStock={onAdjustStock}
+          onTransferStock={onTransferStock}
+        />
       )}
       {domain.key === 'labUsage' && (
         <LabUsageWorkspace
@@ -1126,11 +1340,15 @@ function InventoryWorkspace({
   movements,
   stock,
   onReceiveStock,
+  onAdjustStock,
+  onTransferStock,
 }: {
   lots: InventoryLot[]
   movements: InventoryMovement[]
   stock: ReturnType<typeof stockSummary>
   onReceiveStock: () => void
+  onAdjustStock: () => void
+  onTransferStock: () => void
 }) {
   return (
     <div className="workspace-grid inventory-grid">
@@ -1138,10 +1356,18 @@ function InventoryWorkspace({
         title="Stock Summary"
         icon={Boxes}
         right={
-          <button className="primary-button" type="button" onClick={onReceiveStock}>
-            <Plus size={15} />
-            Create New
-          </button>
+          <div className="action-row">
+            <button className="primary-button" type="button" onClick={onReceiveStock}>
+              <Plus size={15} />
+              Create New
+            </button>
+            <button className="ghost-button small" type="button" onClick={onAdjustStock}>
+              Adjust Stock
+            </button>
+            <button className="ghost-button small" type="button" onClick={onTransferStock}>
+              Transfer Lot
+            </button>
+          </div>
         }
       >
         <div className="stock-grid">
@@ -1152,18 +1378,47 @@ function InventoryWorkspace({
                 <span>{item.material.family}</span>
               </div>
               <div className="mono-value">{formatGrams(item.available)}</div>
+              <span>current {formatGrams(item.current)} / reserved {formatGrams(item.reserved)}</span>
             </div>
           ))}
         </div>
       </Panel>
 
+      <Panel title="Storage Locations" icon={PackageSearch}>
+        <div className="material-list">
+          {storageLocations.slice(0, 6).map((location) => {
+            const storedGrams = lots
+              .filter((lot) => lot.location === location.name)
+              .reduce((sum, lot) => sum + lot.quantityGrams, 0)
+            return (
+              <div className="material-row static" key={location.id}>
+                <div>
+                  <strong>{location.name}</strong>
+                  <span>{location.zone} / {location.condition}</span>
+                </div>
+                <div className="mono-value">{formatGrams(storedGrams)}</div>
+              </div>
+            )
+          })}
+        </div>
+      </Panel>
+
       <Panel
+        className="wide"
         title="Lots"
         icon={PackageCheck}
         right={
-          <button className="ghost-button small" type="button" onClick={onReceiveStock}>
-            Receive Stock
-          </button>
+          <div className="action-row">
+            <button className="ghost-button small" type="button" onClick={onReceiveStock}>
+              Receive Stock
+            </button>
+            <button className="ghost-button small" type="button" onClick={onAdjustStock}>
+              Adjust
+            </button>
+            <button className="ghost-button small" type="button" onClick={onTransferStock}>
+              Transfer
+            </button>
+          </div>
         }
       >
         <div className="lot-table">
@@ -1173,10 +1428,11 @@ function InventoryWorkspace({
               <div className="lot-row" key={lot.id}>
                 <div>
                   <strong>{lot.lotNumber}</strong>
-                  <span>{material?.name}</span>
+                  <span>{material?.name} / {lot.location}</span>
                 </div>
                 <StatusBadge status={lot.qualityStatus === 'APPROVED' ? 'stable' : 'review'} label={lot.qualityStatus} />
                 <span className="mono-value">{formatGrams(lot.quantityGrams)}</span>
+                <span className="mono-value">reserved {formatGrams(lot.reservedGrams)}</span>
                 <span className="mono-value">{lot.expiryDate}</span>
               </div>
             )
