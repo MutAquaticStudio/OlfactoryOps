@@ -75,6 +75,7 @@ import {
   type FormulaLine,
   type InventoryLot,
   type InventoryMovement,
+  type LabWeighingSession,
   type ResolvedLeaf,
   type SignedDocumentUrl,
 } from './data/northStar'
@@ -86,6 +87,7 @@ type UsageRecord = {
   batchGrams: number
   status: 'COMMITTED' | 'REVERSED'
   allocations: Allocation[]
+  weighingSession?: LabWeighingSession
 }
 
 type ModalKind =
@@ -154,6 +156,104 @@ const shellMotion = {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
 
+function allocationKey(allocation: Pick<Allocation, 'materialId' | 'lotId'>) {
+  return `${allocation.materialId}:${allocation.lotId}`
+}
+
+function buildWeighingSessionPreview({
+  formula,
+  plan,
+  lots,
+  batchGrams,
+  actualWeights,
+  tolerancePercent,
+  operator,
+}: {
+  formula: Formula
+  plan: ReturnType<typeof planLabUsage>
+  lots: InventoryLot[]
+  batchGrams: number
+  actualWeights: Record<string, number>
+  tolerancePercent: number
+  operator: string
+}): LabWeighingSession {
+  const safeTolerance = Number.isFinite(tolerancePercent) && tolerancePercent >= 0 ? tolerancePercent : 0
+  const remainingAvailableByLot = new Map(
+    lots.map((lot) => [lot.id, Math.max(0, lot.quantityGrams - lot.reservedGrams)]),
+  )
+  const lines = plan.allocations.map((allocation) => {
+    const actualGrams = Number(actualWeights[allocationKey(allocation)] ?? allocation.allocatedGrams)
+    const available = remainingAvailableByLot.get(allocation.lotId) ?? 0
+    remainingAvailableByLot.set(allocation.lotId, available - actualGrams)
+    const deviationGrams = actualGrams - allocation.allocatedGrams
+    const deviationPercent =
+      allocation.allocatedGrams > 0 ? Math.abs(deviationGrams / allocation.allocatedGrams) * 100 : 0
+
+    return {
+      materialId: allocation.materialId,
+      materialName: allocation.materialName,
+      lotId: allocation.lotId,
+      lotNumber: allocation.lotNumber,
+      targetGrams: allocation.allocatedGrams,
+      actualGrams,
+      deviationGrams,
+      deviationPercent,
+      withinTolerance:
+        Number.isFinite(actualGrams) &&
+        actualGrams > 0 &&
+        actualGrams <= available + 0.0001 &&
+        deviationPercent <= safeTolerance + 0.0001,
+    }
+  })
+
+  return {
+    id: 'WGH-UI-PREVIEW',
+    formulaId: formula.id,
+    formulaCode: formula.code,
+    targetBatchGrams: batchGrams,
+    tolerancePercent: safeTolerance,
+    operator: operator.trim() || 'Perfumer',
+    status:
+      plan.shortfalls.length === 0 && lines.length > 0 && lines.every((line) => line.withinTolerance)
+        ? 'READY'
+        : 'NEEDS_REVIEW',
+    lines,
+    createdAt: 'preview',
+  }
+}
+
+function WeighingEvidence({ session, compact = false }: { session: LabWeighingSession; compact?: boolean }) {
+  const actualTotal = session.lines.reduce((sum, line) => sum + line.actualGrams, 0)
+  const maxDeviation = session.lines.reduce((max, line) => Math.max(max, line.deviationPercent), 0)
+
+  return (
+    <div className={`weighing-evidence ${compact ? 'is-compact' : ''}`}>
+      <div className="weighing-evidence-head">
+        <div>
+          <strong>Actual weighing evidence</strong>
+          <span>
+            {session.operator} / {session.status}
+          </span>
+        </div>
+        <DataTag label="Actual" value={formatGrams(actualTotal)} tone="blue" />
+        <DataTag label="Deviation" value={`${maxDeviation.toFixed(2)}%`} tone={session.status === 'READY' ? 'green' : 'amber'} />
+      </div>
+      {session.lines.map((line) => (
+        <div className="weighing-evidence-row" key={allocationKey(line)}>
+          <div>
+            <strong>{line.materialName}</strong>
+            <span>{line.lotNumber}</span>
+          </div>
+          <span className="mono-value">{formatGrams(line.actualGrams)}</span>
+          <span className={`deviation-pill ${line.withinTolerance ? 'is-ok' : 'is-alert'}`}>
+            {line.deviationPercent.toFixed(2)}%
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
   const [commandOpen, setCommandOpen] = useState(false)
@@ -166,6 +266,9 @@ function App() {
   const [movements, setMovements] = useState<InventoryMovement[]>(initialMovements)
   const [usageHistory, setUsageHistory] = useState<UsageRecord[]>([])
   const [batchGrams, setBatchGrams] = useState(12.5)
+  const [actualWeights, setActualWeights] = useState<Record<string, number>>({})
+  const [weighingTolerancePercent, setWeighingTolerancePercent] = useState(2)
+  const [weighingOperator, setWeighingOperator] = useState('Thuan Le Minh')
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
   const [newFormulaTargetGrams, setNewFormulaTargetGrams] = useState(100)
   const [newLineMaterialId, setNewLineMaterialId] = useState(materials[0]?.id ?? '')
@@ -196,6 +299,20 @@ function App() {
     () => planLabUsage(resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams),
     [resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams],
   )
+  const weighingSessionPreview = useMemo(
+    () =>
+      buildWeighingSessionPreview({
+        formula: selectedFormula,
+        plan: labPlan,
+        lots,
+        batchGrams,
+        actualWeights,
+        tolerancePercent: weighingTolerancePercent,
+        operator: weighingOperator,
+      }),
+    [actualWeights, batchGrams, labPlan, lots, selectedFormula, weighingOperator, weighingTolerancePercent],
+  )
+  const weighingReady = weighingSessionPreview.status === 'READY'
   const stock = useMemo(() => stockSummary(lots), [lots])
   const stats = useMemo(() => readinessStats(), [])
   const selectedAdjustmentLot = lots.find((lot) => lot.id === adjustmentLotId)
@@ -204,6 +321,14 @@ function App() {
     adjustmentDirection === 'OUT' &&
     selectedAdjustmentLot !== undefined &&
     selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
+
+  useEffect(() => {
+    const nextWeights: Record<string, number> = {}
+    labPlan.allocations.forEach((allocation) => {
+      nextWeights[allocationKey(allocation)] = Number(allocation.allocatedGrams.toFixed(3))
+    })
+    setActualWeights(nextWeights)
+  }, [labPlan.allocations])
 
   useEffect(() => {
     function handleKeys(event: KeyboardEvent) {
@@ -221,8 +346,16 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeys)
   }, [])
 
+  function setTargetWeights() {
+    const nextWeights: Record<string, number> = {}
+    labPlan.allocations.forEach((allocation) => {
+      nextWeights[allocationKey(allocation)] = Number(allocation.allocatedGrams.toFixed(3))
+    })
+    setActualWeights(nextWeights)
+  }
+
   function commitLabUsage() {
-    if (labPlan.shortfalls.length > 0 || resolvedLeaves.length === 0) {
+    if (!weighingReady || resolvedLeaves.length === 0) {
       return
     }
 
@@ -230,13 +363,21 @@ function App() {
     const timestamp = '2026-07-01 06:48'
     const lotMap = new Map(lots.map((lot) => [lot.id, { ...lot }]))
     const createdMovements: InventoryMovement[] = []
+    const actualAllocations: Allocation[] = []
 
     labPlan.allocations.forEach((allocation, index) => {
       const lot = lotMap.get(allocation.lotId)
+      const line = weighingSessionPreview.lines[index]
       if (!lot) {
         return
       }
-      lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
+      const actualGrams = line?.actualGrams ?? allocation.allocatedGrams
+      lot.quantityGrams = Math.max(0, lot.quantityGrams - actualGrams)
+      actualAllocations.push({
+        ...allocation,
+        allocatedGrams: actualGrams,
+        balanceAfter: lot.quantityGrams,
+      })
       createdMovements.push({
         id: `MOV-LAB-${usageHistory.length + 1}-${index + 1}`,
         at: timestamp,
@@ -244,10 +385,10 @@ function App() {
         direction: 'OUT',
         materialId: allocation.materialId,
         lotId: allocation.lotId,
-        quantityGrams: allocation.allocatedGrams,
+        quantityGrams: actualGrams,
         balanceAfter: lot.quantityGrams,
         ref: usageId,
-        actor: 'Perfumer',
+        actor: weighingSessionPreview.operator,
       })
     })
 
@@ -260,7 +401,8 @@ function App() {
         formulaCode: selectedFormula.code,
         batchGrams,
         status: 'COMMITTED',
-        allocations: labPlan.allocations,
+        allocations: actualAllocations,
+        weighingSession: { ...weighingSessionPreview, id: `WGH-${usageId}`, createdAt: timestamp },
       },
       ...current,
     ])
@@ -522,6 +664,20 @@ function App() {
                   batchGrams={batchGrams}
                   setBatchGrams={setBatchGrams}
                   usageHistory={usageHistory}
+                  weighingSession={weighingSessionPreview}
+                  actualWeights={actualWeights}
+                  onActualWeightChange={(key, value) =>
+                    setActualWeights((current) => ({
+                      ...current,
+                      [key]: value,
+                    }))
+                  }
+                  weighingTolerancePercent={weighingTolerancePercent}
+                  setWeighingTolerancePercent={setWeighingTolerancePercent}
+                  weighingOperator={weighingOperator}
+                  setWeighingOperator={setWeighingOperator}
+                  weighingReady={weighingReady}
+                  onUseTargetWeights={setTargetWeights}
                   onCommit={() => setModal('commit')}
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
@@ -551,9 +707,10 @@ function App() {
         actionLabel="Create movements"
         onClose={() => setModal(null)}
         onAction={commitLabUsage}
-        actionDisabled={labPlan.shortfalls.length > 0}
+        actionDisabled={!weighingReady}
       >
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} compact />
+        <WeighingEvidence session={weighingSessionPreview} compact />
       </BlackPopup>
 
       <BlackPopup
@@ -1014,6 +1171,15 @@ function DomainWorkspace({
   batchGrams,
   setBatchGrams,
   usageHistory,
+  weighingSession,
+  actualWeights,
+  onActualWeightChange,
+  weighingTolerancePercent,
+  setWeighingTolerancePercent,
+  weighingOperator,
+  setWeighingOperator,
+  weighingReady,
+  onUseTargetWeights,
   onCommit,
   onReverse,
   onOpenModal,
@@ -1039,6 +1205,15 @@ function DomainWorkspace({
   batchGrams: number
   setBatchGrams: (value: number) => void
   usageHistory: UsageRecord[]
+  weighingSession: LabWeighingSession
+  actualWeights: Record<string, number>
+  onActualWeightChange: (key: string, value: number) => void
+  weighingTolerancePercent: number
+  setWeighingTolerancePercent: (value: number) => void
+  weighingOperator: string
+  setWeighingOperator: (value: string) => void
+  weighingReady: boolean
+  onUseTargetWeights: () => void
   onCommit: () => void
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
@@ -1084,6 +1259,15 @@ function DomainWorkspace({
           batchGrams={batchGrams}
           setBatchGrams={setBatchGrams}
           usageHistory={usageHistory}
+          weighingSession={weighingSession}
+          actualWeights={actualWeights}
+          onActualWeightChange={onActualWeightChange}
+          weighingTolerancePercent={weighingTolerancePercent}
+          setWeighingTolerancePercent={setWeighingTolerancePercent}
+          weighingOperator={weighingOperator}
+          setWeighingOperator={setWeighingOperator}
+          weighingReady={weighingReady}
+          onUseTargetWeights={onUseTargetWeights}
           onCommit={onCommit}
           onReverse={onReverse}
         />
@@ -1452,6 +1636,15 @@ function LabUsageWorkspace({
   batchGrams,
   setBatchGrams,
   usageHistory,
+  weighingSession,
+  actualWeights,
+  onActualWeightChange,
+  weighingTolerancePercent,
+  setWeighingTolerancePercent,
+  weighingOperator,
+  setWeighingOperator,
+  weighingReady,
+  onUseTargetWeights,
   onCommit,
   onReverse,
 }: {
@@ -1459,13 +1652,28 @@ function LabUsageWorkspace({
   batchGrams: number
   setBatchGrams: (value: number) => void
   usageHistory: UsageRecord[]
+  weighingSession: LabWeighingSession
+  actualWeights: Record<string, number>
+  onActualWeightChange: (key: string, value: number) => void
+  weighingTolerancePercent: number
+  setWeighingTolerancePercent: (value: number) => void
+  weighingOperator: string
+  setWeighingOperator: (value: string) => void
+  weighingReady: boolean
+  onUseTargetWeights: () => void
   onCommit: () => void
   onReverse: () => void
 }) {
   const latestCommitted = usageHistory.find((usage) => usage.status === 'COMMITTED')
+  const actualTotal = weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0)
+  const maxDeviation = weighingSession.lines.reduce((max, line) => Math.max(max, line.deviationPercent), 0)
   return (
     <div className="workspace-grid lab-grid">
-      <Panel title="Commit Preview" icon={ClipboardCheck} right={<DataTag label="Formula" value="FRM-0421 v12" />}>
+      <Panel
+        title="Commit Preview"
+        icon={ClipboardCheck}
+        right={<DataTag label="Formula" value={weighingSession.formulaCode} />}
+      >
         <label className="slider-row">
           <span>Trial batch grams</span>
           <input
@@ -1480,14 +1688,86 @@ function LabUsageWorkspace({
         </label>
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} />
         <div className="action-row">
-          <button className="primary-button" type="button" onClick={onCommit} disabled={labPlan.shortfalls.length > 0}>
+          <button className="primary-button" type="button" onClick={onCommit} disabled={!weighingReady}>
             <Play size={16} />
-            Commit Usage
+            Commit Actual Usage
           </button>
           <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted}>
             <RotateCcw size={16} />
             Reverse latest
           </button>
+        </div>
+      </Panel>
+
+      <Panel
+        title="Actual Weighing Session"
+        icon={Beaker}
+        right={
+          <StatusBadge
+            status={weighingSession.status === 'READY' ? 'stable' : 'review'}
+            label={weighingSession.status}
+          />
+        }
+      >
+        <div className="weighing-controls">
+          <label className="field-row">
+            <span>Operator</span>
+            <input
+              aria-label="Weighing operator"
+              value={weighingOperator}
+              onChange={(event) => setWeighingOperator(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Tolerance %</span>
+            <input
+              aria-label="Weighing tolerance percent"
+              min={0}
+              step={0.1}
+              type="number"
+              value={weighingTolerancePercent}
+              onChange={(event) => setWeighingTolerancePercent(Number(event.target.value))}
+            />
+          </label>
+          <button className="ghost-button small" type="button" onClick={onUseTargetWeights}>
+            Use target weights
+          </button>
+        </div>
+
+        <div className="weighing-table">
+          {weighingSession.lines.length === 0 ? (
+            <div className="empty-state">No eligible allocations to weigh yet.</div>
+          ) : (
+            weighingSession.lines.map((line) => {
+              const key = allocationKey(line)
+              return (
+                <label className="weighing-row" key={key}>
+                  <div>
+                    <strong>{line.materialName}</strong>
+                    <span>
+                      {line.lotNumber} / target {formatGrams(line.targetGrams)}
+                    </span>
+                  </div>
+                  <input
+                    aria-label={`Actual grams for ${line.materialName} ${line.lotNumber}`}
+                    min={0}
+                    step={0.001}
+                    type="number"
+                    value={actualWeights[key] ?? line.actualGrams}
+                    onChange={(event) => onActualWeightChange(key, Number(event.target.value))}
+                  />
+                  <span className={`deviation-pill ${line.withinTolerance ? 'is-ok' : 'is-alert'}`}>
+                    {line.deviationPercent.toFixed(2)}%
+                  </span>
+                </label>
+              )
+            })
+          )}
+        </div>
+
+        <div className="weighing-summary">
+          <DataTag label="Actual total" value={formatGrams(actualTotal)} tone="blue" />
+          <DataTag label="Max deviation" value={`${maxDeviation.toFixed(2)}%`} tone={weighingReady ? 'green' : 'amber'} />
         </div>
       </Panel>
 
@@ -1502,6 +1782,11 @@ function LabUsageWorkspace({
                   <strong>{usage.id}</strong>
                   <span>
                     {usage.formulaCode} / {formatGrams(usage.batchGrams)}
+                    {usage.weighingSession
+                      ? ` / actual ${formatGrams(
+                          usage.weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0),
+                        )}`
+                      : ''}
                   </span>
                 </div>
                 <StatusBadge status={usage.status === 'COMMITTED' ? 'stable' : 'review'} label={usage.status} />

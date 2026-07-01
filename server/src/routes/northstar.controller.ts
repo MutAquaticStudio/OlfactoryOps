@@ -1,6 +1,18 @@
 import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
 
+type LabUsageBody = {
+  formulaId?: string
+  grams?: number
+  actuals?: {
+    materialId?: string
+    lotId: string
+    actualGrams: number
+  }[]
+  tolerancePercent?: number
+  operator?: string
+}
+
 @Controller()
 export class NorthStarController {
   constructor(@Inject(NorthStarService) private readonly northStar: NorthStarService) {}
@@ -162,9 +174,22 @@ export class NorthStarController {
     return this.northStar.labUsagePlan(formulaId, Number(grams))
   }
 
+  @Post('lab-usage/weighing-session')
+  recordLabWeighingSession(@Body() body: LabUsageBody) {
+    return this.northStar.recordLabWeighingSession(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
+      actuals: body.actuals,
+      tolerancePercent: body.tolerancePercent,
+      operator: body.operator,
+    })
+  }
+
   @Post('lab-usage/commit')
-  commitLabUsage(@Body() body: { formulaId?: string; grams?: number }) {
-    return this.northStar.commitLabUsage(body.formulaId ?? 'frm-0421', body.grams ?? 12.5)
+  commitLabUsage(@Body() body: LabUsageBody) {
+    return this.northStar.commitLabUsage(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
+      actuals: body.actuals,
+      tolerancePercent: body.tolerancePercent,
+      operator: body.operator,
+    })
   }
 
   @Post('lab-usage/reverse-latest')

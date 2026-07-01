@@ -44,12 +44,25 @@ import {
   type FormulaLine,
   type InventoryLot,
   type InventoryMovement,
+  type LabWeighingSession,
   type NumberingSequenceRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
   type SalesOrderRecord,
   type TenantSettingsRecord,
 } from '../../../src/data/northStar.js'
+
+type WeighingActualInput = {
+  materialId?: string
+  lotId: string
+  actualGrams: number
+}
+
+type LabWeighingOptions = {
+  actuals?: WeighingActualInput[]
+  tolerancePercent?: number
+  operator?: string
+}
 
 type UsageRecord = {
   id: string
@@ -58,6 +71,7 @@ type UsageRecord = {
   grams: number
   status: 'COMMITTED' | 'REVERSED'
   allocations: Allocation[]
+  weighingSession?: LabWeighingSession
   createdAt: string
 }
 
@@ -538,7 +552,7 @@ export class NorthStarService {
     }
   }
 
-  commitLabUsage(formulaId: string, grams: number) {
+  recordLabWeighingSession(formulaId: string, grams: number, options: LabWeighingOptions = {}) {
     const formula = this.formulaRecords.find((item) => item.id === formulaId)
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
@@ -551,17 +565,107 @@ export class NorthStarService {
       })
     }
 
+    const tolerancePercent = Number(options.tolerancePercent ?? 2)
+    if (!Number.isFinite(tolerancePercent) || tolerancePercent < 0) {
+      throw new UnprocessableEntityException('Weighing tolerancePercent must be 0 or greater')
+    }
+
+    const remainingAvailableByLot = new Map(
+      this.lots.map((lot) => [lot.id, Math.max(0, lot.quantityGrams - lot.reservedGrams)]),
+    )
+    const timestamp = new Date().toISOString()
+    const lines = plan.allocations.map((allocation) => {
+      const actualInput = options.actuals?.find(
+        (item) =>
+          item.lotId === allocation.lotId &&
+          (item.materialId === undefined || item.materialId === allocation.materialId),
+      )
+      const actualGrams = Number(actualInput?.actualGrams ?? allocation.allocatedGrams)
+      if (!Number.isFinite(actualGrams) || actualGrams <= 0) {
+        throw new UnprocessableEntityException('Actual weighed grams must be greater than 0')
+      }
+
+      const available = remainingAvailableByLot.get(allocation.lotId) ?? 0
+      if (actualGrams - available > 0.0001) {
+        throw new UnprocessableEntityException({
+          message: 'Actual weighed grams exceed available lot stock',
+          lotId: allocation.lotId,
+          availableGrams: available,
+          actualGrams,
+        })
+      }
+      remainingAvailableByLot.set(allocation.lotId, available - actualGrams)
+
+      const deviationGrams = actualGrams - allocation.allocatedGrams
+      const deviationPercent =
+        allocation.allocatedGrams > 0 ? Math.abs(deviationGrams / allocation.allocatedGrams) * 100 : 0
+
+      return {
+        materialId: allocation.materialId,
+        materialName: allocation.materialName,
+        lotId: allocation.lotId,
+        lotNumber: allocation.lotNumber,
+        targetGrams: allocation.allocatedGrams,
+        actualGrams,
+        deviationGrams,
+        deviationPercent,
+        withinTolerance: deviationPercent <= tolerancePercent + 0.0001,
+      }
+    })
+    const weighingSession: LabWeighingSession = {
+      id: `WGH-API-${String(this.usageHistory.length + 1).padStart(4, '0')}`,
+      formulaId,
+      formulaCode: formula.code,
+      targetBatchGrams: grams,
+      tolerancePercent,
+      operator: options.operator?.trim() || 'api:perfumer',
+      status: lines.every((line) => line.withinTolerance) ? 'READY' : 'NEEDS_REVIEW',
+      lines,
+      createdAt: timestamp,
+    }
+
+    return {
+      data: {
+        weighingSession,
+        canCommit: weighingSession.status === 'READY',
+        invariant: 'weighing session validates actual grams before movement creation',
+      },
+    }
+  }
+
+  commitLabUsage(formulaId: string, grams: number, options: LabWeighingOptions = {}) {
+    const formula = this.formulaRecords.find((item) => item.id === formulaId)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${formulaId} was not found`)
+    }
+    const plan = this.labUsagePlan(formulaId, grams).data
+    const weighingSession = this.recordLabWeighingSession(formulaId, grams, options).data.weighingSession
+    if (weighingSession.status !== 'READY') {
+      throw new UnprocessableEntityException({
+        message: 'Lab usage cannot be committed while actual weights need review',
+        weighingSession,
+      })
+    }
+
     const usageId = `LAB-API-${String(this.usageHistory.length + 1).padStart(4, '0')}`
     const timestamp = new Date().toISOString()
     const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
     const createdMovements: InventoryMovement[] = []
+    const actualAllocations: Allocation[] = []
 
     plan.allocations.forEach((allocation, index) => {
       const lot = lotMap.get(allocation.lotId)
+      const line = weighingSession.lines[index]
       if (!lot) {
         return
       }
-      lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
+      const actualGrams = line?.actualGrams ?? allocation.allocatedGrams
+      lot.quantityGrams = Math.max(0, lot.quantityGrams - actualGrams)
+      actualAllocations.push({
+        ...allocation,
+        allocatedGrams: actualGrams,
+        balanceAfter: lot.quantityGrams,
+      })
       createdMovements.push({
         id: `MOV-API-${usageId}-${index + 1}`,
         at: timestamp,
@@ -569,10 +673,10 @@ export class NorthStarService {
         direction: 'OUT',
         materialId: allocation.materialId,
         lotId: allocation.lotId,
-        quantityGrams: allocation.allocatedGrams,
+        quantityGrams: actualGrams,
         balanceAfter: lot.quantityGrams,
         ref: usageId,
-        actor: 'api:perfumer',
+        actor: weighingSession.operator,
       })
     })
 
@@ -584,7 +688,8 @@ export class NorthStarService {
       formulaCode: formula.code,
       grams,
       status: 'COMMITTED',
-      allocations: plan.allocations,
+      allocations: actualAllocations,
+      weighingSession: { ...weighingSession, id: `WGH-${usageId}`, createdAt: timestamp },
       createdAt: timestamp,
     }
     this.usageHistory = [usage, ...this.usageHistory]
@@ -593,7 +698,9 @@ export class NorthStarService {
       data: {
         usage,
         movements: createdMovements,
-        message: `${usageId} committed ${formatGrams(grams)} using immutable OUT movements`,
+        message: `${usageId} committed ${formatGrams(
+          weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0),
+        )} actual lab usage using immutable OUT movements`,
       },
     }
   }

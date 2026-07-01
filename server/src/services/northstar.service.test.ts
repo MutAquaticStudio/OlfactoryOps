@@ -8,6 +8,7 @@ describe('NorthStarService', () => {
     const commit = service.commitLabUsage('frm-0421', 12.5).data
 
     expect(commit.usage.status).toBe('COMMITTED')
+    expect(commit.usage.weighingSession?.status).toBe('READY')
     expect(commit.movements.length).toBeGreaterThan(0)
     expect(commit.movements.every((movement) => movement.direction === 'OUT')).toBe(true)
 
@@ -16,6 +17,75 @@ describe('NorthStarService', () => {
     expect(reverse.usageId).toBe(commit.usage.id)
     expect(reverse.movements.every((movement) => movement.direction === 'IN')).toBe(true)
     expect(reverse.invariant).toContain('reverse by compensation')
+  })
+
+  it('records lab weighing sessions without creating inventory movements', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const actuals = plan.allocations.map((allocation, index) => ({
+      materialId: allocation.materialId,
+      lotId: allocation.lotId,
+      actualGrams: index === 0 ? Number((allocation.allocatedGrams * 1.01).toFixed(4)) : allocation.allocatedGrams,
+    }))
+
+    const result = service.recordLabWeighingSession('frm-0421', 12.5, {
+      actuals,
+      tolerancePercent: 2,
+      operator: 'Bench Chemist',
+    }).data
+
+    expect(result.weighingSession.status).toBe('READY')
+    expect(result.weighingSession.operator).toBe('Bench Chemist')
+    expect(result.weighingSession.lines[0]?.deviationPercent).toBeCloseTo(1)
+    expect(result.invariant).toContain('before movement creation')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('commits lab usage with actual weighed quantities', () => {
+    const service = new NorthStarService()
+    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const firstAllocation = plan.allocations[0]!
+    const actualGrams = Number((firstAllocation.allocatedGrams * 0.99).toFixed(4))
+
+    const commit = service.commitLabUsage('frm-0421', 12.5, {
+      actuals: [
+        {
+          materialId: firstAllocation.materialId,
+          lotId: firstAllocation.lotId,
+          actualGrams,
+        },
+      ],
+      tolerancePercent: 2,
+      operator: 'Bench Chemist',
+    }).data
+
+    expect(commit.movements[0]?.quantityGrams).toBeCloseTo(actualGrams)
+    expect(commit.movements[0]?.actor).toBe('Bench Chemist')
+    expect(commit.usage.allocations[0]?.allocatedGrams).toBeCloseTo(actualGrams)
+    expect(commit.usage.weighingSession?.lines[0]?.actualGrams).toBeCloseTo(actualGrams)
+  })
+
+  it('blocks out-of-tolerance lab weighing commits before inventory changes', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const firstAllocation = plan.allocations[0]!
+
+    expect(() =>
+      service.commitLabUsage('frm-0421', 12.5, {
+        actuals: [
+          {
+            materialId: firstAllocation.materialId,
+            lotId: firstAllocation.lotId,
+            actualGrams: Number((firstAllocation.allocatedGrams * 1.25).toFixed(4)),
+          },
+        ],
+        tolerancePercent: 2,
+        operator: 'Bench Chemist',
+      }),
+    ).toThrow(UnprocessableEntityException)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
   it('issues short-lived document URLs only after permission check and logs access', () => {

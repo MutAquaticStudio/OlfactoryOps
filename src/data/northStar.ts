@@ -339,6 +339,30 @@ export interface LabUsagePlan {
   }[]
 }
 
+export interface LabWeighingLine {
+  materialId: string
+  materialName: string
+  lotId: string
+  lotNumber: string
+  targetGrams: number
+  actualGrams: number
+  deviationGrams: number
+  deviationPercent: number
+  withinTolerance: boolean
+}
+
+export interface LabWeighingSession {
+  id: string
+  formulaId: string
+  formulaCode: string
+  targetBatchGrams: number
+  tolerancePercent: number
+  operator: string
+  status: 'READY' | 'NEEDS_REVIEW'
+  lines: LabWeighingLine[]
+  createdAt: string
+}
+
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
   active: { label: 'Active', color: '#4d9bff' },
   stable: { label: 'Stable', color: '#37d6a0' },
