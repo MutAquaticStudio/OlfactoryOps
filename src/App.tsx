@@ -60,6 +60,7 @@ import {
   initialMovements,
   materials,
   memberships,
+  permissionCatalog,
   phases,
   planLabUsage,
   readinessStats,
@@ -86,6 +87,7 @@ import {
   type LabWeighingSession,
   type MembershipRecord,
   type OrganizationRecord,
+  type PermissionDefinition,
   type ResolvedLeaf,
   type RolePolicy,
   type SignedDocumentUrl,
@@ -130,9 +132,20 @@ type TenantConsoleResponse = {
   memberships: MembershipRecord[]
   sessions: AuthSession[]
   rolePolicies: RolePolicy[]
+  permissionCatalog: PermissionDefinition[]
+  permissionMatrix: RolePermissionMatrix[]
   securityPolicy: TenantSecurityPolicy
   audit: AuditEvent[]
   invariant: string
+}
+
+type RolePermissionMatrix = {
+  role: string
+  scope: RolePolicy['scope']
+  mfaRequired: boolean
+  allowedPermissions: string[]
+  deniedPermissions: string[]
+  highRiskPermissions: string[]
 }
 
 type SecurityProbeResult = {
@@ -2087,15 +2100,60 @@ function sessionStatus(status: AuthSession['status']): DomainStatus {
   return status === 'ACTIVE' ? 'stable' : 'draft'
 }
 
+const ownerLockedPermissionKeys = ['security.manageUsers', 'security.viewAuditLog', 'security.sessions.manage']
+
+function buildRolePermissionMatrix(
+  policies: RolePolicy[],
+  catalog: PermissionDefinition[],
+): RolePermissionMatrix[] {
+  const organizationCatalog = catalog.filter((permission) => permission.scope === 'organization')
+  const highRiskPermissionKeys = new Set(
+    organizationCatalog
+      .filter((permission) => permission.risk === 'high' || permission.risk === 'critical')
+      .map((permission) => permission.key),
+  )
+
+  return policies.map((policy) => {
+    const allowedSet = new Set(policy.permissions)
+    const allowedPermissions = organizationCatalog
+      .map((permission) => permission.key)
+      .filter((permission) => allowedSet.has(permission))
+    return {
+      role: policy.role,
+      scope: policy.scope,
+      mfaRequired: policy.mfaRequired,
+      allowedPermissions,
+      deniedPermissions: organizationCatalog
+        .map((permission) => permission.key)
+        .filter((permission) => !allowedSet.has(permission)),
+      highRiskPermissions: allowedPermissions.filter((permission) => highRiskPermissionKeys.has(permission)),
+    }
+  })
+}
+
+function permissionRiskTone(risk: PermissionDefinition['risk']): 'green' | 'amber' | 'blue' {
+  if (risk === 'low') {
+    return 'green'
+  }
+  if (risk === 'medium') {
+    return 'blue'
+  }
+  return 'amber'
+}
+
 function IdentityWorkspace() {
   const fallbackTenant = useMemo<TenantConsoleResponse>(() => {
     const organization = organizations.find((item) => item.id === 'org-nxl') ?? organizations[0]!
+    const organizationRolePolicies = rolePolicies.filter((item) => item.scope === 'organization')
+    const organizationPermissionCatalog = permissionCatalog.filter((permission) => permission.scope === 'organization')
     return {
       organization,
       brands: brands.filter((item) => item.organizationId === organization.id),
       memberships: memberships.filter((item) => item.organizationId === organization.id),
       sessions: authSessions.filter((item) => item.organizationId === organization.id),
-      rolePolicies: rolePolicies.filter((item) => item.scope === 'organization'),
+      rolePolicies: organizationRolePolicies,
+      permissionCatalog: organizationPermissionCatalog,
+      permissionMatrix: buildRolePermissionMatrix(organizationRolePolicies, organizationPermissionCatalog),
       securityPolicy: tenantSecurityPolicy,
       audit: auditEvents.filter((event) => event.action.includes('auth') || event.action.includes('security')),
       invariant: 'local tenant seed fallback',
@@ -2108,9 +2166,11 @@ function IdentityWorkspace() {
   const [permissionRole, setPermissionRole] = useState('Viewer')
   const [permissionName, setPermissionName] = useState('inventory.adjust')
   const [probeResult, setProbeResult] = useState<SecurityProbeResult | null>(null)
-  const permissionOptions = Array.from(
-    new Set(tenantData.rolePolicies.flatMap((policy) => policy.permissions)),
-  ).sort()
+  const permissionOptions = tenantData.permissionCatalog.map((permission) => permission.key)
+  const selectedRolePolicy = tenantData.rolePolicies.find((policy) => policy.role === permissionRole) ?? tenantData.rolePolicies[0]
+  const selectedRoleMatrix =
+    tenantData.permissionMatrix.find((matrix) => matrix.role === selectedRolePolicy?.role) ?? tenantData.permissionMatrix[0]
+  const selectedPermissionKeys = new Set(selectedRolePolicy?.permissions ?? [])
 
   async function refreshTenantConsole(nextStatus = 'Tenant console synced from API') {
     try {
@@ -2224,6 +2284,41 @@ function IdentityWorkspace() {
       })
     } finally {
       void refreshTenantConsole('Permission probe recorded in audit trail')
+    }
+  }
+
+  async function updateRolePermission(permissionKey: string, enabled: boolean) {
+    if (!selectedRolePolicy) {
+      return
+    }
+    const nextPermissions = enabled
+      ? Array.from(new Set([...selectedRolePolicy.permissions, permissionKey]))
+      : selectedRolePolicy.permissions.filter((permission) => permission !== permissionKey)
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/security/roles/${encodeURIComponent(selectedRolePolicy.role)}/permissions`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissions: nextPermissions }),
+        },
+      )
+      if (!response.ok) {
+        throw new Error('Role permission update failed')
+      }
+      await refreshTenantConsole(`${selectedRolePolicy.role} permission matrix updated`)
+      setProbeResult({
+        status: 'allowed',
+        title: 'Permission matrix updated',
+        detail: `${selectedRolePolicy.role} ${enabled ? 'now includes' : 'no longer includes'} ${permissionKey}`,
+      })
+    } catch {
+      setTenantStatus('Permission update blocked by role policy guard')
+      setProbeResult({
+        status: 'blocked',
+        title: 'Permission update blocked',
+        detail: `${selectedRolePolicy.role} cannot be changed to that permission set`,
+      })
     }
   }
 
@@ -2354,7 +2449,7 @@ function IdentityWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="Permission Probe" icon={ShieldCheck}>
+      <Panel className="wide" title="Permission Matrix" icon={ShieldCheck}>
         <div className="tenant-form-row">
           <label className="field-row">
             <span>Role</span>
@@ -2387,6 +2482,50 @@ function IdentityWorkspace() {
           <button className="primary-button" type="button" onClick={() => void runPermissionProbe()}>
             Run probe
           </button>
+        </div>
+        <div className="permission-role-strip">
+          {tenantData.permissionMatrix.map((matrix) => (
+            <button
+              className={`permission-role-card ${matrix.role === permissionRole ? 'is-selected' : ''}`}
+              key={matrix.role}
+              type="button"
+              onClick={() => setPermissionRole(matrix.role)}
+            >
+              <strong>{matrix.role}</strong>
+              <span>{matrix.allowedPermissions.length} granted / {matrix.deniedPermissions.length} denied</span>
+              <span>{matrix.highRiskPermissions.length} high-risk permissions</span>
+            </button>
+          ))}
+        </div>
+        {selectedRoleMatrix && (
+          <div className="tag-row">
+            <DataTag label="Granted" value={String(selectedRoleMatrix.allowedPermissions.length)} tone="green" />
+            <DataTag label="Denied" value={String(selectedRoleMatrix.deniedPermissions.length)} tone="blue" />
+            <DataTag label="High risk" value={String(selectedRoleMatrix.highRiskPermissions.length)} tone="amber" />
+            <DataTag label="MFA" value={selectedRoleMatrix.mfaRequired ? 'Required' : 'Optional'} tone={selectedRoleMatrix.mfaRequired ? 'amber' : 'green'} />
+          </div>
+        )}
+        <div className="permission-grid">
+          {tenantData.permissionCatalog.map((permission) => {
+            const granted = selectedPermissionKeys.has(permission.key)
+            const locked = permissionRole === 'Owner' && ownerLockedPermissionKeys.includes(permission.key)
+            return (
+              <label className={`permission-row-card ${granted ? 'is-granted' : ''}`} key={permission.key}>
+                <input
+                  type="checkbox"
+                  checked={granted}
+                  disabled={locked}
+                  onChange={(event) => void updateRolePermission(permission.key, event.target.checked)}
+                />
+                <span>
+                  <strong>{permission.label}</strong>
+                  <small>{permission.key}</small>
+                  <small>{permission.description}</small>
+                </span>
+                <DataTag label={permission.category} value={permission.risk} tone={permissionRiskTone(permission.risk)} />
+              </label>
+            )
+          })}
         </div>
         <ul className="policy-list">
           <li>{tenantStatus}</li>

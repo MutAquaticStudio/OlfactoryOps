@@ -128,6 +128,46 @@ describe('NorthStarService', () => {
     expect(service.permissionProbe('inventory.adjust', 'Owner').data.allowed).toBe(true)
   })
 
+  it('returns a server-side permission matrix for organization roles', () => {
+    const service = new NorthStarService()
+    const result = service.permissionMatrix().data
+    const viewer = result.matrix.find((row) => row.role === 'Viewer')
+
+    expect(result.permissionCatalog.some((permission) => permission.key === 'inventory.adjust')).toBe(true)
+    expect(result.rolePolicies.some((policy) => policy.role === 'Admin')).toBe(true)
+    expect(viewer?.allowedPermissions).toContain('inventory.view')
+    expect(viewer?.deniedPermissions).toContain('inventory.adjust')
+    expect(result.invariant).toContain('server-side')
+  })
+
+  it('updates role permissions and applies the new permission decision', () => {
+    const service = new NorthStarService()
+    const viewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    const updated = service.setRolePermissions('Viewer', [
+      ...(viewer?.allowedPermissions ?? []),
+      'inventory.adjust',
+    ]).data
+
+    expect(updated.rolePolicy.permissions).toContain('inventory.adjust')
+    expect(updated.audit.action).toBe('role.permissions.update')
+    expect(service.permissionProbe('inventory.adjust', 'Viewer').data.allowed).toBe(true)
+  })
+
+  it('blocks unknown permissions and unsafe Owner permission removal', () => {
+    const service = new NorthStarService()
+    const owner = service.permissionMatrix().data.matrix.find((row) => row.role === 'Owner')
+
+    expect(() => service.setRolePermissions('Viewer', ['inventory.view', 'tenant.escape'])).toThrow(
+      UnprocessableEntityException,
+    )
+    expect(() =>
+      service.setRolePermissions(
+        'Owner',
+        (owner?.allowedPermissions ?? []).filter((permission) => permission !== 'security.manageUsers'),
+      ),
+    ).toThrow(UnprocessableEntityException)
+  })
+
   it('scopes the tenant console to the active organization', () => {
     const service = new NorthStarService()
     const result = service.tenantConsole().data
@@ -137,6 +177,7 @@ describe('NorthStarService', () => {
     expect(result.memberships.every((membership) => membership.organizationId === 'org-nxl')).toBe(true)
     expect(result.sessions.every((session) => session.organizationId === 'org-nxl')).toBe(true)
     expect(result.rolePolicies.some((policy) => policy.role === 'Owner')).toBe(true)
+    expect(result.permissionMatrix.some((matrix) => matrix.role === 'Admin')).toBe(true)
     expect(result.invariant).toContain('active session')
   })
 

@@ -1137,6 +1137,74 @@ kbd {
   background: rgba(245, 176, 76, 0.08);
 }
 
+.permission-role-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.permission-role-card {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.032);
+  cursor: pointer;
+}
+
+.permission-role-card span {
+  color: var(--text-2);
+  font-size: 0.74rem;
+}
+
+.permission-role-card.is-selected {
+  border-color: rgba(77, 155, 255, 0.45);
+  background: rgba(77, 155, 255, 0.11);
+}
+
+.permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  max-height: 460px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.permission-row-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.permission-row-card.is-granted {
+  border-color: rgba(55, 214, 160, 0.22);
+  background: rgba(55, 214, 160, 0.06);
+}
+
+.permission-row-card input {
+  accent-color: var(--blue);
+}
+
+.permission-row-card > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.permission-row-card small {
+  color: var(--text-2);
+  line-height: 1.35;
+}
+
 .record-card {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
@@ -1583,6 +1651,7 @@ input[type='range'] {
   .brand-row-card,
   .member-row,
   .session-row,
+  .permission-row-card,
   .allocation-row,
   .weighing-row,
   .weighing-evidence-row {

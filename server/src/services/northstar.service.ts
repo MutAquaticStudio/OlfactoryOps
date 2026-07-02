@@ -23,12 +23,12 @@ import {
   numberingSequences,
   organizations,
   orderRequiredGrams,
+  permissionCatalog,
   phases,
   planLabUsage,
   productionBatches,
   purchaseOrders,
   resolveFormulaWithCatalog,
-  roleHasPermission,
   rolePolicies,
   salesOrders,
   skuAvailability,
@@ -55,6 +55,7 @@ import {
   type OrganizationRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
+  type RolePolicy,
   type SalesOrderRecord,
   type TenantSettingsRecord,
 } from '../../../src/data/northStar.js'
@@ -82,6 +83,15 @@ type UsageRecord = {
   createdAt: string
 }
 
+type RolePermissionMatrix = {
+  role: string
+  scope: RolePolicy['scope']
+  mfaRequired: boolean
+  allowedPermissions: string[]
+  deniedPermissions: string[]
+  highRiskPermissions: string[]
+}
+
 @Injectable()
 export class NorthStarService {
   private lots: InventoryLot[] = structuredClone(initialLots)
@@ -94,6 +104,7 @@ export class NorthStarService {
   private brandRecords: BrandRecord[] = structuredClone(brands)
   private membershipRecords: MembershipRecord[] = structuredClone(memberships)
   private sessions: AuthSession[] = structuredClone(authSessions)
+  private rolePolicyRecords: RolePolicy[] = structuredClone(rolePolicies)
   private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
   private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
   private sequences: NumberingSequenceRecord[] = structuredClone(numberingSequences)
@@ -472,11 +483,13 @@ export class NorthStarService {
         brands: this.brandRecords.filter((item) => item.organizationId === session.organizationId),
         memberships: this.membershipRecords.filter((item) => item.organizationId === session.organizationId),
         sessions: this.sessions.filter((item) => item.organizationId === session.organizationId),
-        rolePolicies: rolePolicies.filter((item) => item.scope === 'organization'),
+        rolePolicies: this.organizationRolePolicies(),
+        permissionCatalog: this.organizationPermissionCatalog(),
+        permissionMatrix: this.buildPermissionMatrix(this.organizationRolePolicies()),
         securityPolicy: tenantSecurityPolicy,
         audit: this.auditEvents
           .filter((event) =>
-            ['auth.login', 'membership.invite', 'membership.status.update', 'session.revoke', 'security.tenantProbe', 'security.permissionProbe'].includes(
+            ['auth.login', 'membership.invite', 'membership.status.update', 'session.revoke', 'security.tenantProbe', 'security.permissionProbe', 'role.permissions.update'].includes(
               event.action,
             ),
           )
@@ -495,7 +508,7 @@ export class NorthStarService {
     }
 
     const role = body.role?.trim() || 'Viewer'
-    const rolePolicy = rolePolicies.find((item) => item.role === role && item.scope === 'organization')
+    const rolePolicy = this.rolePolicyRecords.find((item) => item.role === role && item.scope === 'organization')
     if (!rolePolicy) {
       throw new UnprocessableEntityException('Invite role must be an organization role')
     }
@@ -610,6 +623,66 @@ export class NorthStarService {
     }
   }
 
+  permissionMatrix() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    const rolePolicyRows = this.organizationRolePolicies()
+    return {
+      data: {
+        permissionCatalog: this.organizationPermissionCatalog(),
+        rolePolicies: rolePolicyRows,
+        matrix: this.buildPermissionMatrix(rolePolicyRows),
+        invariant: 'permission decisions are evaluated server-side from role policy records',
+      },
+    }
+  }
+
+  setRolePermissions(role: string, permissions: string[]) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    const normalizedRole = decodeURIComponent(role).trim()
+    const target = this.rolePolicyRecords.find(
+      (item) => item.role === normalizedRole && item.scope === 'organization',
+    )
+    if (!target) {
+      throw new NotFoundException(`Role ${normalizedRole} was not found`)
+    }
+
+    const allowedPermissionKeys = new Set(this.organizationPermissionCatalog().map((permission) => permission.key))
+    const requested = new Set(permissions)
+    const unknownPermissions = [...requested].filter((permission) => !allowedPermissionKeys.has(permission))
+    if (unknownPermissions.length > 0) {
+      throw new UnprocessableEntityException(`Unknown organization permissions: ${unknownPermissions.join(', ')}`)
+    }
+
+    const mandatoryOwnerPermissions = ['security.manageUsers', 'security.viewAuditLog', 'security.sessions.manage']
+    if (target.role === 'Owner' && mandatoryOwnerPermissions.some((permission) => !requested.has(permission))) {
+      throw new UnprocessableEntityException('Owner role must keep core security administration permissions')
+    }
+    if (target.role === session.role && !requested.has('security.manageUsers')) {
+      throw new UnprocessableEntityException('Current administrator cannot remove their own manage-users permission')
+    }
+
+    const orderedPermissions = this.organizationPermissionCatalog()
+      .map((permission) => permission.key)
+      .filter((permission) => requested.has(permission))
+    const updatedPolicy = { ...target, permissions: orderedPermissions }
+    this.rolePolicyRecords = this.rolePolicyRecords.map((policy) =>
+      policy.role === target.role && policy.scope === target.scope ? updatedPolicy : policy,
+    )
+    const audit = this.recordAudit('role.permissions.update', target.role, session.userId, 'allowed')
+
+    return {
+      data: {
+        rolePolicy: updatedPolicy,
+        permissionCatalog: this.organizationPermissionCatalog(),
+        matrix: this.buildPermissionMatrix(this.organizationRolePolicies()),
+        audit,
+        invariant: 'role permission updates are tenant-scoped, validated against catalog, and audited',
+      },
+    }
+  }
+
   tenantProbe(resourceOrganizationId: string) {
     const session = this.currentSession()
     const allowed = tenantScopeAllows(session.organizationId, resourceOrganizationId)
@@ -621,12 +694,18 @@ export class NorthStarService {
   }
 
   permissionProbe(permission: string, role = 'Viewer') {
-    const allowed = roleHasPermission(role, permission)
-    this.recordAudit('security.permissionProbe', permission, role, allowed ? 'allowed' : 'blocked')
-    if (!allowed) {
+    const decision = this.permissionDecision(role, permission)
+    this.recordAudit('security.permissionProbe', permission, role, decision.allowed ? 'allowed' : 'blocked')
+    if (!decision.knownRole) {
+      throw new NotFoundException(`Role ${role} was not found`)
+    }
+    if (!decision.knownPermission) {
+      throw new UnprocessableEntityException(`Permission ${permission} is not in the catalog`)
+    }
+    if (!decision.allowed) {
       throw new ForbiddenException(`Role ${role} cannot perform ${permission}`)
     }
-    return { data: { allowed, role, permission } }
+    return { data: decision }
   }
 
   settings() {
@@ -1203,8 +1282,67 @@ export class NorthStarService {
   }
 
   private requirePermission(role: string, permission: string) {
-    if (!roleHasPermission(role, permission)) {
+    if (!this.roleHasPermission(role, permission)) {
       throw new ForbiddenException(`Role ${role} cannot perform ${permission}`)
+    }
+  }
+
+  private roleHasPermission(role: string, permission: string) {
+    return this.rolePolicyRecords.some(
+      (policy) => policy.role === role && policy.permissions.includes(permission),
+    )
+  }
+
+  private organizationRolePolicies() {
+    return this.rolePolicyRecords.filter((item) => item.scope === 'organization')
+  }
+
+  private organizationPermissionCatalog() {
+    return permissionCatalog.filter((permission) => permission.scope === 'organization')
+  }
+
+  private buildPermissionMatrix(rolePolicyRows: RolePolicy[]): RolePermissionMatrix[] {
+    const catalog = this.organizationPermissionCatalog()
+    const highRiskPermissionKeys = new Set(
+      catalog
+        .filter((permission) => permission.risk === 'high' || permission.risk === 'critical')
+        .map((permission) => permission.key),
+    )
+
+    return rolePolicyRows.map((policy) => {
+      const allowedSet = new Set(policy.permissions)
+      const allowedPermissions = catalog
+        .map((permission) => permission.key)
+        .filter((permission) => allowedSet.has(permission))
+      return {
+        role: policy.role,
+        scope: policy.scope,
+        mfaRequired: policy.mfaRequired,
+        allowedPermissions,
+        deniedPermissions: catalog
+          .map((permission) => permission.key)
+          .filter((permission) => !allowedSet.has(permission)),
+        highRiskPermissions: allowedPermissions.filter((permission) => highRiskPermissionKeys.has(permission)),
+      }
+    })
+  }
+
+  private permissionDecision(role: string, permission: string) {
+    const rolePolicy = this.rolePolicyRecords.find((policy) => policy.role === role)
+    const permissionDefinition = permissionCatalog.find((item) => item.key === permission)
+    const allowed = Boolean(rolePolicy?.permissions.includes(permission))
+    return {
+      allowed,
+      role,
+      permission,
+      knownRole: Boolean(rolePolicy),
+      knownPermission: Boolean(permissionDefinition),
+      mfaRequired: Boolean(rolePolicy?.mfaRequired),
+      risk: permissionDefinition?.risk ?? 'medium',
+      category: permissionDefinition?.category ?? 'Unknown',
+      reason: allowed
+        ? `${role} includes ${permission} in the server-side role policy`
+        : `${role} does not include ${permission} in the server-side role policy`,
     }
   }
 

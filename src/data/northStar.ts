@@ -218,6 +218,15 @@ export interface RolePolicy {
   permissions: string[]
 }
 
+export interface PermissionDefinition {
+  key: string
+  label: string
+  category: string
+  scope: 'organization' | 'platform'
+  risk: 'low' | 'medium' | 'high' | 'critical'
+  description: string
+}
+
 export interface TenantSecurityPolicy {
   organizationId: string
   mfaRequiredForOwnerAdmin: boolean
@@ -1051,53 +1060,193 @@ export const memberships: MembershipRecord[] = [
   },
 ]
 
+export const permissionCatalog: PermissionDefinition[] = [
+  { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the tenant-scoped North Star console.' },
+  { key: 'audit.view', label: 'View audit trail', category: 'Audit', scope: 'organization', risk: 'medium', description: 'Read tenant audit events and security evidence.' },
+  { key: 'audit.export', label: 'Export audit evidence', category: 'Audit', scope: 'organization', risk: 'high', description: 'Export regulated tenant audit data.' },
+  { key: 'security.manageUsers', label: 'Manage members', category: 'Security', scope: 'organization', risk: 'critical', description: 'Invite, activate, deactivate, and assign tenant roles.' },
+  { key: 'security.viewAuditLog', label: 'View security audit', category: 'Security', scope: 'organization', risk: 'high', description: 'Inspect security-sensitive tenant events.' },
+  { key: 'security.policy.manage', label: 'Manage security policy', category: 'Security', scope: 'organization', risk: 'critical', description: 'Change MFA, session timeout, and IP allowlist policy.' },
+  { key: 'security.sessions.manage', label: 'Manage sessions', category: 'Security', scope: 'organization', risk: 'high', description: 'Revoke active sessions for tenant members.' },
+  { key: 'security.apiKeys.manage', label: 'Manage API keys', category: 'Security', scope: 'organization', risk: 'critical', description: 'Create, rotate, and revoke API credentials.' },
+  { key: 'security.sso.manage', label: 'Manage SSO/SCIM', category: 'Security', scope: 'organization', risk: 'critical', description: 'Configure enterprise identity providers and provisioning.' },
+  { key: 'customization.manage', label: 'Manage tenant config', category: 'Customization', scope: 'organization', risk: 'medium', description: 'Edit settings, flags, fields, numbering, and branding.' },
+  { key: 'materials.view', label: 'View materials', category: 'Materials', scope: 'organization', risk: 'low', description: 'Read tenant material records.' },
+  { key: 'materials.create', label: 'Create materials', category: 'Materials', scope: 'organization', risk: 'medium', description: 'Create new material records.' },
+  { key: 'materials.update', label: 'Update materials', category: 'Materials', scope: 'organization', risk: 'medium', description: 'Edit material records and provenance.' },
+  { key: 'formulas.view', label: 'View formulas', category: 'Formulas', scope: 'organization', risk: 'medium', description: 'Read formula records without sensitive export privileges.' },
+  { key: 'formulas.viewSensitive', label: 'View sensitive formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'View confidential ratios, nested formulas, and sensitive composition.' },
+  { key: 'formulas.export', label: 'Export formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Export formula data outside the application.' },
+  { key: 'inventory.view', label: 'View inventory', category: 'Inventory', scope: 'organization', risk: 'low', description: 'Read stock summaries, lots, and movements.' },
+  { key: 'inventory.receive', label: 'Receive inventory', category: 'Inventory', scope: 'organization', risk: 'medium', description: 'Create receipt movements and approved lots.' },
+  { key: 'inventory.adjust', label: 'Adjust inventory', category: 'Inventory', scope: 'organization', risk: 'high', description: 'Create manual stock adjustments.' },
+  { key: 'inventory.commitLabUsage', label: 'Commit lab usage', category: 'Inventory', scope: 'organization', risk: 'high', description: 'Consume stock through lab usage movements.' },
+  { key: 'inventory.reverseLabUsage', label: 'Reverse lab usage', category: 'Inventory', scope: 'organization', risk: 'high', description: 'Compensate previously committed lab usage movements.' },
+  { key: 'documents.view', label: 'View documents', category: 'Documents', scope: 'organization', risk: 'low', description: 'Read document metadata.' },
+  { key: 'documents.download', label: 'Download documents', category: 'Documents', scope: 'organization', risk: 'high', description: 'Generate signed document download URLs.' },
+  { key: 'documents.manage', label: 'Manage documents', category: 'Documents', scope: 'organization', risk: 'medium', description: 'Attach, version, or manage tenant documents.' },
+  { key: 'production.view', label: 'View production', category: 'Production', scope: 'organization', risk: 'low', description: 'Read production batch records.' },
+  { key: 'production.consume', label: 'Consume production stock', category: 'Production', scope: 'organization', risk: 'high', description: 'Consume stock for production batches.' },
+  { key: 'production.qc', label: 'Record production QC', category: 'Production', scope: 'organization', risk: 'medium', description: 'Record QC state and production evidence.' },
+  { key: 'procurement.view', label: 'View procurement', category: 'Procurement', scope: 'organization', risk: 'low', description: 'Read suppliers and purchase orders.' },
+  { key: 'procurement.manage', label: 'Manage procurement', category: 'Procurement', scope: 'organization', risk: 'medium', description: 'Create and receive purchase orders.' },
+  { key: 'commerce.view', label: 'View catalog', category: 'Commerce', scope: 'organization', risk: 'low', description: 'Read commercial SKU and customer-facing catalog data.' },
+  { key: 'commerce.manage', label: 'Manage catalog', category: 'Commerce', scope: 'organization', risk: 'medium', description: 'Edit SKUs, price lists, and customer catalog settings.' },
+  { key: 'orders.view', label: 'View orders', category: 'Orders', scope: 'organization', risk: 'low', description: 'Read customer orders.' },
+  { key: 'orders.reserve', label: 'Reserve stock', category: 'Orders', scope: 'organization', risk: 'medium', description: 'Create stock reservations without inventory movement.' },
+  { key: 'orders.fulfill', label: 'Fulfill orders', category: 'Orders', scope: 'organization', risk: 'high', description: 'Create shipment consumption movements.' },
+  { key: 'costing.view', label: 'View costing', category: 'Costing', scope: 'organization', risk: 'medium', description: 'Read formula and SKU cost summaries.' },
+  { key: 'finance.viewMargin', label: 'View margin', category: 'Costing', scope: 'organization', risk: 'high', description: 'Read sensitive margin and finance data.' },
+  { key: 'analytics.view', label: 'View analytics', category: 'Analytics', scope: 'organization', risk: 'low', description: 'Read tenant dashboards and analytics.' },
+  { key: 'billing.manage', label: 'Manage billing', category: 'Billing', scope: 'organization', risk: 'critical', description: 'Manage plans, invoices, seats, and payment state.' },
+  { key: 'platform.tenants.manage', label: 'Manage platform tenants', category: 'Platform Admin', scope: 'platform', risk: 'critical', description: 'Provision, suspend, and lock tenants as operator.' },
+  { key: 'platform.flags.manage', label: 'Manage platform flags', category: 'Platform Admin', scope: 'platform', risk: 'critical', description: 'Change global feature flags and rollout cohorts.' },
+  { key: 'platform.impersonation.audit', label: 'Audit impersonation', category: 'Platform Admin', scope: 'platform', risk: 'critical', description: 'Review support impersonation and operator actions.' },
+]
+
+function organizationPermissions(...categories: string[]) {
+  const categorySet = new Set(categories)
+  return permissionCatalog
+    .filter((permission) => permission.scope === 'organization' && categorySet.has(permission.category))
+    .map((permission) => permission.key)
+}
+
+const allOrganizationPermissions = permissionCatalog
+  .filter((permission) => permission.scope === 'organization')
+  .map((permission) => permission.key)
+
 export const rolePolicies: RolePolicy[] = [
   {
     role: 'Owner',
     scope: 'organization',
     mfaRequired: true,
+    permissions: allOrganizationPermissions,
+  },
+  {
+    role: 'Admin',
+    scope: 'organization',
+    mfaRequired: true,
     permissions: [
+      ...organizationPermissions('Platform', 'Audit', 'Security', 'Customization', 'Materials', 'Formulas', 'Inventory', 'Documents', 'Production', 'Procurement', 'Commerce', 'Orders', 'Costing', 'Analytics'),
       'audit.export',
-      'billing.manage',
-      'commerce.manage',
-      'customization.manage',
-      'documents.download',
-      'documents.manage',
-      'finance.viewMargin',
-      'formulas.viewSensitive',
-      'inventory.adjust',
-      'inventory.commitLabUsage',
-      'inventory.receive',
-      'inventory.reverseLabUsage',
-      'orders.fulfill',
-      'orders.reserve',
-      'procurement.manage',
-      'production.consume',
-      'production.qc',
-      'security.apiKeys.manage',
-      'security.manageUsers',
-      'security.sso.manage',
-    ],
+    ].filter((permission) => !['billing.manage', 'security.sso.manage', 'security.apiKeys.manage'].includes(permission)),
   },
   {
     role: 'Lab Manager',
     scope: 'organization',
     mfaRequired: false,
     permissions: [
+      'materials.view',
+      'materials.create',
+      'materials.update',
+      'formulas.view',
       'documents.download',
+      'documents.view',
       'formulas.viewSensitive',
+      'inventory.view',
+      'inventory.adjust',
       'inventory.commitLabUsage',
       'inventory.receive',
       'inventory.reverseLabUsage',
+      'production.view',
       'production.consume',
       'production.qc',
+      'analytics.view',
+    ],
+  },
+  {
+    role: 'Perfumer',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: [
+      'materials.view',
+      'formulas.view',
+      'formulas.viewSensitive',
+      'formulas.export',
+      'documents.view',
+      'documents.download',
+      'costing.view',
+      'analytics.view',
+    ],
+  },
+  {
+    role: 'Inventory Manager',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: [
+      'materials.view',
+      'inventory.view',
+      'inventory.receive',
+      'inventory.adjust',
+      'inventory.commitLabUsage',
+      'inventory.reverseLabUsage',
+      'documents.view',
+      'documents.download',
+      'production.view',
+      'analytics.view',
+    ],
+  },
+  {
+    role: 'Procurement',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: [
+      'materials.view',
+      'inventory.view',
+      'procurement.view',
+      'procurement.manage',
+      'documents.view',
+      'documents.download',
+      'costing.view',
+      'analytics.view',
+    ],
+  },
+  {
+    role: 'Commercial',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: [
+      'commerce.view',
+      'commerce.manage',
+      'orders.view',
+      'orders.reserve',
+      'materials.view',
+      'formulas.view',
+      'documents.view',
+      'analytics.view',
+    ],
+  },
+  {
+    role: 'Finance',
+    scope: 'organization',
+    mfaRequired: true,
+    permissions: [
+      'billing.manage',
+      'costing.view',
+      'finance.viewMargin',
+      'procurement.view',
+      'commerce.view',
+      'orders.view',
+      'audit.view',
+      'analytics.view',
     ],
   },
   {
     role: 'Viewer',
     scope: 'organization',
     mfaRequired: false,
-    permissions: ['documents.view', 'materials.view', 'formulas.view', 'inventory.view'],
+    permissions: [
+      'platform.view',
+      'materials.view',
+      'formulas.view',
+      'inventory.view',
+      'documents.view',
+      'production.view',
+      'procurement.view',
+      'commerce.view',
+      'orders.view',
+      'analytics.view',
+    ],
   },
   {
     role: 'Platform Admin',

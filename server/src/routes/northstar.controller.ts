@@ -139,6 +139,16 @@ export class NorthStarController {
     return this.northStar.revokeSession(id)
   }
 
+  @Get('security/permissions')
+  permissionMatrix() {
+    return this.northStar.permissionMatrix()
+  }
+
+  @Patch('security/roles/:role/permissions')
+  setRolePermissions(@Param('role') role: string, @Body() body: { permissions?: string[] }) {
+    return this.northStar.setRolePermissions(role, body.permissions ?? [])
+  }
+
   @Get('security/tenant-probe')
   tenantProbe(@Query('organizationId') organizationId = 'org-nxl') {
     return this.northStar.tenantProbe(organizationId)
