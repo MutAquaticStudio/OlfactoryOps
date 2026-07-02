@@ -884,9 +884,12 @@ kbd {
   grid-template-columns: 0.72fr minmax(0, 1fr) auto auto auto;
 }
 
-.member-row,
-.session-row {
+.member-row {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.session-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto auto;
 }
 
 .brand-row-card {

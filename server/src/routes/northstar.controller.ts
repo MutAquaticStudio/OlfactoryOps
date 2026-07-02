@@ -104,6 +104,11 @@ export class NorthStarController {
     return this.northStar.login(body.email)
   }
 
+  @Post('auth/logout')
+  logout() {
+    return this.northStar.logout()
+  }
+
   @Get('me')
   me() {
     return this.northStar.me()
@@ -137,6 +142,16 @@ export class NorthStarController {
   @Post('security/sessions/:id/revoke')
   revokeSession(@Param('id') id: string) {
     return this.northStar.revokeSession(id)
+  }
+
+  @Post('security/sessions/revoke-all')
+  revokeAllSessions(@Body() body: { email?: string; keepCurrent?: boolean }) {
+    return this.northStar.revokeAllSessions(body)
+  }
+
+  @Post('security/sessions/:id/touch')
+  touchSession(@Param('id') id: string) {
+    return this.northStar.touchSession(id)
   }
 
   @Get('security/permissions')

@@ -232,6 +232,57 @@ describe('NorthStarService', () => {
     expect(revoked.invariant).toContain('tenant-scoped')
   })
 
+  it('creates bounded login sessions and clamps concurrent sessions', () => {
+    const service = new NorthStarService()
+    const firstLogin = service.login('owner@noxel.is').data
+    const secondLogin = service.login('owner@noxel.is').data
+    const consoleState = service.tenantConsole().data
+    const activeOwnerSessions = consoleState.sessions.filter(
+      (session) => session.email === 'owner@noxel.is' && session.status === 'ACTIVE',
+    )
+
+    expect(firstLogin.session.idleExpiresAt).toBeTruthy()
+    expect(firstLogin.session.expiresAt).not.toBe(firstLogin.session.idleExpiresAt)
+    expect(secondLogin.revokedForLimit.length).toBeGreaterThanOrEqual(1)
+    expect(activeOwnerSessions.length).toBeLessThanOrEqual(consoleState.securityPolicy.concurrentSessionLimit)
+    expect(secondLogin.invariant).toContain('idle and absolute')
+  })
+
+  it('touches active sessions without changing absolute expiry', () => {
+    const service = new NorthStarService()
+    const before = service.tenantConsole().data.sessions.find((session) => session.id === 'SES-0002')
+    const touched = service.touchSession('SES-0002').data
+
+    expect(touched.session.status).toBe('ACTIVE')
+    expect(touched.session.expiresAt).toBe(before?.expiresAt)
+    expect(touched.audit.action).toBe('session.touch')
+    expect(touched.invariant).toContain('idle timeout')
+  })
+
+  it('revokes all active sessions for a tenant member while keeping current admin session', () => {
+    const service = new NorthStarService()
+    const revoked = service.revokeAllSessions({ email: 'lab@noxel.is' }).data
+    const consoleState = service.tenantConsole().data
+    const activeLabSessions = consoleState.sessions.filter(
+      (session) => session.email === 'lab@noxel.is' && session.status === 'ACTIVE',
+    )
+
+    expect(revoked.revokedSessions.length).toBeGreaterThanOrEqual(1)
+    expect(revoked.audit.action).toBe('session.revokeAll')
+    expect(activeLabSessions).toHaveLength(0)
+    expect(consoleState.sessions.some((session) => session.email === 'owner@noxel.is' && session.status === 'ACTIVE')).toBe(true)
+  })
+
+  it('logs out the current session with audit evidence', () => {
+    const service = new NorthStarService()
+    const result = service.logout().data
+
+    expect(result.session.status).toBe('REVOKED')
+    expect(result.session.revokedReason).toBe('AUTH_LOGOUT')
+    expect(result.audit.action).toBe('auth.logout')
+    expect(result.invariant).toContain('current active session')
+  })
+
   it('updates customization settings and increments numbering through the sequence service', () => {
     const service = new NorthStarService()
 

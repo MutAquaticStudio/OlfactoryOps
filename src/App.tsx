@@ -2097,7 +2097,13 @@ function memberStatus(status: MembershipRecord['status']): DomainStatus {
 }
 
 function sessionStatus(status: AuthSession['status']): DomainStatus {
-  return status === 'ACTIVE' ? 'stable' : 'draft'
+  if (status === 'ACTIVE') {
+    return 'stable'
+  }
+  if (status === 'EXPIRED') {
+    return 'review'
+  }
+  return 'draft'
 }
 
 const ownerLockedPermissionKeys = ['security.manageUsers', 'security.viewAuditLog', 'security.sessions.manage']
@@ -2239,6 +2245,46 @@ function IdentityWorkspace() {
     }
   }
 
+  async function revokeAllTenantSessions(email: string) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/sessions/revoke-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, keepCurrent: true }),
+      })
+      if (!response.ok) {
+        throw new Error('Session revoke-all failed')
+      }
+      await refreshTenantConsole(`All active sessions revoked for ${email}`)
+    } catch {
+      setTenantStatus('Revoke-all blocked by tenant policy')
+    }
+  }
+
+  async function touchTenantSession(sessionId: string) {
+    try {
+      const response = await fetch(`${apiBaseUrl}/security/sessions/${sessionId}/touch`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('Session touch failed')
+      }
+      await refreshTenantConsole('Session idle timeout extended')
+    } catch {
+      setTenantStatus('Session touch blocked by lifecycle policy')
+    }
+  }
+
+  async function logoutCurrentSession() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/logout`, { method: 'POST' })
+      if (!response.ok) {
+        throw new Error('Logout failed')
+      }
+      await refreshTenantConsole('Current session logged out; demo created a fresh owner session')
+    } catch {
+      setTenantStatus('Logout blocked by session lifecycle policy')
+    }
+  }
+
   async function runTenantProbe(organizationId: string) {
     try {
       const response = await fetch(
@@ -2335,7 +2381,9 @@ function IdentityWorkspace() {
         <div className="tag-row">
           <DataTag label="Contact" value={tenantData.organization.primaryContact} />
           <DataTag label="Brands" value={String(tenantData.brands.length)} tone="blue" />
-          <DataTag label="Session TTL" value={`${tenantData.securityPolicy.sessionTimeoutMinutes}m`} tone="green" />
+          <DataTag label="Idle TTL" value={`${tenantData.securityPolicy.idleTimeoutMinutes}m`} tone="green" />
+          <DataTag label="Max length" value={`${Math.round(tenantData.securityPolicy.absoluteSessionMinutes / 60)}h`} tone="blue" />
+          <DataTag label="Concurrent" value={String(tenantData.securityPolicy.concurrentSessionLimit)} tone="amber" />
         </div>
         <div className="brand-list">
           {tenantData.brands.map((brand) => (
@@ -2424,18 +2472,44 @@ function IdentityWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="Session Control" icon={LockKeyhole}>
+      <Panel
+        title="Session Control"
+        icon={LockKeyhole}
+        right={
+          <button className="ghost-button small" type="button" onClick={() => void logoutCurrentSession()}>
+            Logout current
+          </button>
+        }
+      >
+        <div className="tag-row">
+          <DataTag label="Idle timeout" value={`${tenantData.securityPolicy.idleTimeoutMinutes}m`} tone="green" />
+          <DataTag label="Absolute timeout" value={`${tenantData.securityPolicy.absoluteSessionMinutes}m`} tone="blue" />
+          <DataTag label="Max sessions" value={String(tenantData.securityPolicy.concurrentSessionLimit)} tone="amber" />
+          <DataTag label="New device alert" value={tenantData.securityPolicy.newDeviceAlertEnabled ? 'On' : 'Off'} tone="green" />
+        </div>
         <div className="session-list">
           {tenantData.sessions.map((session) => (
             <div className="session-row" key={session.id}>
               <div>
                 <strong>{session.email}</strong>
                 <span>
-                  {session.ipAddress} / {session.userAgent}
+                  {session.location} / {session.ipAddress} / {session.userAgent}
                 </span>
+                <span>
+                  Last seen {new Date(session.lastSeenAt).toLocaleTimeString()} / idle until {new Date(session.idleExpiresAt).toLocaleTimeString()}
+                </span>
+                {session.revokedReason && <span>Reason: {session.revokedReason}</span>}
               </div>
               <StatusBadge status={sessionStatus(session.status)} label={session.status} />
               <span className="mono-value">{new Date(session.expiresAt).toLocaleTimeString()}</span>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void touchTenantSession(session.id)}
+                disabled={session.status !== 'ACTIVE'}
+              >
+                Touch
+              </button>
               <button
                 className="ghost-button small"
                 type="button"
@@ -2443,6 +2517,14 @@ function IdentityWorkspace() {
                 disabled={session.status === 'REVOKED'}
               >
                 Revoke
+              </button>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void revokeAllTenantSessions(session.email)}
+                disabled={session.status !== 'ACTIVE'}
+              >
+                Revoke all
               </button>
             </div>
           ))}

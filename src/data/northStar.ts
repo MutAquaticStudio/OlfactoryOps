@@ -231,6 +231,10 @@ export interface TenantSecurityPolicy {
   organizationId: string
   mfaRequiredForOwnerAdmin: boolean
   sessionTimeoutMinutes: number
+  idleTimeoutMinutes: number
+  absoluteSessionMinutes: number
+  concurrentSessionLimit: number
+  newDeviceAlertEnabled: boolean
   ipAllowlist: string[]
   passwordPolicy: string
 }
@@ -243,11 +247,17 @@ export interface AuthSession {
   brandId: string
   role: string
   issuedAt: string
+  lastSeenAt: string
+  idleExpiresAt: string
   expiresAt: string
-  status: 'ACTIVE' | 'REVOKED'
+  status: 'ACTIVE' | 'REVOKED' | 'EXPIRED'
   mfaVerified: boolean
   ipAddress: string
   userAgent: string
+  deviceId: string
+  location: string
+  revokedAt?: string
+  revokedReason?: string
 }
 
 export interface TenantSettingsRecord {
@@ -1260,6 +1270,10 @@ export const tenantSecurityPolicy: TenantSecurityPolicy = {
   organizationId: 'org-nxl',
   mfaRequiredForOwnerAdmin: true,
   sessionTimeoutMinutes: 60,
+  idleTimeoutMinutes: 15,
+  absoluteSessionMinutes: 480,
+  concurrentSessionLimit: 2,
+  newDeviceAlertEnabled: true,
   ipAllowlist: ['203.0.113.0/24'],
   passwordPolicy: 'min-14-with-breach-check',
 }
@@ -1281,12 +1295,16 @@ export const authSessions: AuthSession[] = [
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Owner',
-    issuedAt: '2026-07-01T07:44:00.000Z',
-    expiresAt: '2026-07-01T08:44:00.000Z',
+    issuedAt: '2026-07-02T07:44:00.000Z',
+    lastSeenAt: '2026-07-02T07:58:00.000Z',
+    idleExpiresAt: '2026-07-03T08:13:00.000Z',
+    expiresAt: '2026-07-03T15:44:00.000Z',
     status: 'ACTIVE',
     mfaVerified: true,
     ipAddress: '203.0.113.18',
     userAgent: 'Codex Desktop / Chrome',
+    deviceId: 'dev-owner-codex',
+    location: 'Bangkok, TH',
   },
   {
     id: 'SES-0002',
@@ -1295,12 +1313,16 @@ export const authSessions: AuthSession[] = [
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Lab Manager',
-    issuedAt: '2026-07-01T06:31:00.000Z',
-    expiresAt: '2026-07-01T07:31:00.000Z',
+    issuedAt: '2026-07-02T06:31:00.000Z',
+    lastSeenAt: '2026-07-02T06:48:00.000Z',
+    idleExpiresAt: '2026-07-03T07:03:00.000Z',
+    expiresAt: '2026-07-03T14:31:00.000Z',
     status: 'ACTIVE',
     mfaVerified: true,
     ipAddress: '203.0.113.42',
     userAgent: 'Windows Lab Terminal',
+    deviceId: 'dev-lab-terminal',
+    location: 'Bangkok Lab',
   },
 ]
 

@@ -92,6 +92,15 @@ type RolePermissionMatrix = {
   highRiskPermissions: string[]
 }
 
+type SessionRevokeReason =
+  | 'ADMIN_REVOKE'
+  | 'AUTH_LOGOUT'
+  | 'CONCURRENT_LIMIT'
+  | 'IDLE_TIMEOUT'
+  | 'ABSOLUTE_TIMEOUT'
+  | 'MEMBERSHIP_DEACTIVATED'
+  | 'REVOKE_ALL'
+
 @Injectable()
 export class NorthStarService {
   private lots: InventoryLot[] = structuredClone(initialLots)
@@ -429,6 +438,12 @@ export class NorthStarService {
     }
 
     const issuedAt = new Date()
+    const idleExpiresAt = new Date(issuedAt.getTime() + tenantSecurityPolicy.idleTimeoutMinutes * 60_000)
+    const expiresAt = new Date(issuedAt.getTime() + tenantSecurityPolicy.absoluteSessionMinutes * 60_000)
+    const deviceId = normalizedEmail === 'owner@noxel.is' ? 'dev-owner-codex' : `dev-${membership.userId}`
+    const knownDevice = this.sessions.some(
+      (item) => item.email.toLowerCase() === normalizedEmail && item.deviceId === deviceId,
+    )
     const session: AuthSession = {
       id: `SES-${String(this.sessions.length + 1).padStart(4, '0')}`,
       userId: membership.userId,
@@ -437,18 +452,35 @@ export class NorthStarService {
       brandId,
       role: membership.role,
       issuedAt: issuedAt.toISOString(),
-      expiresAt: new Date(issuedAt.getTime() + tenantSecurityPolicy.sessionTimeoutMinutes * 60_000).toISOString(),
+      lastSeenAt: issuedAt.toISOString(),
+      idleExpiresAt: idleExpiresAt.toISOString(),
+      expiresAt: expiresAt.toISOString(),
       status: 'ACTIVE',
       mfaVerified: membership.mfaEnabled,
       ipAddress: '203.0.113.24',
       userAgent: 'API Client',
+      deviceId,
+      location: 'Bangkok, TH',
     }
     this.sessions = [session, ...this.sessions]
+    const revokedForLimit = this.enforceConcurrentSessionLimit(session.email, session.id)
     this.membershipRecords = this.membershipRecords.map((item) =>
       item.id === membership.id ? { ...item, lastActiveAt: issuedAt.toISOString() } : item,
     )
     this.recordAudit('auth.login', session.userId, 'api:auth', 'allowed')
-    return { data: { session, securityPolicy: tenantSecurityPolicy } }
+    const newDeviceAudit =
+      tenantSecurityPolicy.newDeviceAlertEnabled && !knownDevice
+        ? this.recordAudit('auth.newDevice', session.deviceId, session.userId, 'review')
+        : null
+    return {
+      data: {
+        session,
+        revokedForLimit,
+        newDeviceAlert: Boolean(newDeviceAudit),
+        securityPolicy: tenantSecurityPolicy,
+        invariant: 'login creates bounded idle and absolute session windows',
+      },
+    }
   }
 
   me() {
@@ -489,7 +521,7 @@ export class NorthStarService {
         securityPolicy: tenantSecurityPolicy,
         audit: this.auditEvents
           .filter((event) =>
-            ['auth.login', 'membership.invite', 'membership.status.update', 'session.revoke', 'security.tenantProbe', 'security.permissionProbe', 'role.permissions.update'].includes(
+            ['auth.login', 'auth.logout', 'auth.newDevice', 'membership.invite', 'membership.status.update', 'session.revoke', 'session.revokeAll', 'session.touch', 'session.expire', 'security.tenantProbe', 'security.permissionProbe', 'role.permissions.update'].includes(
               event.action,
             ),
           )
@@ -609,9 +641,7 @@ export class NorthStarService {
     if (!target) {
       throw new NotFoundException(`Session ${id} was not found`)
     }
-    const now = new Date().toISOString()
-    const revoked = { ...target, status: 'REVOKED' as const, expiresAt: now }
-    this.sessions = this.sessions.map((item) => (item.id === id ? revoked : item))
+    const revoked = this.revokeSessionRecord(target, 'ADMIN_REVOKE')
     const audit = this.recordAudit('session.revoke', target.userId, session.userId, 'allowed')
 
     return {
@@ -619,6 +649,82 @@ export class NorthStarService {
         session: revoked,
         audit,
         invariant: 'session revocation is tenant-scoped and audited',
+      },
+    }
+  }
+
+  revokeAllSessions(body: { email?: string; keepCurrent?: boolean } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.manageUsers')
+    const email = body.email?.trim().toLowerCase()
+    if (!email) {
+      throw new UnprocessableEntityException('Email is required for revoke-all')
+    }
+    const keepCurrent = body.keepCurrent ?? true
+    const revokedSessions: AuthSession[] = []
+    this.sessions = this.sessions.map((item) => {
+      const shouldKeepCurrent = keepCurrent && item.id === session.id
+      if (
+        item.organizationId !== session.organizationId ||
+        item.email.toLowerCase() !== email ||
+        item.status !== 'ACTIVE' ||
+        shouldKeepCurrent
+      ) {
+        return item
+      }
+      const revoked = this.revokeSessionShape(item, 'REVOKE_ALL')
+      revokedSessions.push(revoked)
+      return revoked
+    })
+    const audit = this.recordAudit('session.revokeAll', email, session.userId, 'allowed')
+    return {
+      data: {
+        revokedSessions,
+        audit,
+        invariant: 'revoke-all is tenant-scoped and can keep the current admin session active',
+      },
+    }
+  }
+
+  touchSession(id: string) {
+    const session = this.currentSession()
+    const target = this.sessions.find((item) => item.id === id && item.organizationId === session.organizationId)
+    if (!target) {
+      throw new NotFoundException(`Session ${id} was not found`)
+    }
+    if (target.email !== session.email) {
+      this.requirePermission(session.role, 'security.sessions.manage')
+    }
+    if (target.status !== 'ACTIVE') {
+      throw new UnprocessableEntityException('Only active sessions can extend idle timeout')
+    }
+
+    const now = new Date()
+    const touched = {
+      ...target,
+      lastSeenAt: now.toISOString(),
+      idleExpiresAt: new Date(now.getTime() + tenantSecurityPolicy.idleTimeoutMinutes * 60_000).toISOString(),
+    }
+    this.sessions = this.sessions.map((item) => (item.id === id ? touched : item))
+    const audit = this.recordAudit('session.touch', target.userId, session.userId, 'allowed')
+    return {
+      data: {
+        session: touched,
+        audit,
+        invariant: 'session activity only extends idle timeout, never absolute expiry',
+      },
+    }
+  }
+
+  logout() {
+    const session = this.currentSession()
+    const revoked = this.revokeSessionRecord(session, 'AUTH_LOGOUT')
+    const audit = this.recordAudit('auth.logout', session.userId, 'api:auth', 'allowed')
+    return {
+      data: {
+        session: revoked,
+        audit,
+        invariant: 'logout revokes the current active session',
       },
     }
   }
@@ -1274,9 +1380,12 @@ export class NorthStarService {
   }
 
   private currentSession() {
-    const activeSession = this.sessions.find((item) => item.status === 'ACTIVE')
-    if (activeSession) {
-      return activeSession
+    this.refreshSessionStates()
+    const activeAdminSession = this.sessions.find(
+      (item) => item.status === 'ACTIVE' && this.roleHasPermission(item.role, 'security.manageUsers'),
+    )
+    if (activeAdminSession) {
+      return activeAdminSession
     }
     return this.login().data.session
   }
@@ -1348,21 +1457,85 @@ export class NorthStarService {
 
   private revokeSessionsForEmail(email: string) {
     const normalizedEmail = email.toLowerCase()
-    const now = new Date().toISOString()
     const revokedSessions: AuthSession[] = []
     this.sessions = this.sessions.map((session) => {
       if (session.email.toLowerCase() !== normalizedEmail || session.status !== 'ACTIVE') {
         return session
       }
-      const revoked = { ...session, status: 'REVOKED' as const, expiresAt: now }
+      const revoked = this.revokeSessionShape(session, 'MEMBERSHIP_DEACTIVATED')
       revokedSessions.push(revoked)
       return revoked
     })
     return revokedSessions
   }
 
+  private revokeSessionRecord(session: AuthSession, reason: SessionRevokeReason) {
+    const revoked = this.revokeSessionShape(session, reason)
+    this.sessions = this.sessions.map((item) => (item.id === session.id ? revoked : item))
+    return revoked
+  }
+
+  private revokeSessionShape(session: AuthSession, reason: SessionRevokeReason) {
+    const now = new Date().toISOString()
+    return {
+      ...session,
+      status: 'REVOKED' as const,
+      revokedAt: now,
+      revokedReason: reason,
+    }
+  }
+
+  private enforceConcurrentSessionLimit(email: string, currentSessionId: string) {
+    const normalizedEmail = email.toLowerCase()
+    const activeSessions = this.sessions
+      .filter((session) => session.email.toLowerCase() === normalizedEmail && session.status === 'ACTIVE')
+      .sort((left, right) => new Date(left.issuedAt).getTime() - new Date(right.issuedAt).getTime())
+    const overflow = activeSessions.length - tenantSecurityPolicy.concurrentSessionLimit
+    if (overflow <= 0) {
+      return []
+    }
+
+    const revokedSessions: AuthSession[] = []
+    const revokeIds = new Set(
+      activeSessions
+        .filter((session) => session.id !== currentSessionId)
+        .slice(0, overflow)
+        .map((session) => session.id),
+    )
+    this.sessions = this.sessions.map((session) => {
+      if (!revokeIds.has(session.id)) {
+        return session
+      }
+      const revoked = this.revokeSessionShape(session, 'CONCURRENT_LIMIT')
+      revokedSessions.push(revoked)
+      this.recordAudit('session.revoke', session.userId, 'api:auth', 'review')
+      return revoked
+    })
+    return revokedSessions
+  }
+
+  private refreshSessionStates(now = new Date()) {
+    this.sessions = this.sessions.map((session) => {
+      if (session.status !== 'ACTIVE') {
+        return session
+      }
+      const absoluteExpired = new Date(session.expiresAt).getTime() <= now.getTime()
+      const idleExpired = new Date(session.idleExpiresAt).getTime() <= now.getTime()
+      if (!absoluteExpired && !idleExpired) {
+        return session
+      }
+      this.recordAudit('session.expire', session.userId, 'api:auth', 'review')
+      return {
+        ...session,
+        status: 'EXPIRED' as const,
+        revokedAt: now.toISOString(),
+        revokedReason: absoluteExpired ? 'ABSOLUTE_TIMEOUT' : 'IDLE_TIMEOUT',
+      }
+    })
+  }
+
   private permissionsForRole(role: string) {
-    return rolePolicies.find((policy) => policy.role === role)?.permissions ?? []
+    return this.rolePolicyRecords.find((policy) => policy.role === role)?.permissions ?? []
   }
 
   private pickLotsForMaterial(materialId: string, requiredGrams: number, reservedOnly = false) {
