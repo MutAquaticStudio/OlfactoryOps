@@ -340,6 +340,70 @@ describe('NorthStarService', () => {
     expect(() => service.updateBranding({ accentColor: 'blue' })).toThrow(UnprocessableEntityException)
   })
 
+  it('creates materials with CAS duplicate guard and no stock side effect', () => {
+    const service = new NorthStarService()
+    const beforeStockRows = service.inventorySummary().data.length
+    const result = service.createMaterial({
+      name: 'Vetiveryl Acetate',
+      cas: '68917-34-0',
+      family: 'Woody vetiver',
+      tier: 'Base',
+      density: 0.99,
+      vaporPressure: 0.002,
+      mw: 254.37,
+      logP: 4.8,
+      source: 'Manual supplier onboarding',
+    }).data
+    const dedupe = service.materialDedupe('68917-34-0').data
+
+    expect(result.material.id).toBe('mat-vetiveryl-acetate')
+    expect(result.audit.action).toBe('material.create')
+    expect(result.invariant).toContain('does not create stock')
+    expect(dedupe.duplicate).toBe(true)
+    expect(service.inventorySummary().data.length).toBe(beforeStockRows + 1)
+    expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '68917-34-0' })).toThrow(
+      UnprocessableEntityException,
+    )
+  })
+
+  it('stages SDS extraction for review and only writes approved provenance fields', () => {
+    const service = new NorthStarService()
+    const review = service.ingestMaterialDocument('mat-iso', {
+      source: 'Iso E Super SDS v4',
+      version: 'v4',
+      fields: { density: 0.97, vaporPressure: 0.0052 },
+    }).data
+    const beforeApproval = service.material('mat-iso').data
+    const approved = service.ingestMaterialDocument('mat-iso', {
+      source: 'Iso E Super SDS v4',
+      version: 'v4',
+      approved: true,
+      fields: { density: 0.97, vaporPressure: 0.0052 },
+      odor: ['cedar', 'amber', 'transparent'],
+    }).data
+    const provenance = service.materialProvenance('mat-iso').data
+
+    expect(review.ingestion.status).toBe('REVIEW_REQUIRED')
+    expect(review.audit.outcome).toBe('review')
+    expect(beforeApproval.density).toBe(0.96)
+    expect(approved.ingestion.status).toBe('APPROVED')
+    expect(approved.material.density).toBe(0.97)
+    expect(approved.material.provenance[0]?.source).toContain('Iso E Super SDS v4')
+    expect(provenance.provenance.some((item) => item.field === 'vaporPressure' && item.version === 'v4')).toBe(true)
+  })
+
+  it('fills curated PubChem data and returns molecule split for a material', () => {
+    const service = new NorthStarService()
+    const filled = service.pubchemFill('mat-iso').data
+    const molecules = service.materialMolecules('mat-iso').data
+
+    expect(filled.material.logP).toBe(4.72)
+    expect(filled.audit.action).toBe('material.pubchemFill')
+    expect(filled.invariant).toContain('not tenant-crossing scraping')
+    expect(molecules.molecules.length).toBeGreaterThanOrEqual(2)
+    expect(molecules.totalPercent).toBeGreaterThanOrEqual(100)
+  })
+
   it('creates formula drafts without consuming inventory', () => {
     const service = new NorthStarService()
     const beforeMovements = service.inventoryMovements().data.length

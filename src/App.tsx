@@ -64,6 +64,7 @@ import {
   initialMovements,
   materials,
   memberships,
+  moleculeComponents,
   numberingSequences,
   permissionCatalog,
   phases,
@@ -94,7 +95,9 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type Material,
   type MembershipRecord,
+  type MoleculeComponent,
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type PermissionDefinition,
@@ -195,6 +198,49 @@ type BrandingUpdateResponse = {
   branding: BrandingConfig
   audit: AuditEvent
   invariant: string
+}
+
+type MaterialDedupeResponse = {
+  cas: string
+  matches: Material[]
+  duplicate: boolean
+  invariant: string
+}
+
+type MaterialMutationResponse = {
+  material: Material
+  audit: AuditEvent
+  invariant: string
+}
+
+type MaterialIngestionResponse = MaterialMutationResponse & {
+  ingestion: {
+    id: string
+    materialId: string
+    documentType: 'SDS' | 'CoA'
+    source: string
+    version: string
+    status: 'REVIEW_REQUIRED' | 'APPROVED'
+    extractedFields: string[]
+  }
+}
+
+type MaterialMoleculesResponse = {
+  materialId: string
+  molecules: MoleculeComponent[]
+  totalPercent: number
+  invariant: string
+}
+
+type MaterialProvenanceResponse = {
+  materialId: string
+  provenance: Material['provenance']
+  documents: DocumentRecord[]
+  invariant: string
+}
+
+type PubChemFillResponse = MaterialMutationResponse & {
+  molecules: MoleculeComponent[]
 }
 
 type RolePermissionMatrix = {
@@ -360,6 +406,7 @@ function App() {
   const [modal, setModal] = useState<ModalKind>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedMaterialId, setSelectedMaterialId] = useState('mat-iso')
+  const [materialRecords, setMaterialRecords] = useState<Material[]>(() => structuredClone(materials))
   const [formulaRecords, setFormulaRecords] = useState<Formula[]>(() => structuredClone(formulas))
   const [activeFormulaId, setActiveFormulaId] = useState('frm-0421')
   const [lots, setLots] = useState<InventoryLot[]>(initialLots)
@@ -390,8 +437,8 @@ function App() {
     return formulaRecords.find((formula) => formula.id === activeFormulaId) ?? fallbackFormula
   }, [activeFormulaId, formulaRecords])
   const resolvedLeaves = useMemo(
-    () => resolveFormulaWithCatalog(selectedFormula.id, formulaRecords),
-    [formulaRecords, selectedFormula.id],
+    () => resolveFormulaWithCatalog(selectedFormula.id, formulaRecords, materialRecords),
+    [formulaRecords, materialRecords, selectedFormula.id],
   )
   const totals = useMemo(() => formulaTotals(resolvedLeaves), [resolvedLeaves])
   const curve = useMemo(() => evaporationCurve(resolvedLeaves), [resolvedLeaves])
@@ -413,7 +460,7 @@ function App() {
     [actualWeights, batchGrams, labPlan, lots, selectedFormula, weighingOperator, weighingTolerancePercent],
   )
   const weighingReady = weighingSessionPreview.status === 'READY'
-  const stock = useMemo(() => stockSummary(lots), [lots])
+  const stock = useMemo(() => stockSummary(lots, materialRecords), [lots, materialRecords])
   const stats = useMemo(() => readinessStats(), [])
   const selectedAdjustmentLot = lots.find((lot) => lot.id === adjustmentLotId)
   const selectedTransferLot = lots.find((lot) => lot.id === transferLotId)
@@ -587,7 +634,7 @@ function App() {
   }
 
   function addFormulaMaterialLine() {
-    const material = materials.find((item) => item.id === newLineMaterialId)
+    const material = materialRecords.find((item) => item.id === newLineMaterialId)
     const formula = formulaRecords.find((item) => item.id === activeFormulaId)
     const grams = Number(newLineGrams)
 
@@ -612,7 +659,7 @@ function App() {
   }
 
   function receiveStockLot() {
-    const material = materials.find((item) => item.id === receiveMaterialId)
+    const material = materialRecords.find((item) => item.id === receiveMaterialId)
     const quantityGrams = Number(receiveQuantityGrams)
 
     if (!material || !Number.isFinite(quantityGrams) || quantityGrams <= 0) {
@@ -752,6 +799,8 @@ function App() {
                   lots={lots}
                   movements={movements}
                   stock={stock}
+                  materialRecords={materialRecords}
+                  setMaterialRecords={setMaterialRecords}
                   formulaRecords={formulaRecords}
                   activeFormulaId={activeFormulaId}
                   setActiveFormulaId={setActiveFormulaId}
@@ -862,7 +911,7 @@ function App() {
               value={newLineMaterialId}
               onChange={(event) => setNewLineMaterialId(event.target.value)}
             >
-              {materials.map((material) => (
+              {materialRecords.map((material) => (
                 <option key={material.id} value={material.id}>
                   {material.name}
                 </option>
@@ -904,7 +953,7 @@ function App() {
               value={receiveMaterialId}
               onChange={(event) => setReceiveMaterialId(event.target.value)}
             >
-              {materials.map((material) => (
+              {materialRecords.map((material) => (
                 <option key={material.id} value={material.id}>
                   {material.name}
                 </option>
@@ -960,7 +1009,7 @@ function App() {
               onChange={(event) => setAdjustmentLotId(event.target.value)}
             >
               {lots.map((lot) => {
-                const material = materials.find((item) => item.id === lot.materialId)
+                const material = materialRecords.find((item) => item.id === lot.materialId)
                 return (
                   <option key={lot.id} value={lot.id}>
                     {lot.lotNumber} / {material?.name} / {formatGrams(lot.quantityGrams)}
@@ -1026,7 +1075,7 @@ function App() {
               onChange={(event) => setTransferLotId(event.target.value)}
             >
               {lots.map((lot) => {
-                const material = materials.find((item) => item.id === lot.materialId)
+                const material = materialRecords.find((item) => item.id === lot.materialId)
                 return (
                   <option key={lot.id} value={lot.id}>
                     {lot.lotNumber} / {material?.name} / {lot.location}
@@ -1259,6 +1308,8 @@ function DomainWorkspace({
   lots,
   movements,
   stock,
+  materialRecords,
+  setMaterialRecords,
   formulaRecords,
   activeFormulaId,
   setActiveFormulaId,
@@ -1293,6 +1344,8 @@ function DomainWorkspace({
   lots: InventoryLot[]
   movements: InventoryMovement[]
   stock: ReturnType<typeof stockSummary>
+  materialRecords: Material[]
+  setMaterialRecords: (materials: Material[]) => void
   formulaRecords: Formula[]
   activeFormulaId: string
   setActiveFormulaId: (id: string) => void
@@ -1328,7 +1381,13 @@ function DomainWorkspace({
       <DomainHeader domain={domain} onOpenModal={onOpenModal} />
 
       {domain.key === 'materials' && (
-        <MaterialWorkspace selectedMaterialId={selectedMaterialId} onSelectMaterial={setSelectedMaterialId} stock={stock} />
+        <MaterialWorkspace
+          materialRecords={materialRecords}
+          onMaterialsChange={setMaterialRecords}
+          selectedMaterialId={selectedMaterialId}
+          onSelectMaterial={setSelectedMaterialId}
+          stock={stock}
+        />
       )}
       {domain.key === 'formulas' && (
         <FormulaWorkspace
@@ -1348,6 +1407,7 @@ function DomainWorkspace({
           lots={lots}
           movements={movements}
           stock={stock}
+          materialRecords={materialRecords}
           onReceiveStock={onReceiveStock}
           onAdjustStock={onAdjustStock}
           onTransferStock={onTransferStock}
@@ -1424,22 +1484,301 @@ function DomainHeader({ domain, onOpenModal }: { domain: DomainModule; onOpenMod
 }
 
 function MaterialWorkspace({
+  materialRecords,
+  onMaterialsChange,
   selectedMaterialId,
   onSelectMaterial,
   stock,
 }: {
+  materialRecords: Material[]
+  onMaterialsChange: (materials: Material[]) => void
   selectedMaterialId: string
   onSelectMaterial: (id: string) => void
   stock: ReturnType<typeof stockSummary>
 }) {
-  const selected = materials.find((material) => material.id === selectedMaterialId) ?? materials[0]
+  const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
   const selectedStock = stock.find((item) => item.material.id === selected.id)
+  const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
+  const [createName, setCreateName] = useState('Vetiveryl Acetate')
+  const [createCas, setCreateCas] = useState('68917-34-0')
+  const [createFamily, setCreateFamily] = useState('Woody vetiver')
+  const [createTier, setCreateTier] = useState<Material['tier']>('Base')
+  const [editDraft, setEditDraft] = useState({
+    family: selected.family,
+    tier: selected.tier,
+    density: selected.density,
+    vaporPressure: selected.vaporPressure,
+    costPerGram: selected.costPerGram,
+    ifraLimit: selected.ifraLimit,
+    odor: selected.odor.join(', '),
+  })
+  const [ingestDraft, setIngestDraft] = useState({
+    documentType: 'SDS' as 'SDS' | 'CoA',
+    source: `${selected.name} SDS v4`,
+    version: 'v4',
+    density: selected.density,
+    vaporPressure: selected.vaporPressure,
+  })
+  const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
+    moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
+  )
+  const [provenanceRows, setProvenanceRows] = useState<Material['provenance']>(selected.provenance)
+  const [linkedDocuments, setLinkedDocuments] = useState<DocumentRecord[]>(() =>
+    documents.filter((document) => document.linkedTo === selected.id),
+  )
+
+  useEffect(() => {
+    async function loadMaterials() {
+      try {
+        const response = await fetch(`${apiBaseUrl}/materials`)
+        if (!response.ok) {
+          throw new Error('Material catalog API failed')
+        }
+        const payload = (await response.json()) as ApiEnvelope<Material[]>
+        onMaterialsChange(payload.data)
+        if (!payload.data.some((material) => material.id === selectedMaterialId) && payload.data[0]) {
+          onSelectMaterial(payload.data[0].id)
+        }
+        setMaterialStatus('Material catalog synced from API')
+      } catch {
+        setMaterialStatus('Using local material seed until API is reachable')
+      }
+    }
+    void loadMaterials()
+  }, [onMaterialsChange, onSelectMaterial, selectedMaterialId])
+
+  useEffect(() => {
+    let active = true
+    setEditDraft({
+      family: selected.family,
+      tier: selected.tier,
+      density: selected.density,
+      vaporPressure: selected.vaporPressure,
+      costPerGram: selected.costPerGram,
+      ifraLimit: selected.ifraLimit,
+      odor: selected.odor.join(', '),
+    })
+    setIngestDraft((current) => ({
+      ...current,
+      source: `${selected.name} ${current.documentType} review`,
+      density: selected.density,
+      vaporPressure: selected.vaporPressure,
+    }))
+    setMoleculeRows(moleculeComponents.filter((molecule) => molecule.materialId === selected.id))
+    setProvenanceRows(selected.provenance)
+    setLinkedDocuments(documents.filter((document) => document.linkedTo === selected.id))
+
+    async function loadIntelligence() {
+      try {
+        const [moleculeResponse, provenanceResponse] = await Promise.all([
+          fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/molecules`),
+          fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/provenance`),
+        ])
+        if (!moleculeResponse.ok || !provenanceResponse.ok) {
+          throw new Error('Material intelligence API failed')
+        }
+        const moleculePayload = (await moleculeResponse.json()) as ApiEnvelope<MaterialMoleculesResponse>
+        const provenancePayload = (await provenanceResponse.json()) as ApiEnvelope<MaterialProvenanceResponse>
+        if (!active) {
+          return
+        }
+        setMoleculeRows(moleculePayload.data.molecules)
+        setProvenanceRows(provenancePayload.data.provenance)
+        setLinkedDocuments(provenancePayload.data.documents)
+      } catch {
+        if (active) {
+          setMaterialStatus('Using local molecule/provenance seed until API is reachable')
+        }
+      }
+    }
+
+    void loadIntelligence()
+    return () => {
+      active = false
+    }
+  }, [selected])
+
+  function upsertMaterial(nextMaterial: Material) {
+    const exists = materialRecords.some((material) => material.id === nextMaterial.id)
+    onMaterialsChange(
+      exists
+        ? materialRecords.map((material) => (material.id === nextMaterial.id ? nextMaterial : material))
+        : [nextMaterial, ...materialRecords],
+    )
+    onSelectMaterial(nextMaterial.id)
+    setProvenanceRows(nextMaterial.provenance)
+  }
+
+  async function checkCasDuplicate() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/materials/dedupe?cas=${encodeURIComponent(createCas)}`)
+      if (!response.ok) {
+        throw new Error('Dedupe check failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<MaterialDedupeResponse>
+      setMaterialStatus(
+        payload.data.duplicate
+          ? `${payload.data.matches.length} duplicate candidate found for ${payload.data.cas}`
+          : `No CAS duplicate found for ${payload.data.cas}`,
+      )
+    } catch {
+      setMaterialStatus('CAS duplicate check unavailable')
+    }
+  }
+
+  async function createMaterialRecord() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/materials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: createName,
+          cas: createCas,
+          family: createFamily,
+          tier: createTier,
+          density: 1,
+          vaporPressure: 0.01,
+          mw: 100,
+          logP: 1,
+          substantivityHours: 24,
+          ifraLimit: 100,
+          costPerGram: 0.05,
+          odor: createFamily.split(' ').filter(Boolean),
+          source: 'Material intelligence console',
+          version: 'v1',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Material create failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<MaterialMutationResponse>
+      upsertMaterial(payload.data.material)
+      setCreateName('')
+      setMaterialStatus(`${payload.data.material.name} created without stock movement`)
+    } catch {
+      setMaterialStatus('Material create blocked; check required fields or duplicate CAS')
+    }
+  }
+
+  async function saveMaterialUpdate() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          family: editDraft.family,
+          tier: editDraft.tier,
+          density: Number(editDraft.density),
+          vaporPressure: Number(editDraft.vaporPressure),
+          costPerGram: Number(editDraft.costPerGram),
+          ifraLimit: Number(editDraft.ifraLimit),
+          odor: editDraft.odor.split(',').map((tag) => tag.trim()).filter(Boolean),
+          source: 'Material inspector update',
+          version: 'manual-ui',
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Material update failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<MaterialMutationResponse>
+      upsertMaterial(payload.data.material)
+      setMaterialStatus(`${payload.data.material.name} metadata saved with provenance`)
+    } catch {
+      setMaterialStatus('Material update blocked by validation or permission')
+    }
+  }
+
+  async function approveIngestion() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documentType: ingestDraft.documentType,
+          source: ingestDraft.source,
+          version: ingestDraft.version,
+          approved: true,
+          fields: {
+            density: Number(ingestDraft.density),
+            vaporPressure: Number(ingestDraft.vaporPressure),
+          },
+          odor: editDraft.odor.split(',').map((tag) => tag.trim()).filter(Boolean),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Material ingest failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<MaterialIngestionResponse>
+      upsertMaterial(payload.data.material)
+      setMaterialStatus(`${payload.data.ingestion.source} approved and written to material provenance`)
+    } catch {
+      setMaterialStatus('SDS/CoA ingest blocked; review extracted fields')
+    }
+  }
+
+  async function fillFromPubChem() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/pubchem-fill`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error('PubChem fill failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<PubChemFillResponse>
+      upsertMaterial(payload.data.material)
+      setMoleculeRows(payload.data.molecules)
+      setMaterialStatus(`${payload.data.material.name} enriched from curated PubChem profile`)
+    } catch {
+      setMaterialStatus('PubChem fill unavailable for this material')
+    }
+  }
 
   return (
-    <div className="workspace-grid two-one">
+    <div className="workspace-grid material-intelligence-grid">
       <Panel title="Material Library" icon={Atom}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Name</span>
+            <input aria-label="New material name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
+          </label>
+          <label className="field-row">
+            <span>CAS</span>
+            <input aria-label="New material CAS" value={createCas} onChange={(event) => setCreateCas(event.target.value)} />
+          </label>
+          <label className="field-row">
+            <span>Family</span>
+            <input
+              aria-label="New material family"
+              value={createFamily}
+              onChange={(event) => setCreateFamily(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Tier</span>
+            <select
+              aria-label="New material tier"
+              value={createTier}
+              onChange={(event) => setCreateTier(event.target.value as Material['tier'])}
+            >
+              <option value="Top">Top</option>
+              <option value="Heart">Heart</option>
+              <option value="Base">Base</option>
+            </select>
+          </label>
+          <button className="ghost-button" type="button" onClick={() => void checkCasDuplicate()}>
+            Check CAS
+          </button>
+          <button className="primary-button" type="button" onClick={() => void createMaterialRecord()} disabled={!createName.trim() || !createCas.trim()}>
+            <Plus size={16} />
+            Create material
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>{materialStatus}</li>
+          <li>Material master changes do not create stock. Lots and movements stay in Inventory.</li>
+        </ul>
         <div className="material-list">
-          {materials.map((material) => {
+          {materialRecords.map((material) => {
             const summary = stock.find((item) => item.material.id === material.id)
             return (
               <button
@@ -1452,6 +1791,7 @@ function MaterialWorkspace({
                   <strong>{material.name}</strong>
                   <span>{material.family}</span>
                 </div>
+                <DataTag label={material.tier} value={material.cas} tone="blue" />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
             )
@@ -1460,6 +1800,11 @@ function MaterialWorkspace({
       </Panel>
 
       <Panel title="Material Inspector" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
+        <div className="tag-row">
+          <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
+          <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
+          <DataTag label="Molecules" value={String(moleculeRows.length)} />
+        </div>
         <div className="inspector-grid">
           <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
           <Metric label="Density" value={`${selected.density} g/ml`} />
@@ -1473,14 +1818,193 @@ function MaterialWorkspace({
             <span key={tag}>{tag}</span>
           ))}
         </div>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Family</span>
+            <input
+              aria-label="Material family"
+              value={editDraft.family}
+              onChange={(event) => setEditDraft((current) => ({ ...current, family: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Tier</span>
+            <select
+              aria-label="Material tier"
+              value={editDraft.tier}
+              onChange={(event) => setEditDraft((current) => ({ ...current, tier: event.target.value as Material['tier'] }))}
+            >
+              <option value="Top">Top</option>
+              <option value="Heart">Heart</option>
+              <option value="Base">Base</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Density</span>
+            <input
+              aria-label="Material density"
+              step={0.001}
+              type="number"
+              value={editDraft.density}
+              onChange={(event) => setEditDraft((current) => ({ ...current, density: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Vapor pressure</span>
+            <input
+              aria-label="Material vapor pressure"
+              step={0.0001}
+              type="number"
+              value={editDraft.vaporPressure}
+              onChange={(event) => setEditDraft((current) => ({ ...current, vaporPressure: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Cost / gram</span>
+            <input
+              aria-label="Material cost per gram"
+              step={0.001}
+              type="number"
+              value={editDraft.costPerGram}
+              onChange={(event) => setEditDraft((current) => ({ ...current, costPerGram: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>IFRA limit %</span>
+            <input
+              aria-label="Material IFRA limit"
+              step={0.1}
+              type="number"
+              value={editDraft.ifraLimit}
+              onChange={(event) => setEditDraft((current) => ({ ...current, ifraLimit: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row wide-field">
+            <span>Odor tags</span>
+            <input
+              aria-label="Material odor tags"
+              value={editDraft.odor}
+              onChange={(event) => setEditDraft((current) => ({ ...current, odor: event.target.value }))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void saveMaterialUpdate()}>
+            Save metadata
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void fillFromPubChem()}>
+            PubChem fill
+          </button>
+        </div>
+      </Panel>
+
+      <Panel title="SDS / CoA Review" icon={FileLock2}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Document type</span>
+            <select
+              aria-label="Material ingest document type"
+              value={ingestDraft.documentType}
+              onChange={(event) =>
+                setIngestDraft((current) => ({ ...current, documentType: event.target.value as 'SDS' | 'CoA' }))
+              }
+            >
+              <option value="SDS">SDS</option>
+              <option value="CoA">CoA</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Version</span>
+            <input
+              aria-label="Material ingest version"
+              value={ingestDraft.version}
+              onChange={(event) => setIngestDraft((current) => ({ ...current, version: event.target.value }))}
+            />
+          </label>
+          <label className="field-row wide-field">
+            <span>Source</span>
+            <input
+              aria-label="Material ingest source"
+              value={ingestDraft.source}
+              onChange={(event) => setIngestDraft((current) => ({ ...current, source: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Extracted density</span>
+            <input
+              aria-label="Material ingest density"
+              step={0.001}
+              type="number"
+              value={ingestDraft.density}
+              onChange={(event) => setIngestDraft((current) => ({ ...current, density: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Extracted vapor pressure</span>
+            <input
+              aria-label="Material ingest vapor pressure"
+              step={0.0001}
+              type="number"
+              value={ingestDraft.vaporPressure}
+              onChange={(event) =>
+                setIngestDraft((current) => ({ ...current, vaporPressure: Number(event.target.value) }))
+              }
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void approveIngestion()}>
+            Approve ingest
+          </button>
+        </div>
+        <div className="empty-state">
+          <strong>Review-first ingestion</strong>
+          <span>Extracted SDS/CoA fields are written only after this explicit approval step.</span>
+        </div>
+      </Panel>
+
+      <Panel title="Molecule Split" icon={Layers3}>
+        <div className="tag-row">
+          <DataTag label="Components" value={String(moleculeRows.length)} />
+          <DataTag label="Total" value={`${moleculeRows.reduce((sum, molecule) => sum + molecule.percent, 0).toFixed(1)}%`} tone="blue" />
+        </div>
         <div className="provenance-list">
-          {selected.provenance.map((source) => (
-            <div className="provenance-item" key={`${source.field}-${source.version}`}>
+          {moleculeRows.length > 0 ? (
+            moleculeRows.map((molecule) => (
+              <div className="provenance-item" key={molecule.id}>
+                <div>
+                  <strong>{molecule.name}</strong>
+                  <span>{molecule.cas} / {molecule.source}</span>
+                </div>
+                <DataTag label="Pct" value={`${molecule.percent}%`} tone="green" />
+                <StatusBadge status={molecule.status === 'VERIFIED' ? 'stable' : 'review'} label={molecule.status} />
+              </div>
+            ))
+          ) : (
+            <div className="empty-state">
+              <strong>No molecule split yet.</strong>
+              <span>Run PubChem fill or approve SDS section 3 extraction to seed components.</span>
+            </div>
+          )}
+        </div>
+      </Panel>
+
+      <Panel className="wide" title="Field Provenance" icon={ClipboardCheck}>
+        <div className="provenance-list">
+          {provenanceRows.map((source, index) => (
+            <div className="provenance-item" key={`${source.field}-${source.version}-${index}`}>
               <div>
                 <strong>{source.field}</strong>
                 <span>{source.source}</span>
               </div>
               <span className="mono-value">{source.version}</span>
+              <span className="mono-small">{index === 0 ? 'latest' : source.date}</span>
+            </div>
+          ))}
+          {linkedDocuments.map((document) => (
+            <div className="provenance-item" key={document.id}>
+              <div>
+                <strong>{document.type} document</strong>
+                <span>{document.title} / {document.sensitivity}</span>
+              </div>
+              <span className="mono-value">{document.version}</span>
+              <StatusBadge status="stable" label="private" />
             </div>
           ))}
         </div>
@@ -1635,6 +2159,7 @@ function InventoryWorkspace({
   lots,
   movements,
   stock,
+  materialRecords,
   onReceiveStock,
   onAdjustStock,
   onTransferStock,
@@ -1642,6 +2167,7 @@ function InventoryWorkspace({
   lots: InventoryLot[]
   movements: InventoryMovement[]
   stock: ReturnType<typeof stockSummary>
+  materialRecords: Material[]
   onReceiveStock: () => void
   onAdjustStock: () => void
   onTransferStock: () => void
@@ -1719,7 +2245,7 @@ function InventoryWorkspace({
       >
         <div className="lot-table">
           {lots.map((lot) => {
-            const material = materials.find((item) => item.id === lot.materialId)
+            const material = materialRecords.find((item) => item.id === lot.materialId)
             return (
               <div className="lot-row" key={lot.id}>
                 <div>
@@ -1737,7 +2263,7 @@ function InventoryWorkspace({
       </Panel>
 
       <Panel className="wide" title="Immutable Movement Ledger" icon={Database}>
-        <MovementTable movements={movements} />
+        <MovementTable movements={movements} materialRecords={materialRecords} />
       </Panel>
     </div>
   )
@@ -3413,11 +3939,17 @@ function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve
   )
 }
 
-function MovementTable({ movements }: { movements: InventoryMovement[] }) {
+function MovementTable({
+  movements,
+  materialRecords = materials,
+}: {
+  movements: InventoryMovement[]
+  materialRecords?: Material[]
+}) {
   return (
     <div className="movement-table">
       {movements.map((movement) => {
-        const material = materials.find((item) => item.id === movement.materialId)
+        const material = materialRecords.find((item) => item.id === movement.materialId)
         return (
           <div className="movement-row" key={movement.id}>
             <span className="mono-value">{movement.id}</span>

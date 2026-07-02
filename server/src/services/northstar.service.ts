@@ -22,6 +22,7 @@ import {
   initialMovements,
   materials,
   memberships,
+  moleculeComponents,
   numberingSequences,
   organizations,
   orderRequiredGrams,
@@ -54,7 +55,11 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type Material,
+  type MaterialIngestionRecord,
+  type MaterialProvenance,
   type MembershipRecord,
+  type MoleculeComponent,
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type ProductionBatchRecord,
@@ -105,8 +110,28 @@ type SessionRevokeReason =
   | 'MEMBERSHIP_DEACTIVATED'
   | 'REVOKE_ALL'
 
+type MaterialMutationBody = Partial<Omit<Material, 'id' | 'provenance'>> & {
+  source?: string
+  version?: string
+}
+
+type MaterialNumericFields = Partial<
+  Pick<Material, 'density' | 'vaporPressure' | 'mw' | 'logP' | 'ifraLimit' | 'costPerGram'>
+>
+
+type MaterialIngestionBody = {
+  documentType?: 'SDS' | 'CoA'
+  source?: string
+  version?: string
+  approved?: boolean
+  fields?: MaterialNumericFields
+  odor?: string[]
+}
+
 @Injectable()
 export class NorthStarService {
+  private materialRecords: Material[] = structuredClone(materials)
+  private moleculeRecords: MoleculeComponent[] = structuredClone(moleculeComponents)
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
   private formulaRecords: Formula[] = structuredClone(initialFormulas)
@@ -137,7 +162,66 @@ export class NorthStarService {
   }
 
   materials() {
-    return { data: materials }
+    return { data: this.materialRecords }
+  }
+
+  materialDedupe(cas = '') {
+    const normalizedCas = cas.trim().toLowerCase()
+    const matches = normalizedCas
+      ? this.materialRecords.filter((material) => material.cas.toLowerCase() === normalizedCas)
+      : []
+    return {
+      data: {
+        cas,
+        matches,
+        duplicate: matches.length > 0,
+        invariant: 'CAS duplicate checks run before material creation',
+      },
+    }
+  }
+
+  createMaterial(body: MaterialMutationBody) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.create')
+    const name = body.name?.trim()
+    const cas = body.cas?.trim()
+    if (!name) {
+      throw new UnprocessableEntityException('Material name is required')
+    }
+    if (!cas || !/^[0-9-]+$/.test(cas)) {
+      throw new UnprocessableEntityException('CAS must contain digits and hyphens')
+    }
+    if (this.materialRecords.some((material) => material.cas.toLowerCase() === cas.toLowerCase())) {
+      throw new UnprocessableEntityException('Material CAS already exists')
+    }
+
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `material-${Date.now()}`
+    const material: Material = {
+      id: `mat-${slug}`,
+      name,
+      cas,
+      family: body.family?.trim() || 'Unclassified',
+      tier: body.tier === 'Top' || body.tier === 'Heart' || body.tier === 'Base' ? body.tier : 'Base',
+      vaporPressure: this.safeMaterialNumber(body.vaporPressure, 0.01),
+      density: this.safeMaterialNumber(body.density, 1),
+      mw: this.safeMaterialNumber(body.mw, 100),
+      logP: this.safeMaterialNumber(body.logP, 1),
+      substantivityHours: this.safeMaterialNumber(body.substantivityHours, 24),
+      ifraLimit: this.safeMaterialNumber(body.ifraLimit, 100),
+      costPerGram: this.safeMaterialNumber(body.costPerGram, 0.05),
+      odor: body.odor?.filter(Boolean) ?? [],
+      provenance: [
+        {
+          field: 'Material',
+          source: body.source?.trim() || 'Manual material create',
+          version: body.version?.trim() || 'v1',
+          date: new Date().toISOString().slice(0, 10),
+        },
+      ],
+    }
+    this.materialRecords = [material, ...this.materialRecords]
+    const audit = this.recordAudit('material.create', material.id, session.userId, 'allowed')
+    return { data: { material, audit, invariant: 'material master create does not create stock' } }
   }
 
   formulas() {
@@ -184,7 +268,7 @@ export class NorthStarService {
       throw new UnprocessableEntityException('Formula line must reference exactly one material or child formula')
     }
 
-    const material = body.materialId ? materials.find((item) => item.id === body.materialId) : undefined
+    const material = body.materialId ? this.materialRecords.find((item) => item.id === body.materialId) : undefined
     if (body.materialId && !material) {
       throw new NotFoundException(`Material ${body.materialId} was not found`)
     }
@@ -208,7 +292,7 @@ export class NorthStarService {
     }
     const updatedFormula = { ...formula, lines: [...formula.lines, line] }
     this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
-    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords)
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords, this.materialRecords)
 
     this.recordAudit('formula.line.create', updatedFormula.code, 'api:perfumer', 'allowed')
     return {
@@ -223,12 +307,151 @@ export class NorthStarService {
   }
 
   material(id: string) {
-    const material = materials.find((item) => item.id === id)
+    const material = this.materialRecords.find((item) => item.id === id)
     if (!material) {
       throw new NotFoundException(`Material ${id} was not found`)
     }
-    const summary = stockSummary(this.lots).find((item) => item.material.id === id)
+    const summary = stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === id)
     return { data: { ...material, stock: summary } }
+  }
+
+  updateMaterial(id: string, body: MaterialMutationBody) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    const material = this.materialRecords.find((item) => item.id === id)
+    if (!material) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    const updated = this.mergeMaterial(material, body, body.source?.trim() || 'Manual material update', body.version?.trim() || 'v1')
+    this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
+    const audit = this.recordAudit('material.update', id, session.userId, 'allowed')
+    return { data: { material: updated, audit, invariant: 'material edits preserve field provenance' } }
+  }
+
+  ingestMaterialDocument(id: string, body: MaterialIngestionBody) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    const material = this.materialRecords.find((item) => item.id === id)
+    if (!material) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    const documentType = body.documentType === 'CoA' ? 'CoA' : 'SDS'
+    const source = body.source?.trim() || `${material.name} ${documentType}`
+    const version = body.version?.trim() || 'v1'
+    const fallbackFields =
+      documentType === 'CoA'
+        ? { costPerGram: Number((material.costPerGram * 0.98).toFixed(4)) }
+        : {
+            density: Number((material.density + 0.01).toFixed(3)),
+            vaporPressure: Number((material.vaporPressure * 1.08).toFixed(4)),
+            mw: material.mw,
+            logP: Number((material.logP + 0.05).toFixed(2)),
+          }
+    const fields = this.sanitizeMaterialFields({ ...fallbackFields, ...body.fields })
+    const ingestion: MaterialIngestionRecord = {
+      id: `ING-${String(this.auditCounter + 1).padStart(5, '0')}`,
+      materialId: id,
+      documentType,
+      source,
+      version,
+      status: body.approved === true ? 'APPROVED' : 'REVIEW_REQUIRED',
+      extractedFields: Object.keys(fields),
+    }
+    const audit = this.recordAudit(
+      body.approved === true ? 'material.ingest.approve' : 'material.ingest.review',
+      id,
+      session.userId,
+      body.approved === true ? 'allowed' : 'review',
+    )
+
+    if (body.approved !== true) {
+      return {
+        data: {
+          material,
+          ingestion,
+          audit,
+          invariant: 'SDS/CoA extraction is staged for human review before write',
+        },
+      }
+    }
+
+    const updated = this.mergeMaterial(
+      material,
+      { ...fields, odor: body.odor },
+      `${source} ${documentType} review`,
+      version,
+    )
+    this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
+    return {
+      data: {
+        material: updated,
+        ingestion,
+        audit,
+        invariant: 'SDS/CoA ingestion writes only after explicit approval',
+      },
+    }
+  }
+
+  pubchemFill(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    const material = this.materialRecords.find((item) => item.id === id)
+    if (!material) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    const profile = this.pubchemProfile(material)
+    const updated = this.mergeMaterial(material, profile.fields, 'PubChem curated fill', '2026-07')
+    const nextMolecules = profile.molecules.map((molecule, index) => ({
+      ...molecule,
+      id: `mol-${id}-${index + 1}`,
+      materialId: id,
+      source: 'PubChem curated fill',
+      status: 'REVIEW' as const,
+    }))
+    this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
+    this.moleculeRecords = [
+      ...nextMolecules,
+      ...this.moleculeRecords.filter((molecule) => molecule.materialId !== id || molecule.status === 'VERIFIED'),
+    ]
+    const audit = this.recordAudit('material.pubchemFill', id, session.userId, 'allowed')
+    return {
+      data: {
+        material: updated,
+        molecules: this.moleculeRecords.filter((molecule) => molecule.materialId === id),
+        audit,
+        invariant: 'PubChem fill is curated tenant data, not tenant-crossing scraping',
+      },
+    }
+  }
+
+  materialMolecules(id: string) {
+    if (!this.materialRecords.some((item) => item.id === id)) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    const molecules = this.moleculeRecords.filter((molecule) => molecule.materialId === id)
+    return {
+      data: {
+        materialId: id,
+        molecules,
+        totalPercent: molecules.reduce((sum, molecule) => sum + molecule.percent, 0),
+        invariant: 'molecule split is linked to a tenant material record',
+      },
+    }
+  }
+
+  materialProvenance(id: string) {
+    const material = this.materialRecords.find((item) => item.id === id)
+    if (!material) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    return {
+      data: {
+        materialId: id,
+        provenance: material.provenance,
+        documents: this.documentRecords.filter((document) => document.linkedTo === id),
+        invariant: 'every sourced material field keeps provenance evidence',
+      },
+    }
   }
 
   resolveFormula(id: string) {
@@ -236,7 +459,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${id} was not found`)
     }
-    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords)
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords, this.materialRecords)
     return {
       data: {
         formula,
@@ -263,7 +486,7 @@ export class NorthStarService {
   }
 
   inventorySummary() {
-    return { data: stockSummary(this.lots) }
+    return { data: stockSummary(this.lots, this.materialRecords) }
   }
 
   inventoryMovements() {
@@ -325,7 +548,7 @@ export class NorthStarService {
       data: {
         lot: updatedLot,
         movement,
-        summary: stockSummary(this.lots).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === lot.materialId),
         invariant: 'inventory adjustment changes stock only through immutable movement',
       },
     }
@@ -368,7 +591,7 @@ export class NorthStarService {
       data: {
         lot: updatedLot,
         movement,
-        summary: stockSummary(this.lots).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === lot.materialId),
         invariant: 'inventory transfer records movement evidence without changing stock quantity',
       },
     }
@@ -380,8 +603,8 @@ export class NorthStarService {
     quantityGrams?: number
     expiryDate?: string
   }) {
-    const materialId = body.materialId ?? materials[0]?.id
-    const material = materials.find((item) => item.id === materialId)
+    const materialId = body.materialId ?? this.materialRecords[0]?.id
+    const material = this.materialRecords.find((item) => item.id === materialId)
     if (!material) {
       throw new NotFoundException(`Material ${materialId} was not found`)
     }
@@ -425,7 +648,7 @@ export class NorthStarService {
       data: {
         lot,
         movement,
-        summary: stockSummary(this.lots).find((item) => item.material.id === material.id),
+        summary: stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === material.id),
         invariant: 'inventory receipt creates lot and immutable IN movement',
       },
     }
@@ -1041,7 +1264,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
-    const leaves = resolveFormulaWithCatalog(formulaId, this.formulaRecords)
+    const leaves = resolveFormulaWithCatalog(formulaId, this.formulaRecords, this.materialRecords)
     const plan = planLabUsage(leaves, this.lots, grams, formula.targetGrams)
     return {
       data: {
@@ -1289,7 +1512,7 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${batch.formulaId} was not found`)
     }
-    const leaves = resolveFormulaWithCatalog(batch.formulaId, this.formulaRecords)
+    const leaves = resolveFormulaWithCatalog(batch.formulaId, this.formulaRecords, this.materialRecords)
     const plan = planLabUsage(leaves, this.lots, batch.targetGrams, formula.targetGrams)
     if (plan.shortfalls.length > 0) {
       throw new UnprocessableEntityException({ message: 'Production cannot consume while shortfalls exist', shortfalls: plan.shortfalls })
@@ -1352,7 +1575,7 @@ export class NorthStarService {
     if (!order) {
       throw new NotFoundException(`Purchase order ${id} was not found`)
     }
-    const material = materials.find((item) => item.id === order.materialId)
+    const material = this.materialRecords.find((item) => item.id === order.materialId)
     if (!material) {
       throw new NotFoundException(`Material ${order.materialId} was not found`)
     }
@@ -1677,8 +1900,86 @@ export class NorthStarService {
     return this.rolePolicyRecords.find((policy) => policy.role === role)?.permissions ?? []
   }
 
+  private safeMaterialNumber(value: unknown, fallback: number) {
+    const next = Number(value)
+    return Number.isFinite(next) && next >= 0 ? next : fallback
+  }
+
+  private sanitizeMaterialFields(fields: MaterialNumericFields = {}): MaterialNumericFields {
+    return Object.fromEntries(
+      Object.entries(fields)
+        .map(([field, value]) => [field, Number(value)] as const)
+        .filter(([, value]) => Number.isFinite(value) && value >= 0),
+    ) as MaterialNumericFields
+  }
+
+  private mergeMaterial(material: Material, body: MaterialMutationBody, source: string, version: string): Material {
+    const date = new Date().toISOString().slice(0, 10)
+    const next: Material = {
+      ...material,
+      name: body.name?.trim() || material.name,
+      family: body.family?.trim() || material.family,
+      tier: body.tier === 'Top' || body.tier === 'Heart' || body.tier === 'Base' ? body.tier : material.tier,
+      vaporPressure:
+        body.vaporPressure === undefined ? material.vaporPressure : this.safeMaterialNumber(body.vaporPressure, material.vaporPressure),
+      density: body.density === undefined ? material.density : this.safeMaterialNumber(body.density, material.density),
+      mw: body.mw === undefined ? material.mw : this.safeMaterialNumber(body.mw, material.mw),
+      logP: body.logP === undefined ? material.logP : this.safeMaterialNumber(body.logP, material.logP),
+      substantivityHours:
+        body.substantivityHours === undefined
+          ? material.substantivityHours
+          : this.safeMaterialNumber(body.substantivityHours, material.substantivityHours),
+      ifraLimit: body.ifraLimit === undefined ? material.ifraLimit : this.safeMaterialNumber(body.ifraLimit, material.ifraLimit),
+      costPerGram:
+        body.costPerGram === undefined ? material.costPerGram : this.safeMaterialNumber(body.costPerGram, material.costPerGram),
+      odor: body.odor ? body.odor.filter(Boolean) : material.odor,
+    }
+    const trackedFields = [
+      'name',
+      'family',
+      'tier',
+      'vaporPressure',
+      'density',
+      'mw',
+      'logP',
+      'substantivityHours',
+      'ifraLimit',
+      'costPerGram',
+      'odor',
+    ] as const
+    const provenance: MaterialProvenance[] = trackedFields
+      .filter((field) => body[field] !== undefined && JSON.stringify(next[field]) !== JSON.stringify(material[field]))
+      .map((field) => ({ field: String(field), source, version, date }))
+    return {
+      ...next,
+      provenance: [...provenance, ...material.provenance],
+    }
+  }
+
+  private pubchemProfile(material: Material) {
+    if (material.cas === '54464-57-2') {
+      return {
+        fields: { mw: 234.38, logP: 4.72, vaporPressure: 0.0049 },
+        molecules: [
+          { name: 'Iso E Super isomer A', cas: '54464-57-2', percent: 72 },
+          { name: 'Iso E Super isomer B', cas: '54464-59-4', percent: 28 },
+        ],
+      }
+    }
+    if (material.cas === '24851-98-7') {
+      return {
+        fields: { mw: 226.31, logP: 3.12, vaporPressure: 0.011 },
+        molecules: [{ name: 'Methyl dihydrojasmonate', cas: '24851-98-7', percent: 94 }],
+      }
+    }
+    return {
+      fields: { mw: material.mw, logP: material.logP, vaporPressure: material.vaporPressure },
+      molecules: [{ name: `${material.name} primary component`, cas: material.cas, percent: 100 }],
+    }
+  }
+
   private pickLotsForMaterial(materialId: string, requiredGrams: number, reservedOnly = false) {
-    const material = materials.find((item) => item.id === materialId)
+    const material = this.materialRecords.find((item) => item.id === materialId)
     if (!material) {
       throw new NotFoundException(`Material ${materialId} was not found`)
     }

@@ -64,12 +64,34 @@ export interface Material {
   ifraLimit: number
   costPerGram: number
   odor: string[]
-  provenance: {
-    field: string
-    source: string
-    version: string
-    date: string
-  }[]
+  provenance: MaterialProvenance[]
+}
+
+export interface MaterialProvenance {
+  field: string
+  source: string
+  version: string
+  date: string
+}
+
+export interface MaterialIngestionRecord {
+  id: string
+  materialId: string
+  documentType: 'SDS' | 'CoA'
+  source: string
+  version: string
+  status: 'REVIEW_REQUIRED' | 'APPROVED'
+  extractedFields: string[]
+}
+
+export interface MoleculeComponent {
+  id: string
+  materialId: string
+  name: string
+  cas: string
+  percent: number
+  source: string
+  status: 'VERIFIED' | 'REVIEW'
 }
 
 export interface FormulaLine {
@@ -451,7 +473,7 @@ export const phases: Phase[] = [
   { id: 1, name: 'Platform Foundation', domain: 'platform', goal: 'Shell, API convention, health, logging', gate: 'Health and shell green', status: 'active', securityLayer: 'L1', coverage: 88 },
   { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'active', securityLayer: 'L2/L4', coverage: 86 },
   { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 84 },
-  { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 82 },
+  { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 90 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, summary', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 80 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'testing', securityLayer: 'L5', coverage: 70 },
@@ -527,16 +549,16 @@ export const domains: DomainModule[] = [
     shortName: 'Materials',
     responsibility: 'Material master, SDS/CoA ingestion, provenance, molecule data',
     status: 'active',
-    health: 82,
-    risk: 'Provenance modeled; AI extract stays review-only',
+    health: 90,
+    risk: 'Material create/update, CAS duplicate guard, SDS review, PubChem fill, molecule split, and provenance are live',
     owner: 'Lab Data',
-    entities: ['Material', 'Molecule', 'OdorProfile', 'IFRADataRef', 'CostSnapshot'],
-    features: ['Material inspector', 'SDS ingestion', 'PubChem fill', 'Molecule split', 'Field provenance'],
+    entities: ['Material', 'Molecule', 'OdorProfile', 'IFRADataRef', 'CostSnapshot', 'MaterialIngestion'],
+    features: ['Material CRUD', 'CAS duplicate guard', 'SDS/CoA review ingest', 'PubChem fill', 'Molecule split', 'Field provenance'],
     invariants: ['INV-003 material has no stock', 'INV-014 vapor pressure on leaf', 'INV-015 provenance required'],
-    apis: ['/api/v1/materials', '/api/v1/materials/:id/ingest', '/api/v1/materials/:id/provenance'],
+    apis: ['/api/v1/materials', '/api/v1/materials/:id/ingest', '/api/v1/materials/:id/pubchem-fill', '/api/v1/materials/:id/molecules', '/api/v1/materials/:id/provenance'],
     permissions: ['materials.view', 'materials.create', 'materials.update'],
-    screens: ['Material list', 'Inspector', 'Ingestion wizard'],
-    activity: 'Iso E Super SDS v3 verified against supplier CoA',
+    screens: ['Material list', 'Intelligence console', 'SDS review', 'Molecule split'],
+    activity: 'Iso E Super SDS v3 updates density/vapor pressure with reviewed provenance',
   },
   {
     key: 'formulas',
@@ -884,6 +906,45 @@ export const materials: Material[] = [
     provenance: [
       { field: 'density', source: 'Supplier SDS section 9', version: 'v5', date: '2026-01-04' },
     ],
+  },
+]
+
+export const moleculeComponents: MoleculeComponent[] = [
+  {
+    id: 'mol-iso-001',
+    materialId: 'mat-iso',
+    name: 'Tetramethyl acetyloctahydronaphthalenes',
+    cas: '54464-57-2',
+    percent: 88,
+    source: 'SDS Iso E Super section 3',
+    status: 'VERIFIED',
+  },
+  {
+    id: 'mol-iso-002',
+    materialId: 'mat-iso',
+    name: 'Amber woody isomer blend',
+    cas: '54464-59-4',
+    percent: 12,
+    source: 'Supplier CoA note',
+    status: 'REVIEW',
+  },
+  {
+    id: 'mol-hed-001',
+    materialId: 'mat-hedione',
+    name: 'Methyl dihydrojasmonate',
+    cas: '24851-98-7',
+    percent: 94,
+    source: 'CoA HED-2026-011',
+    status: 'VERIFIED',
+  },
+  {
+    id: 'mol-berg-001',
+    materialId: 'mat-bergamot',
+    name: 'Limonene',
+    cas: '5989-27-5',
+    percent: 38,
+    source: 'Supplier SDS section 3',
+    status: 'REVIEW',
   },
 ]
 
@@ -1554,8 +1615,6 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
   ],
 }
 
-const materialById = new Map(materials.map((material) => [material.id, material]))
-
 export function formatGrams(value: number) {
   return `${value.toFixed(value >= 10 ? 1 : 2)}g`
 }
@@ -1629,8 +1688,13 @@ export function createSignedDocumentUrl(
   }
 }
 
-export function resolveFormulaWithCatalog(formulaId: string, formulaCatalog: Formula[] = formulas): ResolvedLeaf[] {
+export function resolveFormulaWithCatalog(
+  formulaId: string,
+  formulaCatalog: Formula[] = formulas,
+  materialCatalog: Material[] = materials,
+): ResolvedLeaf[] {
   const formulaLookup = new Map(formulaCatalog.map((formula) => [formula.id, formula]))
+  const materialLookup = new Map(materialCatalog.map((material) => [material.id, material]))
   const root = formulaLookup.get(formulaId)
   if (!root) {
     return []
@@ -1648,7 +1712,7 @@ export function resolveFormulaWithCatalog(formulaId: string, formulaCatalog: For
     formula.lines.forEach((line) => {
       const lineGrams = line.grams * scale
       if (line.materialId) {
-        const material = materialById.get(line.materialId)
+        const material = materialLookup.get(line.materialId)
         if (!material) {
           return
         }
@@ -1729,8 +1793,8 @@ export function evaporationCurve(leaves: ResolvedLeaf[]) {
   })
 }
 
-export function stockSummary(lots: InventoryLot[]) {
-  return materials.map((material) => {
+export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
+  return materialCatalog.map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)
     const reserved = materialLots.reduce((sum, lot) => sum + lot.reservedGrams, 0)

@@ -1087,6 +1087,7 @@ kbd {
 }
 
 .inventory-grid,
+.material-intelligence-grid,
 .lab-grid,
 .documents-grid,
 .identity-grid,
@@ -1106,8 +1107,18 @@ kbd {
   margin-top: 12px;
 }
 
+.material-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
 .customization-form-grid .primary-button,
-.customization-form-grid .ghost-button {
+.customization-form-grid .ghost-button,
+.material-form-grid .primary-button,
+.material-form-grid .ghost-button {
   align-self: end;
 }
 
@@ -1698,6 +1709,7 @@ input[type='range'] {
   .dashboard-grid,
   .workspace-grid.two-one,
   .formula-grid,
+  .material-intelligence-grid,
   .inventory-grid,
   .lab-grid,
   .documents-grid,
@@ -1767,6 +1779,7 @@ input[type='range'] {
   .tenant-form-row,
   .weighing-controls,
   .customization-form-grid,
+  .material-form-grid,
   .branding-preview {
     grid-template-columns: 1fr;
   }

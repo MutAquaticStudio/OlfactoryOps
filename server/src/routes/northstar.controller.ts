@@ -32,9 +32,98 @@ export class NorthStarController {
     return this.northStar.materials()
   }
 
+  @Get('materials/dedupe')
+  materialDedupe(@Query('cas') cas = '') {
+    return this.northStar.materialDedupe(cas)
+  }
+
+  @Post('materials')
+  createMaterial(
+    @Body()
+    body: {
+      name?: string
+      cas?: string
+      family?: string
+      tier?: 'Top' | 'Heart' | 'Base'
+      vaporPressure?: number
+      density?: number
+      mw?: number
+      logP?: number
+      substantivityHours?: number
+      ifraLimit?: number
+      costPerGram?: number
+      odor?: string[]
+      source?: string
+      version?: string
+    },
+  ) {
+    return this.northStar.createMaterial(body)
+  }
+
   @Get('materials/:id')
   material(@Param('id') id: string) {
     return this.northStar.material(id)
+  }
+
+  @Patch('materials/:id')
+  updateMaterial(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      name?: string
+      family?: string
+      tier?: 'Top' | 'Heart' | 'Base'
+      vaporPressure?: number
+      density?: number
+      mw?: number
+      logP?: number
+      substantivityHours?: number
+      ifraLimit?: number
+      costPerGram?: number
+      odor?: string[]
+      source?: string
+      version?: string
+    },
+  ) {
+    return this.northStar.updateMaterial(id, body)
+  }
+
+  @Post('materials/:id/ingest')
+  ingestMaterialDocument(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      documentType?: 'SDS' | 'CoA'
+      source?: string
+      version?: string
+      approved?: boolean
+      fields?: {
+        density?: number
+        vaporPressure?: number
+        mw?: number
+        logP?: number
+        ifraLimit?: number
+        costPerGram?: number
+      }
+      odor?: string[]
+    },
+  ) {
+    return this.northStar.ingestMaterialDocument(id, body)
+  }
+
+  @Post('materials/:id/pubchem-fill')
+  pubchemFill(@Param('id') id: string) {
+    return this.northStar.pubchemFill(id)
+  }
+
+  @Get('materials/:id/molecules')
+  materialMolecules(@Param('id') id: string) {
+    return this.northStar.materialMolecules(id)
+  }
+
+  @Get('materials/:id/provenance')
+  materialProvenance(@Param('id') id: string) {
+    return this.northStar.materialProvenance(id)
   }
 
   @Get('formulas')
