@@ -831,6 +831,9 @@ kbd {
 .brand-list,
 .member-list,
 .session-list,
+.flag-list,
+.sequence-list,
+.custom-field-list,
 .usage-preview,
 .weighing-table,
 .weighing-evidence,
@@ -851,6 +854,9 @@ kbd {
 .brand-row-card,
 .member-row,
 .session-row,
+.flag-row,
+.sequence-row,
+.custom-field-row,
 .history-row,
 .allocation-row,
 .weighing-row,
@@ -894,6 +900,24 @@ kbd {
 
 .brand-row-card {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.flag-row,
+.sequence-row,
+.custom-field-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sequence-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.flag-row.is-enabled,
+.sequence-row.is-selected {
+  border-color: rgba(55, 214, 160, 0.22);
+  background: rgba(55, 214, 160, 0.06);
 }
 
 .audit-row {
@@ -941,6 +965,9 @@ kbd {
 .brand-row-card span,
 .member-row span,
 .session-row span,
+.flag-row span,
+.sequence-row span,
+.custom-field-row span,
 .history-row span,
 .audit-row span,
 .movement-row span,
@@ -957,6 +984,9 @@ kbd {
 .brand-row-card > div,
 .member-row > div,
 .session-row > div,
+.flag-row > div,
+.sequence-row > div,
+.custom-field-row > div,
 .formula-card > div,
 .formula-line > div,
 .resolved-row > div,
@@ -1059,12 +1089,79 @@ kbd {
 .inventory-grid,
 .lab-grid,
 .documents-grid,
-.identity-grid {
+.identity-grid,
+.customization-grid {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.8fr);
 }
 
 .wide {
   grid-column: 1 / -1;
+}
+
+.customization-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.customization-form-grid .primary-button,
+.customization-form-grid .ghost-button {
+  align-self: end;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 0.78rem;
+}
+
+.toggle-row input,
+.flag-row input {
+  accent-color: var(--blue);
+}
+
+.sequence-preview,
+.branding-preview {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.sequence-preview strong,
+.label-preview {
+  color: var(--blue-bright);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sequence-preview span,
+.branding-preview span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.branding-preview {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 
 .stock-grid,
@@ -1605,6 +1702,7 @@ input[type='range'] {
   .lab-grid,
   .documents-grid,
   .identity-grid,
+  .customization-grid,
   .generic-grid {
     grid-template-columns: 1fr;
     grid-template-areas: none;
@@ -1654,6 +1752,9 @@ input[type='range'] {
   .brand-row-card,
   .member-row,
   .session-row,
+  .flag-row,
+  .sequence-row,
+  .custom-field-row,
   .permission-row-card,
   .allocation-row,
   .weighing-row,
@@ -1664,7 +1765,9 @@ input[type='range'] {
 
   .slider-row,
   .tenant-form-row,
-  .weighing-controls {
+  .weighing-controls,
+  .customization-form-grid,
+  .branding-preview {
     grid-template-columns: 1fr;
   }
 

@@ -180,8 +180,22 @@ export class NorthStarController {
   }
 
   @Patch('settings')
-  updateSettings(@Body() body: Record<string, unknown>) {
+  updateSettings(
+    @Body()
+    body: {
+      locale?: string
+      timezone?: string
+      currency?: string
+      defaultUnit?: 'g' | 'ml'
+      defaultDilutionPercent?: number
+    },
+  ) {
     return this.northStar.updateSettings(body)
+  }
+
+  @Get('customization-console')
+  customizationConsole() {
+    return this.northStar.customizationConsole()
   }
 
   @Get('feature-flags')
@@ -189,14 +203,61 @@ export class NorthStarController {
     return this.northStar.featureFlags()
   }
 
+  @Patch('feature-flags/:key')
+  updateFeatureFlag(@Param('key') key: string, @Body() body: { enabled?: boolean }) {
+    return this.northStar.updateFeatureFlag(key, body.enabled === true)
+  }
+
   @Get('numbering-sequences')
   numberingSequences() {
     return this.northStar.numberingSequences()
   }
 
+  @Patch('numbering-sequences/:key')
+  updateNumberingSequence(
+    @Param('key') key: string,
+    @Body() body: { pattern?: string; nextValue?: number; scope?: 'organization' | 'brand' },
+  ) {
+    return this.northStar.updateNumberingSequence(key, body)
+  }
+
+  @Get('numbering-sequences/:key/preview')
+  previewNumber(@Param('key') key: string) {
+    return this.northStar.previewNumber(key)
+  }
+
   @Post('numbering-sequences/:key/next')
   nextNumber(@Param('key') key: string) {
     return this.northStar.nextNumber(key)
+  }
+
+  @Post('custom-fields')
+  createCustomField(
+    @Body()
+    body: {
+      entity?: 'material' | 'formula' | 'lot' | 'document' | 'supplier' | 'order'
+      key?: string
+      label?: string
+      fieldType?: 'text' | 'number' | 'select' | 'date' | 'boolean'
+      required?: boolean
+      options?: string[]
+    },
+  ) {
+    return this.northStar.createCustomField(body)
+  }
+
+  @Patch('branding')
+  updateBranding(
+    @Body()
+    body: {
+      displayName?: string
+      accentColor?: string
+      documentFooter?: string
+      labelTemplate?: string
+      logoMode?: 'wordmark' | 'monogram'
+    },
+  ) {
+    return this.northStar.updateBranding(body)
   }
 
   @Get('documents')

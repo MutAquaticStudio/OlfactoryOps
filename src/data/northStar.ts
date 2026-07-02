@@ -283,6 +283,26 @@ export interface NumberingSequenceRecord {
   scope: 'organization' | 'brand'
 }
 
+export interface CustomFieldDefinition {
+  id: string
+  entity: 'material' | 'formula' | 'lot' | 'document' | 'supplier' | 'order'
+  key: string
+  label: string
+  fieldType: 'text' | 'number' | 'select' | 'date' | 'boolean'
+  required: boolean
+  options: string[]
+  status: 'ACTIVE' | 'ARCHIVED'
+}
+
+export interface BrandingConfig {
+  organizationId: string
+  displayName: string
+  accentColor: string
+  documentFooter: string
+  labelTemplate: string
+  logoMode: 'wordmark' | 'monogram'
+}
+
 export interface ProductionBatchRecord {
   id: string
   formulaId: string
@@ -430,7 +450,7 @@ export const phases: Phase[] = [
   { id: 0, name: 'Architecture Blueprint', domain: 'platform', goal: 'Bounded contexts, invariants, permission map', gate: 'Baseline approved', status: 'stable', securityLayer: 'L0', coverage: 100 },
   { id: 1, name: 'Platform Foundation', domain: 'platform', goal: 'Shell, API convention, health, logging', gate: 'Health and shell green', status: 'active', securityLayer: 'L1', coverage: 88 },
   { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'active', securityLayer: 'L2/L4', coverage: 86 },
-  { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 76 },
+  { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 84 },
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 82 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, summary', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 80 },
@@ -489,16 +509,16 @@ export const domains: DomainModule[] = [
     shortName: 'Customization',
     responsibility: 'Tenant settings, feature flags, custom fields, numbering, branding',
     status: 'active',
-    health: 76,
-    risk: 'Settings and numbering API live; custom field forms remain next gate',
+    health: 84,
+    risk: 'Settings, flags, custom fields, numbering, and branding are live; workflow designer remains next gate',
     owner: 'Product Ops',
     entities: ['CustomFieldDefinition', 'NumberingSequence', 'BrandingConfig', 'WorkflowDefinition'],
-    features: ['Numbering pattern', 'Workflow policy', 'Feature flags', 'Export branding'],
+    features: ['Tenant settings', 'Feature flags', 'Custom fields', 'Numbering pattern', 'Export branding'],
     invariants: ['INV-010 config not fork', 'Config changes audit logged'],
     apis: ['/api/v1/settings', '/api/v1/custom-fields', '/api/v1/numbering-sequences'],
     permissions: ['customization.manage'],
     screens: ['Tenant settings', 'Fields', 'Branding', 'Workflow'],
-    activity: 'Formula sequence increments through backend sequence service',
+    activity: 'Customization workspace updates settings, flags, fields, numbering, and branding without code forks',
   },
   {
     key: 'materials',
@@ -1338,6 +1358,48 @@ export const numberingSequences: NumberingSequenceRecord[] = [
   { key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
   { key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
 ]
+
+export const customFields: CustomFieldDefinition[] = [
+  {
+    id: 'CF-MAT-ODOUR-FAMILY',
+    entity: 'material',
+    key: 'odorFamily',
+    label: 'Odor family',
+    fieldType: 'select',
+    required: true,
+    options: ['citrus', 'floral', 'woody', 'amber', 'musk'],
+    status: 'ACTIVE',
+  },
+  {
+    id: 'CF-FRM-BRIEF',
+    entity: 'formula',
+    key: 'creativeBrief',
+    label: 'Creative brief',
+    fieldType: 'text',
+    required: false,
+    options: [],
+    status: 'ACTIVE',
+  },
+  {
+    id: 'CF-LOT-QC-DATE',
+    entity: 'lot',
+    key: 'qcReleaseDate',
+    label: 'QC release date',
+    fieldType: 'date',
+    required: false,
+    options: [],
+    status: 'ACTIVE',
+  },
+]
+
+export const brandingConfig: BrandingConfig = {
+  organizationId: 'org-nxl',
+  displayName: 'NOXELIS Lab',
+  accentColor: '#4d9bff',
+  documentFooter: 'Confidential formula and inventory record - NOXELIS',
+  labelTemplate: 'NOX-{brand}-{sequence}',
+  logoMode: 'wordmark',
+}
 
 export const productionBatches: ProductionBatchRecord[] = [
   {

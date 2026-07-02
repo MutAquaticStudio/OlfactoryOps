@@ -290,10 +290,54 @@ describe('NorthStarService', () => {
     const first = service.nextNumber('formula').data
     const second = service.nextNumber('formula').data
 
-    expect(settings.currency).toBe('EUR')
-    expect(settings.organizationId).toBe('org-nxl')
+    expect(settings.settings.currency).toBe('EUR')
+    expect(settings.settings.organizationId).toBe('org-nxl')
+    expect(settings.audit.action).toBe('customization.settings.update')
     expect(first.value).toBe('FRM-0422')
     expect(second.value).toBe('FRM-0423')
+  })
+
+  it('manages customization console flags, fields, sequences, and branding with audit evidence', () => {
+    const service = new NorthStarService()
+
+    const consoleState = service.customizationConsole().data
+    const flag = service.updateFeatureFlag('formulaCostVisibility', false).data
+    const previewBefore = service.previewNumber('formula').data
+    const sequence = service.updateNumberingSequence('formula', { pattern: 'FRM-YY-####', nextValue: 430 }).data
+    const previewAfter = service.previewNumber('formula').data
+    const field = service.createCustomField({
+      entity: 'supplier',
+      label: 'IFRA review date',
+      fieldType: 'date',
+      required: true,
+    }).data
+    const branding = service.updateBranding({ accentColor: '#37d6a0', displayName: 'NOXELIS Atelier' }).data
+
+    expect(consoleState.customFields.length).toBeGreaterThan(0)
+    expect(consoleState.branding.displayName).toBe('NOXELIS Lab')
+    expect(flag.featureFlag.enabled).toBe(false)
+    expect(flag.audit.action).toBe('customization.featureFlag.update')
+    expect(previewBefore.value).toBe('FRM-0422')
+    expect(sequence.sequence.nextValue).toBe(430)
+    expect(sequence.preview).toBe('FRM-YY-0430')
+    expect(previewAfter.value).toBe('FRM-YY-0430')
+    expect(field.customField.key).toBe('ifra_review_date')
+    expect(field.audit.action).toBe('customization.customField.create')
+    expect(branding.branding.accentColor).toBe('#37d6a0')
+    expect(branding.audit.action).toBe('customization.branding.update')
+  })
+
+  it('blocks unsafe customization changes', () => {
+    const service = new NorthStarService()
+
+    expect(() => service.updateNumberingSequence('formula', { pattern: 'FRM-YY', nextValue: 430 })).toThrow(
+      UnprocessableEntityException,
+    )
+    expect(() => service.updateNumberingSequence('formula', { nextValue: 100 })).toThrow(UnprocessableEntityException)
+    expect(() =>
+      service.createCustomField({ entity: 'material', key: 'odorFamily', label: 'Odor family', fieldType: 'select' }),
+    ).toThrow(UnprocessableEntityException)
+    expect(() => service.updateBranding({ accentColor: 'blue' })).toThrow(UnprocessableEntityException)
   })
 
   it('creates formula drafts without consuming inventory', () => {

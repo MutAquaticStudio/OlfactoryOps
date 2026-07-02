@@ -4,9 +4,11 @@ import {
   apiKeys,
   authSessions,
   billingPlan,
+  brandingConfig,
   brands,
   canDownloadDocument,
   commercialSkus,
+  customFields,
   createSignedDocumentUrl,
   documentRequiredPermissions,
   documents,
@@ -43,6 +45,8 @@ import {
   type AuditEvent,
   type AuthSession,
   type BrandRecord,
+  type BrandingConfig,
+  type CustomFieldDefinition,
   type DocumentRecord,
   type FeatureFlagRecord,
   type Formula,
@@ -117,6 +121,8 @@ export class NorthStarService {
   private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
   private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
   private sequences: NumberingSequenceRecord[] = structuredClone(numberingSequences)
+  private customFieldRecords: CustomFieldDefinition[] = structuredClone(customFields)
+  private brandingRecord: BrandingConfig = structuredClone(brandingConfig)
   private productionBatchRecords: ProductionBatchRecord[] = structuredClone(productionBatches)
   private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
   private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
@@ -819,13 +825,146 @@ export class NorthStarService {
   }
 
   updateSettings(patch: Partial<TenantSettingsRecord>) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'customization.manage')
     this.settingsRecord = {
       ...this.settingsRecord,
       ...patch,
       organizationId: this.settingsRecord.organizationId,
     }
-    this.recordAudit('customization.settings.update', this.settingsRecord.organizationId, 'api:owner', 'allowed')
-    return { data: this.settingsRecord }
+    const audit = this.recordAudit('customization.settings.update', this.settingsRecord.organizationId, session.userId, 'allowed')
+    return { data: { settings: this.settingsRecord, audit, invariant: 'tenant settings update by config, not forked code' } }
+  }
+
+  customizationConsole() {
+    return {
+      data: {
+        settings: this.settingsRecord,
+        featureFlags: this.flagRecords,
+        numberingSequences: this.sequences,
+        customFields: this.customFieldRecords,
+        branding: this.brandingRecord,
+        audit: this.auditEvents
+          .filter((event) => event.action.startsWith('customization.'))
+          .slice(0, 8),
+        invariant: 'tenant customization is config-driven and audit logged',
+      },
+    }
+  }
+
+  updateFeatureFlag(key: string, enabled: boolean) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'customization.manage')
+    const flag = this.flagRecords.find((item) => item.key === key)
+    if (!flag) {
+      throw new NotFoundException(`Feature flag ${key} was not found`)
+    }
+    const updated = { ...flag, enabled }
+    this.flagRecords = this.flagRecords.map((item) => (item.key === key ? updated : item))
+    const audit = this.recordAudit('customization.featureFlag.update', key, session.userId, 'allowed')
+    return { data: { featureFlag: updated, audit, invariant: 'feature flags change tenant behavior without code forks' } }
+  }
+
+  updateNumberingSequence(key: string, patch: Partial<NumberingSequenceRecord>) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'customization.manage')
+    const sequence = this.sequences.find((item) => item.key === key)
+    if (!sequence) {
+      throw new NotFoundException(`Numbering sequence ${key} was not found`)
+    }
+    const pattern = typeof patch.pattern === 'string' && patch.pattern.trim() ? patch.pattern.trim() : sequence.pattern
+    if (!pattern.includes('#')) {
+      throw new UnprocessableEntityException('Numbering pattern must include at least one # placeholder')
+    }
+    const nextValue = Number.isFinite(Number(patch.nextValue)) ? Number(patch.nextValue) : sequence.nextValue
+    if (nextValue < sequence.nextValue) {
+      throw new UnprocessableEntityException('Numbering next value cannot move backwards')
+    }
+    const updated = {
+      ...sequence,
+      pattern,
+      nextValue: Math.floor(nextValue),
+      scope: patch.scope === 'organization' || patch.scope === 'brand' ? patch.scope : sequence.scope,
+    }
+    this.sequences = this.sequences.map((item) => (item.key === key ? updated : item))
+    const audit = this.recordAudit('customization.sequence.update', key, session.userId, 'allowed')
+    return {
+      data: {
+        sequence: updated,
+        preview: formatSequenceValue(updated),
+        audit,
+        invariant: 'numbering sequence updates preserve monotonic next values',
+      },
+    }
+  }
+
+  previewNumber(key: string) {
+    const sequence = this.sequences.find((item) => item.key === key)
+    if (!sequence) {
+      throw new NotFoundException(`Numbering sequence ${key} was not found`)
+    }
+    return { data: { key, value: formatSequenceValue(sequence), nextValue: sequence.nextValue } }
+  }
+
+  createCustomField(body: Partial<CustomFieldDefinition>) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'customization.manage')
+    const entity = body.entity ?? 'material'
+    if (!['material', 'formula', 'lot', 'document', 'supplier', 'order'].includes(entity)) {
+      throw new UnprocessableEntityException('Custom field entity is not supported')
+    }
+    const label = body.label?.trim()
+    if (!label) {
+      throw new UnprocessableEntityException('Custom field label is required')
+    }
+    const key = (body.key?.trim() || label)
+      .replace(/[^a-z0-9 ]/gi, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .toLowerCase()
+    if (!key) {
+      throw new UnprocessableEntityException('Custom field key is required')
+    }
+    const duplicate = this.customFieldRecords.some(
+      (item) => item.entity === entity && item.key.toLowerCase() === key.toLowerCase(),
+    )
+    if (duplicate) {
+      throw new UnprocessableEntityException('Custom field key already exists on this entity')
+    }
+    const fieldType = ['text', 'number', 'select', 'date', 'boolean'].includes(body.fieldType ?? '')
+      ? body.fieldType!
+      : 'text'
+    const field: CustomFieldDefinition = {
+      id: `CF-${entity.toUpperCase()}-${String(this.customFieldRecords.length + 1).padStart(4, '0')}`,
+      entity,
+      key,
+      label,
+      fieldType,
+      required: Boolean(body.required),
+      options: fieldType === 'select' ? body.options?.filter(Boolean) ?? [] : [],
+      status: 'ACTIVE',
+    }
+    this.customFieldRecords = [field, ...this.customFieldRecords]
+    const audit = this.recordAudit('customization.customField.create', field.id, session.userId, 'allowed')
+    return { data: { customField: field, audit, invariant: 'custom fields extend tenant data without schema forks' } }
+  }
+
+  updateBranding(patch: Partial<BrandingConfig>) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'customization.manage')
+    const accentColor = patch.accentColor?.trim() ?? this.brandingRecord.accentColor
+    if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
+      throw new UnprocessableEntityException('Accent color must be a hex color like #4d9bff')
+    }
+    this.brandingRecord = {
+      ...this.brandingRecord,
+      ...patch,
+      organizationId: this.brandingRecord.organizationId,
+      accentColor,
+      logoMode: patch.logoMode === 'monogram' || patch.logoMode === 'wordmark' ? patch.logoMode : this.brandingRecord.logoMode,
+    }
+    const audit = this.recordAudit('customization.branding.update', this.brandingRecord.organizationId, session.userId, 'allowed')
+    return { data: { branding: this.brandingRecord, audit, invariant: 'branding changes are tenant config only' } }
   }
 
   featureFlags() {

@@ -35,7 +35,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   Area,
   AreaChart,
@@ -48,18 +48,23 @@ import {
 import {
   auditEvents,
   authSessions,
+  brandingConfig,
   brands,
+  customFields,
   documents,
   domains,
   evaporationCurve,
+  featureFlags,
   formatCurrency,
   formatGrams,
+  formatSequenceValue,
   formulaTotals,
   formulas,
   initialLots,
   initialMovements,
   materials,
   memberships,
+  numberingSequences,
   permissionCatalog,
   phases,
   planLabUsage,
@@ -70,27 +75,33 @@ import {
   statusMeta,
   storageLocations,
   stockSummary,
+  tenantSettings,
   tenantSecurityPolicy,
   organizations,
   type Allocation,
   type AuditEvent,
   type AuthSession,
   type BrandRecord,
+  type BrandingConfig,
+  type CustomFieldDefinition,
   type DocumentRecord,
   type DomainKey,
   type DomainModule,
   type DomainStatus,
+  type FeatureFlagRecord,
   type Formula,
   type FormulaLine,
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
   type MembershipRecord,
+  type NumberingSequenceRecord,
   type OrganizationRecord,
   type PermissionDefinition,
   type ResolvedLeaf,
   type RolePolicy,
   type SignedDocumentUrl,
+  type TenantSettingsRecord,
   type TenantSecurityPolicy,
 } from './data/northStar'
 
@@ -136,6 +147,53 @@ type TenantConsoleResponse = {
   permissionMatrix: RolePermissionMatrix[]
   securityPolicy: TenantSecurityPolicy
   audit: AuditEvent[]
+  invariant: string
+}
+
+type CustomizationConsoleResponse = {
+  settings: TenantSettingsRecord
+  featureFlags: FeatureFlagRecord[]
+  numberingSequences: NumberingSequenceRecord[]
+  customFields: CustomFieldDefinition[]
+  branding: BrandingConfig
+  audit: AuditEvent[]
+  invariant: string
+}
+
+type SettingsUpdateResponse = {
+  settings: TenantSettingsRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type FeatureFlagUpdateResponse = {
+  featureFlag: FeatureFlagRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type NumberingUpdateResponse = {
+  sequence: NumberingSequenceRecord
+  preview: string
+  audit: AuditEvent
+  invariant: string
+}
+
+type NumberingPreviewResponse = {
+  key: string
+  value: string
+  nextValue: number
+}
+
+type CustomFieldCreateResponse = {
+  customField: CustomFieldDefinition
+  audit: AuditEvent
+  invariant: string
+}
+
+type BrandingUpdateResponse = {
+  branding: BrandingConfig
+  audit: AuditEvent
   invariant: string
 }
 
@@ -1318,7 +1376,18 @@ function DomainWorkspace({
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
-      {!['identity', 'materials', 'formulas', 'inventory', 'labUsage', 'documents', 'costing', 'analytics'].includes(domain.key) && (
+      {domain.key === 'customization' && <CustomizationWorkspace />}
+      {![
+        'identity',
+        'customization',
+        'materials',
+        'formulas',
+        'inventory',
+        'labUsage',
+        'documents',
+        'costing',
+        'analytics',
+      ].includes(domain.key) && (
         <GenericDomainWorkspace domain={domain} onOpenModal={onOpenModal} />
       )}
     </div>
@@ -2081,6 +2150,602 @@ function GenericDomainWorkspace({
             </button>
           )}
         </div>
+      </Panel>
+    </div>
+  )
+}
+
+function buildCustomizationFallback(): CustomizationConsoleResponse {
+  return {
+    settings: { ...tenantSettings },
+    featureFlags: featureFlags.map((flag) => ({ ...flag })),
+    numberingSequences: numberingSequences.map((sequence) => ({ ...sequence })),
+    customFields: customFields.map((field) => ({ ...field, options: [...field.options] })),
+    branding: { ...brandingConfig },
+    audit: auditEvents.filter((event) => event.action.startsWith('customization.')).slice(0, 8),
+    invariant: 'local customization seed fallback',
+  }
+}
+
+function fieldStatus(status: CustomFieldDefinition['status']): DomainStatus {
+  return status === 'ACTIVE' ? 'stable' : 'draft'
+}
+
+function CustomizationWorkspace() {
+  const fallbackCustomization = useMemo(buildCustomizationFallback, [])
+  const initialSequence = fallbackCustomization.numberingSequences[0]!
+  const [customizationData, setCustomizationData] = useState<CustomizationConsoleResponse>(fallbackCustomization)
+  const [customizationStatus, setCustomizationStatus] = useState('Loading customization console')
+  const [settingsDraft, setSettingsDraft] = useState<TenantSettingsRecord>(fallbackCustomization.settings)
+  const [brandingDraft, setBrandingDraft] = useState<BrandingConfig>(fallbackCustomization.branding)
+  const [selectedSequenceKey, setSelectedSequenceKey] = useState(initialSequence.key)
+  const [sequenceDraft, setSequenceDraft] = useState<NumberingSequenceRecord>(initialSequence)
+  const [sequencePreview, setSequencePreview] = useState(formatSequenceValue(initialSequence))
+  const [fieldEntity, setFieldEntity] = useState<CustomFieldDefinition['entity']>('material')
+  const [fieldType, setFieldType] = useState<CustomFieldDefinition['fieldType']>('text')
+  const [fieldLabel, setFieldLabel] = useState('Regulatory review code')
+  const [fieldKey, setFieldKey] = useState('regulatoryReviewCode')
+  const [fieldRequired, setFieldRequired] = useState(false)
+  const [fieldOptions, setFieldOptions] = useState('citrus, floral, woody')
+
+  const syncCustomizationData = useCallback((next: CustomizationConsoleResponse, nextStatus: string) => {
+    setCustomizationData(next)
+    setSettingsDraft(next.settings)
+    setBrandingDraft(next.branding)
+    const nextSequence =
+      next.numberingSequences.find((sequence) => sequence.key === selectedSequenceKey) ?? next.numberingSequences[0]
+    if (nextSequence) {
+      setSelectedSequenceKey(nextSequence.key)
+      setSequenceDraft(nextSequence)
+      setSequencePreview(formatSequenceValue(nextSequence))
+    }
+    setCustomizationStatus(nextStatus)
+  }, [selectedSequenceKey])
+
+  const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization console synced from API') => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/customization-console`)
+      if (!response.ok) {
+        throw new Error('Customization console API failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<CustomizationConsoleResponse>
+      syncCustomizationData(payload.data, nextStatus)
+    } catch {
+      setCustomizationStatus('Using local customization seed until API is reachable')
+    }
+  }, [syncCustomizationData])
+
+  useEffect(() => {
+    void refreshCustomizationConsole()
+  }, [refreshCustomizationConsole])
+
+  function selectSequence(key: string) {
+    const nextSequence = customizationData.numberingSequences.find((sequence) => sequence.key === key)
+    if (!nextSequence) {
+      return
+    }
+    setSelectedSequenceKey(nextSequence.key)
+    setSequenceDraft(nextSequence)
+    setSequencePreview(formatSequenceValue(nextSequence))
+  }
+
+  function addAudit(current: AuditEvent[], audit: AuditEvent) {
+    return [audit, ...current].slice(0, 8)
+  }
+
+  async function saveSettings() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...settingsDraft,
+          defaultDilutionPercent: Number(settingsDraft.defaultDilutionPercent),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Settings update failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<SettingsUpdateResponse>
+      setCustomizationData((current) => ({
+        ...current,
+        settings: payload.data.settings,
+        audit: addAudit(current.audit, payload.data.audit),
+      }))
+      setSettingsDraft(payload.data.settings)
+      setCustomizationStatus('Tenant settings saved with audit evidence')
+    } catch {
+      setCustomizationStatus('Settings update blocked by customization policy')
+    }
+  }
+
+  async function toggleFeatureFlag(flag: FeatureFlagRecord, enabled: boolean) {
+    setCustomizationData((current) => ({
+      ...current,
+      featureFlags: current.featureFlags.map((item) => (item.key === flag.key ? { ...item, enabled } : item)),
+    }))
+    try {
+      const response = await fetch(`${apiBaseUrl}/feature-flags/${encodeURIComponent(flag.key)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!response.ok) {
+        throw new Error('Feature flag update failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<FeatureFlagUpdateResponse>
+      setCustomizationData((current) => ({
+        ...current,
+        featureFlags: current.featureFlags.map((item) =>
+          item.key === payload.data.featureFlag.key ? payload.data.featureFlag : item,
+        ),
+        audit: addAudit(current.audit, payload.data.audit),
+      }))
+      setCustomizationStatus(`${payload.data.featureFlag.label} is now ${enabled ? 'enabled' : 'disabled'}`)
+    } catch {
+      setCustomizationData((current) => ({
+        ...current,
+        featureFlags: current.featureFlags.map((item) => (item.key === flag.key ? flag : item)),
+      }))
+      setCustomizationStatus('Feature flag update blocked by customization policy')
+    }
+  }
+
+  async function previewSequence() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/preview`)
+      if (!response.ok) {
+        throw new Error('Numbering preview failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<NumberingPreviewResponse>
+      setSequencePreview(payload.data.value)
+      setCustomizationStatus(`Preview generated without incrementing ${payload.data.key}`)
+    } catch {
+      setCustomizationStatus('Number preview unavailable')
+    }
+  }
+
+  async function saveSequence() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pattern: sequenceDraft.pattern,
+          nextValue: Number(sequenceDraft.nextValue),
+          scope: sequenceDraft.scope,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Numbering update failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<NumberingUpdateResponse>
+      setCustomizationData((current) => ({
+        ...current,
+        numberingSequences: current.numberingSequences.map((sequence) =>
+          sequence.key === payload.data.sequence.key ? payload.data.sequence : sequence,
+        ),
+        audit: addAudit(current.audit, payload.data.audit),
+      }))
+      setSequenceDraft(payload.data.sequence)
+      setSequencePreview(payload.data.preview)
+      setCustomizationStatus('Numbering sequence saved with monotonic guard')
+    } catch {
+      setCustomizationStatus('Numbering update blocked; check pattern and next value')
+    }
+  }
+
+  async function issueNextNumber() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/next`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error('Number issue failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<{ key: string; value: string; invariant: string }>
+      await refreshCustomizationConsole(`Issued ${payload.data.value} through the sequence service`)
+      setSequencePreview(`Issued ${payload.data.value}`)
+    } catch {
+      setCustomizationStatus('Numbering issue blocked by sequence service')
+    }
+  }
+
+  async function createField() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/custom-fields`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity: fieldEntity,
+          key: fieldKey,
+          label: fieldLabel,
+          fieldType,
+          required: fieldRequired,
+          options: fieldOptions
+            .split(',')
+            .map((option) => option.trim())
+            .filter(Boolean),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error('Custom field create failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<CustomFieldCreateResponse>
+      setCustomizationData((current) => ({
+        ...current,
+        customFields: [payload.data.customField, ...current.customFields],
+        audit: addAudit(current.audit, payload.data.audit),
+      }))
+      setFieldLabel('')
+      setFieldKey('')
+      setCustomizationStatus(`${payload.data.customField.label} custom field created`)
+    } catch {
+      setCustomizationStatus('Custom field create blocked; check entity and duplicate key')
+    }
+  }
+
+  async function saveBranding() {
+    try {
+      const response = await fetch(`${apiBaseUrl}/branding`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(brandingDraft),
+      })
+      if (!response.ok) {
+        throw new Error('Branding update failed')
+      }
+      const payload = (await response.json()) as ApiEnvelope<BrandingUpdateResponse>
+      setCustomizationData((current) => ({
+        ...current,
+        branding: payload.data.branding,
+        audit: addAudit(current.audit, payload.data.audit),
+      }))
+      setBrandingDraft(payload.data.branding)
+      setCustomizationStatus('Export branding saved as tenant configuration')
+    } catch {
+      setCustomizationStatus('Branding update blocked; accent color must be hex')
+    }
+  }
+
+  return (
+    <div className="workspace-grid customization-grid">
+      <Panel title="Tenant Settings" icon={Settings}>
+        <div className="tag-row">
+          <DataTag label="Locale" value={customizationData.settings.locale} />
+          <DataTag label="Currency" value={customizationData.settings.currency} tone="blue" />
+          <DataTag label="Default unit" value={customizationData.settings.defaultUnit} tone="green" />
+        </div>
+        <div className="customization-form-grid">
+          <label className="field-row">
+            <span>Locale</span>
+            <input
+              aria-label="Customization locale"
+              value={settingsDraft.locale}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, locale: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Timezone</span>
+            <input
+              aria-label="Customization timezone"
+              value={settingsDraft.timezone}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, timezone: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Currency</span>
+            <input
+              aria-label="Customization currency"
+              value={settingsDraft.currency}
+              onChange={(event) => setSettingsDraft((current) => ({ ...current, currency: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Default unit</span>
+            <select
+              aria-label="Customization default unit"
+              value={settingsDraft.defaultUnit}
+              onChange={(event) =>
+                setSettingsDraft((current) => ({
+                  ...current,
+                  defaultUnit: event.target.value as TenantSettingsRecord['defaultUnit'],
+                }))
+              }
+            >
+              <option value="g">g</option>
+              <option value="ml">ml</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Default dilution %</span>
+            <input
+              aria-label="Customization default dilution"
+              min={0}
+              step={0.1}
+              type="number"
+              value={settingsDraft.defaultDilutionPercent}
+              onChange={(event) =>
+                setSettingsDraft((current) => ({
+                  ...current,
+                  defaultDilutionPercent: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void saveSettings()}>
+            Save settings
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>{customizationStatus}</li>
+          <li>{customizationData.invariant}</li>
+        </ul>
+      </Panel>
+
+      <Panel title="Feature Flags" icon={Play}>
+        <div className="flag-list">
+          {customizationData.featureFlags.map((flag) => (
+            <label className={`flag-row ${flag.enabled ? 'is-enabled' : ''}`} key={flag.key}>
+              <div>
+                <strong>{flag.label}</strong>
+                <span>{flag.key}</span>
+              </div>
+              <DataTag label="Phase" value={`P${flag.phase}`} tone="blue" />
+              <input
+                aria-label={`Toggle ${flag.label}`}
+                checked={flag.enabled}
+                type="checkbox"
+                onChange={(event) => void toggleFeatureFlag(flag, event.target.checked)}
+              />
+            </label>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Numbering Sequences" icon={Command}>
+        <div className="customization-form-grid">
+          <label className="field-row">
+            <span>Sequence</span>
+            <select
+              aria-label="Numbering sequence"
+              value={selectedSequenceKey}
+              onChange={(event) => selectSequence(event.target.value)}
+            >
+              {customizationData.numberingSequences.map((sequence) => (
+                <option key={sequence.key} value={sequence.key}>
+                  {sequence.key}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Pattern</span>
+            <input
+              aria-label="Numbering pattern"
+              value={sequenceDraft.pattern}
+              onChange={(event) => setSequenceDraft((current) => ({ ...current, pattern: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Next value</span>
+            <input
+              aria-label="Numbering next value"
+              min={0}
+              step={1}
+              type="number"
+              value={sequenceDraft.nextValue}
+              onChange={(event) =>
+                setSequenceDraft((current) => ({ ...current, nextValue: Number(event.target.value) }))
+              }
+            />
+          </label>
+          <label className="field-row">
+            <span>Scope</span>
+            <select
+              aria-label="Numbering scope"
+              value={sequenceDraft.scope}
+              onChange={(event) =>
+                setSequenceDraft((current) => ({
+                  ...current,
+                  scope: event.target.value as NumberingSequenceRecord['scope'],
+                }))
+              }
+            >
+              <option value="brand">brand</option>
+              <option value="organization">organization</option>
+            </select>
+          </label>
+        </div>
+        <div className="sequence-preview">
+          <strong>{sequencePreview}</strong>
+          <span>Preview is read-only until you issue the next value.</span>
+        </div>
+        <div className="action-row">
+          <button className="ghost-button" type="button" onClick={() => void previewSequence()}>
+            Preview
+          </button>
+          <button className="primary-button" type="button" onClick={() => void saveSequence()}>
+            Save sequence
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void issueNextNumber()}>
+            Issue next
+          </button>
+        </div>
+        <div className="sequence-list">
+          {customizationData.numberingSequences.map((sequence) => (
+            <button
+              className={`sequence-row ${sequence.key === selectedSequenceKey ? 'is-selected' : ''}`}
+              key={sequence.key}
+              type="button"
+              onClick={() => selectSequence(sequence.key)}
+            >
+              <div>
+                <strong>{sequence.key}</strong>
+                <span>{sequence.pattern}</span>
+              </div>
+              <DataTag label="Next" value={String(sequence.nextValue)} />
+              <DataTag label="Scope" value={sequence.scope} tone="blue" />
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Custom Fields" icon={Layers3}>
+        <div className="customization-form-grid">
+          <label className="field-row">
+            <span>Entity</span>
+            <select
+              aria-label="Custom field entity"
+              value={fieldEntity}
+              onChange={(event) => setFieldEntity(event.target.value as CustomFieldDefinition['entity'])}
+            >
+              {['material', 'formula', 'lot', 'document', 'supplier', 'order'].map((entity) => (
+                <option key={entity} value={entity}>
+                  {entity}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Field type</span>
+            <select
+              aria-label="Custom field type"
+              value={fieldType}
+              onChange={(event) => setFieldType(event.target.value as CustomFieldDefinition['fieldType'])}
+            >
+              {['text', 'number', 'select', 'date', 'boolean'].map((type) => (
+                <option key={type} value={type}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Label</span>
+            <input
+              aria-label="Custom field label"
+              value={fieldLabel}
+              onChange={(event) => setFieldLabel(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Key</span>
+            <input
+              aria-label="Custom field key"
+              value={fieldKey}
+              onChange={(event) => setFieldKey(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Select options</span>
+            <input
+              aria-label="Custom field options"
+              disabled={fieldType !== 'select'}
+              value={fieldOptions}
+              onChange={(event) => setFieldOptions(event.target.value)}
+            />
+          </label>
+          <label className="toggle-row">
+            <input
+              checked={fieldRequired}
+              type="checkbox"
+              onChange={(event) => setFieldRequired(event.target.checked)}
+            />
+            Required
+          </label>
+          <button className="primary-button" type="button" onClick={() => void createField()} disabled={!fieldLabel.trim()}>
+            <Plus size={16} />
+            Create field
+          </button>
+        </div>
+        <div className="custom-field-list">
+          {customizationData.customFields.map((field) => (
+            <div className="custom-field-row" key={field.id}>
+              <div>
+                <strong>{field.label}</strong>
+                <span>
+                  {field.entity}.{field.key} / {field.fieldType}
+                </span>
+              </div>
+              <DataTag label="Required" value={field.required ? 'yes' : 'no'} tone={field.required ? 'amber' : 'green'} />
+              <StatusBadge status={fieldStatus(field.status)} label={field.status} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Export Branding" icon={Sparkles}>
+        <div className="customization-form-grid">
+          <label className="field-row">
+            <span>Display name</span>
+            <input
+              aria-label="Branding display name"
+              value={brandingDraft.displayName}
+              onChange={(event) => setBrandingDraft((current) => ({ ...current, displayName: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Accent color</span>
+            <input
+              aria-label="Branding accent color"
+              type="color"
+              value={brandingDraft.accentColor}
+              onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Logo mode</span>
+            <select
+              aria-label="Branding logo mode"
+              value={brandingDraft.logoMode}
+              onChange={(event) =>
+                setBrandingDraft((current) => ({
+                  ...current,
+                  logoMode: event.target.value as BrandingConfig['logoMode'],
+                }))
+              }
+            >
+              <option value="wordmark">wordmark</option>
+              <option value="monogram">monogram</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Label template</span>
+            <input
+              aria-label="Branding label template"
+              value={brandingDraft.labelTemplate}
+              onChange={(event) => setBrandingDraft((current) => ({ ...current, labelTemplate: event.target.value }))}
+            />
+          </label>
+          <label className="field-row wide-field">
+            <span>Document footer</span>
+            <input
+              aria-label="Branding document footer"
+              value={brandingDraft.documentFooter}
+              onChange={(event) =>
+                setBrandingDraft((current) => ({ ...current, documentFooter: event.target.value }))
+              }
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void saveBranding()}>
+            Save branding
+          </button>
+        </div>
+        <div className="branding-preview" style={{ borderColor: `${brandingDraft.accentColor}66` }}>
+          <div>
+            <span className="mono-small">Export preview</span>
+            <strong style={{ color: brandingDraft.accentColor }}>{brandingDraft.displayName}</strong>
+            <span>{brandingDraft.documentFooter}</span>
+          </div>
+          <span className="label-preview">
+            {brandingDraft.labelTemplate.replace('{brand}', 'NXL').replace('{sequence}', '0430')}
+          </span>
+        </div>
+      </Panel>
+
+      <Panel className="wide" title="Customization Audit" icon={ClipboardCheck}>
+        <AuditList events={customizationData.audit.length > 0 ? customizationData.audit : auditEvents.slice(0, 4)} />
       </Panel>
     </div>
   )
