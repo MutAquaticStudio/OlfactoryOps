@@ -60,6 +60,8 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type InventoryReorderSuggestion,
+  type LabUsagePurpose,
+  type LabUsageRecord,
   type LabWeighingSession,
   type LotLabelPayload,
   type LotQualityStatus,
@@ -89,17 +91,15 @@ type LabWeighingOptions = {
   actuals?: WeighingActualInput[]
   tolerancePercent?: number
   operator?: string
+  purpose?: LabUsagePurpose
+  projectCode?: string
+  sampleCode?: string
+  qcLink?: string
 }
 
-type UsageRecord = {
-  id: string
-  formulaId: string
-  formulaCode: string
-  grams: number
-  status: 'COMMITTED' | 'REVERSED'
-  allocations: Allocation[]
-  weighingSession?: LabWeighingSession
-  createdAt: string
+type LabUsageReverseOptions = {
+  reason?: string
+  actor?: string
 }
 
 type RolePermissionMatrix = {
@@ -155,7 +155,7 @@ export class NorthStarService {
   private stockTakeRecords: StockTakeRecord[] = structuredClone(stockTakeRecords)
   private formulaRecords: Formula[] = structuredClone(initialFormulas)
   private formulaVersionRecords: FormulaVersionRecord[] = structuredClone(formulaVersions)
-  private usageHistory: UsageRecord[] = []
+  private usageHistory: LabUsageRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
   private organizationRecords: OrganizationRecord[] = structuredClone(organizations)
@@ -1809,15 +1809,43 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
+    if (!Number.isFinite(grams) || grams <= 0) {
+      throw new UnprocessableEntityException('Lab usage grams must be greater than 0')
+    }
     const leaves = resolveFormulaWithCatalog(formulaId, this.formulaRecords, this.materialRecords)
     const plan = planLabUsage(leaves, this.lots, grams, formula.targetGrams)
     return {
       data: {
         formulaId,
+        formulaCode: formula.code,
         grams,
         allocations: plan.allocations,
         shortfalls: plan.shortfalls,
         canCommit: plan.shortfalls.length === 0,
+      },
+    }
+  }
+
+  labUsageHistory() {
+    return {
+      data: {
+        usages: this.usageHistory,
+        invariant: 'lab usage history links formula, actual weighing evidence, lots, movements, and reversal evidence',
+      },
+    }
+  }
+
+  labUsageDetail(id: string) {
+    const usage = this.usageHistory.find((item) => item.id === id)
+    if (!usage) {
+      throw new NotFoundException(`Lab usage ${id} was not found`)
+    }
+
+    return {
+      data: {
+        usage,
+        movements: this.movements.filter((movement) => movement.ref === usage.id),
+        invariant: 'lab usage detail is audit-critical and keeps original OUT movements visible after reversal',
       },
     }
   }
@@ -1952,12 +1980,17 @@ export class NorthStarService {
 
     this.lots = Array.from(lotMap.values())
     this.movements = [...createdMovements, ...this.movements]
-    const usage: UsageRecord = {
+    const usage: LabUsageRecord = {
       id: usageId,
       formulaId,
       formulaCode: formula.code,
       grams,
+      batchGrams: grams,
       status: 'COMMITTED',
+      purpose: this.normalizeLabUsagePurpose(options.purpose),
+      projectCode: options.projectCode?.trim() || undefined,
+      sampleCode: options.sampleCode?.trim() || undefined,
+      qcLink: options.qcLink?.trim() || undefined,
       allocations: actualAllocations,
       weighingSession: { ...weighingSession, id: `WGH-${usageId}`, createdAt: timestamp },
       createdAt: timestamp,
@@ -1968,20 +2001,28 @@ export class NorthStarService {
       data: {
         usage,
         movements: createdMovements,
+        lots: this.lots,
+        usageHistory: this.usageHistory,
         message: `${usageId} committed ${formatGrams(
           weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0),
         )} actual lab usage using immutable OUT movements`,
+        invariant: 'commit creates immutable OUT movements and stores actual weighing evidence',
       },
     }
   }
 
-  reverseLatestLabUsage() {
-    const usage = this.usageHistory.find((item) => item.status === 'COMMITTED')
+  reverseLabUsage(id: string, options: LabUsageReverseOptions = {}) {
+    const usage = this.usageHistory.find((item) => item.id === id)
     if (!usage) {
-      throw new UnprocessableEntityException('No committed lab usage exists to reverse')
+      throw new NotFoundException(`Lab usage ${id} was not found`)
+    }
+    if (usage.status === 'REVERSED') {
+      throw new UnprocessableEntityException(`Lab usage ${id} is already reversed`)
     }
 
     const timestamp = new Date().toISOString()
+    const actor = options.actor?.trim() || 'api:lab-manager'
+    const reason = options.reason?.trim() || 'Compensation reversal'
     const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
     const reversals: InventoryMovement[] = []
 
@@ -2001,23 +2042,44 @@ export class NorthStarService {
         quantityGrams: allocation.allocatedGrams,
         balanceAfter: lot.quantityGrams,
         ref: usage.id,
-        actor: 'api:lab-manager',
+        actor,
       })
     })
 
     this.lots = Array.from(lotMap.values())
     this.movements = [...reversals, ...this.movements]
+    let reversedUsage: LabUsageRecord | undefined
     this.usageHistory = this.usageHistory.map((item) =>
-      item.id === usage.id ? { ...item, status: 'REVERSED' } : item,
+      item.id === usage.id
+        ? (reversedUsage = {
+            ...item,
+            status: 'REVERSED',
+            reversedAt: timestamp,
+            reversalMovements: reversals,
+          })
+        : item,
     )
 
     return {
       data: {
         usageId: usage.id,
+        usage: reversedUsage ?? { ...usage, status: 'REVERSED', reversedAt: timestamp, reversalMovements: reversals },
         movements: reversals,
+        lots: this.lots,
+        usageHistory: this.usageHistory,
+        reason,
         invariant: 'reverse by compensation; original OUT remains',
       },
     }
+  }
+
+  reverseLatestLabUsage(options: LabUsageReverseOptions = {}) {
+    const usage = this.usageHistory.find((item) => item.status === 'COMMITTED')
+    if (!usage) {
+      throw new UnprocessableEntityException('No committed lab usage exists to reverse')
+    }
+
+    return this.reverseLabUsage(usage.id, options)
   }
 
   productionBatches() {
@@ -2648,6 +2710,13 @@ export class NorthStarService {
     }
 
     return allocations
+  }
+
+  private normalizeLabUsagePurpose(value?: LabUsagePurpose): LabUsagePurpose {
+    if (value === 'sample' || value === 'production-prep' || value === 'qc' || value === 'waste') {
+      return value
+    }
+    return 'trial'
   }
 
   private recordAudit(

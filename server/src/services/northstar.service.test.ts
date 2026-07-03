@@ -15,8 +15,37 @@ describe('NorthStarService', () => {
     const reverse = service.reverseLatestLabUsage().data
 
     expect(reverse.usageId).toBe(commit.usage.id)
+    expect(reverse.usage.status).toBe('REVERSED')
     expect(reverse.movements.every((movement) => movement.direction === 'IN')).toBe(true)
     expect(reverse.invariant).toContain('reverse by compensation')
+  })
+
+  it('exposes lab usage history, detail, and reverse-by-id evidence', () => {
+    const service = new NorthStarService()
+    const commit = service.commitLabUsage('frm-0421', 12.5, {
+      purpose: 'sample',
+      projectCode: 'NXL-RD-0421',
+      sampleCode: 'SMP-0421-A',
+      operator: 'Bench Chemist',
+    }).data
+
+    const history = service.labUsageHistory().data
+    expect(history.usages[0]?.id).toBe(commit.usage.id)
+    expect(history.usages[0]?.purpose).toBe('sample')
+    expect(history.invariant).toContain('usage history')
+
+    const detail = service.labUsageDetail(commit.usage.id).data
+    expect(detail.usage.sampleCode).toBe('SMP-0421-A')
+    expect(detail.movements.length).toBe(commit.movements.length)
+
+    const reverse = service.reverseLabUsage(commit.usage.id, {
+      reason: 'Bench correction',
+      actor: 'Lab Manager',
+    }).data
+    expect(reverse.usage.reversedAt).toBeDefined()
+    expect(reverse.usage.reversalMovements?.length).toBe(commit.movements.length)
+    expect(reverse.movements.every((movement) => movement.actor === 'Lab Manager')).toBe(true)
+    expect(() => service.reverseLabUsage(commit.usage.id)).toThrow(UnprocessableEntityException)
   })
 
   it('records lab weighing sessions without creating inventory movements', () => {

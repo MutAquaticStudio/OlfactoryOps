@@ -11,6 +11,12 @@ type LabUsageBody = {
   }[]
   tolerancePercent?: number
   operator?: string
+  purpose?: 'trial' | 'sample' | 'production-prep' | 'qc' | 'waste'
+  projectCode?: string
+  sampleCode?: string
+  qcLink?: string
+  reason?: string
+  actor?: string
 }
 
 @Controller()
@@ -480,13 +486,23 @@ export class NorthStarController {
     return this.northStar.requestDocumentSignedUrl(id)
   }
 
+  @Get('lab-usage')
+  labUsageHistory() {
+    return this.northStar.labUsageHistory()
+  }
+
   @Get('lab-usage/plan')
   labUsagePlan(@Query('formulaId') formulaId = 'frm-0421', @Query('grams') grams = '12.5') {
     return this.northStar.labUsagePlan(formulaId, Number(grams))
   }
 
+  @Get('lab-usage/:id')
+  labUsageDetail(@Param('id') id: string) {
+    return this.northStar.labUsageDetail(id)
+  }
+
   @Post('lab-usage/weighing-session')
-  recordLabWeighingSession(@Body() body: LabUsageBody) {
+  recordLabWeighingSession(@Body() body: LabUsageBody = {}) {
     return this.northStar.recordLabWeighingSession(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
       actuals: body.actuals,
       tolerancePercent: body.tolerancePercent,
@@ -495,17 +511,32 @@ export class NorthStarController {
   }
 
   @Post('lab-usage/commit')
-  commitLabUsage(@Body() body: LabUsageBody) {
+  commitLabUsage(@Body() body: LabUsageBody = {}) {
     return this.northStar.commitLabUsage(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
       actuals: body.actuals,
       tolerancePercent: body.tolerancePercent,
       operator: body.operator,
+      purpose: body.purpose,
+      projectCode: body.projectCode,
+      sampleCode: body.sampleCode,
+      qcLink: body.qcLink,
     })
   }
 
   @Post('lab-usage/reverse-latest')
-  reverseLatestLabUsage() {
-    return this.northStar.reverseLatestLabUsage()
+  reverseLatestLabUsage(@Body() body: LabUsageBody = {}) {
+    return this.northStar.reverseLatestLabUsage({
+      reason: body.reason,
+      actor: body.actor,
+    })
+  }
+
+  @Post('lab-usage/:id/reverse')
+  reverseLabUsage(@Param('id') id: string, @Body() body: LabUsageBody = {}) {
+    return this.northStar.reverseLabUsage(id, {
+      reason: body.reason,
+      actor: body.actor,
+    })
   }
 
   @Get('production/batches')

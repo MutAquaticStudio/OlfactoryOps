@@ -97,6 +97,8 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type LabUsagePurpose,
+  type LabUsageRecord,
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
@@ -114,15 +116,7 @@ import {
   type TenantSecurityPolicy,
 } from './data/northStar'
 
-type UsageRecord = {
-  id: string
-  at: string
-  formulaCode: string
-  batchGrams: number
-  status: 'COMMITTED' | 'REVERSED'
-  allocations: Allocation[]
-  weighingSession?: LabWeighingSession
-}
+type UsageRecord = LabUsageRecord
 
 type ModalKind =
   | 'commit'
@@ -352,6 +346,30 @@ type StorageLocationCreateResponse = {
   invariant: string
 }
 
+type LabUsageHistoryResponse = {
+  usages: UsageRecord[]
+  invariant: string
+}
+
+type LabUsageCommitResponse = {
+  usage: UsageRecord
+  movements: InventoryMovement[]
+  lots: InventoryLot[]
+  usageHistory: UsageRecord[]
+  message: string
+  invariant: string
+}
+
+type LabUsageReverseResponse = {
+  usageId: string
+  usage: UsageRecord
+  movements: InventoryMovement[]
+  lots: InventoryLot[]
+  usageHistory: UsageRecord[]
+  reason: string
+  invariant: string
+}
+
 type RolePermissionMatrix = {
   role: string
   scope: RolePolicy['scope']
@@ -427,6 +445,11 @@ async function requestApi<T>(path: string, init?: RequestInit) {
   }
   const payload = (await response.json()) as ApiEnvelope<T>
   return payload.data
+}
+
+function mergeMovements(newMovements: InventoryMovement[], currentMovements: InventoryMovement[]) {
+  const incomingIds = new Set(newMovements.map((movement) => movement.id))
+  return [...newMovements, ...currentMovements.filter((movement) => !incomingIds.has(movement.id))]
 }
 
 function allocationKey(allocation: Pick<Allocation, 'materialId' | 'lotId'>) {
@@ -544,6 +567,11 @@ function App() {
   const [actualWeights, setActualWeights] = useState<Record<string, number>>({})
   const [weighingTolerancePercent, setWeighingTolerancePercent] = useState(2)
   const [weighingOperator, setWeighingOperator] = useState('Thuan Le Minh')
+  const [labUsagePurpose, setLabUsagePurpose] = useState<LabUsagePurpose>('trial')
+  const [labUsageProjectCode, setLabUsageProjectCode] = useState('NXL-RD-0421')
+  const [labUsageSampleCode, setLabUsageSampleCode] = useState('SMP-0421-A')
+  const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Live API sync pending')
+  const [labUsageBusy, setLabUsageBusy] = useState(false)
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
   const [newFormulaTargetGrams, setNewFormulaTargetGrams] = useState(100)
   const [newLineMaterialId, setNewLineMaterialId] = useState(materials[0]?.id ?? '')
@@ -606,6 +634,26 @@ function App() {
   }, [labPlan.allocations])
 
   useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadLabUsageHistory() {
+      try {
+        const payload = await requestApi<LabUsageHistoryResponse>('/lab-usage', { signal: controller.signal })
+        setUsageHistory(payload.usages)
+        setLabUsageStatusMessage('Synced from live Lab Usage API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setLabUsageStatusMessage('Using local Lab Usage state until API is reachable')
+        }
+      }
+    }
+
+    void loadLabUsageHistory()
+
+    return () => controller.abort()
+  }, [])
+
+  useEffect(() => {
     function handleKeys(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
@@ -629,97 +677,71 @@ function App() {
     setActualWeights(nextWeights)
   }
 
-  function commitLabUsage() {
+  async function commitLabUsage() {
     if (!weighingReady || resolvedLeaves.length === 0) {
       return
     }
 
-    const usageId = `LAB-2026-${String(usageHistory.length + 91).padStart(3, '0')}`
-    const timestamp = '2026-07-01 06:48'
-    const lotMap = new Map(lots.map((lot) => [lot.id, { ...lot }]))
-    const createdMovements: InventoryMovement[] = []
-    const actualAllocations: Allocation[] = []
-
-    labPlan.allocations.forEach((allocation, index) => {
-      const lot = lotMap.get(allocation.lotId)
-      const line = weighingSessionPreview.lines[index]
-      if (!lot) {
-        return
-      }
-      const actualGrams = line?.actualGrams ?? allocation.allocatedGrams
-      lot.quantityGrams = Math.max(0, lot.quantityGrams - actualGrams)
-      actualAllocations.push({
-        ...allocation,
-        allocatedGrams: actualGrams,
-        balanceAfter: lot.quantityGrams,
+    setLabUsageBusy(true)
+    try {
+      const payload = await requestApi<LabUsageCommitResponse>('/lab-usage/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formulaId: selectedFormula.id,
+          grams: batchGrams,
+          actuals: weighingSessionPreview.lines.map((line) => ({
+            materialId: line.materialId,
+            lotId: line.lotId,
+            actualGrams: line.actualGrams,
+          })),
+          tolerancePercent: weighingTolerancePercent,
+          operator: weighingOperator,
+          purpose: labUsagePurpose,
+          projectCode: labUsageProjectCode,
+          sampleCode: labUsageSampleCode,
+        }),
       })
-      createdMovements.push({
-        id: `MOV-LAB-${usageHistory.length + 1}-${index + 1}`,
-        at: timestamp,
-        type: 'LAB_CONSUMPTION',
-        direction: 'OUT',
-        materialId: allocation.materialId,
-        lotId: allocation.lotId,
-        quantityGrams: actualGrams,
-        balanceAfter: lot.quantityGrams,
-        ref: usageId,
-        actor: weighingSessionPreview.operator,
-      })
-    })
 
-    setLots(Array.from(lotMap.values()))
-    setMovements((current) => [...createdMovements, ...current])
-    setUsageHistory((current) => [
-      {
-        id: usageId,
-        at: timestamp,
-        formulaCode: selectedFormula.code,
-        batchGrams,
-        status: 'COMMITTED',
-        allocations: actualAllocations,
-        weighingSession: { ...weighingSessionPreview, id: `WGH-${usageId}`, createdAt: timestamp },
-      },
-      ...current,
-    ])
-    setActiveKey('labUsage')
-    setModal(null)
+      setLots(payload.lots)
+      setMovements((current) => mergeMovements(payload.movements, current))
+      setUsageHistory(payload.usageHistory)
+      setLabUsageStatusMessage(payload.message)
+      setActiveKey('labUsage')
+      setModal(null)
+    } catch (error) {
+      setLabUsageStatusMessage(error instanceof Error ? error.message : 'Lab Usage commit failed')
+    } finally {
+      setLabUsageBusy(false)
+    }
   }
 
-  function reverseLatestUsage() {
+  async function reverseLatestUsage() {
     const latest = usageHistory.find((usage) => usage.status === 'COMMITTED')
     if (!latest) {
       return
     }
 
-    const timestamp = '2026-07-01 06:57'
-    const lotMap = new Map(lots.map((lot) => [lot.id, { ...lot }]))
-    const reversalMovements: InventoryMovement[] = []
-
-    latest.allocations.forEach((allocation, index) => {
-      const lot = lotMap.get(allocation.lotId)
-      if (!lot) {
-        return
-      }
-      lot.quantityGrams += allocation.allocatedGrams
-      reversalMovements.push({
-        id: `MOV-REV-${latest.id}-${index + 1}`,
-        at: timestamp,
-        type: 'REVERSAL',
-        direction: 'IN',
-        materialId: allocation.materialId,
-        lotId: allocation.lotId,
-        quantityGrams: allocation.allocatedGrams,
-        balanceAfter: lot.quantityGrams,
-        ref: latest.id,
-        actor: 'Lab Manager',
+    setLabUsageBusy(true)
+    try {
+      const payload = await requestApi<LabUsageReverseResponse>(`/lab-usage/${encodeURIComponent(latest.id)}/reverse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: weighingOperator || 'Lab Manager',
+          reason: 'Compensation reversal from Lab Usage workspace',
+        }),
       })
-    })
 
-    setLots(Array.from(lotMap.values()))
-    setMovements((current) => [...reversalMovements, ...current])
-    setUsageHistory((current) =>
-      current.map((usage) => (usage.id === latest.id ? { ...usage, status: 'REVERSED' } : usage)),
-    )
+      setLots(payload.lots)
+      setMovements((current) => mergeMovements(payload.movements, current))
+      setUsageHistory(payload.usageHistory)
+      setLabUsageStatusMessage(`${payload.usageId} reversed by compensation`)
+    } catch (error) {
+      setLabUsageStatusMessage(error instanceof Error ? error.message : 'Lab Usage reverse failed')
+    } finally {
+      setLabUsageBusy(false)
+    }
   }
 
   async function createFormulaDraft() {
@@ -934,6 +956,14 @@ function App() {
                   setWeighingTolerancePercent={setWeighingTolerancePercent}
                   weighingOperator={weighingOperator}
                   setWeighingOperator={setWeighingOperator}
+                  labUsagePurpose={labUsagePurpose}
+                  setLabUsagePurpose={setLabUsagePurpose}
+                  labUsageProjectCode={labUsageProjectCode}
+                  setLabUsageProjectCode={setLabUsageProjectCode}
+                  labUsageSampleCode={labUsageSampleCode}
+                  setLabUsageSampleCode={setLabUsageSampleCode}
+                  labUsageStatusMessage={labUsageStatusMessage}
+                  labUsageBusy={labUsageBusy}
                   weighingReady={weighingReady}
                   onUseTargetWeights={setTargetWeights}
                   onCommit={() => setModal('commit')}
@@ -965,7 +995,7 @@ function App() {
         actionLabel="Create movements"
         onClose={() => setModal(null)}
         onAction={commitLabUsage}
-        actionDisabled={!weighingReady}
+        actionDisabled={!weighingReady || labUsageBusy}
       >
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} compact />
         <WeighingEvidence session={weighingSessionPreview} compact />
@@ -1443,6 +1473,14 @@ function DomainWorkspace({
   setWeighingTolerancePercent,
   weighingOperator,
   setWeighingOperator,
+  labUsagePurpose,
+  setLabUsagePurpose,
+  labUsageProjectCode,
+  setLabUsageProjectCode,
+  labUsageSampleCode,
+  setLabUsageSampleCode,
+  labUsageStatusMessage,
+  labUsageBusy,
   weighingReady,
   onUseTargetWeights,
   onCommit,
@@ -1484,6 +1522,14 @@ function DomainWorkspace({
   setWeighingTolerancePercent: (value: number) => void
   weighingOperator: string
   setWeighingOperator: (value: string) => void
+  labUsagePurpose: LabUsagePurpose
+  setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageProjectCode: string
+  setLabUsageProjectCode: (value: string) => void
+  labUsageSampleCode: string
+  setLabUsageSampleCode: (value: string) => void
+  labUsageStatusMessage: string
+  labUsageBusy: boolean
   weighingReady: boolean
   onUseTargetWeights: () => void
   onCommit: () => void
@@ -1551,6 +1597,14 @@ function DomainWorkspace({
           setWeighingTolerancePercent={setWeighingTolerancePercent}
           weighingOperator={weighingOperator}
           setWeighingOperator={setWeighingOperator}
+          labUsagePurpose={labUsagePurpose}
+          setLabUsagePurpose={setLabUsagePurpose}
+          labUsageProjectCode={labUsageProjectCode}
+          setLabUsageProjectCode={setLabUsageProjectCode}
+          labUsageSampleCode={labUsageSampleCode}
+          setLabUsageSampleCode={setLabUsageSampleCode}
+          statusMessage={labUsageStatusMessage}
+          busy={labUsageBusy}
           weighingReady={weighingReady}
           onUseTargetWeights={onUseTargetWeights}
           onCommit={onCommit}
@@ -3094,6 +3148,14 @@ function LabUsageWorkspace({
   setWeighingTolerancePercent,
   weighingOperator,
   setWeighingOperator,
+  labUsagePurpose,
+  setLabUsagePurpose,
+  labUsageProjectCode,
+  setLabUsageProjectCode,
+  labUsageSampleCode,
+  setLabUsageSampleCode,
+  statusMessage,
+  busy,
   weighingReady,
   onUseTargetWeights,
   onCommit,
@@ -3110,6 +3172,14 @@ function LabUsageWorkspace({
   setWeighingTolerancePercent: (value: number) => void
   weighingOperator: string
   setWeighingOperator: (value: string) => void
+  labUsagePurpose: LabUsagePurpose
+  setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageProjectCode: string
+  setLabUsageProjectCode: (value: string) => void
+  labUsageSampleCode: string
+  setLabUsageSampleCode: (value: string) => void
+  statusMessage: string
+  busy: boolean
   weighingReady: boolean
   onUseTargetWeights: () => void
   onCommit: () => void
@@ -3138,12 +3208,13 @@ function LabUsageWorkspace({
           <strong className="mono-value">{formatGrams(batchGrams)}</strong>
         </label>
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} />
+        <div className="empty-state compact">{statusMessage}</div>
         <div className="action-row">
-          <button className="primary-button" type="button" onClick={onCommit} disabled={!weighingReady}>
+          <button className="primary-button" type="button" onClick={onCommit} disabled={!weighingReady || busy}>
             <Play size={16} />
-            Commit Actual Usage
+            {busy ? 'Working' : 'Commit Actual Usage'}
           </button>
-          <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted}>
+          <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted || busy}>
             <RotateCcw size={16} />
             Reverse latest
           </button>
@@ -3183,6 +3254,38 @@ function LabUsageWorkspace({
           <button className="ghost-button small" type="button" onClick={onUseTargetWeights}>
             Use target weights
           </button>
+        </div>
+        <div className="form-grid">
+          <label className="field-row">
+            <span>Purpose</span>
+            <select
+              aria-label="Lab usage purpose"
+              value={labUsagePurpose}
+              onChange={(event) => setLabUsagePurpose(event.target.value as LabUsagePurpose)}
+            >
+              <option value="trial">Trial</option>
+              <option value="sample">Sample</option>
+              <option value="production-prep">Production prep</option>
+              <option value="qc">QC</option>
+              <option value="waste">Waste</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Project code</span>
+            <input
+              aria-label="Lab usage project code"
+              value={labUsageProjectCode}
+              onChange={(event) => setLabUsageProjectCode(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Sample code</span>
+            <input
+              aria-label="Lab usage sample code"
+              value={labUsageSampleCode}
+              onChange={(event) => setLabUsageSampleCode(event.target.value)}
+            />
+          </label>
         </div>
 
         <div className="weighing-table">
@@ -3233,6 +3336,8 @@ function LabUsageWorkspace({
                   <strong>{usage.id}</strong>
                   <span>
                     {usage.formulaCode} / {formatGrams(usage.batchGrams)}
+                    {usage.purpose ? ` / ${usage.purpose}` : ''}
+                    {usage.sampleCode ? ` / ${usage.sampleCode}` : ''}
                     {usage.weighingSession
                       ? ` / actual ${formatGrams(
                           usage.weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0),
@@ -4979,7 +5084,7 @@ function BlackPopup({
                 <X size={18} />
               </button>
             </div>
-            {children}
+            <div className="popup-body">{children}</div>
             <div className="popup-actions">
               <button className="ghost-button" type="button" onClick={onClose}>
                 Cancel

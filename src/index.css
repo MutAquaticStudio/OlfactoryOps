@@ -1659,8 +1659,9 @@ input[type='range'] {
   z-index: 50;
   inset: 0;
   display: grid;
-  place-items: start center;
-  padding: 8vh 18px 18px;
+  place-items: center;
+  padding: 18px;
+  overflow: auto;
   background: rgba(0, 0, 0, 0.48);
   backdrop-filter: blur(10px);
 }
@@ -1675,6 +1676,8 @@ input[type='range'] {
 
 .command-palette {
   padding: 12px;
+  place-self: start center;
+  margin-top: min(6vh, 44px);
 }
 
 .command-input-row {
@@ -1732,9 +1735,12 @@ input[type='range'] {
 
 .black-popup {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 14px;
   max-width: 760px;
+  max-height: calc(100vh - 36px);
   padding: 18px;
+  overflow: hidden;
 }
 
 .popup-header {
@@ -1749,10 +1755,17 @@ input[type='range'] {
   line-height: 1.55;
 }
 
+.popup-body {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
 .popup-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 2px;
 }
 
 @keyframes drift {

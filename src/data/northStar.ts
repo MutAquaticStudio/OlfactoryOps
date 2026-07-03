@@ -523,6 +523,26 @@ export interface LabWeighingSession {
   createdAt: string
 }
 
+export type LabUsagePurpose = 'trial' | 'sample' | 'production-prep' | 'qc' | 'waste'
+
+export interface LabUsageRecord {
+  id: string
+  formulaId: string
+  formulaCode: string
+  grams: number
+  batchGrams: number
+  status: 'COMMITTED' | 'REVERSED'
+  purpose: LabUsagePurpose
+  projectCode?: string
+  sampleCode?: string
+  qcLink?: string
+  allocations: Allocation[]
+  weighingSession?: LabWeighingSession
+  createdAt: string
+  reversedAt?: string
+  reversalMovements?: InventoryMovement[]
+}
+
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
   active: { label: 'Active', color: '#4d9bff' },
   stable: { label: 'Stable', color: '#37d6a0' },
@@ -540,7 +560,7 @@ export const phases: Phase[] = [
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 90 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 90 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, QC, stock take', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 92 },
-  { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'testing', securityLayer: 'L5', coverage: 70 },
+  { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'active', securityLayer: 'L5', coverage: 84 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, download audit', gate: 'Access and download logged', status: 'testing', securityLayer: 'L5', coverage: 62 },
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'testing', securityLayer: 'L5', coverage: 64 },
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'testing', securityLayer: 'L4/L5', coverage: 62 },
@@ -666,17 +686,17 @@ export const domains: DomainModule[] = [
     name: 'Lab Usage Traceability',
     shortName: 'Lab Usage',
     responsibility: 'Commit and reverse lab usage from formula version to lot movements',
-    status: 'testing',
-    health: 70,
-    risk: 'Compensation flow modeled in UI; needs transaction API',
+    status: 'active',
+    health: 84,
+    risk: 'Transaction API, usage history, weighing evidence, and reverse-by-id are live; partial reverse and print sheets remain next gates',
     owner: 'Lab Ops',
     entities: ['FormulaLabUsage', 'InventoryMovement'],
-    features: ['Commit usage', 'Reverse usage', 'Multi-lot allocation', 'Usage history'],
+    features: ['Commit usage', 'Reverse usage', 'Multi-lot allocation', 'Usage history', 'Actual weighing evidence', 'Purpose and sample metadata'],
     invariants: ['INV-007 explicit consumption', 'INV-008 reverse by compensation'],
-    apis: ['/api/v1/lab-usage/commit', '/api/v1/lab-usage/:id/reverse'],
+    apis: ['/api/v1/lab-usage', '/api/v1/lab-usage/:id', '/api/v1/lab-usage/plan', '/api/v1/lab-usage/weighing-session', '/api/v1/lab-usage/commit', '/api/v1/lab-usage/:id/reverse'],
     permissions: ['inventory.commitLabUsage', 'inventory.reverseLabUsage'],
-    screens: ['Commit flow', 'Reverse popup', 'History'],
-    activity: 'Trial commit preview ready for 12.5g FRM-0421',
+    screens: ['Commit flow', 'Actual weighing session', 'Reverse popup', 'History'],
+    activity: 'FRM-0421 can commit actual weighed usage via API and reverse the committed record by compensation',
   },
   {
     key: 'documents',
