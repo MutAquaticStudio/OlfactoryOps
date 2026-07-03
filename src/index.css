@@ -896,6 +896,45 @@ kbd {
   grid-template-columns: 0.72fr minmax(0, 1fr) auto auto auto;
 }
 
+.document-list:not(.compact-list) .document-row {
+  grid-template-columns: minmax(84px, 96px) minmax(0, 1fr) max-content max-content;
+  grid-template-areas:
+    'doc-id doc-main doc-main doc-action'
+    'doc-id doc-tag doc-tag doc-action'
+    'doc-id doc-downloads doc-downloads doc-action';
+  align-items: center;
+}
+
+.document-list:not(.compact-list) .document-row > .mono-value:first-child {
+  grid-area: doc-id;
+  overflow-wrap: anywhere;
+}
+
+.document-list:not(.compact-list) .document-row > div {
+  grid-area: doc-main;
+}
+
+.document-list:not(.compact-list) .document-row > .data-tag {
+  grid-area: doc-tag;
+  justify-self: start;
+}
+
+.document-list:not(.compact-list) .document-row > .mono-value:last-of-type {
+  grid-area: doc-downloads;
+  justify-self: start;
+  white-space: nowrap;
+}
+
+.document-list:not(.compact-list) .document-row > .ghost-button {
+  grid-area: doc-action;
+  align-self: center;
+  justify-self: end;
+}
+
+.compact-list .document-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .member-row {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
 }
@@ -1937,6 +1976,21 @@ input[type='range'] {
   .weighing-evidence-row {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .document-list:not(.compact-list) .document-row,
+  .compact-list .document-row {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .document-list:not(.compact-list) .document-row > .mono-value:first-child,
+  .document-list:not(.compact-list) .document-row > div,
+  .document-list:not(.compact-list) .document-row > .data-tag,
+  .document-list:not(.compact-list) .document-row > .mono-value:last-of-type,
+  .document-list:not(.compact-list) .document-row > .ghost-button {
+    grid-area: auto;
+    justify-self: start;
   }
 
   .formula-line.is-editable .line-actions {
