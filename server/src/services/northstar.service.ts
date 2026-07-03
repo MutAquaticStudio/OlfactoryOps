@@ -21,6 +21,7 @@ import {
   formatGrams,
   initialLots,
   initialMovements,
+  isLotEligibleForInventory,
   materials,
   memberships,
   moleculeComponents,
@@ -37,7 +38,9 @@ import {
   salesOrders,
   skuAvailability,
   ssoConfig,
+  stockTakeRecords,
   stockSummary,
+  storageLocations,
   suppliers,
   tenantScopeAllows,
   tenantSecurityPolicy,
@@ -56,7 +59,10 @@ import {
   type FormulaVersionRecord,
   type InventoryLot,
   type InventoryMovement,
+  type InventoryReorderSuggestion,
   type LabWeighingSession,
+  type LotLabelPayload,
+  type LotQualityStatus,
   type Material,
   type MaterialIngestionRecord,
   type MaterialProvenance,
@@ -68,6 +74,8 @@ import {
   type PurchaseOrderRecord,
   type RolePolicy,
   type SalesOrderRecord,
+  type StockTakeRecord,
+  type StorageLocation,
   type TenantSettingsRecord,
 } from '../../../src/data/northStar.js'
 
@@ -143,6 +151,8 @@ export class NorthStarService {
   private moleculeRecords: MoleculeComponent[] = structuredClone(moleculeComponents)
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
+  private locationRecords: StorageLocation[] = structuredClone(storageLocations)
+  private stockTakeRecords: StockTakeRecord[] = structuredClone(stockTakeRecords)
   private formulaRecords: Formula[] = structuredClone(initialFormulas)
   private formulaVersionRecords: FormulaVersionRecord[] = structuredClone(formulaVersions)
   private usageHistory: UsageRecord[] = []
@@ -730,6 +740,285 @@ export class NorthStarService {
     return { data: this.movements }
   }
 
+  inventoryConsole() {
+    return {
+      data: {
+        lots: this.lots,
+        movements: this.movements,
+        locations: this.locationRecords,
+        stockTakes: this.stockTakeRecords,
+        summary: stockSummary(this.lots, this.materialRecords),
+        reorderSuggestions: this.inventoryReorderSuggestions().data.suggestions,
+        invariant: 'inventory console reads lots, locations, stock takes, and immutable movement evidence together',
+      },
+    }
+  }
+
+  storageLocationsList() {
+    return { data: this.locationRecords }
+  }
+
+  createStorageLocation(body: {
+    name?: string
+    zone?: string
+    condition?: string
+    capacityGrams?: number
+    parentId?: string
+    kind?: StorageLocation['kind']
+    light?: StorageLocation['light']
+    temperatureRange?: string
+  }) {
+    const name = body.name?.trim()
+    if (!name) {
+      throw new UnprocessableEntityException('Storage location name is required')
+    }
+    if (this.locationRecords.some((location) => location.name.toLowerCase() === name.toLowerCase())) {
+      throw new UnprocessableEntityException(`Storage location ${name} already exists`)
+    }
+
+    const capacityGrams = Number(body.capacityGrams ?? 0)
+    if (!Number.isFinite(capacityGrams) || capacityGrams <= 0) {
+      throw new UnprocessableEntityException('Storage location capacityGrams must be greater than 0')
+    }
+
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `loc-${Date.now()}`
+    const location: StorageLocation = {
+      id: `loc-${slug}`,
+      name,
+      zone: body.zone?.trim() || 'Warehouse',
+      condition: body.condition?.trim() || 'Controlled ambient',
+      capacityGrams,
+      parentId: body.parentId?.trim() || undefined,
+      kind: body.kind ?? 'Bin',
+      light: body.light ?? 'Ambient',
+      temperatureRange: body.temperatureRange?.trim() || '18-22C',
+      status: 'ACTIVE',
+    }
+
+    this.locationRecords = [location, ...this.locationRecords]
+    this.recordAudit('inventory.location.create', location.name, 'api:inventory', 'allowed')
+    return {
+      data: {
+        location,
+        invariant: 'storage location creation changes master data only, not stock quantity',
+      },
+    }
+  }
+
+  inventoryReorderSuggestions() {
+    const reorderPoints = new Map<string, number>([
+      ['mat-iso', 180],
+      ['mat-hedione', 120],
+      ['mat-bergamot', 60],
+      ['mat-ambroxan', 45],
+      ['mat-muscenone', 20],
+      ['mat-roseoxide', 18],
+      ['mat-vanillin', 100],
+      ['mat-ethanol', 1500],
+    ])
+    const suggestions: InventoryReorderSuggestion[] = stockSummary(this.lots, this.materialRecords)
+      .flatMap((item) => {
+        const reorderPointGrams = reorderPoints.get(item.material.id) ?? 0
+        if (reorderPointGrams <= 0 || item.available >= reorderPointGrams) {
+          return []
+        }
+        return [
+          {
+            materialId: item.material.id,
+            materialName: item.material.name,
+            availableGrams: item.available,
+            reorderPointGrams,
+            suggestedOrderGrams: Math.max(25, Math.ceil((reorderPointGrams * 1.6 - item.available) / 5) * 5),
+            reason: `${formatGrams(item.available)} available is below ${formatGrams(reorderPointGrams)} reorder point`,
+          },
+        ]
+      })
+      .sort((a, b) => a.availableGrams - b.availableGrams)
+
+    return {
+      data: {
+        suggestions,
+        invariant: 'shopping list is generated from available approved non-expired stock without reserving or moving inventory',
+      },
+    }
+  }
+
+  changeLotQuality(id: string, body: { qualityStatus?: LotQualityStatus; reason?: string }) {
+    const lot = this.lots.find((item) => item.id === id)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${id} was not found`)
+    }
+
+    const qualityStatus = body.qualityStatus
+    if (!this.isLotQualityStatus(qualityStatus)) {
+      throw new UnprocessableEntityException('Lot qualityStatus must be APPROVED, QUARANTINE, ON_HOLD, REJECTED, or EXPIRED')
+    }
+
+    const updatedLot: InventoryLot = { ...lot, qualityStatus }
+    const movementCount = this.movements.length
+    this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+    const audit = this.recordAudit(
+      'inventory.quality.update',
+      `${lot.lotNumber}:${qualityStatus}`,
+      'api:qc',
+      qualityStatus === 'APPROVED' ? 'allowed' : 'review',
+    )
+
+    return {
+      data: {
+        lot: updatedLot,
+        audit,
+        summary: stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === lot.materialId),
+        movementCount,
+        reason: body.reason?.trim() || 'QC status workflow',
+        invariant: 'quality status changes lot eligibility but creates no inventory movement',
+      },
+    }
+  }
+
+  performStockTake(body: {
+    lotId?: string
+    countedGrams?: number
+    reason?: string
+    actor?: string
+  }) {
+    const lot = this.lots.find((item) => item.id === body.lotId)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${body.lotId} was not found`)
+    }
+
+    const countedGrams = Number(body.countedGrams ?? Number.NaN)
+    if (!Number.isFinite(countedGrams) || countedGrams < 0) {
+      throw new UnprocessableEntityException('Stock take countedGrams must be 0 or greater')
+    }
+    if (countedGrams < lot.reservedGrams) {
+      throw new UnprocessableEntityException({
+        message: 'Stock take count cannot be lower than reserved stock',
+        lotId: lot.id,
+        reservedGrams: lot.reservedGrams,
+        countedGrams,
+      })
+    }
+
+    const expectedGrams = lot.quantityGrams
+    const varianceGrams = Number((countedGrams - expectedGrams).toFixed(3))
+    const timestamp = new Date().toISOString()
+    const actor = body.actor?.trim() || 'api:inventory'
+    let movement: InventoryMovement | undefined
+    let updatedLot = lot
+
+    if (Math.abs(varianceGrams) > 0.0001) {
+      updatedLot = { ...lot, quantityGrams: countedGrams }
+      movement = {
+        id: `MOV-STK-${String(this.movements.length + 1029).padStart(4, '0')}`,
+        at: timestamp,
+        type: 'ADJUSTMENT',
+        direction: varianceGrams > 0 ? 'IN' : 'OUT',
+        materialId: lot.materialId,
+        lotId: lot.id,
+        quantityGrams: Math.abs(varianceGrams),
+        balanceAfter: countedGrams,
+        ref: body.reason?.trim() || 'Stock take variance',
+        actor,
+      }
+      this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+      this.movements = [movement, ...this.movements]
+    }
+
+    const record: StockTakeRecord = {
+      id: `STK-${new Date().getFullYear()}-${String(this.stockTakeRecords.length + 22).padStart(3, '0')}`,
+      at: timestamp,
+      lotId: lot.id,
+      lotNumber: lot.lotNumber,
+      expectedGrams,
+      countedGrams,
+      varianceGrams,
+      reason: body.reason?.trim() || 'Cycle count',
+      actor,
+      status: movement ? 'ADJUSTED' : 'MATCHED',
+      movementId: movement?.id,
+    }
+
+    this.stockTakeRecords = [record, ...this.stockTakeRecords]
+    this.recordAudit('inventory.stockTake', lot.lotNumber, actor, movement ? 'review' : 'allowed')
+    return {
+      data: {
+        lot: updatedLot,
+        movement,
+        stockTake: record,
+        summary: stockSummary(this.lots, this.materialRecords).find((item) => item.material.id === lot.materialId),
+        invariant: movement
+          ? 'stock take variance updates stock through immutable ADJUSTMENT movement'
+          : 'stock take match records evidence without changing stock quantity',
+      },
+    }
+  }
+
+  lotLabel(id: string) {
+    const lot = this.lots.find((item) => item.id === id)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${id} was not found`)
+    }
+    const material = this.materialRecords.find((item) => item.id === lot.materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${lot.materialId} was not found`)
+    }
+
+    const label: LotLabelPayload = {
+      lotId: lot.id,
+      lotNumber: lot.lotNumber,
+      materialName: material.name,
+      storageText: `${lot.location} / ${lot.container ?? 'container not set'}`,
+      qualityStatus: lot.qualityStatus,
+      expiryDate: lot.expiryDate,
+      qrValue: `OLFOPS|LOT|${lot.id}|${lot.lotNumber}|${lot.qualityStatus}|${lot.expiryDate}`,
+    }
+
+    return {
+      data: {
+        label,
+        invariant: 'lot label generation is read-only and does not create stock movement',
+      },
+    }
+  }
+
+  lotGenealogy(id: string) {
+    const lot = this.lots.find((item) => item.id === id)
+    if (!lot) {
+      throw new NotFoundException(`Lot ${id} was not found`)
+    }
+    const material = this.materialRecords.find((item) => item.id === lot.materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${lot.materialId} was not found`)
+    }
+
+    const receivedAt = new Date(`${lot.receivedDate}T00:00:00.000Z`).getTime()
+    const agingDays = Math.max(0, Math.round((Date.now() - receivedAt) / 86_400_000))
+    const movements = this.movements.filter((movement) => movement.lotId === lot.id)
+    const documents = this.documentRecords.filter((document) => document.linkedTo === lot.id || document.linkedTo === lot.materialId)
+    const downstreamRefs = movements
+      .filter((movement) => movement.direction === 'OUT' || movement.direction === 'MOVE')
+      .map((movement) => ({
+        ref: movement.ref,
+        type: movement.type,
+        quantityGrams: movement.quantityGrams,
+        at: movement.at,
+      }))
+
+    return {
+      data: {
+        lot,
+        material,
+        agingDays,
+        movements,
+        documents,
+        downstreamRefs,
+        eligibility: isLotEligibleForInventory(lot) ? 'ELIGIBLE' : 'BLOCKED',
+        invariant: 'lot genealogy is reconstructed from movement ledger, documents, and lot metadata',
+      },
+    }
+  }
+
   adjustInventory(body: {
     lotId?: string
     direction?: 'IN' | 'OUT'
@@ -839,6 +1128,15 @@ export class NorthStarService {
     lotNumber?: string
     quantityGrams?: number
     expiryDate?: string
+    qualityStatus?: LotQualityStatus
+    location?: string
+    supplierLotRef?: string
+    currency?: string
+    retestDate?: string
+    openedDate?: string
+    shelfLifeAfterOpeningDays?: number
+    container?: string
+    packaging?: string
   }) {
     const materialId = body.materialId ?? this.materialRecords[0]?.id
     const material = this.materialRecords.find((item) => item.id === materialId)
@@ -850,6 +1148,7 @@ export class NorthStarService {
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
       throw new UnprocessableEntityException('Inventory receipt quantityGrams must be greater than 0')
     }
+    const qualityStatus = this.isLotQualityStatus(body.qualityStatus) ? body.qualityStatus : 'APPROVED'
 
     const timestamp = new Date().toISOString()
     const lot: InventoryLot = {
@@ -860,9 +1159,18 @@ export class NorthStarService {
       reservedGrams: 0,
       receivedDate: timestamp.slice(0, 10),
       expiryDate: body.expiryDate ?? '2028-12-31',
-      qualityStatus: 'APPROVED',
-      location: 'Receiving Bay',
+      qualityStatus,
+      location: body.location?.trim() || 'Receiving Bay',
       unitCost: material.costPerGram,
+      supplierLotRef: body.supplierLotRef?.trim() || undefined,
+      currency: body.currency?.trim() || 'USD',
+      retestDate: body.retestDate?.trim() || undefined,
+      openedDate: body.openedDate?.trim() || undefined,
+      shelfLifeAfterOpeningDays: Number.isFinite(Number(body.shelfLifeAfterOpeningDays))
+        ? Number(body.shelfLifeAfterOpeningDays)
+        : undefined,
+      container: body.container?.trim() || 'Receiving container',
+      packaging: body.packaging?.trim() || undefined,
     }
     const movement: InventoryMovement = {
       id: `MOV-REC-${String(this.movements.length + 1029).padStart(4, '0')}`,
@@ -2140,6 +2448,16 @@ export class NorthStarService {
   private safeMaterialNumber(value: unknown, fallback: number) {
     const next = Number(value)
     return Number.isFinite(next) && next >= 0 ? next : fallback
+  }
+
+  private isLotQualityStatus(value: unknown): value is LotQualityStatus {
+    return (
+      value === 'APPROVED' ||
+      value === 'QUARANTINE' ||
+      value === 'ON_HOLD' ||
+      value === 'REJECTED' ||
+      value === 'EXPIRED'
+    )
   }
 
   private sanitizeMaterialFields(fields: MaterialNumericFields = {}): MaterialNumericFields {

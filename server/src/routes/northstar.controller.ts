@@ -202,6 +202,11 @@ export class NorthStarController {
     return this.northStar.lotsList()
   }
 
+  @Get('inventory/console')
+  inventoryConsole() {
+    return this.northStar.inventoryConsole()
+  }
+
   @Get('inventory/summary')
   inventorySummary() {
     return this.northStar.inventorySummary()
@@ -212,9 +217,77 @@ export class NorthStarController {
     return this.northStar.inventoryMovements()
   }
 
+  @Get('inventory/reorder-suggestions')
+  inventoryReorderSuggestions() {
+    return this.northStar.inventoryReorderSuggestions()
+  }
+
+  @Post('inventory/stock-takes')
+  performStockTake(
+    @Body() body: { lotId?: string; countedGrams?: number; reason?: string; actor?: string },
+  ) {
+    return this.northStar.performStockTake(body)
+  }
+
+  @Get('storage-locations')
+  storageLocations() {
+    return this.northStar.storageLocationsList()
+  }
+
+  @Post('storage-locations')
+  createStorageLocation(
+    @Body()
+    body: {
+      name?: string
+      zone?: string
+      condition?: string
+      capacityGrams?: number
+      parentId?: string
+      kind?: 'Warehouse' | 'Room' | 'Shelf' | 'Bin' | 'Transit'
+      light?: 'Dark' | 'Amber' | 'Ambient'
+      temperatureRange?: string
+    },
+  ) {
+    return this.northStar.createStorageLocation(body)
+  }
+
+  @Patch('lots/:id/quality')
+  changeLotQuality(
+    @Param('id') id: string,
+    @Body()
+    body: { qualityStatus?: 'APPROVED' | 'QUARANTINE' | 'ON_HOLD' | 'REJECTED' | 'EXPIRED'; reason?: string },
+  ) {
+    return this.northStar.changeLotQuality(id, body)
+  }
+
+  @Post('lots/:id/label')
+  lotLabel(@Param('id') id: string) {
+    return this.northStar.lotLabel(id)
+  }
+
+  @Get('lots/:id/genealogy')
+  lotGenealogy(@Param('id') id: string) {
+    return this.northStar.lotGenealogy(id)
+  }
+
   @Post('inventory/receipts')
   receiveInventoryReceipt(
-    @Body() body: { materialId?: string; lotNumber?: string; quantityGrams?: number; expiryDate?: string },
+    @Body()
+    body: {
+      materialId?: string
+      lotNumber?: string
+      quantityGrams?: number
+      expiryDate?: string
+      qualityStatus?: 'APPROVED' | 'QUARANTINE' | 'ON_HOLD' | 'REJECTED' | 'EXPIRED'
+      location?: string
+      supplierLotRef?: string
+      currency?: string
+      retestDate?: string
+      openedDate?: string
+      shelfLifeAfterOpeningDays?: number
+      container?: string
+      packaging?: string
+    },
   ) {
     return this.northStar.receiveInventoryReceipt(body)
   }

@@ -1175,10 +1175,26 @@ kbd {
   margin-bottom: 12px;
 }
 
+.inventory-ops,
+.genealogy-list,
+.shopping-list {
+  display: grid;
+  gap: 10px;
+}
+
+.inventory-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .customization-form-grid .primary-button,
 .customization-form-grid .ghost-button,
 .material-form-grid .primary-button,
-.material-form-grid .ghost-button {
+.material-form-grid .ghost-button,
+.inventory-form-grid .primary-button,
+.inventory-form-grid .ghost-button {
   align-self: end;
 }
 
@@ -1253,6 +1269,46 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.032);
+}
+
+.lot-detail-card,
+.label-preview-card,
+.genealogy-row,
+.shopping-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.lot-detail-card {
+  grid-template-columns: minmax(0, 1.2fr) repeat(3, max-content);
+  align-items: center;
+}
+
+.label-preview-card code {
+  overflow: hidden;
+  color: var(--blue-bright);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label-preview-card span,
+.genealogy-row span,
+.shopping-row span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.shopping-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
 }
 
 .tenant-summary {
@@ -1839,6 +1895,8 @@ input[type='range'] {
   .movement-row,
   .document-row,
   .lot-row,
+  .lot-detail-card,
+  .shopping-row,
   .record-card,
   .formula-card,
   .formula-line,
@@ -1869,6 +1927,7 @@ input[type='range'] {
   .weighing-controls,
   .customization-form-grid,
   .material-form-grid,
+  .inventory-form-grid,
   .branding-preview {
     grid-template-columns: 1fr;
   }

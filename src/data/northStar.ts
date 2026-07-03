@@ -141,6 +141,8 @@ export interface ResolvedLeaf {
   sourcePath: string
 }
 
+export type LotQualityStatus = 'APPROVED' | 'QUARANTINE' | 'ON_HOLD' | 'REJECTED' | 'EXPIRED'
+
 export interface InventoryLot {
   id: string
   materialId: string
@@ -149,9 +151,17 @@ export interface InventoryLot {
   reservedGrams: number
   receivedDate: string
   expiryDate: string
-  qualityStatus: 'APPROVED' | 'QUARANTINE' | 'EXPIRED'
+  qualityStatus: LotQualityStatus
   location: string
   unitCost: number
+  supplierLotRef?: string
+  currency?: string
+  retestDate?: string
+  openedDate?: string
+  shelfLifeAfterOpeningDays?: number
+  container?: string
+  packaging?: string
+  coaDocumentId?: string
 }
 
 export interface InventoryMovement {
@@ -180,6 +190,44 @@ export interface StorageLocation {
   zone: string
   condition: string
   capacityGrams: number
+  parentId?: string
+  kind?: 'Warehouse' | 'Room' | 'Shelf' | 'Bin' | 'Transit'
+  light?: 'Dark' | 'Amber' | 'Ambient'
+  temperatureRange?: string
+  status?: 'ACTIVE' | 'IN_TRANSIT'
+}
+
+export interface StockTakeRecord {
+  id: string
+  at: string
+  lotId: string
+  lotNumber: string
+  expectedGrams: number
+  countedGrams: number
+  varianceGrams: number
+  reason: string
+  actor: string
+  status: 'MATCHED' | 'ADJUSTED'
+  movementId?: string
+}
+
+export interface LotLabelPayload {
+  lotId: string
+  lotNumber: string
+  materialName: string
+  storageText: string
+  qualityStatus: LotQualityStatus
+  expiryDate: string
+  qrValue: string
+}
+
+export interface InventoryReorderSuggestion {
+  materialId: string
+  materialName: string
+  availableGrams: number
+  reorderPointGrams: number
+  suggestedOrderGrams: number
+  reason: string
 }
 
 export type DocumentSensitivity = 'Internal' | 'Confidential' | 'Highly Confidential'
@@ -491,7 +539,7 @@ export const phases: Phase[] = [
   { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 84 },
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 90 },
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 90 },
-  { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, summary', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 80 },
+  { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, QC, stock take', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 92 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'testing', securityLayer: 'L5', coverage: 70 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, download audit', gate: 'Access and download logged', status: 'testing', securityLayer: 'L5', coverage: 62 },
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'testing', securityLayer: 'L5', coverage: 64 },
@@ -599,18 +647,18 @@ export const domains: DomainModule[] = [
     phase: '6',
     name: 'Lab Inventory Core',
     shortName: 'Inventory',
-    responsibility: 'Receipt, lot, immutable movement ledger, FEFO, summary',
+    responsibility: 'Receipt, lot, QC status, stock take, locations, immutable movement ledger, FEFO',
     status: 'active',
-    health: 80,
-    risk: 'Client ledger demonstrates no direct stock edit',
+    health: 92,
+    risk: 'Stock take and QC changes are controlled; quantity deltas still require immutable movement evidence',
     owner: 'Inventory',
-    entities: ['InventoryReceipt', 'InventoryLot', 'InventoryMovement', 'StockReservation'],
-    features: ['Receive stock', 'Movement ledger', 'Adjustment', 'Transfer', 'Shortfall list'],
+    entities: ['InventoryReceipt', 'InventoryLot', 'InventoryMovement', 'StorageLocation', 'StockTakeRecord', 'StockReservation'],
+    features: ['Receive stock', 'Movement ledger', 'Adjustment', 'Transfer', 'QC workflow', 'Stock take', 'QR label', 'Lot genealogy', 'Reorder suggestion'],
     invariants: ['INV-004 ledger source of truth', 'INV-005 no negative', 'INV-016 reservation != movement'],
-    apis: ['/api/v1/inventory/receipts', '/api/v1/lots', '/api/v1/inventory/adjustments'],
-    permissions: ['inventory.view', 'inventory.receive', 'inventory.adjust'],
-    screens: ['Lots', 'Ledger', 'Receipt form', 'Summary'],
-    activity: 'FEFO allocator excludes expired and quarantine lots',
+    apis: ['/api/v1/inventory/console', '/api/v1/inventory/receipts', '/api/v1/inventory/stock-takes', '/api/v1/lots/:id/quality', '/api/v1/lots/:id/label', '/api/v1/lots/:id/genealogy'],
+    permissions: ['inventory.view', 'inventory.receive', 'inventory.adjust', 'inventory.qc', 'inventory.stockTake'],
+    screens: ['Lots', 'Ledger', 'Receipt form', 'Summary', 'QC workflow', 'Stock take', 'Labels', 'Shopping list'],
+    activity: 'QC release, stock take reconciliation, labels, genealogy, and reorder suggestions are live',
   },
   {
     key: 'labUsage',
@@ -1034,26 +1082,195 @@ export const formulaVersions: FormulaVersionRecord[] = [
 ]
 
 export const initialLots: InventoryLot[] = [
-  { id: 'lot-iso-001', materialId: 'mat-iso', lotNumber: 'L-ISO-031', quantityGrams: 250, reservedGrams: 18, receivedDate: '2026-01-12', expiryDate: '2027-01-12', qualityStatus: 'APPROVED', location: 'Cold Room A', unitCost: 0.081 },
-  { id: 'lot-hed-001', materialId: 'mat-hedione', lotNumber: 'L-HED-014', quantityGrams: 186, reservedGrams: 0, receivedDate: '2026-03-04', expiryDate: '2028-03-04', qualityStatus: 'APPROVED', location: 'Amber Shelf 2', unitCost: 0.064 },
-  { id: 'lot-ber-001', materialId: 'mat-bergamot', lotNumber: 'L-BER-032', quantityGrams: 42, reservedGrams: 4, receivedDate: '2025-11-22', expiryDate: '2026-08-04', qualityStatus: 'APPROVED', location: 'Fridge B', unitCost: 0.19 },
-  { id: 'lot-amb-001', materialId: 'mat-ambroxan', lotNumber: 'L-AMB-006', quantityGrams: 38, reservedGrams: 0, receivedDate: '2026-02-11', expiryDate: '2029-02-11', qualityStatus: 'APPROVED', location: 'Vault C', unitCost: 0.31 },
-  { id: 'lot-mus-001', materialId: 'mat-muscenone', lotNumber: 'L-MUS-009', quantityGrams: 12, reservedGrams: 0, receivedDate: '2026-01-22', expiryDate: '2028-01-22', qualityStatus: 'APPROVED', location: 'Vault C', unitCost: 0.48 },
-  { id: 'lot-rose-001', materialId: 'mat-roseoxide', lotNumber: 'L-ROX-005', quantityGrams: 9, reservedGrams: 0, receivedDate: '2026-04-02', expiryDate: '2027-04-02', qualityStatus: 'QUARANTINE', location: 'QC Tray', unitCost: 0.27 },
-  { id: 'lot-rose-002', materialId: 'mat-roseoxide', lotNumber: 'L-ROX-006', quantityGrams: 6, reservedGrams: 0, receivedDate: '2026-04-18', expiryDate: '2027-04-18', qualityStatus: 'APPROVED', location: 'Vault C', unitCost: 0.28 },
-  { id: 'lot-van-001', materialId: 'mat-vanillin', lotNumber: 'L-VAN-021', quantityGrams: 80, reservedGrams: 3, receivedDate: '2026-02-03', expiryDate: '2029-02-03', qualityStatus: 'APPROVED', location: 'Dry Shelf 1', unitCost: 0.038 },
-  { id: 'lot-eth-001', materialId: 'mat-ethanol', lotNumber: 'L-ETH-210', quantityGrams: 1400, reservedGrams: 100, receivedDate: '2026-02-01', expiryDate: '2028-02-01', qualityStatus: 'APPROVED', location: 'Flammable Cabinet', unitCost: 0.012 },
+  {
+    id: 'lot-iso-001',
+    materialId: 'mat-iso',
+    lotNumber: 'L-ISO-031',
+    quantityGrams: 250,
+    reservedGrams: 18,
+    receivedDate: '2026-01-12',
+    expiryDate: '2027-01-12',
+    qualityStatus: 'APPROVED',
+    location: 'Cold Room A',
+    unitCost: 0.081,
+    supplierLotRef: 'SY-ISO-26-031',
+    currency: 'USD',
+    retestDate: '2026-10-12',
+    openedDate: '2026-02-04',
+    shelfLifeAfterOpeningDays: 365,
+    container: 'Amber glass bottle',
+    packaging: '250g bottle',
+  },
+  {
+    id: 'lot-hed-001',
+    materialId: 'mat-hedione',
+    lotNumber: 'L-HED-014',
+    quantityGrams: 186,
+    reservedGrams: 0,
+    receivedDate: '2026-03-04',
+    expiryDate: '2028-03-04',
+    qualityStatus: 'APPROVED',
+    location: 'Amber Shelf 2',
+    unitCost: 0.064,
+    supplierLotRef: 'HED-2026-011',
+    currency: 'USD',
+    retestDate: '2027-03-04',
+    container: 'HDPE canister',
+    packaging: '500g canister',
+    coaDocumentId: 'DOC-119',
+  },
+  {
+    id: 'lot-ber-001',
+    materialId: 'mat-bergamot',
+    lotNumber: 'L-BER-032',
+    quantityGrams: 42,
+    reservedGrams: 4,
+    receivedDate: '2025-11-22',
+    expiryDate: '2026-08-04',
+    qualityStatus: 'APPROVED',
+    location: 'Fridge B',
+    unitCost: 0.19,
+    supplierLotRef: 'CIT-BO-090',
+    currency: 'EUR',
+    retestDate: '2026-07-21',
+    openedDate: '2026-03-11',
+    shelfLifeAfterOpeningDays: 180,
+    container: 'Aluminum flask',
+    packaging: '100g flask',
+  },
+  {
+    id: 'lot-amb-001',
+    materialId: 'mat-ambroxan',
+    lotNumber: 'L-AMB-006',
+    quantityGrams: 38,
+    reservedGrams: 0,
+    receivedDate: '2026-02-11',
+    expiryDate: '2029-02-11',
+    qualityStatus: 'APPROVED',
+    location: 'Vault C',
+    unitCost: 0.31,
+    supplierLotRef: 'AMB-C-006',
+    currency: 'USD',
+    retestDate: '2028-02-11',
+    container: 'Sealed tin',
+    packaging: '50g tin',
+  },
+  {
+    id: 'lot-mus-001',
+    materialId: 'mat-muscenone',
+    lotNumber: 'L-MUS-009',
+    quantityGrams: 12,
+    reservedGrams: 0,
+    receivedDate: '2026-01-22',
+    expiryDate: '2028-01-22',
+    qualityStatus: 'APPROVED',
+    location: 'Vault C',
+    unitCost: 0.48,
+    supplierLotRef: 'MUS-7781',
+    currency: 'USD',
+    retestDate: '2027-01-22',
+    container: 'Amber vial',
+    packaging: '25g vial',
+  },
+  {
+    id: 'lot-rose-001',
+    materialId: 'mat-roseoxide',
+    lotNumber: 'L-ROX-005',
+    quantityGrams: 9,
+    reservedGrams: 0,
+    receivedDate: '2026-04-02',
+    expiryDate: '2027-04-02',
+    qualityStatus: 'QUARANTINE',
+    location: 'QC Tray',
+    unitCost: 0.27,
+    supplierLotRef: 'ROX-QC-005',
+    currency: 'USD',
+    retestDate: '2026-07-15',
+    container: 'QC sample vial',
+    packaging: '10g vial',
+  },
+  {
+    id: 'lot-rose-002',
+    materialId: 'mat-roseoxide',
+    lotNumber: 'L-ROX-006',
+    quantityGrams: 6,
+    reservedGrams: 0,
+    receivedDate: '2026-04-18',
+    expiryDate: '2027-04-18',
+    qualityStatus: 'APPROVED',
+    location: 'Vault C',
+    unitCost: 0.28,
+    supplierLotRef: 'ROX-006',
+    currency: 'USD',
+    retestDate: '2027-01-18',
+    container: 'Amber vial',
+    packaging: '10g vial',
+  },
+  {
+    id: 'lot-van-001',
+    materialId: 'mat-vanillin',
+    lotNumber: 'L-VAN-021',
+    quantityGrams: 80,
+    reservedGrams: 3,
+    receivedDate: '2026-02-03',
+    expiryDate: '2029-02-03',
+    qualityStatus: 'APPROVED',
+    location: 'Dry Shelf 1',
+    unitCost: 0.038,
+    supplierLotRef: 'VAN-2026-A',
+    currency: 'USD',
+    retestDate: '2028-02-03',
+    container: 'Fiber drum',
+    packaging: '1kg drum',
+  },
+  {
+    id: 'lot-eth-001',
+    materialId: 'mat-ethanol',
+    lotNumber: 'L-ETH-210',
+    quantityGrams: 1400,
+    reservedGrams: 100,
+    receivedDate: '2026-02-01',
+    expiryDate: '2028-02-01',
+    qualityStatus: 'APPROVED',
+    location: 'Flammable Cabinet',
+    unitCost: 0.012,
+    supplierLotRef: 'ETH-96-210',
+    currency: 'USD',
+    retestDate: '2027-02-01',
+    openedDate: '2026-05-14',
+    shelfLifeAfterOpeningDays: 365,
+    container: 'Safety can',
+    packaging: '2L can',
+  },
 ]
 
 export const storageLocations: StorageLocation[] = [
-  { id: 'loc-cold-a', name: 'Cold Room A', zone: 'Warehouse', condition: '15-18C / dark', capacityGrams: 5000 },
-  { id: 'loc-amber-2', name: 'Amber Shelf 2', zone: 'Lab', condition: 'Ambient / amber glass', capacityGrams: 2400 },
-  { id: 'loc-fridge-b', name: 'Fridge B', zone: 'QC', condition: '4-8C / citrus oils', capacityGrams: 1600 },
-  { id: 'loc-vault-c', name: 'Vault C', zone: 'Restricted', condition: 'Locked / high value', capacityGrams: 1200 },
-  { id: 'loc-dry-1', name: 'Dry Shelf 1', zone: 'Warehouse', condition: 'Low humidity', capacityGrams: 3200 },
-  { id: 'loc-flammable', name: 'Flammable Cabinet', zone: 'Safety', condition: 'Fire-rated', capacityGrams: 10000 },
-  { id: 'loc-qc-tray', name: 'QC Tray', zone: 'Quality', condition: 'Quarantine review', capacityGrams: 800 },
-  { id: 'loc-receiving', name: 'Receiving Bay', zone: 'Inbound', condition: 'Inspection pending', capacityGrams: 3000 },
+  { id: 'loc-wh', name: 'Main Warehouse', zone: 'Warehouse', condition: 'Controlled receiving', capacityGrams: 25000, kind: 'Warehouse', light: 'Ambient', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-cold-a', name: 'Cold Room A', zone: 'Warehouse', condition: '15-18C / dark', capacityGrams: 5000, parentId: 'loc-wh', kind: 'Room', light: 'Dark', temperatureRange: '15-18C', status: 'ACTIVE' },
+  { id: 'loc-amber-2', name: 'Amber Shelf 2', zone: 'Lab', condition: 'Ambient / amber glass', capacityGrams: 2400, parentId: 'loc-wh', kind: 'Shelf', light: 'Amber', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-fridge-b', name: 'Fridge B', zone: 'QC', condition: '4-8C / citrus oils', capacityGrams: 1600, parentId: 'loc-qc', kind: 'Room', light: 'Dark', temperatureRange: '4-8C', status: 'ACTIVE' },
+  { id: 'loc-vault-c', name: 'Vault C', zone: 'Restricted', condition: 'Locked / high value', capacityGrams: 1200, parentId: 'loc-wh', kind: 'Room', light: 'Dark', temperatureRange: '18-20C', status: 'ACTIVE' },
+  { id: 'loc-dry-1', name: 'Dry Shelf 1', zone: 'Warehouse', condition: 'Low humidity', capacityGrams: 3200, parentId: 'loc-wh', kind: 'Shelf', light: 'Ambient', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-flammable', name: 'Flammable Cabinet', zone: 'Safety', condition: 'Fire-rated', capacityGrams: 10000, parentId: 'loc-wh', kind: 'Bin', light: 'Dark', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-qc', name: 'QC Lab', zone: 'Quality', condition: 'Inspection and release', capacityGrams: 2600, kind: 'Room', light: 'Ambient', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-qc-tray', name: 'QC Tray', zone: 'Quality', condition: 'Quarantine review', capacityGrams: 800, parentId: 'loc-qc', kind: 'Bin', light: 'Amber', temperatureRange: '18-22C', status: 'ACTIVE' },
+  { id: 'loc-receiving', name: 'Receiving Bay', zone: 'Inbound', condition: 'Inspection pending', capacityGrams: 3000, parentId: 'loc-wh', kind: 'Transit', light: 'Ambient', temperatureRange: '18-25C', status: 'IN_TRANSIT' },
+]
+
+export const stockTakeRecords: StockTakeRecord[] = [
+  {
+    id: 'STK-2026-021',
+    at: '2026-06-27T09:10:00.000Z',
+    lotId: 'lot-ber-001',
+    lotNumber: 'L-BER-032',
+    expectedGrams: 42.3,
+    countedGrams: 42,
+    varianceGrams: -0.3,
+    reason: 'Cycle count citrus fridge',
+    actor: 'Inventory Manager',
+    status: 'ADJUSTED',
+    movementId: 'MOV-1024',
+  },
 ]
 
 export const initialMovements: InventoryMovement[] = [
@@ -1842,13 +2059,23 @@ export function evaporationCurve(leaves: ResolvedLeaf[]) {
   })
 }
 
+export const inventoryAsOfDate = '2026-07-03'
+
+export function lotIsExpired(lot: InventoryLot, asOfDate = inventoryAsOfDate) {
+  return lot.qualityStatus === 'EXPIRED' || lot.expiryDate < asOfDate
+}
+
+export function isLotEligibleForInventory(lot: InventoryLot, asOfDate = inventoryAsOfDate) {
+  return lot.qualityStatus === 'APPROVED' && !lotIsExpired(lot, asOfDate)
+}
+
 export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
   return materialCatalog.map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)
     const reserved = materialLots.reduce((sum, lot) => sum + lot.reservedGrams, 0)
     const available = materialLots
-      .filter((lot) => lot.qualityStatus === 'APPROVED')
+      .filter((lot) => isLotEligibleForInventory(lot))
       .reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
     return { material, current, reserved, available }
   })
@@ -1864,7 +2091,7 @@ export function planLabUsage(leaves: ResolvedLeaf[], lots: InventoryLot[], batch
     const required = leaf.grams * multiplier
     let remaining = required
     const eligibleLots = lots
-      .filter((lot) => lot.materialId === leaf.materialId && lot.qualityStatus === 'APPROVED')
+      .filter((lot) => lot.materialId === leaf.materialId && isLotEligibleForInventory(lot))
       .sort((a, b) => {
         const expirySort = a.expiryDate.localeCompare(b.expiryDate)
         return expirySort || a.receivedDate.localeCompare(b.receivedDate)

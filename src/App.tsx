@@ -93,9 +93,12 @@ import {
   type Formula,
   type FormulaLine,
   type FormulaVersionRecord,
+  type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type LotLabelPayload,
+  type LotQualityStatus,
   type Material,
   type MembershipRecord,
   type MoleculeComponent,
@@ -105,6 +108,8 @@ import {
   type ResolvedLeaf,
   type RolePolicy,
   type SignedDocumentUrl,
+  type StockTakeRecord,
+  type StorageLocation,
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
 } from './data/northStar'
@@ -275,6 +280,75 @@ type FormulaExportResponse = {
   formula: Formula
   document: DocumentRecord
   audit: AuditEvent
+  invariant: string
+}
+
+type InventoryReceiptResponse = {
+  lot: InventoryLot
+  movement: InventoryMovement
+  summary?: ReturnType<typeof stockSummary>[number]
+  invariant: string
+}
+
+type InventoryAdjustmentResponse = InventoryReceiptResponse
+
+type InventoryTransferResponse = InventoryReceiptResponse
+
+type InventoryConsoleResponse = {
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
+  locations: StorageLocation[]
+  stockTakes: StockTakeRecord[]
+  summary: ReturnType<typeof stockSummary>
+  reorderSuggestions: InventoryReorderSuggestion[]
+  invariant: string
+}
+
+type LotQualityResponse = {
+  lot: InventoryLot
+  audit: AuditEvent
+  summary?: ReturnType<typeof stockSummary>[number]
+  movementCount: number
+  reason: string
+  invariant: string
+}
+
+type StockTakeResponse = {
+  lot: InventoryLot
+  movement?: InventoryMovement
+  stockTake: StockTakeRecord
+  summary?: ReturnType<typeof stockSummary>[number]
+  invariant: string
+}
+
+type LotLabelResponse = {
+  label: LotLabelPayload
+  invariant: string
+}
+
+type LotGenealogyResponse = {
+  lot: InventoryLot
+  material: Material
+  agingDays: number
+  movements: InventoryMovement[]
+  documents: DocumentRecord[]
+  downstreamRefs: {
+    ref: string
+    type: InventoryMovement['type']
+    quantityGrams: number
+    at: string
+  }[]
+  eligibility: 'ELIGIBLE' | 'BLOCKED'
+  invariant: string
+}
+
+type InventoryReorderResponse = {
+  suggestions: InventoryReorderSuggestion[]
+  invariant: string
+}
+
+type StorageLocationCreateResponse = {
+  location: StorageLocation
   invariant: string
 }
 
@@ -464,6 +538,7 @@ function App() {
   const [activeFormulaId, setActiveFormulaId] = useState('frm-0421')
   const [lots, setLots] = useState<InventoryLot[]>(initialLots)
   const [movements, setMovements] = useState<InventoryMovement[]>(initialMovements)
+  const [storageLocationRecords, setStorageLocationRecords] = useState<StorageLocation[]>(storageLocations)
   const [usageHistory, setUsageHistory] = useState<UsageRecord[]>([])
   const [batchGrams, setBatchGrams] = useState(12.5)
   const [actualWeights, setActualWeights] = useState<Record<string, number>>({})
@@ -700,7 +775,7 @@ function App() {
     }
   }
 
-  function receiveStockLot() {
+  async function receiveStockLot() {
     const material = materialRecords.find((item) => item.id === receiveMaterialId)
     const quantityGrams = Number(receiveQuantityGrams)
 
@@ -708,41 +783,33 @@ function App() {
       return
     }
 
-    const timestamp = new Date().toISOString()
-    const lot: InventoryLot = {
-      id: `lot-ui-${Date.now()}`,
-      materialId: material.id,
-      lotNumber: receiveLotNumber.trim() || `L-${material.cas.replaceAll('-', '')}`,
-      quantityGrams,
-      reservedGrams: 0,
-      receivedDate: timestamp.slice(0, 10),
-      expiryDate: receiveExpiryDate || '2028-12-31',
-      qualityStatus: 'APPROVED',
-      location: 'Receiving Bay',
-      unitCost: material.costPerGram,
-    }
-    const movement: InventoryMovement = {
-      id: `MOV-REC-${String(movements.length + 1029).padStart(4, '0')}`,
-      at: timestamp,
-      type: 'RECEIPT',
-      direction: 'IN',
-      materialId: material.id,
-      lotId: lot.id,
-      quantityGrams,
-      balanceAfter: lot.quantityGrams,
-      ref: `GR-UI-${String(lots.length + 42).padStart(3, '0')}`,
-      actor: 'Inventory Manager',
-    }
+    try {
+      const payload = await requestApi<InventoryReceiptResponse>('/inventory/receipts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          materialId: material.id,
+          lotNumber: receiveLotNumber.trim() || `L-${material.cas.replaceAll('-', '')}`,
+          quantityGrams,
+          expiryDate: receiveExpiryDate || '2028-12-31',
+          location: 'Receiving Bay',
+          qualityStatus: 'APPROVED',
+          container: 'Receiving container',
+        }),
+      })
 
-    setLots((current) => [lot, ...current])
-    setMovements((current) => [movement, ...current])
-    setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
-    setReceiveQuantityGrams(25)
-    setActiveKey('inventory')
-    setModal(null)
+      setLots((current) => [payload.lot, ...current.filter((lot) => lot.id !== payload.lot.id)])
+      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
+      setReceiveQuantityGrams(25)
+      setActiveKey('inventory')
+      setModal(null)
+    } catch {
+      setActiveKey('inventory')
+    }
   }
 
-  function adjustInventoryLot() {
+  async function adjustInventoryLot() {
     const lot = lots.find((item) => item.id === adjustmentLotId)
     const quantityGrams = Number(adjustmentQuantityGrams)
 
@@ -756,30 +823,29 @@ function App() {
       return
     }
 
-    const timestamp = new Date().toISOString()
-    const movement: InventoryMovement = {
-      id: `MOV-ADJ-${String(movements.length + 1029).padStart(4, '0')}`,
-      at: timestamp,
-      type: 'ADJUSTMENT',
-      direction: adjustmentDirection,
-      materialId: lot.materialId,
-      lotId: lot.id,
-      quantityGrams,
-      balanceAfter: nextQuantity,
-      ref: adjustmentReason.trim() || 'Cycle count correction',
-      actor: 'Inventory Manager',
-    }
+    try {
+      const payload = await requestApi<InventoryAdjustmentResponse>('/inventory/adjustments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lotId: lot.id,
+          direction: adjustmentDirection,
+          quantityGrams,
+          reason: adjustmentReason.trim() || 'Cycle count correction',
+        }),
+      })
 
-    setLots((current) =>
-      current.map((item) => (item.id === lot.id ? { ...item, quantityGrams: nextQuantity } : item)),
-    )
-    setMovements((current) => [movement, ...current])
-    setAdjustmentQuantityGrams(5)
-    setActiveKey('inventory')
-    setModal(null)
+      setLots((current) => current.map((item) => (item.id === payload.lot.id ? payload.lot : item)))
+      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setAdjustmentQuantityGrams(5)
+      setActiveKey('inventory')
+      setModal(null)
+    } catch {
+      setActiveKey('inventory')
+    }
   }
 
-  function transferInventoryLot() {
+  async function transferInventoryLot() {
     const lot = lots.find((item) => item.id === transferLotId)
     const toLocation = transferLocation.trim()
 
@@ -787,24 +853,20 @@ function App() {
       return
     }
 
-    const timestamp = new Date().toISOString()
-    const movement: InventoryMovement = {
-      id: `MOV-XFER-${String(movements.length + 1029).padStart(4, '0')}`,
-      at: timestamp,
-      type: 'TRANSFER',
-      direction: 'MOVE',
-      materialId: lot.materialId,
-      lotId: lot.id,
-      quantityGrams: lot.quantityGrams,
-      balanceAfter: lot.quantityGrams,
-      ref: `${lot.location} -> ${toLocation}`,
-      actor: 'Inventory Manager',
-    }
+    try {
+      const payload = await requestApi<InventoryTransferResponse>('/inventory/transfers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lotId: lot.id, toLocation }),
+      })
 
-    setLots((current) => current.map((item) => (item.id === lot.id ? { ...item, location: toLocation } : item)))
-    setMovements((current) => [movement, ...current])
-    setActiveKey('inventory')
-    setModal(null)
+      setLots((current) => current.map((item) => (item.id === payload.lot.id ? payload.lot : item)))
+      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setActiveKey('inventory')
+      setModal(null)
+    } catch {
+      setActiveKey('inventory')
+    }
   }
 
   return (
@@ -840,8 +902,12 @@ function App() {
                   domain={selectedDomain}
                   lots={lots}
                   movements={movements}
+                  storageLocations={storageLocationRecords}
                   stock={stock}
                   materialRecords={materialRecords}
+                  onLotsChange={setLots}
+                  onMovementsChange={setMovements}
+                  onStorageLocationsChange={setStorageLocationRecords}
                   setMaterialRecords={setMaterialRecords}
                   formulaRecords={formulaRecords}
                   setFormulaRecords={setFormulaRecords}
@@ -1134,7 +1200,7 @@ function App() {
               value={transferLocation}
               onChange={(event) => setTransferLocation(event.target.value)}
             >
-              {storageLocations.map((location) => (
+              {storageLocationRecords.map((location) => (
                 <option key={location.id} value={location.name}>
                   {location.name} / {location.condition}
                 </option>
@@ -1350,8 +1416,12 @@ function DomainWorkspace({
   domain,
   lots,
   movements,
+  storageLocations,
   stock,
   materialRecords,
+  onLotsChange,
+  onMovementsChange,
+  onStorageLocationsChange,
   setMaterialRecords,
   formulaRecords,
   setFormulaRecords,
@@ -1387,8 +1457,12 @@ function DomainWorkspace({
   domain: DomainModule
   lots: InventoryLot[]
   movements: InventoryMovement[]
+  storageLocations: StorageLocation[]
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  onLotsChange: Dispatch<SetStateAction<InventoryLot[]>>
+  onMovementsChange: Dispatch<SetStateAction<InventoryMovement[]>>
+  onStorageLocationsChange: Dispatch<SetStateAction<StorageLocation[]>>
   setMaterialRecords: (materials: Material[]) => void
   formulaRecords: Formula[]
   setFormulaRecords: Dispatch<SetStateAction<Formula[]>>
@@ -1453,8 +1527,12 @@ function DomainWorkspace({
         <InventoryWorkspace
           lots={lots}
           movements={movements}
+          storageLocations={storageLocations}
           stock={stock}
           materialRecords={materialRecords}
+          onLotsChange={onLotsChange}
+          onMovementsChange={onMovementsChange}
+          onStorageLocationsChange={onStorageLocationsChange}
           onReceiveStock={onReceiveStock}
           onAdjustStock={onAdjustStock}
           onTransferStock={onTransferStock}
@@ -2508,20 +2586,200 @@ function FormulaWorkspace({
 function InventoryWorkspace({
   lots,
   movements,
+  storageLocations,
   stock,
   materialRecords,
+  onLotsChange,
+  onMovementsChange,
+  onStorageLocationsChange,
   onReceiveStock,
   onAdjustStock,
   onTransferStock,
 }: {
   lots: InventoryLot[]
   movements: InventoryMovement[]
+  storageLocations: StorageLocation[]
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  onLotsChange: Dispatch<SetStateAction<InventoryLot[]>>
+  onMovementsChange: Dispatch<SetStateAction<InventoryMovement[]>>
+  onStorageLocationsChange: Dispatch<SetStateAction<StorageLocation[]>>
   onReceiveStock: () => void
   onAdjustStock: () => void
   onTransferStock: () => void
 }) {
+  const [selectedLotId, setSelectedLotId] = useState(lots[0]?.id ?? '')
+  const [qualityStatus, setQualityStatus] = useState<LotQualityStatus>('APPROVED')
+  const [qualityReason, setQualityReason] = useState('QC release review')
+  const [stockTakeCount, setStockTakeCount] = useState(0)
+  const [stockTakeReason, setStockTakeReason] = useState('Cycle count reconciliation')
+  const [stockTakeRecords, setStockTakeRecords] = useState<StockTakeRecord[]>([])
+  const [labelPayload, setLabelPayload] = useState<LotLabelPayload | null>(null)
+  const [genealogy, setGenealogy] = useState<LotGenealogyResponse | null>(null)
+  const [reorderSuggestions, setReorderSuggestions] = useState<InventoryReorderSuggestion[]>([])
+  const [newLocationName, setNewLocationName] = useState('Retest Bin 1')
+  const [newLocationZone, setNewLocationZone] = useState('Quality')
+  const [newLocationCapacity, setNewLocationCapacity] = useState(600)
+  const [inventoryStatus, setInventoryStatus] = useState('Phase 6 console ready')
+  const selectedLot = lots.find((lot) => lot.id === selectedLotId) ?? lots[0]
+  const selectedMaterial = selectedLot ? materialRecords.find((material) => material.id === selectedLot.materialId) : undefined
+  const selectedLocation = selectedLot ? storageLocations.find((location) => location.name === selectedLot.location) : undefined
+
+  useEffect(() => {
+    if (lots.length === 0) {
+      setSelectedLotId('')
+      return
+    }
+    if (!selectedLotId || !lots.some((lot) => lot.id === selectedLotId)) {
+      setSelectedLotId(lots[0]?.id ?? '')
+    }
+  }, [lots, selectedLotId])
+
+  useEffect(() => {
+    if (!selectedLot) {
+      return
+    }
+    setQualityStatus(selectedLot.qualityStatus)
+    setStockTakeCount(Number(selectedLot.quantityGrams.toFixed(3)))
+  }, [selectedLot])
+
+  useEffect(() => {
+    let active = true
+    requestApi<InventoryConsoleResponse>('/inventory/console')
+      .then((payload) => {
+        if (!active) {
+          return
+        }
+        onLotsChange(payload.lots)
+        onMovementsChange(payload.movements)
+        onStorageLocationsChange(payload.locations)
+        setStockTakeRecords(payload.stockTakes)
+        setReorderSuggestions(payload.reorderSuggestions)
+        setInventoryStatus('Inventory console synced with API')
+      })
+      .catch(() => {
+        if (active) {
+          setInventoryStatus('API sync unavailable, showing local seed data')
+        }
+      })
+    return () => {
+      active = false
+    }
+  }, [onLotsChange, onMovementsChange, onStorageLocationsChange])
+
+  function upsertLot(lot: InventoryLot) {
+    onLotsChange((current) => current.map((item) => (item.id === lot.id ? lot : item)))
+  }
+
+  function prependMovement(movement?: InventoryMovement) {
+    if (!movement) {
+      return
+    }
+    onMovementsChange((current) => [movement, ...current.filter((item) => item.id !== movement.id)])
+  }
+
+  async function updateLotQuality() {
+    if (!selectedLot) {
+      return
+    }
+    try {
+      const payload = await requestApi<LotQualityResponse>(`/lots/${encodeURIComponent(selectedLot.id)}/quality`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qualityStatus, reason: qualityReason }),
+      })
+      upsertLot(payload.lot)
+      setInventoryStatus(`${payload.lot.lotNumber} moved to ${payload.lot.qualityStatus} with no stock movement`)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'QC status update failed')
+    }
+  }
+
+  async function reconcileStockTake() {
+    if (!selectedLot) {
+      return
+    }
+    try {
+      const payload = await requestApi<StockTakeResponse>('/inventory/stock-takes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lotId: selectedLot.id,
+          countedGrams: stockTakeCount,
+          reason: stockTakeReason,
+          actor: 'Inventory Manager',
+        }),
+      })
+      upsertLot(payload.lot)
+      prependMovement(payload.movement)
+      setStockTakeRecords((current) => [payload.stockTake, ...current.filter((item) => item.id !== payload.stockTake.id)])
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Stock take failed')
+    }
+  }
+
+  async function createLocation() {
+    try {
+      const payload = await requestApi<StorageLocationCreateResponse>('/storage-locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newLocationName,
+          zone: newLocationZone,
+          condition: 'Retest hold / controlled ambient',
+          capacityGrams: newLocationCapacity,
+          kind: 'Bin',
+          light: 'Amber',
+          temperatureRange: '18-22C',
+        }),
+      })
+      onStorageLocationsChange((current) => [payload.location, ...current.filter((item) => item.id !== payload.location.id)])
+      setNewLocationName(`Retest Bin ${storageLocations.length + 1}`)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Location create failed')
+    }
+  }
+
+  async function printLotLabel() {
+    if (!selectedLot) {
+      return
+    }
+    try {
+      const payload = await requestApi<LotLabelResponse>(`/lots/${encodeURIComponent(selectedLot.id)}/label`, {
+        method: 'POST',
+      })
+      setLabelPayload(payload.label)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Label generation failed')
+    }
+  }
+
+  async function loadLotGenealogy() {
+    if (!selectedLot) {
+      return
+    }
+    try {
+      const payload = await requestApi<LotGenealogyResponse>(`/lots/${encodeURIComponent(selectedLot.id)}/genealogy`)
+      setGenealogy(payload)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Genealogy lookup failed')
+    }
+  }
+
+  async function generateShoppingList() {
+    try {
+      const payload = await requestApi<InventoryReorderResponse>('/inventory/reorder-suggestions')
+      setReorderSuggestions(payload.suggestions)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Shopping list generation failed')
+    }
+  }
+
   return (
     <div className="workspace-grid inventory-grid">
       <Panel
@@ -2556,9 +2814,140 @@ function InventoryWorkspace({
         </div>
       </Panel>
 
+      <Panel title="Inventory Operations" icon={ClipboardCheck} right={<DataTag label="Status" value={inventoryStatus} tone="blue" />}>
+        {selectedLot ? (
+          <div className="inventory-ops">
+            <label className="field-row wide-field">
+              <span>Active lot</span>
+              <select
+                aria-label="Inventory active lot"
+                value={selectedLot.id}
+                onChange={(event) => setSelectedLotId(event.target.value)}
+              >
+                {lots.map((lot) => {
+                  const material = materialRecords.find((item) => item.id === lot.materialId)
+                  return (
+                    <option key={lot.id} value={lot.id}>
+                      {lot.lotNumber} / {material?.name ?? lot.materialId} / {lot.qualityStatus}
+                    </option>
+                  )
+                })}
+              </select>
+            </label>
+            <div className="lot-detail-card">
+              <div>
+                <strong>{selectedLot.lotNumber}</strong>
+                <span>{selectedMaterial?.name ?? selectedLot.materialId}</span>
+              </div>
+              <DataTag label="Qty" value={formatGrams(selectedLot.quantityGrams)} />
+              <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
+              <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
+              <DataTag label="Location" value={selectedLot.location} tone="blue" />
+              <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
+              <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
+            </div>
+
+            <div className="inventory-form-grid">
+              <label className="field-row">
+                <span>QC status</span>
+                <select
+                  aria-label="Lot quality status"
+                  value={qualityStatus}
+                  onChange={(event) => setQualityStatus(event.target.value as LotQualityStatus)}
+                >
+                  <option value="APPROVED">APPROVED - eligible</option>
+                  <option value="QUARANTINE">QUARANTINE - receiving hold</option>
+                  <option value="ON_HOLD">ON_HOLD - retest</option>
+                  <option value="REJECTED">REJECTED - blocked</option>
+                  <option value="EXPIRED">EXPIRED - blocked</option>
+                </select>
+              </label>
+              <label className="field-row">
+                <span>QC reason</span>
+                <input
+                  aria-label="Lot quality reason"
+                  value={qualityReason}
+                  onChange={(event) => setQualityReason(event.target.value)}
+                />
+              </label>
+              <button className="primary-button" type="button" onClick={() => void updateLotQuality()}>
+                Update QC
+              </button>
+            </div>
+
+            <div className="inventory-form-grid">
+              <label className="field-row">
+                <span>Counted grams</span>
+                <input
+                  aria-label="Stock take counted grams"
+                  min={0}
+                  step={0.1}
+                  type="number"
+                  value={stockTakeCount}
+                  onChange={(event) => setStockTakeCount(Number(event.target.value))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Count reason</span>
+                <input
+                  aria-label="Stock take reason"
+                  value={stockTakeReason}
+                  onChange={(event) => setStockTakeReason(event.target.value)}
+                />
+              </label>
+              <button className="primary-button" type="button" onClick={() => void reconcileStockTake()}>
+                Stock Take
+              </button>
+            </div>
+
+            <div className="action-row">
+              <button className="ghost-button small" type="button" onClick={() => void printLotLabel()}>
+                Print QR Label
+              </button>
+              <button className="ghost-button small" type="button" onClick={() => void loadLotGenealogy()}>
+                View Genealogy
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state">No inventory lots are available yet.</div>
+        )}
+      </Panel>
+
       <Panel title="Storage Locations" icon={PackageSearch}>
+        <div className="inventory-form-grid">
+          <label className="field-row">
+            <span>New location</span>
+            <input
+              aria-label="New storage location name"
+              value={newLocationName}
+              onChange={(event) => setNewLocationName(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Zone</span>
+            <input
+              aria-label="New storage location zone"
+              value={newLocationZone}
+              onChange={(event) => setNewLocationZone(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Capacity grams</span>
+            <input
+              aria-label="New storage location capacity"
+              min={1}
+              type="number"
+              value={newLocationCapacity}
+              onChange={(event) => setNewLocationCapacity(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void createLocation()} disabled={!newLocationName.trim() || newLocationCapacity <= 0}>
+            New Location
+          </button>
+        </div>
         <div className="material-list">
-          {storageLocations.slice(0, 6).map((location) => {
+          {storageLocations.slice(0, 8).map((location) => {
             const storedGrams = lots
               .filter((lot) => lot.location === location.name)
               .reduce((sum, lot) => sum + lot.quantityGrams, 0)
@@ -2566,12 +2955,62 @@ function InventoryWorkspace({
               <div className="material-row static" key={location.id}>
                 <div>
                   <strong>{location.name}</strong>
-                  <span>{location.zone} / {location.condition}</span>
+                  <span>{location.zone} / {location.kind ?? 'Location'} / {location.condition}</span>
                 </div>
                 <div className="mono-value">{formatGrams(storedGrams)}</div>
+                <StatusBadge status={location.status === 'IN_TRANSIT' ? 'review' : 'stable'} label={location.status ?? 'ACTIVE'} />
               </div>
             )
           })}
+        </div>
+      </Panel>
+
+      <Panel title="Labels, Genealogy & Shopping List" icon={ShoppingCart}>
+        <div className="action-row">
+          <button className="primary-button" type="button" onClick={() => void generateShoppingList()}>
+            Generate Shopping List
+          </button>
+          {selectedLocation && <DataTag label="Storage" value={selectedLocation.condition} tone="blue" />}
+        </div>
+        {labelPayload && (
+          <div className="label-preview-card">
+            <strong>{labelPayload.materialName}</strong>
+            <span>{labelPayload.lotNumber} / {labelPayload.storageText}</span>
+            <code>{labelPayload.qrValue}</code>
+          </div>
+        )}
+        {genealogy && (
+          <div className="genealogy-list">
+            <div className="genealogy-row">
+              <strong>{genealogy.material.name}</strong>
+              <span>{genealogy.eligibility} / aging {genealogy.agingDays}d</span>
+            </div>
+            <div className="genealogy-row">
+              <strong>Ledger events</strong>
+              <span>{genealogy.movements.length} movement(s), {genealogy.documents.length} document(s)</span>
+            </div>
+            {genealogy.downstreamRefs.slice(0, 3).map((ref) => (
+              <div className="genealogy-row" key={`${ref.ref}-${ref.at}`}>
+                <strong>{ref.type}</strong>
+                <span>{ref.ref} / {formatGrams(ref.quantityGrams)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="shopping-list">
+          {reorderSuggestions.length === 0 ? (
+            <div className="empty-state compact">No reorder suggestions generated yet.</div>
+          ) : (
+            reorderSuggestions.slice(0, 5).map((suggestion) => (
+              <div className="shopping-row" key={suggestion.materialId}>
+                <div>
+                  <strong>{suggestion.materialName}</strong>
+                  <span>{suggestion.reason}</span>
+                </div>
+                <span className="mono-value">{formatGrams(suggestion.suggestedOrderGrams)}</span>
+              </div>
+            ))
+          )}
         </div>
       </Panel>
 
@@ -2606,9 +3045,33 @@ function InventoryWorkspace({
                 <span className="mono-value">{formatGrams(lot.quantityGrams)}</span>
                 <span className="mono-value">reserved {formatGrams(lot.reservedGrams)}</span>
                 <span className="mono-value">{lot.expiryDate}</span>
+                <button className="ghost-button tiny" type="button" onClick={() => setSelectedLotId(lot.id)}>
+                  Select
+                </button>
               </div>
             )
           })}
+        </div>
+      </Panel>
+
+      <Panel className="wide" title="Stock Take Evidence" icon={ClipboardCheck}>
+        <div className="movement-table">
+          {stockTakeRecords.length === 0 ? (
+            <div className="empty-state">No stock take records synced yet.</div>
+          ) : (
+            stockTakeRecords.slice(0, 5).map((record) => (
+              <div className="movement-row" key={record.id}>
+                <span className="mono-value">{record.id}</span>
+                <div>
+                  <strong>{record.lotNumber}</strong>
+                  <span>{record.reason}</span>
+                </div>
+                <StatusBadge status={record.status === 'MATCHED' ? 'stable' : 'review'} label={record.status} />
+                <span className="mono-value">expected {formatGrams(record.expectedGrams)}</span>
+                <span className="mono-value">counted {formatGrams(record.countedGrams)}</span>
+              </div>
+            ))
+          )}
         </div>
       </Panel>
 
@@ -4494,7 +4957,7 @@ function BlackPopup({
   actionLabel: string
   actionDisabled?: boolean
   onClose: () => void
-  onAction: () => void
+  onAction: () => void | Promise<void>
   children: ReactNode
 }) {
   return (
@@ -4521,7 +4984,7 @@ function BlackPopup({
               <button className="ghost-button" type="button" onClick={onClose}>
                 Cancel
               </button>
-              <button className="primary-button" type="button" onClick={onAction} disabled={actionDisabled}>
+              <button className="primary-button" type="button" onClick={() => void onAction()} disabled={actionDisabled}>
                 {actionLabel}
               </button>
             </div>

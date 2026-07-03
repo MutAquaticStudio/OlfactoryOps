@@ -552,6 +552,87 @@ describe('NorthStarService', () => {
     expect(transfer.invariant).toContain('without changing stock quantity')
   })
 
+  it('changes lot quality eligibility without creating a stock movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const beforeSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-hedione')
+    const quality = service.changeLotQuality('lot-hed-001', {
+      qualityStatus: 'ON_HOLD',
+      reason: 'Retest required',
+    }).data
+    const afterSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-hedione')
+
+    expect(quality.lot.qualityStatus).toBe('ON_HOLD')
+    expect(quality.movementCount).toBe(beforeMovements)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(afterSummary?.available).toBeLessThan(beforeSummary?.available ?? 0)
+    expect(quality.invariant).toContain('creates no inventory movement')
+  })
+
+  it('reconciles stock take variance through immutable adjustment movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const stockTake = service.performStockTake({
+      lotId: 'lot-hed-001',
+      countedGrams: 182.5,
+      reason: 'Cycle count shelf A',
+      actor: 'Inventory Manager',
+    }).data
+
+    expect(stockTake.lot.quantityGrams).toBe(182.5)
+    expect(stockTake.stockTake.status).toBe('ADJUSTED')
+    expect(stockTake.stockTake.varianceGrams).toBe(-3.5)
+    expect(stockTake.movement?.type).toBe('ADJUSTMENT')
+    expect(stockTake.movement?.direction).toBe('OUT')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements + 1)
+    expect(stockTake.invariant).toContain('immutable ADJUSTMENT movement')
+
+    expect(() =>
+      service.performStockTake({
+        lotId: 'lot-iso-001',
+        countedGrams: 10,
+        reason: 'Invalid cycle count',
+      }),
+    ).toThrow(UnprocessableEntityException)
+  })
+
+  it('records matched stock take without moving inventory', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const stockTake = service.performStockTake({
+      lotId: 'lot-amb-001',
+      countedGrams: 38,
+      reason: 'Vault cycle count',
+    }).data
+
+    expect(stockTake.stockTake.status).toBe('MATCHED')
+    expect(stockTake.movement).toBeUndefined()
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(stockTake.invariant).toContain('without changing stock quantity')
+  })
+
+  it('generates lot labels, genealogy, locations, and shopping list without stock movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const location = service.createStorageLocation({
+      name: 'Retest Bin 1',
+      zone: 'Quality',
+      condition: 'Retest hold',
+      capacityGrams: 600,
+    }).data
+    const label = service.lotLabel('lot-hed-001').data
+    const genealogy = service.lotGenealogy('lot-hed-001').data
+    const suggestions = service.inventoryReorderSuggestions().data
+
+    expect(location.location.name).toBe('Retest Bin 1')
+    expect(label.label.qrValue).toContain('OLFOPS|LOT|lot-hed-001')
+    expect(genealogy.material.id).toBe('mat-hedione')
+    expect(genealogy.documents.some((document) => document.id === 'DOC-119')).toBe(true)
+    expect(suggestions.suggestions.length).toBeGreaterThan(0)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(suggestions.invariant).toContain('without reserving or moving inventory')
+  })
+
   it('runs production consumption separately from lab usage', () => {
     const service = new NorthStarService()
     const batch = service.createProductionBatch('frm-0421', 25).data
