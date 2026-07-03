@@ -148,6 +148,28 @@ describe('NorthStarService', () => {
     expect(latestAudit?.outcome).toBe('blocked')
   })
 
+  it('reports compliance coverage and generates review-gated documents', () => {
+    const service = new NorthStarService()
+    const before = service.documentComplianceDashboard().data
+    expect(before.missingCount).toBeGreaterThan(0)
+    expect(before.expiringDocuments.some((document) => document.id === 'DOC-118')).toBe(true)
+
+    const result = service.generateDocument({
+      type: 'CoA',
+      linkedTo: 'lot-iso-001',
+      actor: 'Compliance Lead',
+    }).data
+
+    expect(result.document.type).toBe('CoA')
+    expect(result.document.linkedTo).toBe('lot-iso-001')
+    expect(result.document.status).toBe('REVIEW_REQUIRED')
+    expect(result.document.generatedFrom).toBe('lot:lot-iso-001')
+    expect(result.audit.action).toBe('document.generate')
+    expect(result.audit.outcome).toBe('review')
+    expect(result.dashboard.generatedCount).toBe(1)
+    expect(result.dashboard.requirements.find((item) => item.id === 'REQ-COA-lot-iso-001')?.status).toBe('review')
+  })
+
   it('blocks cross-tenant and missing-permission probes', () => {
     const service = new NorthStarService()
 

@@ -52,6 +52,7 @@ import {
   brands,
   customFields,
   documents,
+  documentComplianceDashboard,
   domains,
   evaporationCurve,
   featureFlags,
@@ -73,6 +74,7 @@ import {
   records,
   resolveFormulaWithCatalog,
   rolePolicies,
+  salesOrders,
   statusMeta,
   storageLocations,
   stockSummary,
@@ -86,6 +88,8 @@ import {
   type BrandingConfig,
   type CustomFieldDefinition,
   type DocumentRecord,
+  type DocumentComplianceDashboard,
+  type DocumentType,
   type DomainKey,
   type DomainModule,
   type DomainStatus,
@@ -137,6 +141,13 @@ type DocumentDownloadResponse = {
   document: DocumentRecord
   signedUrl: SignedDocumentUrl
   audit: AuditEvent
+  invariant: string
+}
+
+type DocumentGenerationResponse = {
+  document: DocumentRecord
+  audit: AuditEvent
+  dashboard: DocumentComplianceDashboard
   invariant: string
 }
 
@@ -419,6 +430,15 @@ const workflowNodes: { key: DomainKey; label: string; detail: string }[] = [
   { key: 'production', label: 'Production', detail: 'Batch and QC' },
   { key: 'orders', label: 'Orders', detail: 'Reserve then fulfill' },
   { key: 'analytics', label: 'Analytics', detail: 'Read-only intelligence' },
+]
+
+const generatedDocumentTypes: { value: DocumentType; label: string; targetScope: 'lot' | 'formula' | 'order' }[] = [
+  { value: 'CoA', label: 'CoA lot certificate', targetScope: 'lot' },
+  { value: 'Formula Spec Sheet', label: 'Formula spec sheet', targetScope: 'formula' },
+  { value: 'Allergen Declaration', label: 'Allergen declaration', targetScope: 'formula' },
+  { value: 'GHS Label', label: 'GHS label', targetScope: 'formula' },
+  { value: 'Finished Product SDS', label: 'Finished product SDS', targetScope: 'formula' },
+  { value: 'Invoice', label: 'Invoice', targetScope: 'order' },
 ]
 
 const shellMotion = {
@@ -3357,32 +3377,57 @@ function LabUsageWorkspace({
 
 function DocumentsWorkspace() {
   const [documentRows, setDocumentRows] = useState<DocumentRecord[]>(documents)
+  const [dashboard, setDashboard] = useState<DocumentComplianceDashboard>(() =>
+    documentComplianceDashboard(documents, materials, initialLots, formulas),
+  )
   const [downloadAudits, setDownloadAudits] = useState<AuditEvent[]>(
     auditEvents.filter((event) => event.action === 'document.download'),
   )
   const [downloadResult, setDownloadResult] = useState<DocumentDownloadResponse | null>(null)
   const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [generationType, setGenerationType] = useState<DocumentType>('CoA')
+  const [generationTarget, setGenerationTarget] = useState(initialLots[0]?.id ?? '')
   const [statusMessage, setStatusMessage] = useState('Live API sync pending')
+  const selectedGenerationOption = generatedDocumentTypes.find((option) => option.value === generationType)
+  const generationTargets = useMemo(() => {
+    if (selectedGenerationOption?.targetScope === 'formula') {
+      return formulas.map((formula) => ({ id: formula.id, label: `${formula.code} ${formula.name}` }))
+    }
+    if (selectedGenerationOption?.targetScope === 'order') {
+      return salesOrders.map((order) => ({ id: order.id, label: `${order.id} ${order.status}` }))
+    }
+    return initialLots.map((lot) => ({ id: lot.id, label: `${lot.lotNumber} ${lot.qualityStatus}` }))
+  }, [selectedGenerationOption?.targetScope])
+
+  useEffect(() => {
+    if (!generationTargets.some((target) => target.id === generationTarget)) {
+      setGenerationTarget(generationTargets[0]?.id ?? '')
+    }
+  }, [generationTarget, generationTargets])
 
   useEffect(() => {
     const controller = new AbortController()
 
     async function loadDocuments() {
       try {
-        const [documentsResponse, auditResponse] = await Promise.all([
+        const [documentsResponse, auditResponse, dashboardResponse] = await Promise.all([
           fetch(`${apiBaseUrl}/documents`, { signal: controller.signal }),
           fetch(`${apiBaseUrl}/documents/download-audit`, { signal: controller.signal }),
+          fetch(`${apiBaseUrl}/documents/compliance-dashboard`, { signal: controller.signal }),
         ])
 
-        if (!documentsResponse.ok || !auditResponse.ok) {
+        if (!documentsResponse.ok || !auditResponse.ok || !dashboardResponse.ok) {
           throw new Error('Documents API returned a non-OK response')
         }
 
         const documentsPayload = (await documentsResponse.json()) as ApiEnvelope<DocumentRecord[]>
         const auditPayload = (await auditResponse.json()) as ApiEnvelope<AuditEvent[]>
+        const dashboardPayload = (await dashboardResponse.json()) as ApiEnvelope<DocumentComplianceDashboard>
 
         setDocumentRows(documentsPayload.data)
         setDownloadAudits(auditPayload.data)
+        setDashboard(dashboardPayload.data)
         setStatusMessage('Synced from live Documents API')
       } catch {
         if (!controller.signal.aborted) {
@@ -3420,6 +3465,34 @@ function DocumentsWorkspace() {
     }
   }
 
+  async function generateDocument() {
+    if (!generationTarget) {
+      return
+    }
+    setGenerating(true)
+    setStatusMessage('Generating document into private review workflow')
+    try {
+      const payload = await requestApi<DocumentGenerationResponse>('/documents/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: generationType,
+          linkedTo: generationTarget,
+          actor: 'Compliance Lead',
+        }),
+      })
+
+      setDocumentRows((current) => [payload.document, ...current.filter((document) => document.id !== payload.document.id)])
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} generated for review`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document generation failed')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
     <div className="workspace-grid documents-grid">
       <Panel title="Document Center" icon={FileLock2}>
@@ -3431,9 +3504,10 @@ function DocumentsWorkspace() {
                 <strong>{document.title}</strong>
                 <span>
                   {document.type} / {document.linkedTo} / {document.sizeKb}KB
+                  {document.expiresAt ? ` / expires ${document.expiresAt}` : ''}
                 </span>
               </div>
-              <DataTag label={document.sensitivity} value={document.version} />
+              <DataTag label={document.sensitivity} value={document.status} />
               <span className="mono-value">{document.downloads} downloads</span>
               <button
                 className="ghost-button small"
@@ -3446,6 +3520,62 @@ function DocumentsWorkspace() {
               </button>
             </div>
           ))}
+        </div>
+      </Panel>
+      <Panel title="Compliance Dashboard" icon={ShieldCheck}>
+        <div className="stock-grid">
+          <DataTag label="Coverage" value={`${dashboard.coveragePercent}%`} tone="blue" />
+          <DataTag label="Missing" value={String(dashboard.missingCount)} tone={dashboard.missingCount > 0 ? 'amber' : 'green'} />
+          <DataTag label="Expiring" value={String(dashboard.expiringCount)} tone={dashboard.expiringCount > 0 ? 'amber' : 'green'} />
+          <DataTag label="Review" value={String(dashboard.reviewCount)} tone={dashboard.reviewCount > 0 ? 'amber' : 'green'} />
+        </div>
+        <div className="document-list compact-list">
+          {dashboard.requirements.slice(0, 5).map((requirement) => (
+            <div className="document-row" key={requirement.id}>
+              <div>
+                <strong>{requirement.label}</strong>
+                <span>{requirement.requiredType} / {requirement.linkedTo}</span>
+              </div>
+              <StatusBadge
+                status={requirement.status === 'met' ? 'stable' : requirement.status === 'missing' ? 'alert' : 'review'}
+                label={requirement.status.toUpperCase()}
+              />
+            </div>
+          ))}
+        </div>
+      </Panel>
+      <Panel title="Generate Document" icon={FileLock2}>
+        <div className="document-generate-form">
+          <label className="field-row">
+            <span>Document type</span>
+            <select
+              aria-label="Generated document type"
+              value={generationType}
+              onChange={(event) => setGenerationType(event.target.value as DocumentType)}
+            >
+              {generatedDocumentTypes.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Linked object</span>
+            <select
+              aria-label="Generated document linked object"
+              value={generationTarget}
+              onChange={(event) => setGenerationTarget(event.target.value)}
+            >
+              {generationTargets.map((target) => (
+                <option key={target.id} value={target.id}>{target.label}</option>
+              ))}
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void generateDocument()} disabled={generating || !generationTarget}>
+            {generating ? 'Generating' : 'Generate for review'}
+          </button>
+        </div>
+        <div className="empty-state compact">
+          Generated documents enter review and still require signed access for download.
         </div>
       </Panel>
       <Panel title="Signed Access" icon={KeyRound}>

@@ -232,13 +232,30 @@ export interface InventoryReorderSuggestion {
 
 export type DocumentSensitivity = 'Internal' | 'Confidential' | 'Highly Confidential'
 
+export type DocumentType =
+  | 'SDS'
+  | 'CoA'
+  | 'IFRA'
+  | 'Invoice'
+  | 'Formula Export'
+  | 'Batch Record'
+  | 'Allergen Declaration'
+  | 'GHS Label'
+  | 'Formula Spec Sheet'
+  | 'Finished Product SDS'
+
+export type DocumentStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'EXPIRING' | 'EXPIRED'
+
 export interface DocumentRecord {
   id: string
-  type: 'SDS' | 'CoA' | 'IFRA' | 'Invoice' | 'Formula Export' | 'Batch Record'
+  type: DocumentType
   title: string
   linkedTo: string
   version: string
   sensitivity: DocumentSensitivity
+  status: DocumentStatus
+  issueDate?: string
+  expiresAt?: string
   lastAccessed: string
   downloads: number
   storageKey: string
@@ -246,6 +263,31 @@ export interface DocumentRecord {
   sizeKb: number
   checksum: string
   owner: string
+  generatedFrom?: string
+}
+
+export interface DocumentComplianceRequirement {
+  id: string
+  scope: 'material' | 'lot' | 'formula'
+  linkedTo: string
+  label: string
+  requiredType: DocumentType
+  status: 'met' | 'missing' | 'expiring' | 'review'
+  documentId?: string
+  dueDate?: string
+}
+
+export interface DocumentComplianceDashboard {
+  coveragePercent: number
+  totalRequired: number
+  metCount: number
+  missingCount: number
+  expiringCount: number
+  reviewCount: number
+  generatedCount: number
+  requirements: DocumentComplianceRequirement[]
+  expiringDocuments: DocumentRecord[]
+  invariant: string
 }
 
 export interface SignedDocumentUrl {
@@ -561,7 +603,7 @@ export const phases: Phase[] = [
   { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 90 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, QC, stock take', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 92 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'active', securityLayer: 'L5', coverage: 84 },
-  { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, download audit', gate: 'Access and download logged', status: 'testing', securityLayer: 'L5', coverage: 62 },
+  { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, generation, compliance coverage', gate: 'Access logged and coverage visible', status: 'active', securityLayer: 'L5', coverage: 76 },
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'testing', securityLayer: 'L5', coverage: 64 },
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'testing', securityLayer: 'L4/L5', coverage: 62 },
   { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'testing', securityLayer: 'L4', coverage: 58 },
@@ -704,17 +746,17 @@ export const domains: DomainModule[] = [
     name: 'Documents & Compliance',
     shortName: 'Documents',
     responsibility: 'Private file storage, signed URLs, versioning, download audit',
-    status: 'testing',
-    health: 62,
-    risk: 'Signed URL policy represented; object storage pending',
+    status: 'active',
+    health: 76,
+    risk: 'Signed URL, download audit, generated documents, and coverage dashboard are live; external sharing and approval workflow remain next gates',
     owner: 'Compliance',
     entities: ['Document', 'DocumentVersion', 'DownloadAuditLog'],
-    features: ['Document center', 'Signed URL', 'Versioning', 'Download audit', 'Export'],
+    features: ['Document center', 'Signed URL', 'Versioning', 'Download audit', 'Export', 'Generate documents', 'Compliance dashboard'],
     invariants: ['INV-011 documents private', 'SEC-DATA-001 private bucket'],
-    apis: ['/api/v1/documents', '/api/v1/documents/:id/signed-url'],
+    apis: ['/api/v1/documents', '/api/v1/documents/compliance-dashboard', '/api/v1/documents/generate', '/api/v1/documents/:id/signed-url'],
     permissions: ['documents.view', 'documents.download', 'documents.manage'],
-    screens: ['Document center', 'Download audit', 'Formula export'],
-    activity: 'Formula export marked Highly Confidential',
+    screens: ['Document center', 'Compliance dashboard', 'Generate document', 'Download audit', 'Formula export'],
+    activity: 'Compliance can generate a CoA/spec document, see missing/expiring coverage, and sign access only after permission',
   },
   {
     key: 'production',
@@ -1308,6 +1350,9 @@ export const documents: DocumentRecord[] = [
     linkedTo: 'mat-iso',
     version: 'v3',
     sensitivity: 'Confidential',
+    status: 'EXPIRING',
+    issueDate: '2025-02-01',
+    expiresAt: '2026-08-15',
     lastAccessed: '2026-06-29 10:44',
     downloads: 8,
     storageKey: 'org-nxl/materials/mat-iso/sds-v3.pdf',
@@ -1323,6 +1368,9 @@ export const documents: DocumentRecord[] = [
     linkedTo: 'lot-hed-001',
     version: 'v1',
     sensitivity: 'Confidential',
+    status: 'APPROVED',
+    issueDate: '2026-02-11',
+    expiresAt: '2028-02-11',
     lastAccessed: '2026-06-30 08:31',
     downloads: 3,
     storageKey: 'org-nxl/lots/lot-hed-001/coa-v1.pdf',
@@ -1338,6 +1386,8 @@ export const documents: DocumentRecord[] = [
     linkedTo: 'frm-0421',
     version: 'v12',
     sensitivity: 'Highly Confidential',
+    status: 'APPROVED',
+    issueDate: '2026-06-30',
     lastAccessed: '2026-06-30 09:22',
     downloads: 2,
     storageKey: 'org-nxl/formulas/frm-0421/export-v12.pdf',
@@ -1353,6 +1403,9 @@ export const documents: DocumentRecord[] = [
     linkedTo: 'BTH-2025-118',
     version: 'v2',
     sensitivity: 'Internal',
+    status: 'APPROVED',
+    issueDate: '2026-04-20',
+    expiresAt: '2028-04-20',
     lastAccessed: '2026-06-27 16:45',
     downloads: 5,
     storageKey: 'org-nxl/batches/bth-2025-118/qc-record-v2.pdf',
@@ -1971,6 +2024,113 @@ export function createSignedDocumentUrl(
     expiresAt: expiresAt.toISOString(),
     ttlSeconds,
     method: 'GET',
+  }
+}
+
+const complianceAsOfDate = '2026-07-03'
+
+function daysUntil(date: string, asOfDate = complianceAsOfDate) {
+  const dayMs = 24 * 60 * 60 * 1000
+  return Math.ceil((new Date(`${date}T00:00:00Z`).getTime() - new Date(`${asOfDate}T00:00:00Z`).getTime()) / dayMs)
+}
+
+function documentRequirementStatus(
+  document: DocumentRecord | undefined,
+  asOfDate = complianceAsOfDate,
+): DocumentComplianceRequirement['status'] {
+  if (!document) {
+    return 'missing'
+  }
+  if (document.status === 'REVIEW_REQUIRED') {
+    return 'review'
+  }
+  if (document.status === 'EXPIRED' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) < 0)) {
+    return 'missing'
+  }
+  if (document.status === 'EXPIRING' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) <= 90)) {
+    return 'expiring'
+  }
+  return 'met'
+}
+
+export function documentComplianceDashboard(
+  documentCatalog: DocumentRecord[] = documents,
+  materialCatalog: Material[] = materials,
+  lotCatalog: InventoryLot[] = initialLots,
+  formulaCatalog: Formula[] = formulas,
+  asOfDate = complianceAsOfDate,
+): DocumentComplianceDashboard {
+  const requirements: DocumentComplianceRequirement[] = []
+
+  materialCatalog.forEach((material) => {
+    const document = documentCatalog.find((item) => item.linkedTo === material.id && item.type === 'SDS')
+    requirements.push({
+      id: `REQ-SDS-${material.id}`,
+      scope: 'material',
+      linkedTo: material.id,
+      label: `${material.name} SDS`,
+      requiredType: 'SDS',
+      status: documentRequirementStatus(document, asOfDate),
+      documentId: document?.id,
+      dueDate: document?.expiresAt,
+    })
+  })
+
+  lotCatalog
+    .filter((lot) => lot.qualityStatus !== 'REJECTED')
+    .forEach((lot) => {
+      const document = documentCatalog.find((item) => item.linkedTo === lot.id && item.type === 'CoA')
+      requirements.push({
+        id: `REQ-COA-${lot.id}`,
+        scope: 'lot',
+        linkedTo: lot.id,
+        label: `${lot.lotNumber} CoA`,
+        requiredType: 'CoA',
+        status: documentRequirementStatus(document, asOfDate),
+        documentId: document?.id,
+        dueDate: document?.expiresAt,
+      })
+    })
+
+  formulaCatalog
+    .filter((formula) => formula.status === 'active' || formula.status === 'stable')
+    .forEach((formula) => {
+      const document = documentCatalog.find(
+        (item) => item.linkedTo === formula.id && (item.type === 'Formula Export' || item.type === 'Formula Spec Sheet'),
+      )
+      requirements.push({
+        id: `REQ-FORMULA-${formula.id}`,
+        scope: 'formula',
+        linkedTo: formula.id,
+        label: `${formula.code} formula export`,
+        requiredType: 'Formula Export',
+        status: documentRequirementStatus(document, asOfDate),
+        documentId: document?.id,
+        dueDate: document?.expiresAt,
+      })
+    })
+
+  const missingCount = requirements.filter((requirement) => requirement.status === 'missing').length
+  const expiringCount = requirements.filter((requirement) => requirement.status === 'expiring').length
+  const reviewCount = requirements.filter((requirement) => requirement.status === 'review').length
+  const metCount = requirements.length - missingCount
+  const expiringDocuments = documentCatalog.filter(
+    (document) =>
+      document.expiresAt !== undefined &&
+      (document.status === 'EXPIRING' || daysUntil(document.expiresAt, asOfDate) <= 90),
+  )
+
+  return {
+    coveragePercent: requirements.length === 0 ? 100 : Math.round((metCount / requirements.length) * 100),
+    totalRequired: requirements.length,
+    metCount,
+    missingCount,
+    expiringCount,
+    reviewCount,
+    generatedCount: documentCatalog.filter((document) => document.generatedFrom).length,
+    requirements,
+    expiringDocuments,
+    invariant: 'compliance coverage is derived from linked private documents, not public file paths',
   }
 }
 

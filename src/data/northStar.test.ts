@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   evaporationCurve,
   canDownloadDocument,
+  documentComplianceDashboard,
   documentRequiredPermissions,
   documents,
   formulaTotals,
@@ -71,5 +72,17 @@ describe('North Star domain invariants', () => {
     expect(documentRequiredPermissions(formulaExport!)).toEqual(['documents.download', 'formulas.viewSensitive'])
     expect(canDownloadDocument(formulaExport!, ['documents.download'])).toBe(false)
     expect(canDownloadDocument(formulaExport!, ['documents.download', 'formulas.viewSensitive'])).toBe(true)
+  })
+
+  it('derives document compliance coverage from linked private documents', () => {
+    const dashboard = documentComplianceDashboard()
+
+    expect(dashboard.totalRequired).toBeGreaterThan(0)
+    expect(dashboard.missingCount).toBeGreaterThan(0)
+    expect(dashboard.expiringCount).toBeGreaterThan(0)
+    expect(dashboard.coveragePercent).toBeGreaterThan(0)
+    expect(dashboard.requirements.some((requirement) => requirement.id === 'REQ-SDS-mat-iso')).toBe(true)
+    expect(dashboard.expiringDocuments.some((document) => document.id === 'DOC-118')).toBe(true)
+    expect(dashboard.invariant).toContain('private documents')
   })
 })

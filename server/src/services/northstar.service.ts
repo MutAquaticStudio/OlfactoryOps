@@ -10,6 +10,7 @@ import {
   commercialSkus,
   customFields,
   createSignedDocumentUrl,
+  documentComplianceDashboard,
   documentRequiredPermissions,
   documents,
   domains,
@@ -53,6 +54,7 @@ import {
   type BrandingConfig,
   type CustomFieldDefinition,
   type DocumentRecord,
+  type DocumentType,
   type FeatureFlagRecord,
   type Formula,
   type FormulaLine,
@@ -99,6 +101,12 @@ type LabWeighingOptions = {
 
 type LabUsageReverseOptions = {
   reason?: string
+  actor?: string
+}
+
+type GenerateDocumentBody = {
+  type?: DocumentType | string
+  linkedTo?: string
   actor?: string
 }
 
@@ -705,6 +713,8 @@ export class NorthStarService {
       linkedTo: formula.id,
       version: formula.version,
       sensitivity: 'Highly Confidential',
+      status: 'APPROVED',
+      issueDate: new Date().toISOString().slice(0, 10),
       lastAccessed: new Date().toISOString(),
       downloads: 0,
       storageKey: `org-nxl/formulas/${formula.id}/export-${formula.version}.pdf`,
@@ -1760,6 +1770,73 @@ export class NorthStarService {
     return { data: this.documentRecords }
   }
 
+  documentComplianceDashboard() {
+    return {
+      data: documentComplianceDashboard(
+        this.documentRecords,
+        this.materialRecords,
+        this.lots,
+        this.formulaRecords,
+      ),
+    }
+  }
+
+  generateDocument(body: GenerateDocumentBody) {
+    const type = this.normalizeGeneratedDocumentType(body.type)
+    const linkedTo = body.linkedTo?.trim()
+    if (!linkedTo) {
+      throw new UnprocessableEntityException('Document linkedTo target is required')
+    }
+
+    const target = this.documentGenerationTarget(type, linkedTo)
+    const existingCount = this.documentRecords.filter(
+      (document) => document.type === type && document.linkedTo === linkedTo,
+    ).length
+    const timestamp = new Date()
+    const issueDate = timestamp.toISOString().slice(0, 10)
+    const expiresAt =
+      type === 'CoA' || type === 'Finished Product SDS'
+        ? new Date(timestamp.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        : undefined
+    const id = `DOC-GEN-${String(this.documentRecords.length + existingCount + 1).padStart(4, '0')}`
+    const storageType = type.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    const document: DocumentRecord = {
+      id,
+      type,
+      title: `${target.label} ${type}`,
+      linkedTo,
+      version: `v${existingCount + 1}`,
+      sensitivity: target.sensitivity,
+      status: 'REVIEW_REQUIRED',
+      issueDate,
+      expiresAt,
+      lastAccessed: timestamp.toISOString(),
+      downloads: 0,
+      storageKey: `org-nxl/generated/${target.scope}/${linkedTo}/${storageType}-v${existingCount + 1}.pdf`,
+      mimeType: 'application/pdf',
+      sizeKb: target.sizeKb,
+      checksum: this.documentChecksum(`${type}:${linkedTo}:${existingCount + 1}:${issueDate}`),
+      owner: 'Compliance',
+      generatedFrom: target.generatedFrom,
+    }
+    this.documentRecords = [document, ...this.documentRecords]
+    const audit = this.recordAudit('document.generate', document.id, body.actor?.trim() || 'api:compliance', 'review')
+
+    return {
+      data: {
+        document,
+        audit,
+        dashboard: documentComplianceDashboard(
+          this.documentRecords,
+          this.materialRecords,
+          this.lots,
+          this.formulaRecords,
+        ),
+        invariant: 'generated documents enter review and stay in the private document workflow',
+      },
+    }
+  }
+
   documentDownloadAudit() {
     return { data: this.auditEvents.filter((event) => event.action === 'document.download') }
   }
@@ -2717,6 +2794,71 @@ export class NorthStarService {
       return value
     }
     return 'trial'
+  }
+
+  private normalizeGeneratedDocumentType(value?: DocumentType | string): DocumentType {
+    if (
+      value === 'CoA' ||
+      value === 'Allergen Declaration' ||
+      value === 'GHS Label' ||
+      value === 'Formula Spec Sheet' ||
+      value === 'Finished Product SDS' ||
+      value === 'Invoice'
+    ) {
+      return value
+    }
+    throw new UnprocessableEntityException('Unsupported generated document type')
+  }
+
+  private documentGenerationTarget(type: DocumentType, linkedTo: string) {
+    if (type === 'CoA') {
+      const lot = this.lots.find((item) => item.id === linkedTo)
+      if (!lot) {
+        throw new NotFoundException(`Lot ${linkedTo} was not found`)
+      }
+      const material = this.materialRecords.find((item) => item.id === lot.materialId)
+      return {
+        label: `${lot.lotNumber} ${material?.name ?? 'Lot'}`,
+        scope: 'lots',
+        sensitivity: 'Confidential' as const,
+        sizeKb: 168,
+        generatedFrom: `lot:${lot.id}`,
+      }
+    }
+
+    if (type === 'Invoice') {
+      const order = this.salesOrderRecords.find((item) => item.id === linkedTo)
+      if (!order) {
+        throw new NotFoundException(`Sales order ${linkedTo} was not found`)
+      }
+      return {
+        label: order.id,
+        scope: 'orders',
+        sensitivity: 'Confidential' as const,
+        sizeKb: 144,
+        generatedFrom: `sales-order:${order.id}`,
+      }
+    }
+
+    const formula = this.formulaRecords.find((item) => item.id === linkedTo)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${linkedTo} was not found`)
+    }
+    return {
+      label: `${formula.code} ${formula.version}`,
+      scope: 'formulas',
+      sensitivity: type === 'Formula Spec Sheet' || type === 'Finished Product SDS' ? ('Highly Confidential' as const) : ('Confidential' as const),
+      sizeKb: type === 'Finished Product SDS' ? 320 : 128,
+      generatedFrom: `formula:${formula.id}:${formula.version}`,
+    }
+  }
+
+  private documentChecksum(value: string) {
+    let hash = 0
+    for (let index = 0; index < value.length; index += 1) {
+      hash = (hash * 33 + value.charCodeAt(index)) >>> 0
+    }
+    return `sha256:${hash.toString(16).padStart(8, '0')}`
   }
 
   private recordAudit(

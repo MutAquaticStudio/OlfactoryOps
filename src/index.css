@@ -1175,6 +1175,13 @@ kbd {
   margin-bottom: 12px;
 }
 
+.document-generate-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .inventory-ops,
 .genealogy-list,
 .shopping-list {
@@ -1193,6 +1200,7 @@ kbd {
 .customization-form-grid .ghost-button,
 .material-form-grid .primary-button,
 .material-form-grid .ghost-button,
+.document-generate-form .primary-button,
 .inventory-form-grid .primary-button,
 .inventory-form-grid .ghost-button {
   align-self: end;

@@ -476,6 +476,16 @@ export class NorthStarController {
     return this.northStar.documents()
   }
 
+  @Get('documents/compliance-dashboard')
+  documentComplianceDashboard() {
+    return this.northStar.documentComplianceDashboard()
+  }
+
+  @Post('documents/generate')
+  generateDocument(@Body() body: { type?: string; linkedTo?: string; actor?: string }) {
+    return this.northStar.generateDocument(body)
+  }
+
   @Get('documents/download-audit')
   documentDownloadAudit() {
     return this.northStar.documentDownloadAudit()
