@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
 
 type LabUsageBody = {
@@ -144,6 +144,29 @@ export class NorthStarController {
     return this.northStar.addFormulaLine(id, body)
   }
 
+  @Patch('formulas/:id/lines/:lineId')
+  updateFormulaLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+  ) {
+    return this.northStar.updateFormulaLine(id, lineId, body)
+  }
+
+  @Delete('formulas/:id/lines/:lineId')
+  deleteFormulaLine(@Param('id') id: string, @Param('lineId') lineId: string) {
+    return this.northStar.deleteFormulaLine(id, lineId)
+  }
+
+  @Post('formulas/:id/lines/:lineId/move')
+  moveFormulaLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() body: { direction?: 'up' | 'down' },
+  ) {
+    return this.northStar.moveFormulaLine(id, lineId, body)
+  }
+
   @Get('formulas/:id/resolve')
   resolveFormula(@Param('id') id: string) {
     return this.northStar.resolveFormula(id)
@@ -152,6 +175,26 @@ export class NorthStarController {
   @Get('formulas/:id/cost')
   formulaCost(@Param('id') id: string) {
     return this.northStar.formulaCost(id)
+  }
+
+  @Get('formulas/:id/versions')
+  formulaVersions(@Param('id') id: string) {
+    return this.northStar.formulaVersions(id)
+  }
+
+  @Post('formulas/:id/versions')
+  createFormulaVersion(@Param('id') id: string, @Body() body: { note?: string; actor?: string }) {
+    return this.northStar.createFormulaVersion(id, body)
+  }
+
+  @Post('formulas/:id/approve')
+  approveFormula(@Param('id') id: string, @Body() body: { actor?: string }) {
+    return this.northStar.approveFormula(id, body)
+  }
+
+  @Post('formulas/:id/export')
+  exportFormula(@Param('id') id: string, @Body() body: { actor?: string }) {
+    return this.northStar.exportFormula(id, body)
   }
 
   @Get('lots')

@@ -114,6 +114,22 @@ export interface Formula {
   lines: FormulaLine[]
 }
 
+export interface FormulaVersionRecord {
+  id: string
+  formulaId: string
+  formulaCode: string
+  version: string
+  status: 'SNAPSHOT' | 'APPROVED'
+  createdAt: string
+  createdBy: string
+  note: string
+  lineCount: number
+  totalGrams: number
+  totalCost: number
+  checksum: string
+  lines: FormulaLine[]
+}
+
 export interface ResolvedLeaf {
   materialId: string
   materialName: string
@@ -474,7 +490,7 @@ export const phases: Phase[] = [
   { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'active', securityLayer: 'L2/L4', coverage: 86 },
   { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 84 },
   { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 90 },
-  { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
+  { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 90 },
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, summary', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 80 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'testing', securityLayer: 'L5', coverage: 70 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, download audit', gate: 'Access and download logged', status: 'testing', securityLayer: 'L5', coverage: 62 },
@@ -567,16 +583,16 @@ export const domains: DomainModule[] = [
     shortName: 'Formulas',
     responsibility: 'Formula tree, nested accords, versions, resolve, IFRA, evaporation',
     status: 'active',
-    health: 78,
-    risk: 'Resolve/cost client engine implemented; backend service pending',
+    health: 90,
+    risk: 'Nested line editing, version snapshots, approval, export audit, resolve, and cost roll-up are live',
     owner: 'Perfumer Team',
     entities: ['Formula', 'FormulaLine', 'FormulaVersion', 'ReviewRecord'],
-    features: ['Gram-first editor', 'Nested accord', 'Version diff', 'Cost roll-up', 'Evaporation curve'],
+    features: ['Gram-first editor', 'Nested accord', 'Line edit/delete/reorder', 'Version snapshot', 'Approval state', 'Formula export audit', 'Cost roll-up', 'Evaporation curve'],
     invariants: ['INV-006 save non-consuming', 'INV-007 explicit consumption only', 'INV-013 resolve before compute'],
-    apis: ['/api/v1/formulas', '/api/v1/formulas/:id/resolve', '/api/v1/formulas/:id/cost'],
+    apis: ['/api/v1/formulas', '/api/v1/formulas/:id/lines', '/api/v1/formulas/:id/lines/:lineId', '/api/v1/formulas/:id/versions', '/api/v1/formulas/:id/approve', '/api/v1/formulas/:id/export', '/api/v1/formulas/:id/resolve', '/api/v1/formulas/:id/cost'],
     permissions: ['formulas.view', 'formulas.viewSensitive', 'formulas.export'],
-    screens: ['Formula table', 'Nested editor', 'Resolve preview', 'Version diff'],
-    activity: 'FRM-0421 resolves child accord leaves before cost and vapor model',
+    screens: ['Formula table', 'Nested editor', 'Line controls', 'Resolve preview', 'Version history', 'Approval and export'],
+    activity: 'FRM-0421 can snapshot, approve, export, and resolve nested accord leaves without stock movement',
   },
   {
     key: 'inventory',
@@ -981,6 +997,39 @@ export const formulas: Formula[] = [
       { id: 'frm-l6', label: 'Vanillin', materialId: 'mat-vanillin', grams: 4 },
       { id: 'frm-l7', label: 'Ethanol 96%', materialId: 'mat-ethanol', grams: 18 },
     ],
+  },
+]
+
+export const formulaVersions: FormulaVersionRecord[] = [
+  {
+    id: 'FRM-0421-v12',
+    formulaId: 'frm-0421',
+    formulaCode: 'FRM-0421',
+    version: 'v12',
+    status: 'APPROVED',
+    createdAt: '2026-06-30T09:16:00.000Z',
+    createdBy: 'Thuan Le Minh',
+    note: 'Approved Nocturne 17 working version for lab trial and export.',
+    lineCount: 7,
+    totalGrams: 100,
+    totalCost: 9.12,
+    checksum: 'sha256:frm0421-v12-approved',
+    lines: structuredClone(formulas[1]?.lines ?? []),
+  },
+  {
+    id: 'ACC-0007-v4',
+    formulaId: 'frm-accord-citrus',
+    formulaCode: 'ACC-0007',
+    version: 'v4',
+    status: 'APPROVED',
+    createdAt: '2026-06-24T08:10:00.000Z',
+    createdBy: 'Thuan Le Minh',
+    note: 'Citrus Lift Accord approved as reusable nested accord.',
+    lineCount: 4,
+    totalGrams: 100,
+    totalCost: 10.88,
+    checksum: 'sha256:acc0007-v4-approved',
+    lines: structuredClone(formulas[0]?.lines ?? []),
   },
 ]
 

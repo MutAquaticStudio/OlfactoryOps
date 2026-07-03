@@ -35,7 +35,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import {
   Area,
   AreaChart,
@@ -92,6 +92,7 @@ import {
   type FeatureFlagRecord,
   type Formula,
   type FormulaLine,
+  type FormulaVersionRecord,
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
@@ -243,6 +244,40 @@ type PubChemFillResponse = MaterialMutationResponse & {
   molecules: MoleculeComponent[]
 }
 
+type FormulaCreateResponse = {
+  formula: Formula
+  invariant: string
+}
+
+type FormulaMutationResponse = {
+  formula: Formula
+  line?: FormulaLine
+  leaves?: ResolvedLeaf[]
+  totals?: ReturnType<typeof formulaTotals>
+  audit?: AuditEvent
+  invariant: string
+}
+
+type FormulaVersionListResponse = {
+  formula: Formula
+  versions: FormulaVersionRecord[]
+  invariant: string
+}
+
+type FormulaVersionResponse = {
+  formula: Formula
+  version: FormulaVersionRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type FormulaExportResponse = {
+  formula: Formula
+  document: DocumentRecord
+  audit: AuditEvent
+  invariant: string
+}
+
 type RolePermissionMatrix = {
   role: string
   scope: RolePolicy['scope']
@@ -301,6 +336,24 @@ const shellMotion = {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
+
+async function requestApi<T>(path: string, init?: RequestInit) {
+  const response = await fetch(`${apiBaseUrl}${path}`, init)
+  if (!response.ok) {
+    let message = `API request failed with ${response.status}`
+    try {
+      const payload = (await response.json()) as { message?: unknown }
+      if (typeof payload.message === 'string') {
+        message = payload.message
+      }
+    } catch {
+      // Keep the status-based message when the response is not JSON.
+    }
+    throw new Error(message)
+  }
+  const payload = (await response.json()) as ApiEnvelope<T>
+  return payload.data
+}
 
 function allocationKey(allocation: Pick<Allocation, 'materialId' | 'lotId'>) {
   return `${allocation.materialId}:${allocation.lotId}`
@@ -594,46 +647,33 @@ function App() {
     )
   }
 
-  function nextFormulaCode() {
-    const usedCodes = new Set(formulaRecords.map((formula) => formula.code))
-    const nextNumber = formulaRecords.reduce((max, formula) => {
-      const match = /^FRM-(\d+)$/.exec(formula.code)
-      return match ? Math.max(max, Number(match[1]) + 1) : max
-    }, 422)
-    let candidate = nextNumber
-    let code = `FRM-${String(candidate).padStart(4, '0')}`
-
-    while (usedCodes.has(code)) {
-      candidate += 1
-      code = `FRM-${String(candidate).padStart(4, '0')}`
-    }
-
-    return code
-  }
-
-  function createFormulaDraft() {
+  async function createFormulaDraft() {
     const targetGrams = Math.max(1, Number(newFormulaTargetGrams) || 100)
-    const code = nextFormulaCode()
-    const draft: Formula = {
-      id: code.toLowerCase(),
-      code,
-      name: newFormulaName.trim() || 'Untitled Formula',
-      version: 'v1',
-      status: 'draft',
-      targetGrams,
-      owner: 'Thuan Le Minh',
-      lines: [],
+    try {
+      const payload = await requestApi<FormulaCreateResponse>('/formulas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newFormulaName.trim() || 'Untitled Formula',
+          targetGrams,
+          owner: 'Thuan Le Minh',
+        }),
+      })
+      setFormulaRecords((current) => [
+        payload.formula,
+        ...current.filter((formula) => formula.id !== payload.formula.id),
+      ])
+      setActiveFormulaId(payload.formula.id)
+      setNewFormulaName('Untitled Accord')
+      setNewFormulaTargetGrams(100)
+      setActiveKey('formulas')
+      setModal(null)
+    } catch {
+      setActiveKey('formulas')
     }
-
-    setFormulaRecords((current) => [draft, ...current])
-    setActiveFormulaId(draft.id)
-    setNewFormulaName('Untitled Accord')
-    setNewFormulaTargetGrams(100)
-    setActiveKey('formulas')
-    setModal(null)
   }
 
-  function addFormulaMaterialLine() {
+  async function addFormulaMaterialLine() {
     const material = materialRecords.find((item) => item.id === newLineMaterialId)
     const formula = formulaRecords.find((item) => item.id === activeFormulaId)
     const grams = Number(newLineGrams)
@@ -642,20 +682,22 @@ function App() {
       return
     }
 
-    const line: FormulaLine = {
-      id: `${formula.id}-line-${formula.lines.length + 1}-${Date.now()}`,
-      label: material.name,
-      materialId: material.id,
-      grams,
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ materialId: material.id, grams }),
+      })
+      setFormulaRecords((current) =>
+        current.map((item) => (item.id === formula.id ? payload.formula : item)),
+      )
+      setSelectedMaterialId(material.id)
+      setNewLineGrams(5)
+      setActiveKey('formulas')
+      setModal(null)
+    } catch {
+      setActiveKey('formulas')
     }
-
-    setFormulaRecords((current) =>
-      current.map((item) => (item.id === formula.id ? { ...item, lines: [...item.lines, line] } : item)),
-    )
-    setSelectedMaterialId(material.id)
-    setNewLineGrams(5)
-    setActiveKey('formulas')
-    setModal(null)
   }
 
   function receiveStockLot() {
@@ -802,6 +844,7 @@ function App() {
                   materialRecords={materialRecords}
                   setMaterialRecords={setMaterialRecords}
                   formulaRecords={formulaRecords}
+                  setFormulaRecords={setFormulaRecords}
                   activeFormulaId={activeFormulaId}
                   setActiveFormulaId={setActiveFormulaId}
                   resolvedLeaves={resolvedLeaves}
@@ -1311,6 +1354,7 @@ function DomainWorkspace({
   materialRecords,
   setMaterialRecords,
   formulaRecords,
+  setFormulaRecords,
   activeFormulaId,
   setActiveFormulaId,
   resolvedLeaves,
@@ -1347,6 +1391,7 @@ function DomainWorkspace({
   materialRecords: Material[]
   setMaterialRecords: (materials: Material[]) => void
   formulaRecords: Formula[]
+  setFormulaRecords: Dispatch<SetStateAction<Formula[]>>
   activeFormulaId: string
   setActiveFormulaId: (id: string) => void
   resolvedLeaves: ResolvedLeaf[]
@@ -1392,8 +1437,10 @@ function DomainWorkspace({
       {domain.key === 'formulas' && (
         <FormulaWorkspace
           formulaRecords={formulaRecords}
+          materialRecords={materialRecords}
           activeFormulaId={activeFormulaId}
           onSelectFormula={setActiveFormulaId}
+          onFormulaRecordsChange={setFormulaRecords}
           resolvedLeaves={resolvedLeaves}
           totals={totals}
           curve={curve}
@@ -2015,8 +2062,10 @@ function MaterialWorkspace({
 
 function FormulaWorkspace({
   formulaRecords,
+  materialRecords,
   activeFormulaId,
   onSelectFormula,
+  onFormulaRecordsChange,
   resolvedLeaves,
   totals,
   curve,
@@ -2025,8 +2074,10 @@ function FormulaWorkspace({
   onAddLine,
 }: {
   formulaRecords: Formula[]
+  materialRecords: Material[]
   activeFormulaId: string
   onSelectFormula: (id: string) => void
+  onFormulaRecordsChange: Dispatch<SetStateAction<Formula[]>>
   resolvedLeaves: ResolvedLeaf[]
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
@@ -2039,6 +2090,190 @@ function FormulaWorkspace({
   const activeLeaves = resolvedLeaves
   const activeTotals = totals
   const activeCurve = curve
+  const selectableChildFormulas = useMemo(
+    () => formulaRecords.filter((item) => item.id !== formula.id),
+    [formula.id, formulaRecords],
+  )
+  const [formulaStatus, setFormulaStatus] = useState('Formula R&D ready')
+  const [lineDrafts, setLineDrafts] = useState<Record<string, number>>({})
+  const [nestedFormulaId, setNestedFormulaId] = useState(selectableChildFormulas[0]?.id ?? '')
+  const [nestedGrams, setNestedGrams] = useState(10)
+  const [versionNote, setVersionNote] = useState(`Snapshot ${formula.code} ${formula.version}`)
+  const [versions, setVersions] = useState<FormulaVersionRecord[]>([])
+
+  useEffect(() => {
+    setLineDrafts(Object.fromEntries(formula.lines.map((line) => [line.id, line.grams])))
+    setVersionNote(`Snapshot ${formula.code} ${formula.version}`)
+  }, [formula.code, formula.id, formula.lines, formula.version])
+
+  useEffect(() => {
+    if (!selectableChildFormulas.some((item) => item.id === nestedFormulaId)) {
+      setNestedFormulaId(selectableChildFormulas[0]?.id ?? '')
+    }
+  }, [nestedFormulaId, selectableChildFormulas])
+
+  useEffect(() => {
+    let active = true
+    async function loadVersions() {
+      try {
+        const payload = await requestApi<FormulaVersionListResponse>(
+          `/formulas/${encodeURIComponent(formula.id)}/versions`,
+        )
+        if (!active) {
+          return
+        }
+        setVersions(payload.versions)
+        setFormulaStatus(`${formula.code} version history synced`)
+      } catch {
+        if (active) {
+          setVersions([])
+          setFormulaStatus('Formula version history unavailable until API is reachable')
+        }
+      }
+    }
+    void loadVersions()
+    return () => {
+      active = false
+    }
+  }, [formula.code, formula.id, formula.version])
+
+  function upsertFormula(nextFormula: Formula) {
+    onFormulaRecordsChange((current) => {
+      const exists = current.some((item) => item.id === nextFormula.id)
+      return exists
+        ? current.map((item) => (item.id === nextFormula.id ? nextFormula : item))
+        : [nextFormula, ...current]
+    })
+  }
+
+  async function saveLine(line: FormulaLine) {
+    const grams = Number(lineDrafts[line.id] ?? line.grams)
+    if (!Number.isFinite(grams) || grams <= 0) {
+      setFormulaStatus('Line grams must be greater than 0')
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ grams, label: line.label }),
+        },
+      )
+      upsertFormula(payload.formula)
+      setFormulaStatus(`${line.label} saved without inventory movement`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line update failed')
+    }
+  }
+
+  async function deleteLine(line: FormulaLine) {
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}`,
+        { method: 'DELETE' },
+      )
+      upsertFormula(payload.formula)
+      setFormulaStatus(`${line.label} removed without inventory movement`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line delete failed')
+    }
+  }
+
+  async function moveLine(line: FormulaLine, direction: 'up' | 'down') {
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}/move`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direction }),
+        },
+      )
+      upsertFormula(payload.formula)
+      setFormulaStatus(`${line.label} reordered`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line reorder failed')
+    }
+  }
+
+  async function addNestedFormulaLine() {
+    const grams = Number(nestedGrams)
+    if (!nestedFormulaId || !Number.isFinite(grams) || grams <= 0) {
+      setFormulaStatus('Choose a child formula and grams before adding nested accord')
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ childFormulaId: nestedFormulaId, grams }),
+      })
+      upsertFormula(payload.formula)
+      setNestedGrams(10)
+      setFormulaStatus('Nested accord added and cycle guard passed')
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Nested formula add failed')
+    }
+  }
+
+  async function snapshotVersion() {
+    try {
+      const payload = await requestApi<FormulaVersionResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/versions`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: versionNote, actor: formula.owner }),
+        },
+      )
+      upsertFormula(payload.formula)
+      setVersions((current) => [
+        payload.version,
+        ...current.filter((version) => version.id !== payload.version.id),
+      ])
+      setFormulaStatus(`${payload.formula.code} ${payload.version.version} snapshot saved`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula snapshot failed')
+    }
+  }
+
+  async function approveFormulaVersion() {
+    try {
+      const payload = await requestApi<FormulaVersionResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/approve`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ actor: formula.owner }),
+        },
+      )
+      upsertFormula(payload.formula)
+      setVersions((current) =>
+        current.map((version) => (version.id === payload.version.id ? payload.version : version)),
+      )
+      setFormulaStatus(`${payload.formula.code} ${payload.version.version} approved`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula approval failed')
+    }
+  }
+
+  async function exportFormulaRecord() {
+    try {
+      const payload = await requestApi<FormulaExportResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/export`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ actor: formula.owner }),
+        },
+      )
+      setFormulaStatus(`${payload.document.id} exported with ${payload.audit.action} audit`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula export failed')
+    }
+  }
 
   return (
     <div className="workspace-grid formula-grid">
@@ -2067,6 +2302,7 @@ function FormulaWorkspace({
               </div>
               <StatusBadge status={item.status} />
               <span className="mono-value">{formatGrams(item.targetGrams)}</span>
+              <span className="mono-value">{item.version}</span>
             </button>
           ))}
         </div>
@@ -2086,16 +2322,50 @@ function FormulaWorkspace({
           </div>
         }
       >
+        <div className="formula-status-row">
+          <DataTag label="Version" value={formula.version} tone="blue" />
+          <DataTag label="Lines" value={String(formula.lines.length)} />
+          <span>{formulaStatus}</span>
+        </div>
         <div className="formula-lines">
           {formula.lines.length > 0 ? (
-            formula.lines.map((line) => (
-              <div className="formula-line" key={line.id}>
+            formula.lines.map((line, index) => (
+              <div className="formula-line is-editable" key={line.id}>
                 <div>
                   <strong>{line.label}</strong>
-                  <span>{line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}</span>
+                  <span>
+                    {line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}
+                    {line.materialId ? ` / ${materialRecords.find((material) => material.id === line.materialId)?.cas ?? 'material'}` : ''}
+                  </span>
                 </div>
-                <div className="mono-value">{formatGrams(line.grams)}</div>
-                <div className="mono-value">{((line.grams / formula.targetGrams) * 100).toFixed(1)}%</div>
+                <label className="compact-input">
+                  <span>g</span>
+                  <input
+                    aria-label={`${line.label} grams`}
+                    min={0.01}
+                    step={0.01}
+                    type="number"
+                    value={lineDrafts[line.id] ?? line.grams}
+                    onChange={(event) =>
+                      setLineDrafts((current) => ({ ...current, [line.id]: Number(event.target.value) }))
+                    }
+                  />
+                </label>
+                <div className="mono-value">{((Number(lineDrafts[line.id] ?? line.grams) / formula.targetGrams) * 100).toFixed(1)}%</div>
+                <div className="line-actions">
+                  <button className="ghost-button tiny" type="button" onClick={() => void moveLine(line, 'up')} disabled={index === 0}>
+                    Up
+                  </button>
+                  <button className="ghost-button tiny" type="button" onClick={() => void moveLine(line, 'down')} disabled={index === formula.lines.length - 1}>
+                    Down
+                  </button>
+                  <button className="ghost-button tiny" type="button" onClick={() => void saveLine(line)}>
+                    Save
+                  </button>
+                  <button className="ghost-button tiny danger" type="button" onClick={() => void deleteLine(line)}>
+                    Delete
+                  </button>
+                </div>
               </div>
             ))
           ) : (
@@ -2105,6 +2375,43 @@ function FormulaWorkspace({
             </div>
           )}
         </div>
+      </Panel>
+
+      <Panel title="Nested Accord" icon={Layers3}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Child formula</span>
+            <select
+              aria-label="Nested child formula"
+              value={nestedFormulaId}
+              onChange={(event) => setNestedFormulaId(event.target.value)}
+            >
+              {selectableChildFormulas.map((child) => (
+                <option key={child.id} value={child.id}>
+                  {child.code} / {child.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Nested grams</span>
+            <input
+              aria-label="Nested formula grams"
+              min={0.01}
+              step={0.01}
+              type="number"
+              value={nestedGrams}
+              onChange={(event) => setNestedGrams(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void addNestedFormulaLine()} disabled={!nestedFormulaId}>
+            Add Nested
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>Cycle guard blocks parent-child loops before saving.</li>
+          <li>Nested save recalculates resolve and cost but creates no stock movement.</li>
+        </ul>
       </Panel>
 
       <Panel title="Resolved Leaves" icon={Layers3}>
@@ -2135,6 +2442,49 @@ function FormulaWorkspace({
           <Metric label="Resolved grams" value={formatGrams(activeTotals.totalGrams)} />
           <Metric label="Formula cost" value={formatCurrency(activeTotals.totalCost)} />
           <Metric label="Cost / gram" value={formatCurrency(activeTotals.costPerGram)} />
+        </div>
+      </Panel>
+
+      <Panel className="wide" title="Version, Approval, Export" icon={FileLock2}>
+        <div className="material-form-grid">
+          <label className="field-row wide-field">
+            <span>Snapshot note</span>
+            <input
+              aria-label="Formula version note"
+              value={versionNote}
+              onChange={(event) => setVersionNote(event.target.value)}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void snapshotVersion()} disabled={formula.lines.length === 0}>
+            Snapshot Version
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void approveFormulaVersion()}>
+            Approve Formula
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void exportFormulaRecord()} disabled={formula.lines.length === 0}>
+            Export + Audit
+          </button>
+        </div>
+        <div className="version-list">
+          {versions.length > 0 ? (
+            versions.map((version) => (
+              <div className="version-row" key={version.id}>
+                <div>
+                  <strong>{version.formulaCode} {version.version}</strong>
+                  <span>{version.note}</span>
+                </div>
+                <StatusBadge status={version.status === 'APPROVED' ? 'stable' : 'review'} label={version.status} />
+                <span className="mono-value">{formatGrams(version.totalGrams)}</span>
+                <span className="mono-value">{formatCurrency(version.totalCost)}</span>
+                <span className="mono-value">{version.checksum}</span>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state">
+              <strong>No version snapshots loaded.</strong>
+              <span>Create a snapshot before approval/export evidence review.</span>
+            </div>
+          )}
         </div>
       </Panel>
 

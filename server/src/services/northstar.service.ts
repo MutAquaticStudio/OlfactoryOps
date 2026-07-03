@@ -16,6 +16,7 @@ import {
   featureFlags,
   formatSequenceValue,
   formulaTotals,
+  formulaVersions,
   formulas as initialFormulas,
   formatGrams,
   initialLots,
@@ -52,6 +53,7 @@ import {
   type FeatureFlagRecord,
   type Formula,
   type FormulaLine,
+  type FormulaVersionRecord,
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
@@ -128,6 +130,13 @@ type MaterialIngestionBody = {
   odor?: string[]
 }
 
+type FormulaLineMutationBody = {
+  materialId?: string
+  childFormulaId?: string
+  grams?: number
+  label?: string
+}
+
 @Injectable()
 export class NorthStarService {
   private materialRecords: Material[] = structuredClone(materials)
@@ -135,6 +144,7 @@ export class NorthStarService {
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
   private formulaRecords: Formula[] = structuredClone(initialFormulas)
+  private formulaVersionRecords: FormulaVersionRecord[] = structuredClone(formulaVersions)
   private usageHistory: UsageRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
@@ -253,35 +263,14 @@ export class NorthStarService {
 
   addFormulaLine(
     id: string,
-    body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+    body: FormulaLineMutationBody,
   ) {
     const formula = this.formulaRecords.find((item) => item.id === id)
     if (!formula) {
       throw new NotFoundException(`Formula ${id} was not found`)
     }
 
-    const grams = Number(body.grams ?? 0)
-    if (!Number.isFinite(grams) || grams <= 0) {
-      throw new UnprocessableEntityException('Formula line grams must be greater than 0')
-    }
-    if (Boolean(body.materialId) === Boolean(body.childFormulaId)) {
-      throw new UnprocessableEntityException('Formula line must reference exactly one material or child formula')
-    }
-
-    const material = body.materialId ? this.materialRecords.find((item) => item.id === body.materialId) : undefined
-    if (body.materialId && !material) {
-      throw new NotFoundException(`Material ${body.materialId} was not found`)
-    }
-
-    const childFormula = body.childFormulaId
-      ? this.formulaRecords.find((item) => item.id === body.childFormulaId)
-      : undefined
-    if (body.childFormulaId && !childFormula) {
-      throw new NotFoundException(`Child formula ${body.childFormulaId} was not found`)
-    }
-    if (body.childFormulaId === id) {
-      throw new UnprocessableEntityException('Formula cannot contain itself as a child formula')
-    }
+    const { grams, material, childFormula } = this.validateFormulaLineMutation(id, body)
 
     const line: FormulaLine = {
       id: `${id}-line-${formula.lines.length + 1}-${Date.now()}`,
@@ -302,6 +291,123 @@ export class NorthStarService {
         leaves,
         totals: formulaTotals(leaves),
         invariant: 'formula line save does not create inventory movement',
+      },
+    }
+  }
+
+  updateFormulaLine(id: string, lineId: string, body: FormulaLineMutationBody) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    const line = formula.lines.find((item) => item.id === lineId)
+    if (!line) {
+      throw new NotFoundException(`Formula line ${lineId} was not found`)
+    }
+
+    const mutationBody: FormulaLineMutationBody = {
+      grams: body.grams ?? line.grams,
+      label: body.label ?? line.label,
+      materialId: body.materialId ?? (body.childFormulaId ? undefined : line.materialId),
+      childFormulaId: body.childFormulaId ?? (body.materialId ? undefined : line.childFormulaId),
+    }
+    const { grams, material, childFormula } = this.validateFormulaLineMutation(id, mutationBody)
+    const updatedLine: FormulaLine = {
+      id: line.id,
+      label: mutationBody.label?.trim() || material?.name || childFormula?.name || line.label,
+      grams,
+      ...(material ? { materialId: material.id } : {}),
+      ...(childFormula ? { childFormulaId: childFormula.id } : {}),
+      ...(line.dilution ? { dilution: line.dilution } : {}),
+    }
+    const updatedFormula = {
+      ...formula,
+      status: formula.status === 'stable' ? ('review' as const) : formula.status,
+      lines: formula.lines.map((item) => (item.id === lineId ? updatedLine : item)),
+    }
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords, this.materialRecords)
+    const audit = this.recordAudit('formula.line.update', updatedFormula.code, 'api:perfumer', 'allowed')
+    return {
+      data: {
+        formula: updatedFormula,
+        line: updatedLine,
+        leaves,
+        totals: formulaTotals(leaves),
+        audit,
+        invariant: 'formula line update does not create inventory movement',
+      },
+    }
+  }
+
+  deleteFormulaLine(id: string, lineId: string) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    if (!formula.lines.some((line) => line.id === lineId)) {
+      throw new NotFoundException(`Formula line ${lineId} was not found`)
+    }
+
+    const updatedFormula = {
+      ...formula,
+      status: formula.status === 'stable' ? ('review' as const) : formula.status,
+      lines: formula.lines.filter((line) => line.id !== lineId),
+    }
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords, this.materialRecords)
+    const audit = this.recordAudit('formula.line.delete', updatedFormula.code, 'api:perfumer', 'allowed')
+    return {
+      data: {
+        formula: updatedFormula,
+        leaves,
+        totals: formulaTotals(leaves),
+        audit,
+        invariant: 'formula line delete does not create inventory movement',
+      },
+    }
+  }
+
+  moveFormulaLine(id: string, lineId: string, body: { direction?: 'up' | 'down' }) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    const index = formula.lines.findIndex((line) => line.id === lineId)
+    if (index === -1) {
+      throw new NotFoundException(`Formula line ${lineId} was not found`)
+    }
+    const direction = body.direction === 'down' ? 'down' : 'up'
+    const swapIndex = direction === 'up' ? index - 1 : index + 1
+    if (swapIndex < 0 || swapIndex >= formula.lines.length) {
+      return {
+        data: {
+          formula,
+          invariant: 'formula line order unchanged at boundary and no inventory movement was created',
+        },
+      }
+    }
+
+    const lines = [...formula.lines]
+    const currentLine = lines[index]
+    const swapLine = lines[swapIndex]
+    if (!currentLine || !swapLine) {
+      throw new NotFoundException(`Formula line ${lineId} was not found`)
+    }
+    lines[index] = swapLine
+    lines[swapIndex] = currentLine
+    const updatedFormula = {
+      ...formula,
+      status: formula.status === 'stable' ? ('review' as const) : formula.status,
+      lines,
+    }
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
+    const audit = this.recordAudit('formula.line.reorder', updatedFormula.code, 'api:perfumer', 'allowed')
+    return {
+      data: {
+        formula: updatedFormula,
+        audit,
+        invariant: 'formula line reorder does not create inventory movement',
       },
     }
   }
@@ -477,6 +583,137 @@ export class NorthStarService {
         formula: resolved.formula,
         totals: resolved.totals,
         invariant: 'cost is derived from resolved formula leaves',
+      },
+    }
+  }
+
+  formulaVersions(id: string) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    return {
+      data: {
+        formula,
+        versions: this.formulaVersionRecords.filter((version) => version.formulaId === id),
+        invariant: 'version history is immutable snapshot evidence for formula approval',
+      },
+    }
+  }
+
+  createFormulaVersion(id: string, body: { note?: string; actor?: string } = {}) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    if (formula.lines.length === 0) {
+      throw new UnprocessableEntityException('Formula must have at least one line before snapshot')
+    }
+
+    const version = this.nextFormulaVersionValue(formula.version)
+    const updatedFormula = { ...formula, version, status: 'review' as const }
+    const leaves = resolveFormulaWithCatalog(id, this.formulaRecords, this.materialRecords)
+    const totals = formulaTotals(leaves)
+    const snapshot: FormulaVersionRecord = {
+      id: `${updatedFormula.code}-${version}`,
+      formulaId: id,
+      formulaCode: updatedFormula.code,
+      version,
+      status: 'SNAPSHOT',
+      createdAt: new Date().toISOString(),
+      createdBy: body.actor?.trim() || updatedFormula.owner,
+      note: body.note?.trim() || `Snapshot ${updatedFormula.code} ${version}`,
+      lineCount: updatedFormula.lines.length,
+      totalGrams: totals.totalGrams,
+      totalCost: totals.totalCost,
+      checksum: this.formulaVersionChecksum(updatedFormula),
+      lines: structuredClone(updatedFormula.lines),
+    }
+
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? updatedFormula : item))
+    this.formulaVersionRecords = [
+      snapshot,
+      ...this.formulaVersionRecords.filter((item) => item.id !== snapshot.id),
+    ]
+    const audit = this.recordAudit('formula.version.snapshot', updatedFormula.code, snapshot.createdBy, 'allowed')
+    return {
+      data: {
+        formula: updatedFormula,
+        version: snapshot,
+        audit,
+        invariant: 'formula version snapshot does not create inventory movement',
+      },
+    }
+  }
+
+  approveFormula(id: string, body: { actor?: string } = {}) {
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    const version = this.formulaVersionRecords.find(
+      (item) => item.formulaId === id && item.version === formula.version,
+    )
+    if (!version) {
+      throw new UnprocessableEntityException('Formula must have a version snapshot before approval')
+    }
+
+    const approvedVersion = { ...version, status: 'APPROVED' as const }
+    const approvedFormula = { ...formula, status: 'stable' as const }
+    const actor = body.actor?.trim() || formula.owner
+    this.formulaRecords = this.formulaRecords.map((item) => (item.id === id ? approvedFormula : item))
+    this.formulaVersionRecords = this.formulaVersionRecords.map((item) =>
+      item.id === version.id ? approvedVersion : item,
+    )
+    const audit = this.recordAudit('formula.approve', approvedFormula.code, actor, 'allowed')
+    return {
+      data: {
+        formula: approvedFormula,
+        version: approvedVersion,
+        audit,
+        invariant: 'formula approval changes review state but does not consume stock',
+      },
+    }
+  }
+
+  exportFormula(id: string, body: { actor?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.export')
+    const formula = this.formulaRecords.find((item) => item.id === id)
+    if (!formula) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    if (formula.lines.length === 0) {
+      throw new UnprocessableEntityException('Formula must have at least one line before export')
+    }
+
+    const actor = body.actor?.trim() || session.userId
+    const document: DocumentRecord = {
+      id: `DOC-FRM-${formula.code.replace(/[^A-Z0-9]/g, '')}-${formula.version.toUpperCase()}`,
+      type: 'Formula Export',
+      title: `${formula.code} ${formula.version} Export`,
+      linkedTo: formula.id,
+      version: formula.version,
+      sensitivity: 'Highly Confidential',
+      lastAccessed: new Date().toISOString(),
+      downloads: 0,
+      storageKey: `org-nxl/formulas/${formula.id}/export-${formula.version}.pdf`,
+      mimeType: 'application/pdf',
+      sizeKb: Math.max(32, Math.round(JSON.stringify(formula.lines).length / 8)),
+      checksum: this.formulaVersionChecksum(formula),
+      owner: 'Compliance',
+    }
+    this.documentRecords = [
+      document,
+      ...this.documentRecords.filter((item) => item.id !== document.id),
+    ]
+    const audit = this.recordAudit('formula.export', formula.code, actor, 'allowed')
+    return {
+      data: {
+        formula,
+        document,
+        audit,
+        invariant: 'formula export is audited and creates no inventory movement',
       },
     }
   }
@@ -1976,6 +2213,76 @@ export class NorthStarService {
       fields: { mw: material.mw, logP: material.logP, vaporPressure: material.vaporPressure },
       molecules: [{ name: `${material.name} primary component`, cas: material.cas, percent: 100 }],
     }
+  }
+
+  private validateFormulaLineMutation(formulaId: string, body: FormulaLineMutationBody) {
+    const grams = Number(body.grams ?? 0)
+    if (!Number.isFinite(grams) || grams <= 0) {
+      throw new UnprocessableEntityException('Formula line grams must be greater than 0')
+    }
+
+    const materialId = body.materialId?.trim()
+    const childFormulaId = body.childFormulaId?.trim()
+    if (Boolean(materialId) === Boolean(childFormulaId)) {
+      throw new UnprocessableEntityException('Formula line must reference exactly one material or child formula')
+    }
+
+    const material = materialId ? this.materialRecords.find((item) => item.id === materialId) : undefined
+    if (materialId && !material) {
+      throw new NotFoundException(`Material ${materialId} was not found`)
+    }
+
+    const childFormula = childFormulaId
+      ? this.formulaRecords.find((item) => item.id === childFormulaId)
+      : undefined
+    if (childFormulaId && !childFormula) {
+      throw new NotFoundException(`Child formula ${childFormulaId} was not found`)
+    }
+    if (childFormulaId === formulaId || (childFormulaId && this.formulaContainsFormula(childFormulaId, formulaId))) {
+      throw new UnprocessableEntityException('Nested formula would create a cycle')
+    }
+
+    return { grams, material, childFormula }
+  }
+
+  private formulaContainsFormula(rootFormulaId: string, targetFormulaId: string, trail = new Set<string>()): boolean {
+    if (rootFormulaId === targetFormulaId) {
+      return true
+    }
+    if (trail.has(rootFormulaId)) {
+      return false
+    }
+    const formula = this.formulaRecords.find((item) => item.id === rootFormulaId)
+    if (!formula) {
+      return false
+    }
+    const nextTrail = new Set(trail).add(rootFormulaId)
+    return formula.lines.some((line) => {
+      if (!line.childFormulaId) {
+        return false
+      }
+      return (
+        line.childFormulaId === targetFormulaId ||
+        this.formulaContainsFormula(line.childFormulaId, targetFormulaId, nextTrail)
+      )
+    })
+  }
+
+  private nextFormulaVersionValue(version: string) {
+    const match = /^v(\d+)$/i.exec(version.trim())
+    const current = match ? Number(match[1]) : 0
+    return `v${current + 1}`
+  }
+
+  private formulaVersionChecksum(formula: Formula) {
+    const payload = `${formula.id}:${formula.version}:${formula.lines
+      .map((line) => `${line.id}:${line.materialId ?? line.childFormulaId}:${line.grams}`)
+      .join('|')}`
+    let hash = 0
+    for (let index = 0; index < payload.length; index += 1) {
+      hash = (hash * 31 + payload.charCodeAt(index)) >>> 0
+    }
+    return `sha256:${hash.toString(16).padStart(8, '0')}`
   }
 
   private pickLotsForMaterial(materialId: string, requiredGrams: number, reservedOnly = false) {

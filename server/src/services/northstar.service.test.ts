@@ -432,6 +432,64 @@ describe('NorthStarService', () => {
     expect(result.invariant).toContain('does not create inventory movement')
   })
 
+  it('edits, reorders, and deletes formula lines without consuming inventory', () => {
+    const service = new NorthStarService()
+    const formula = service.createFormulaDraft({ name: 'Editable Accord', targetGrams: 50 }).data.formula
+    const firstLine = service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 12 }).data.line
+    const secondLine = service.addFormulaLine(formula.id, { materialId: 'mat-iso', grams: 8 }).data.line
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const updated = service.updateFormulaLine(formula.id, firstLine.id, { grams: 10, label: 'Hedione HC' }).data
+    const moved = service.moveFormulaLine(formula.id, secondLine.id, { direction: 'up' }).data
+    const deleted = service.deleteFormulaLine(formula.id, firstLine.id).data
+
+    expect(updated.line.grams).toBe(10)
+    expect(updated.line.label).toBe('Hedione HC')
+    expect(moved.formula.lines[0]?.id).toBe(secondLine.id)
+    expect(deleted.formula.lines).toHaveLength(1)
+    expect(deleted.formula.lines[0]?.id).toBe(secondLine.id)
+    expect(deleted.invariant).toContain('does not create inventory movement')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('resolves nested child formulas and blocks formula cycles', () => {
+    const service = new NorthStarService()
+    const parent = service.createFormulaDraft({ name: 'Nested Citrus Trial', targetGrams: 100 }).data.formula
+    const nested = service.addFormulaLine(parent.id, {
+      childFormulaId: 'frm-accord-citrus',
+      grams: 25,
+      label: 'Citrus top accord',
+    }).data
+    const resolved = service.resolveFormula(parent.id).data
+
+    expect(nested.line.childFormulaId).toBe('frm-accord-citrus')
+    expect(resolved.leaves.some((leaf) => leaf.materialId === 'mat-bergamot')).toBe(true)
+    expect(resolved.leaves[0]?.sourcePath).toContain('Citrus top accord')
+    expect(() =>
+      service.addFormulaLine('frm-accord-citrus', { childFormulaId: parent.id, grams: 5 }),
+    ).toThrow(UnprocessableEntityException)
+  })
+
+  it('snapshots, approves, and exports formula versions with audit but no stock movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const snapshot = service.createFormulaVersion('frm-0421', { note: 'Bench QA snapshot' }).data
+    const approval = service.approveFormula('frm-0421').data
+    const exported = service.exportFormula('frm-0421').data
+    const versions = service.formulaVersions('frm-0421').data
+
+    expect(snapshot.formula.version).toBe('v13')
+    expect(snapshot.version.status).toBe('SNAPSHOT')
+    expect(approval.formula.status).toBe('stable')
+    expect(approval.version.status).toBe('APPROVED')
+    expect(exported.document.type).toBe('Formula Export')
+    expect(exported.document.sensitivity).toBe('Highly Confidential')
+    expect(exported.audit.action).toBe('formula.export')
+    expect(versions.versions[0]?.status).toBe('APPROVED')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(exported.invariant).toContain('creates no inventory movement')
+  })
+
   it('receives direct inventory receipts through lot and IN movement', () => {
     const service = new NorthStarService()
     const beforeMovements = service.inventoryMovements().data.length

@@ -824,6 +824,7 @@ kbd {
 .document-list,
 .provenance-list,
 .card-list,
+.version-list,
 .formula-library,
 .formula-lines,
 .resolved-table,
@@ -847,6 +848,7 @@ kbd {
 .movement-row,
 .document-row,
 .provenance-item,
+.version-row,
 .formula-card,
 .formula-line,
 .resolved-row,
@@ -877,6 +879,10 @@ kbd {
 .history-row,
 .allocation-row {
   grid-template-columns: 1fr auto;
+}
+
+.version-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto minmax(150px, auto);
 }
 
 .weighing-row,
@@ -936,6 +942,58 @@ kbd {
   grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
+.formula-card {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.formula-line.is-editable {
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 0.35fr) auto minmax(190px, auto);
+}
+
+.line-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.compact-input {
+  display: grid;
+  gap: 4px;
+  min-width: 88px;
+}
+
+.compact-input span,
+.formula-status-row span,
+.version-row span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.compact-input input {
+  width: 100%;
+  min-width: 0;
+}
+
+.formula-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.ghost-button.tiny {
+  min-height: 28px;
+  padding: 6px 8px;
+  font-size: 0.72rem;
+}
+
+.ghost-button.danger {
+  color: #ffb4b8;
+  border-color: rgba(242, 88, 95, 0.32);
+}
+
 .material-row {
   width: 100%;
   text-align: left;
@@ -972,6 +1030,7 @@ kbd {
 .audit-row span,
 .movement-row span,
 .document-row span,
+.version-row span,
 .provenance-item span {
   color: var(--text-2);
   font-size: 0.78rem;
@@ -991,6 +1050,7 @@ kbd {
 .formula-line > div,
 .resolved-row > div,
 .material-row > div,
+.version-row > div,
 .allocation-row > div,
 .history-row > div,
 .weighing-row > div,
@@ -1689,8 +1749,30 @@ input[type='range'] {
     transition: transform 0.25s;
   }
 
+  .sidebar.glass-hover:hover {
+    transform: translateX(-110%);
+  }
+
   .app-shell.is-rail .sidebar {
+    width: 76px;
+    overflow: hidden;
     transform: translateX(0);
+  }
+
+  .app-shell.is-rail .sidebar.glass-hover:hover {
+    transform: translateX(0);
+  }
+
+  .app-shell.is-rail .workspace {
+    margin-left: 86px;
+  }
+
+  .app-shell.is-rail .wordmark,
+  .app-shell.is-rail .brand-row .mono-small,
+  .app-shell.is-rail .nav-title,
+  .app-shell.is-rail .nav-item span:nth-child(2),
+  .app-shell.is-rail .sidebar-footer {
+    display: none;
   }
 
   .mobile-menu {
@@ -1758,7 +1840,10 @@ input[type='range'] {
   .document-row,
   .lot-row,
   .record-card,
+  .formula-card,
   .formula-line,
+  .formula-line.is-editable,
+  .version-row,
   .resolved-row,
   .material-row,
   .brand-row-card,
@@ -1773,6 +1858,10 @@ input[type='range'] {
   .weighing-evidence-row {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .formula-line.is-editable .line-actions {
+    justify-content: flex-start;
   }
 
   .slider-row,
