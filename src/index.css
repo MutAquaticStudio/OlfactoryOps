@@ -1272,6 +1272,7 @@ kbd {
 .lab-grid,
 .documents-grid,
 .production-grid,
+.procurement-grid,
 .identity-grid,
 .customization-grid,
 .saas-grid {
@@ -1335,6 +1336,33 @@ kbd {
 
 .production-list .production-row {
   grid-template-columns: minmax(0, 1fr) auto minmax(360px, auto);
+}
+
+.purchase-order-list .purchase-order-row {
+  grid-template-columns: minmax(0, 1fr) auto minmax(110px, 0.18fr) minmax(360px, auto);
+}
+
+.supplier-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.purchase-order-row input {
+  min-width: 0;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.price-history-list {
+  margin-top: 12px;
+}
+
+.price-history-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
 }
 
 .document-generate-form {
@@ -2032,6 +2060,12 @@ input[type='range'] {
     transform: translateX(0);
   }
 
+  .app-shell.is-mobile-nav-open .sidebar {
+    width: min(300px, calc(100vw - 20px));
+    overflow: auto;
+    transform: translateX(0);
+  }
+
   .app-shell.is-rail .sidebar.glass-hover:hover {
     transform: translateX(0);
   }
@@ -2040,12 +2074,27 @@ input[type='range'] {
     margin-left: 86px;
   }
 
+  .app-shell.is-mobile-nav-open .workspace {
+    margin-left: 0;
+  }
+
   .app-shell.is-rail .wordmark,
   .app-shell.is-rail .brand-row .mono-small,
   .app-shell.is-rail .nav-title,
   .app-shell.is-rail .nav-item span:nth-child(2),
   .app-shell.is-rail .sidebar-footer {
     display: none;
+  }
+
+  .app-shell.is-mobile-nav-open .wordmark,
+  .app-shell.is-mobile-nav-open .brand-row .mono-small,
+  .app-shell.is-mobile-nav-open .nav-title,
+  .app-shell.is-mobile-nav-open .nav-item span:nth-child(2) {
+    display: block;
+  }
+
+  .app-shell.is-mobile-nav-open .sidebar-footer {
+    display: grid;
   }
 
   .mobile-menu {
@@ -2077,6 +2126,7 @@ input[type='range'] {
   .lab-grid,
   .documents-grid,
   .production-grid,
+  .procurement-grid,
   .identity-grid,
   .customization-grid,
   .saas-grid,
@@ -2147,7 +2197,8 @@ input[type='range'] {
 
   .document-list:not(.compact-list) .document-row,
   .compact-list .document-row,
-  .production-list .production-row {
+  .production-list .production-row,
+  .purchase-order-list .purchase-order-row {
     grid-template-columns: 1fr;
     grid-template-areas: none;
   }

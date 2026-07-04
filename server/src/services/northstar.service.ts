@@ -33,6 +33,7 @@ import {
   permissionCatalog,
   phases,
   planLabUsage,
+  priceHistory,
   productionBatches,
   purchaseOrders,
   resolveFormulaWithCatalog,
@@ -76,12 +77,14 @@ import {
   type MoleculeComponent,
   type NumberingSequenceRecord,
   type OrganizationRecord,
+  type PriceHistoryRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
   type RolePolicy,
   type SalesOrderRecord,
   type StockTakeRecord,
   type StorageLocation,
+  type SupplierRecord,
   type TenantSettingsRecord,
 } from '../../../src/data/northStar.js'
 
@@ -117,6 +120,24 @@ type SignupBody = {
   workspaceSlug?: string
   email?: string
   name?: string
+}
+
+type CreatePurchaseOrderBody = {
+  supplierId?: string
+  materialId?: string
+  quantityGrams?: number
+  unitCost?: number
+  currency?: string
+  expectedDate?: string
+}
+
+type CreateSupplierBody = {
+  name?: string
+  country?: string
+  leadTimeDays?: number
+  contactEmail?: string
+  paymentTerms?: string
+  preferredMaterialIds?: string[]
 }
 
 const productionLifecycleStatuses: ProductionBatchRecord['status'][] = [
@@ -197,7 +218,9 @@ export class NorthStarService {
   private customFieldRecords: CustomFieldDefinition[] = structuredClone(customFields)
   private brandingRecord: BrandingConfig = structuredClone(brandingConfig)
   private productionBatchRecords: ProductionBatchRecord[] = structuredClone(productionBatches)
+  private supplierRecords: SupplierRecord[] = structuredClone(suppliers)
   private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
+  private priceHistoryRecords: PriceHistoryRecord[] = structuredClone(priceHistory)
   private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
   private auditCounter = auditEvents.length
 
@@ -2447,14 +2470,135 @@ export class NorthStarService {
   }
 
   suppliers() {
-    return { data: suppliers }
+    return { data: this.supplierRecords }
+  }
+
+  createSupplier(body: CreateSupplierBody = {}) {
+    const name = body.name?.trim()
+    const country = body.country?.trim().toUpperCase()
+    const contactEmail = body.contactEmail?.trim().toLowerCase()
+
+    if (!name) {
+      throw new UnprocessableEntityException('Supplier name is required')
+    }
+    if (!country || country.length !== 2) {
+      throw new UnprocessableEntityException('Supplier country must be a two-letter code')
+    }
+    if (!contactEmail || !contactEmail.includes('@')) {
+      throw new UnprocessableEntityException('Supplier contactEmail is required')
+    }
+    if (this.supplierRecords.some((supplier) => supplier.name.toLowerCase() === name.toLowerCase())) {
+      throw new UnprocessableEntityException(`Supplier ${name} already exists`)
+    }
+    const leadTimeDays = Math.round(Number(body.leadTimeDays ?? 14))
+    if (!Number.isFinite(leadTimeDays) || leadTimeDays <= 0) {
+      throw new UnprocessableEntityException('Supplier leadTimeDays must be greater than 0')
+    }
+
+    const supplier: SupplierRecord = {
+      id: `SUP-${String(this.supplierRecords.length + 8).padStart(3, '0')}`,
+      name,
+      status: 'review',
+      country,
+      leadTimeDays,
+      contactEmail,
+      paymentTerms: body.paymentTerms?.trim() || 'Net 30',
+      preferredMaterialIds: (body.preferredMaterialIds ?? []).filter((materialId) =>
+        this.materialRecords.some((material) => material.id === materialId),
+      ),
+    }
+
+    this.supplierRecords = [supplier, ...this.supplierRecords]
+    const audit = this.recordAudit('procurement.supplier.create', supplier.id, 'api:procurement', 'allowed')
+    return {
+      data: {
+        supplier,
+        audit,
+        invariant: 'supplier master changes are audited and do not create inventory movement',
+      },
+    }
   }
 
   purchaseOrders() {
     return { data: this.purchaseOrderRecords }
   }
 
-  receivePurchaseOrder(id: string) {
+  createPurchaseOrder(body: CreatePurchaseOrderBody = {}) {
+    const supplier = this.supplierRecords.find((item) => item.id === body.supplierId)
+    if (!supplier) {
+      throw new NotFoundException(`Supplier ${body.supplierId ?? 'unknown'} was not found`)
+    }
+    const material = this.materialRecords.find((item) => item.id === body.materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${body.materialId ?? 'unknown'} was not found`)
+    }
+    const quantityGrams = Number(body.quantityGrams ?? 0)
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      throw new UnprocessableEntityException('Purchase order quantityGrams must be greater than 0')
+    }
+    const unitCost = Number(body.unitCost ?? material.costPerGram)
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      throw new UnprocessableEntityException('Purchase order unitCost must be greater than 0')
+    }
+
+    const id = this.nextNumber('purchaseOrder').data.value
+    const expectedDate =
+      body.expectedDate?.trim() ||
+      new Date(Date.now() + supplier.leadTimeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const purchaseOrder: PurchaseOrderRecord = {
+      id,
+      supplierId: supplier.id,
+      materialId: material.id,
+      quantityGrams,
+      receivedGrams: 0,
+      status: 'DRAFT',
+      expectedDate,
+      unitCost,
+      currency: body.currency?.trim().toUpperCase() || 'USD',
+      createdAt: new Date().toISOString(),
+    }
+
+    this.purchaseOrderRecords = [purchaseOrder, ...this.purchaseOrderRecords]
+    const audit = this.recordAudit('procurement.po.create', id, 'api:procurement', 'allowed')
+    return {
+      data: {
+        purchaseOrder,
+        audit,
+        invariant: 'purchase order draft creation does not reserve or move inventory',
+      },
+    }
+  }
+
+  updatePurchaseOrderStatus(id: string, status: PurchaseOrderRecord['status'] = 'SENT') {
+    const order = this.purchaseOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Purchase order ${id} was not found`)
+    }
+    if (!['DRAFT', 'SENT', 'PARTIAL', 'RECEIVED'].includes(status)) {
+      throw new UnprocessableEntityException(`Purchase order status ${status} is not supported`)
+    }
+    if (order.status === 'RECEIVED' && status !== 'RECEIVED') {
+      throw new UnprocessableEntityException(`Purchase order ${id} is already received`)
+    }
+    if (status === 'RECEIVED' && order.receivedGrams < order.quantityGrams) {
+      throw new UnprocessableEntityException(`Purchase order ${id} must be fully received through goods receipt`)
+    }
+    if (status === 'DRAFT' && order.receivedGrams > 0) {
+      throw new UnprocessableEntityException(`Purchase order ${id} cannot return to draft after receipt`)
+    }
+
+    this.purchaseOrderRecords = this.purchaseOrderRecords.map((item) => (item.id === id ? { ...item, status } : item))
+    const audit = this.recordAudit('procurement.po.status', id, 'api:procurement', status === 'PARTIAL' ? 'review' : 'allowed')
+    return {
+      data: {
+        purchaseOrder: this.purchaseOrderRecords.find((item) => item.id === id)!,
+        audit,
+        invariant: 'purchase order state transitions are audited and separated from stock receipt',
+      },
+    }
+  }
+
+  receivePurchaseOrder(id: string, body: { receivedGrams?: number } = {}) {
     const order = this.purchaseOrderRecords.find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Purchase order ${id} was not found`)
@@ -2466,38 +2610,89 @@ export class NorthStarService {
     if (order.status === 'RECEIVED') {
       throw new UnprocessableEntityException(`Purchase order ${id} has already been received`)
     }
+    if (order.status === 'DRAFT') {
+      throw new UnprocessableEntityException(`Purchase order ${id} must be sent before receiving goods`)
+    }
+    const remainingGrams = order.quantityGrams - order.receivedGrams
+    const receivedGrams = Number(body.receivedGrams ?? remainingGrams)
+    if (!Number.isFinite(receivedGrams) || receivedGrams <= 0) {
+      throw new UnprocessableEntityException('receivedGrams must be greater than 0')
+    }
+    if (receivedGrams > remainingGrams) {
+      throw new UnprocessableEntityException(`receivedGrams exceeds remaining quantity for ${id}`)
+    }
 
+    const totalReceived = order.receivedGrams + receivedGrams
+    const receiptIndex = this.movements.filter((movement) => movement.ref === id && movement.type === 'RECEIPT').length + 1
     const lot: InventoryLot = {
-      id: `lot-${order.id.toLowerCase()}`,
+      id: `lot-${order.id.toLowerCase()}-${receiptIndex}`,
       materialId: order.materialId,
-      lotNumber: `L-${order.id}`,
-      quantityGrams: order.quantityGrams,
+      lotNumber: `L-${order.id}-${String(receiptIndex).padStart(2, '0')}`,
+      quantityGrams: receivedGrams,
       reservedGrams: 0,
       receivedDate: new Date().toISOString().slice(0, 10),
       expiryDate: '2028-12-31',
       qualityStatus: 'APPROVED',
       location: 'Receiving Bay',
-      unitCost: material.costPerGram,
+      unitCost: order.unitCost,
+      supplierLotRef: order.id,
+      currency: order.currency,
     }
     const movement: InventoryMovement = {
-      id: `MOV-PO-${id}`,
+      id: `MOV-PO-${id}-${receiptIndex}`,
       at: new Date().toISOString(),
       type: 'RECEIPT',
       direction: 'IN',
       materialId: order.materialId,
       lotId: lot.id,
-      quantityGrams: order.quantityGrams,
+      quantityGrams: receivedGrams,
       balanceAfter: lot.quantityGrams,
       ref: id,
       actor: 'api:procurement',
     }
+    const priceSnapshot: PriceHistoryRecord = {
+      id: `PRICE-${id}-${receiptIndex}`,
+      materialId: order.materialId,
+      supplierId: order.supplierId,
+      purchaseOrderId: id,
+      unitCost: order.unitCost,
+      currency: order.currency,
+      quantityGrams: receivedGrams,
+      capturedAt: movement.at,
+      source: 'PO_RECEIPT',
+    }
     this.lots = [lot, ...this.lots]
     this.movements = [movement, ...this.movements]
+    this.priceHistoryRecords = [priceSnapshot, ...this.priceHistoryRecords]
     this.purchaseOrderRecords = this.purchaseOrderRecords.map((item) =>
-      item.id === id ? { ...item, receivedGrams: item.quantityGrams, status: 'RECEIVED' } : item,
+      item.id === id
+        ? {
+            ...item,
+            receivedGrams: totalReceived,
+            status: totalReceived >= item.quantityGrams ? 'RECEIVED' : 'PARTIAL',
+          }
+        : item,
     )
-    this.recordAudit('procurement.po.receive', id, 'api:procurement', 'allowed')
-    return { data: { lot, movement, invariant: 'goods receipt creates lot and IN movement' } }
+    const audit = this.recordAudit('procurement.po.receive', id, 'api:procurement', 'allowed')
+    return {
+      data: {
+        lot,
+        movement,
+        purchaseOrder: this.purchaseOrderRecords.find((item) => item.id === id)!,
+        priceHistory: priceSnapshot,
+        audit,
+        invariant: 'goods receipt creates lot and IN movement plus immutable price history snapshot',
+      },
+    }
+  }
+
+  materialPriceHistory(materialId: string) {
+    if (!this.materialRecords.some((material) => material.id === materialId)) {
+      throw new NotFoundException(`Material ${materialId} was not found`)
+    }
+    return {
+      data: this.priceHistoryRecords.filter((record) => record.materialId === materialId),
+    }
   }
 
   catalogSkus() {

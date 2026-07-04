@@ -456,6 +456,9 @@ export interface SupplierRecord {
   status: DomainStatus
   country: string
   leadTimeDays: number
+  contactEmail: string
+  paymentTerms: string
+  preferredMaterialIds: string[]
 }
 
 export interface PurchaseOrderRecord {
@@ -464,8 +467,23 @@ export interface PurchaseOrderRecord {
   materialId: string
   quantityGrams: number
   receivedGrams: number
-  status: 'DRAFT' | 'ORDERED' | 'PARTIAL' | 'RECEIVED'
+  status: 'DRAFT' | 'SENT' | 'PARTIAL' | 'RECEIVED'
   expectedDate: string
+  unitCost: number
+  currency: string
+  createdAt: string
+}
+
+export interface PriceHistoryRecord {
+  id: string
+  materialId: string
+  supplierId: string
+  purchaseOrderId: string
+  unitCost: number
+  currency: string
+  quantityGrams: number
+  capturedAt: string
+  source: 'PO_RECEIPT' | 'QUOTE'
 }
 
 export interface CommercialSkuRecord {
@@ -613,7 +631,7 @@ export const phases: Phase[] = [
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'active', securityLayer: 'L5', coverage: 84 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, generation, compliance coverage', gate: 'Access logged and coverage visible', status: 'active', securityLayer: 'L5', coverage: 76 },
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'active', securityLayer: 'L5', coverage: 78 },
-  { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'testing', securityLayer: 'L4/L5', coverage: 62 },
+  { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'testing', securityLayer: 'L4', coverage: 58 },
   { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'testing', securityLayer: 'L5', coverage: 62 },
   { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'testing', securityLayer: 'L4/L5', coverage: 58 },
@@ -790,17 +808,17 @@ export const domains: DomainModule[] = [
     name: 'Procurement',
     shortName: 'Procurement',
     responsibility: 'Supplier, PO, goods receipt, inventory receipt, price history',
-    status: 'testing',
-    health: 62,
-    risk: 'Supplier and PO receipt API live; quote/RFQ remains next gate',
+    status: 'active',
+    health: 78,
+    risk: 'Supplier master, low-stock PO, receipt, and price history controls are live; RFQ comparison remains next gate',
     owner: 'Procurement',
     entities: ['Supplier', 'PurchaseOrder', 'POLine', 'GoodsReceipt', 'PriceHistory'],
-    features: ['Low-stock to PO', 'Goods receipt', 'Price history', 'Supplier master'],
+    features: ['Supplier master', 'Low-stock to PO', 'PO send/receive', 'Partial goods receipt', 'Price history'],
     invariants: ['Goods receipt creates lot and IN movement', 'Price history immutable'],
-    apis: ['/api/v1/suppliers', '/api/v1/purchase-orders', '/api/v1/purchase-orders/:id/receive'],
+    apis: ['/api/v1/suppliers', '/api/v1/purchase-orders', '/api/v1/purchase-orders/:id/receive', '/api/v1/materials/:id/price-history'],
     permissions: ['procurement.view', 'procurement.manage'],
     screens: ['Supplier list', 'PO board', 'Goods receipt'],
-    activity: 'PO-2026-014 receipt creates lot and IN movement',
+    activity: 'Low-stock suggestion can create PO; goods receipt creates lot, RECEIPT movement, and price snapshot',
   },
   {
     key: 'commerce',
@@ -1823,8 +1841,26 @@ export const productionBatches: ProductionBatchRecord[] = [
 ]
 
 export const suppliers: SupplierRecord[] = [
-  { id: 'SUP-003', name: 'Aroma Supplier EU', status: 'stable', country: 'FR', leadTimeDays: 21 },
-  { id: 'SUP-007', name: 'Citrus Naturals Lab', status: 'review', country: 'IT', leadTimeDays: 14 },
+  {
+    id: 'SUP-003',
+    name: 'Aroma Supplier EU',
+    status: 'stable',
+    country: 'FR',
+    leadTimeDays: 21,
+    contactEmail: 'orders@aroma-supplier.eu',
+    paymentTerms: 'Net 30',
+    preferredMaterialIds: ['mat-ambroxan', 'mat-bergamot', 'mat-hedione'],
+  },
+  {
+    id: 'SUP-007',
+    name: 'Citrus Naturals Lab',
+    status: 'review',
+    country: 'IT',
+    leadTimeDays: 14,
+    contactEmail: 'sourcing@citrusnaturals.example',
+    paymentTerms: '50% deposit / net 15',
+    preferredMaterialIds: ['mat-bergamot', 'mat-ethanol'],
+  },
 ]
 
 export const purchaseOrders: PurchaseOrderRecord[] = [
@@ -1834,8 +1870,36 @@ export const purchaseOrders: PurchaseOrderRecord[] = [
     materialId: 'mat-bergamot',
     quantityGrams: 100,
     receivedGrams: 0,
-    status: 'ORDERED',
+    status: 'SENT',
     expectedDate: '2026-07-18',
+    unitCost: 0.18,
+    currency: 'USD',
+    createdAt: '2026-07-01T10:15:00.000Z',
+  },
+]
+
+export const priceHistory: PriceHistoryRecord[] = [
+  {
+    id: 'PRICE-2026-041',
+    materialId: 'mat-bergamot',
+    supplierId: 'SUP-003',
+    purchaseOrderId: 'PO-2026-014',
+    unitCost: 0.18,
+    currency: 'USD',
+    quantityGrams: 100,
+    capturedAt: '2026-07-01T10:15:00.000Z',
+    source: 'QUOTE',
+  },
+  {
+    id: 'PRICE-2026-028',
+    materialId: 'mat-ambroxan',
+    supplierId: 'SUP-003',
+    purchaseOrderId: 'PO-2026-006',
+    unitCost: 0.84,
+    currency: 'USD',
+    quantityGrams: 50,
+    capturedAt: '2026-06-12T09:30:00.000Z',
+    source: 'PO_RECEIPT',
   },
 ]
 

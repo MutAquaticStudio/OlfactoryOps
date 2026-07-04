@@ -74,7 +74,9 @@ import {
   permissionCatalog,
   phases,
   planLabUsage,
+  priceHistory,
   productionBatches,
+  purchaseOrders,
   readinessStats,
   records,
   resolveFormulaWithCatalog,
@@ -84,6 +86,7 @@ import {
   statusMeta,
   storageLocations,
   stockSummary,
+  suppliers,
   tenantSettings,
   tenantSecurityPolicy,
   organizations,
@@ -121,13 +124,16 @@ import {
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type PermissionDefinition,
+  type PriceHistoryRecord,
   type ProductionBatchRecord,
+  type PurchaseOrderRecord,
   type ResolvedLeaf,
   type RolePolicy,
   type SsoConfigRecord,
   type SignedDocumentUrl,
   type StockTakeRecord,
   type StorageLocation,
+  type SupplierRecord,
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
   type WebhookRecord,
@@ -214,6 +220,29 @@ type ProductionConsumeResponse = {
 
 type ProductionStatusResponse = {
   batch: ProductionBatchRecord
+  invariant: string
+}
+
+type SupplierCreateResponse = {
+  supplier: SupplierRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type PurchaseOrderCreateResponse = {
+  purchaseOrder: PurchaseOrderRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type PurchaseOrderStatusResponse = PurchaseOrderCreateResponse
+
+type PurchaseOrderReceiptResponse = {
+  lot: InventoryLot
+  movement: InventoryMovement
+  purchaseOrder: PurchaseOrderRecord
+  priceHistory: PriceHistoryRecord
+  audit: AuditEvent
   invariant: string
 }
 
@@ -680,6 +709,7 @@ function App() {
   const [commandOpen, setCommandOpen] = useState(false)
   const [modal, setModal] = useState<ModalKind>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [selectedMaterialId, setSelectedMaterialId] = useState('mat-iso')
   const [materialRecords, setMaterialRecords] = useState<Material[]>(() => structuredClone(materials))
   const [formulaRecords, setFormulaRecords] = useState<Formula[]>(() => structuredClone(formulas))
@@ -749,6 +779,10 @@ function App() {
     adjustmentDirection === 'OUT' &&
     selectedAdjustmentLot !== undefined &&
     selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
+  const navigateToDomain = useCallback((key: DomainKey) => {
+    setActiveKey(key)
+    setMobileNavOpen(false)
+  }, [])
 
   useEffect(() => {
     const nextWeights: Record<string, number> = {}
@@ -1072,13 +1106,19 @@ function App() {
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
-      <div className={`app-shell ${sidebarCollapsed ? 'is-rail' : ''}`}>
+      <div className={`app-shell ${sidebarCollapsed ? 'is-rail' : ''} ${mobileNavOpen ? 'is-mobile-nav-open' : ''}`}>
         <Sidebar
           activeKey={activeKey}
-          collapsed={sidebarCollapsed}
+          collapsed={sidebarCollapsed && !mobileNavOpen}
           session={currentSession}
-          onNavigate={setActiveKey}
-          onToggle={() => setSidebarCollapsed((value) => !value)}
+          onNavigate={navigateToDomain}
+          onToggle={() => {
+            if (mobileNavOpen) {
+              setMobileNavOpen(false)
+              return
+            }
+            setSidebarCollapsed((value) => !value)
+          }}
         />
         <main className="workspace">
           <Topbar
@@ -1086,7 +1126,7 @@ function App() {
             session={currentSession}
             onCommand={() => setCommandOpen(true)}
             onLogout={() => void logoutWorkspace()}
-            onMenu={() => setSidebarCollapsed((value) => !value)}
+            onMenu={() => setMobileNavOpen((value) => !value)}
           />
           <AnimatePresence mode="wait">
             {activeKey === 'dashboard' ? (
@@ -1095,7 +1135,7 @@ function App() {
                   stats={stats}
                   movements={movements}
                   activeKey={activeKey}
-                  onNavigate={setActiveKey}
+                  onNavigate={navigateToDomain}
                   onOpenModal={setModal}
                 />
               </motion.div>
@@ -1166,7 +1206,7 @@ function App() {
       <CommandPalette
         open={commandOpen}
         onClose={() => setCommandOpen(false)}
-        onNavigate={setActiveKey}
+        onNavigate={navigateToDomain}
         onCommit={() => setModal('commit')}
       />
 
@@ -1951,6 +1991,14 @@ function DomainWorkspace({
       )}
       {domain.key === 'documents' && <DocumentsWorkspace />}
       {domain.key === 'production' && <ProductionWorkspace />}
+      {domain.key === 'procurement' && (
+        <ProcurementWorkspace
+          stock={stock}
+          materialRecords={materialRecords}
+          onLotsChange={onLotsChange}
+          onMovementsChange={onMovementsChange}
+        />
+      )}
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
       {domain.key === 'saas' && <SaasWorkspace session={session} />}
@@ -1965,6 +2013,7 @@ function DomainWorkspace({
         'labUsage',
         'documents',
         'production',
+        'procurement',
         'costing',
         'analytics',
         'saas',
@@ -4325,6 +4374,567 @@ function ProductionWorkspace() {
           <li>Release is blocked until inventory is consumed and QC passes.</li>
           <li>Failed QC moves the batch to HOLD for deviation review.</li>
           <li>Batch records are append/audit-oriented and not hard-deleted.</li>
+        </ul>
+      </Panel>
+    </div>
+  )
+}
+
+const purchaseOrderStatusTone: Record<PurchaseOrderRecord['status'], DomainStatus> = {
+  DRAFT: 'draft',
+  SENT: 'active',
+  PARTIAL: 'review',
+  RECEIVED: 'stable',
+}
+
+const reorderPointByTier: Record<Material['tier'], number> = {
+  Top: 80,
+  Heart: 120,
+  Base: 160,
+}
+
+function ProcurementWorkspace({
+  stock,
+  materialRecords,
+  onLotsChange,
+  onMovementsChange,
+}: {
+  stock: ReturnType<typeof stockSummary>
+  materialRecords: Material[]
+  onLotsChange: Dispatch<SetStateAction<InventoryLot[]>>
+  onMovementsChange: Dispatch<SetStateAction<InventoryMovement[]>>
+}) {
+  const materialOptions = materialRecords.length > 0 ? materialRecords : materials
+  const [supplierRows, setSupplierRows] = useState<SupplierRecord[]>(suppliers)
+  const [orderRows, setOrderRows] = useState<PurchaseOrderRecord[]>(purchaseOrders)
+  const [historyRows, setHistoryRows] = useState<PriceHistoryRecord[]>(priceHistory)
+  const [selectedMaterialId, setSelectedMaterialId] = useState(materialOptions[0]?.id ?? 'mat-bergamot')
+  const [statusMessage, setStatusMessage] = useState('Loading procurement workspace')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [lastReceipt, setLastReceipt] = useState<PurchaseOrderReceiptResponse | null>(null)
+  const [supplierDraft, setSupplierDraft] = useState({
+    name: 'North Aroma Cooperative',
+    country: 'TH',
+    contactEmail: 'procurement@nortaroma.example',
+    leadTimeDays: 10,
+    paymentTerms: 'Net 30',
+  })
+  const [orderDraft, setOrderDraft] = useState({
+    supplierId: suppliers[0]?.id ?? '',
+    materialId: materialOptions[0]?.id ?? '',
+    quantityGrams: 100,
+    unitCost: materialOptions[0]?.costPerGram ?? 0.1,
+    currency: 'USD',
+  })
+  const [receiveDraft, setReceiveDraft] = useState<Record<string, number>>({})
+
+  const materialById = useMemo(
+    () => new Map(materialOptions.map((material) => [material.id, material])),
+    [materialOptions],
+  )
+  const supplierById = useMemo(() => new Map(supplierRows.map((supplier) => [supplier.id, supplier])), [supplierRows])
+  const selectedMaterial = materialById.get(selectedMaterialId) ?? materialOptions[0]
+  const lowStockSuggestions = useMemo(
+    () =>
+      stock
+        .map((item) => {
+          const reorderPointGrams = reorderPointByTier[item.material.tier]
+          return {
+            materialId: item.material.id,
+            materialName: item.material.name,
+            availableGrams: item.available,
+            reorderPointGrams,
+            suggestedOrderGrams: Math.max(reorderPointGrams * 2 - item.available, reorderPointGrams),
+            reason: `${item.material.tier} tier below ${formatGrams(reorderPointGrams)} reorder point`,
+          }
+        })
+        .filter((item) => item.availableGrams < item.reorderPointGrams)
+        .slice(0, 6),
+    [stock],
+  )
+  const activeOrders = useMemo(
+    () => orderRows.filter((order) => order.status !== 'RECEIVED').slice(0, 8),
+    [orderRows],
+  )
+
+  const updateOrder = useCallback((updated: PurchaseOrderRecord) => {
+    setOrderRows((current) => {
+      if (current.some((order) => order.id === updated.id)) {
+        return current.map((order) => (order.id === updated.id ? updated : order))
+      }
+      return [updated, ...current]
+    })
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    async function loadProcurement() {
+      try {
+        const [supplierPayload, orderPayload] = await Promise.all([
+          requestApi<SupplierRecord[]>('/suppliers'),
+          requestApi<PurchaseOrderRecord[]>('/purchase-orders'),
+        ])
+        if (!active) {
+          return
+        }
+        setSupplierRows(supplierPayload)
+        setOrderRows(orderPayload)
+        setStatusMessage('Procurement API synced: suppliers, PO board, and receipt controls are live')
+      } catch (error) {
+        if (active) {
+          setStatusMessage(error instanceof Error ? error.message : 'Using local procurement seed until API is reachable')
+        }
+      }
+    }
+    void loadProcurement()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!materialOptions.some((material) => material.id === selectedMaterialId) && materialOptions[0]) {
+      setSelectedMaterialId(materialOptions[0].id)
+    }
+  }, [materialOptions, selectedMaterialId])
+
+  useEffect(() => {
+    setOrderDraft((current) => ({
+      ...current,
+      supplierId: supplierRows.some((supplier) => supplier.id === current.supplierId)
+        ? current.supplierId
+        : supplierRows[0]?.id ?? '',
+      materialId: materialOptions.some((material) => material.id === current.materialId)
+        ? current.materialId
+        : materialOptions[0]?.id ?? '',
+      unitCost: materialById.get(current.materialId)?.costPerGram ?? current.unitCost,
+    }))
+  }, [materialById, materialOptions, supplierRows])
+
+  useEffect(() => {
+    let active = true
+    async function loadPriceHistory() {
+      try {
+        const payload = await requestApi<PriceHistoryRecord[]>(
+          `/materials/${encodeURIComponent(selectedMaterialId)}/price-history`,
+        )
+        if (active) {
+          setHistoryRows(payload)
+        }
+      } catch {
+        if (active) {
+          setHistoryRows(priceHistory.filter((record) => record.materialId === selectedMaterialId))
+        }
+      }
+    }
+    void loadPriceHistory()
+    return () => {
+      active = false
+    }
+  }, [selectedMaterialId])
+
+  async function createSupplier() {
+    setBusyId('supplier-create')
+    setStatusMessage('Creating supplier master record')
+    try {
+      const payload = await requestApi<SupplierCreateResponse>('/suppliers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...supplierDraft,
+          leadTimeDays: Number(supplierDraft.leadTimeDays),
+          preferredMaterialIds: selectedMaterial ? [selectedMaterial.id] : [],
+        }),
+      })
+      setSupplierRows((current) => [payload.supplier, ...current])
+      setOrderDraft((current) => ({ ...current, supplierId: payload.supplier.id }))
+      setSupplierDraft((current) => ({ ...current, name: '', contactEmail: '' }))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Supplier create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function createPurchaseOrder() {
+    setBusyId('po-create')
+    setStatusMessage('Creating purchase order draft')
+    try {
+      const payload = await requestApi<PurchaseOrderCreateResponse>('/purchase-orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          supplierId: orderDraft.supplierId,
+          materialId: orderDraft.materialId,
+          quantityGrams: Number(orderDraft.quantityGrams),
+          unitCost: Number(orderDraft.unitCost),
+          currency: orderDraft.currency,
+        }),
+      })
+      updateOrder(payload.purchaseOrder)
+      setSelectedMaterialId(payload.purchaseOrder.materialId)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Purchase order create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function sendPurchaseOrder(orderId: string) {
+    setBusyId(orderId)
+    setStatusMessage(`Sending ${orderId} to supplier`)
+    try {
+      const payload = await requestApi<PurchaseOrderStatusResponse>(`/purchase-orders/${encodeURIComponent(orderId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'SENT' }),
+      })
+      updateOrder(payload.purchaseOrder)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Purchase order send failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function receivePurchaseOrder(order: PurchaseOrderRecord, receiveAll = false) {
+    const remainingGrams = order.quantityGrams - order.receivedGrams
+    const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[order.id] ?? remainingGrams)
+    setBusyId(order.id)
+    setStatusMessage(`Receiving ${formatGrams(receivedGrams)} for ${order.id}`)
+    try {
+      const payload = await requestApi<PurchaseOrderReceiptResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receivedGrams }),
+      })
+      updateOrder(payload.purchaseOrder)
+      onLotsChange((current) => (current.some((lot) => lot.id === payload.lot.id) ? current : [payload.lot, ...current]))
+      onMovementsChange((current) =>
+        current.some((movement) => movement.id === payload.movement.id) ? current : [payload.movement, ...current],
+      )
+      setHistoryRows((current) =>
+        current.some((record) => record.id === payload.priceHistory.id) ? current : [payload.priceHistory, ...current],
+      )
+      setReceiveDraft((current) => ({ ...current, [order.id]: Math.max(payload.purchaseOrder.quantityGrams - payload.purchaseOrder.receivedGrams, 0) }))
+      setSelectedMaterialId(order.materialId)
+      setLastReceipt(payload)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Purchase order receipt failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function fillOrderFromMaterial(materialId: string) {
+    const material = materialById.get(materialId)
+    setOrderDraft((current) => ({
+      ...current,
+      materialId,
+      unitCost: material?.costPerGram ?? current.unitCost,
+    }))
+    setSelectedMaterialId(materialId)
+  }
+
+  function prepareLowStockOrder(suggestion: InventoryReorderSuggestion) {
+    const supplier = supplierRows.find((item) => item.preferredMaterialIds.includes(suggestion.materialId)) ?? supplierRows[0]
+    const material = materialById.get(suggestion.materialId)
+    setOrderDraft({
+      supplierId: supplier?.id ?? '',
+      materialId: suggestion.materialId,
+      quantityGrams: suggestion.suggestedOrderGrams,
+      unitCost: material?.costPerGram ?? 0.1,
+      currency: 'USD',
+    })
+    setSelectedMaterialId(suggestion.materialId)
+    setStatusMessage(`${suggestion.materialName} loaded into PO draft from low-stock suggestion`)
+  }
+
+  return (
+    <div className="workspace-grid procurement-grid">
+      <Panel title="Supplier Master" icon={Truck} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Supplier name</span>
+            <input
+              aria-label="Supplier name"
+              value={supplierDraft.name}
+              onChange={(event) => setSupplierDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Country</span>
+            <input
+              aria-label="Supplier country"
+              maxLength={2}
+              value={supplierDraft.country}
+              onChange={(event) => setSupplierDraft((current) => ({ ...current, country: event.target.value.toUpperCase() }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Contact email</span>
+            <input
+              aria-label="Supplier contact email"
+              value={supplierDraft.contactEmail}
+              onChange={(event) => setSupplierDraft((current) => ({ ...current, contactEmail: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Lead time days</span>
+            <input
+              aria-label="Supplier lead time days"
+              min={1}
+              type="number"
+              value={supplierDraft.leadTimeDays}
+              onChange={(event) => setSupplierDraft((current) => ({ ...current, leadTimeDays: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Payment terms</span>
+            <input
+              aria-label="Supplier payment terms"
+              value={supplierDraft.paymentTerms}
+              onChange={(event) => setSupplierDraft((current) => ({ ...current, paymentTerms: event.target.value }))}
+            />
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createSupplier()}
+            disabled={busyId === 'supplier-create' || !supplierDraft.name.trim() || !supplierDraft.contactEmail.trim()}
+          >
+            <Plus size={16} />
+            Create Supplier
+          </button>
+        </div>
+        <div className="document-list compact-list supplier-list">
+          {supplierRows.slice(0, 5).map((supplier) => (
+            <div className="document-row supplier-row" key={supplier.id}>
+              <div>
+                <strong>{supplier.name}</strong>
+                <span>{supplier.country} / {supplier.contactEmail} / {supplier.paymentTerms}</span>
+                <span>{supplier.leadTimeDays}d lead time</span>
+              </div>
+              <StatusBadge status={supplier.status} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Low-Stock to PO" icon={ShoppingCart}>
+        <div className="shopping-list">
+          {lowStockSuggestions.length === 0 ? (
+            <div className="empty-state compact">No low-stock materials need a purchase order.</div>
+          ) : (
+            lowStockSuggestions.map((suggestion) => (
+              <div className="shopping-row" key={suggestion.materialId}>
+                <div>
+                  <strong>{suggestion.materialName}</strong>
+                  <span>
+                    {formatGrams(suggestion.availableGrams)} available / suggest {formatGrams(suggestion.suggestedOrderGrams)}
+                  </span>
+                  <span>{suggestion.reason}</span>
+                </div>
+                <button className="ghost-button small" type="button" onClick={() => prepareLowStockOrder(suggestion)}>
+                  Use in PO
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Create Purchase Order" icon={ClipboardCheck}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Supplier</span>
+            <select
+              aria-label="Purchase order supplier"
+              value={orderDraft.supplierId}
+              onChange={(event) => setOrderDraft((current) => ({ ...current, supplierId: event.target.value }))}
+            >
+              {supplierRows.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="Purchase order material"
+              value={orderDraft.materialId}
+              onChange={(event) => fillOrderFromMaterial(event.target.value)}
+            >
+              {materialOptions.map((material) => (
+                <option key={material.id} value={material.id}>
+                  {material.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Quantity grams</span>
+            <input
+              aria-label="Purchase order quantity grams"
+              min={1}
+              step={1}
+              type="number"
+              value={orderDraft.quantityGrams}
+              onChange={(event) => setOrderDraft((current) => ({ ...current, quantityGrams: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Unit cost</span>
+            <input
+              aria-label="Purchase order unit cost"
+              min={0.01}
+              step={0.01}
+              type="number"
+              value={orderDraft.unitCost}
+              onChange={(event) => setOrderDraft((current) => ({ ...current, unitCost: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Currency</span>
+            <input
+              aria-label="Purchase order currency"
+              maxLength={3}
+              value={orderDraft.currency}
+              onChange={(event) => setOrderDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))}
+            />
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createPurchaseOrder()}
+            disabled={busyId === 'po-create' || !orderDraft.supplierId || !orderDraft.materialId || orderDraft.quantityGrams <= 0}
+          >
+            Create PO
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>Draft PO creation does not reserve or move inventory.</li>
+          <li>Goods receipt is the only action that creates lots and RECEIPT movements.</li>
+        </ul>
+      </Panel>
+
+      <Panel className="wide" title="Purchase Order Board" icon={Activity}>
+        <div className="document-list compact-list purchase-order-list">
+          {activeOrders.length === 0 ? (
+            <div className="empty-state compact">No active purchase orders.</div>
+          ) : (
+            activeOrders.map((order) => {
+              const material = materialById.get(order.materialId)
+              const supplier = supplierById.get(order.supplierId)
+              const remainingGrams = order.quantityGrams - order.receivedGrams
+              return (
+                <div className="document-row purchase-order-row" key={order.id}>
+                  <div>
+                    <strong>{order.id} / {material?.name ?? order.materialId}</strong>
+                    <span>{supplier?.name ?? order.supplierId} / expected {order.expectedDate}</span>
+                    <span>
+                      {formatGrams(order.receivedGrams)} received of {formatGrams(order.quantityGrams)} / {formatCurrency(order.unitCost)} per g
+                    </span>
+                  </div>
+                  <StatusBadge status={purchaseOrderStatusTone[order.status]} label={order.status} />
+                  <input
+                    aria-label={`Receive grams for ${order.id}`}
+                    min={0}
+                    max={remainingGrams}
+                    step={1}
+                    type="number"
+                    value={receiveDraft[order.id] ?? remainingGrams}
+                    onChange={(event) =>
+                      setReceiveDraft((current) => ({ ...current, [order.id]: Number(event.target.value) }))
+                    }
+                  />
+                  <div className="document-actions">
+                    <button
+                      className="ghost-button small"
+                      type="button"
+                      onClick={() => void sendPurchaseOrder(order.id)}
+                      disabled={busyId === order.id || order.status !== 'DRAFT'}
+                    >
+                      Send
+                    </button>
+                    <button
+                      className="primary-button small"
+                      type="button"
+                      onClick={() => void receivePurchaseOrder(order)}
+                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                    >
+                      Receive
+                    </button>
+                    <button
+                      className="ghost-button small"
+                      type="button"
+                      onClick={() => void receivePurchaseOrder(order, true)}
+                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                    >
+                      Receive Remaining
+                    </button>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Goods Receipt Evidence" icon={Database}>
+        {lastReceipt ? (
+          <div className="metric-grid">
+            <Metric label="Lot created" value={lastReceipt.lot.lotNumber} />
+            <Metric label="Movement" value={lastReceipt.movement.id} />
+            <Metric label="Received" value={formatGrams(lastReceipt.movement.quantityGrams)} />
+            <Metric label="Price snapshot" value={lastReceipt.priceHistory.id} />
+          </div>
+        ) : (
+          <div className="empty-state compact">Receive a sent PO to create lot, movement, and price history evidence.</div>
+        )}
+      </Panel>
+
+      <Panel title="Price History" icon={BadgeDollarSign}>
+        <label className="field-row">
+          <span>Material</span>
+          <select value={selectedMaterialId} onChange={(event) => setSelectedMaterialId(event.target.value)}>
+            {materialOptions.map((material) => (
+              <option key={material.id} value={material.id}>
+                {material.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="document-list compact-list price-history-list">
+          {historyRows.length === 0 ? (
+            <div className="empty-state compact">No price history captured for this material yet.</div>
+          ) : (
+            historyRows.slice(0, 6).map((record) => (
+              <div className="document-row price-history-row" key={record.id}>
+                <div>
+                  <strong>{record.purchaseOrderId}</strong>
+                  <span>{supplierById.get(record.supplierId)?.name ?? record.supplierId} / {record.source}</span>
+                </div>
+                <div className="mono-value">{formatCurrency(record.unitCost)}</div>
+                <div className="mono-value">{formatGrams(record.quantityGrams)}</div>
+              </div>
+            ))
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Phase 10 Guardrails" icon={ShieldCheck}>
+        <ul className="policy-list">
+          <li>Supplier master updates are audited and separate from inventory.</li>
+          <li>PO state transitions are explicit: DRAFT, SENT, PARTIAL, RECEIVED.</li>
+          <li>Goods receipt creates immutable price history snapshots.</li>
+          <li>RFQ comparison remains the next procurement depth item.</li>
         </ul>
       </Panel>
     </div>

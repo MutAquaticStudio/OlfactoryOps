@@ -766,7 +766,50 @@ describe('NorthStarService', () => {
 
     expect(receipt.lot.materialId).toBe('mat-bergamot')
     expect(receipt.movement.direction).toBe('IN')
+    expect(receipt.priceHistory.source).toBe('PO_RECEIPT')
     expect(receipt.invariant).toContain('creates lot and IN movement')
+  })
+
+  it('runs procurement supplier, PO state, partial receipt, and price history workflow', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const supplier = service.createSupplier({
+      name: 'North Aroma Cooperative',
+      country: 'US',
+      contactEmail: 'po@north-aroma.test',
+      leadTimeDays: 10,
+      preferredMaterialIds: ['mat-vanillin'],
+    }).data
+
+    expect(supplier.supplier.status).toBe('review')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+
+    const draft = service.createPurchaseOrder({
+      supplierId: supplier.supplier.id,
+      materialId: 'mat-vanillin',
+      quantityGrams: 80,
+      unitCost: 0.12,
+      expectedDate: '2026-07-22',
+    }).data
+
+    expect(draft.purchaseOrder.status).toBe('DRAFT')
+    expect(draft.invariant).toContain('does not reserve or move inventory')
+    expect(() => service.receivePurchaseOrder(draft.purchaseOrder.id, { receivedGrams: 20 })).toThrow(/must be sent/)
+
+    const sent = service.updatePurchaseOrderStatus(draft.purchaseOrder.id, 'SENT').data
+    expect(sent.purchaseOrder.status).toBe('SENT')
+
+    const partial = service.receivePurchaseOrder(draft.purchaseOrder.id, { receivedGrams: 30 }).data
+    expect(partial.purchaseOrder.status).toBe('PARTIAL')
+    expect(partial.purchaseOrder.receivedGrams).toBe(30)
+    expect(partial.priceHistory.unitCost).toBe(0.12)
+
+    const finalReceipt = service.receivePurchaseOrder(draft.purchaseOrder.id).data
+    expect(finalReceipt.purchaseOrder.status).toBe('RECEIVED')
+    expect(finalReceipt.purchaseOrder.receivedGrams).toBe(80)
+
+    const history = service.materialPriceHistory('mat-vanillin').data
+    expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
   })
 
   it('reserves orders without movement and fulfills with OUT movement', () => {

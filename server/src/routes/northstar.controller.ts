@@ -597,14 +597,54 @@ export class NorthStarController {
     return this.northStar.suppliers()
   }
 
+  @Post('suppliers')
+  createSupplier(
+    @Body()
+    body: {
+      name?: string
+      country?: string
+      leadTimeDays?: number
+      contactEmail?: string
+      paymentTerms?: string
+      preferredMaterialIds?: string[]
+    },
+  ) {
+    return this.northStar.createSupplier(body)
+  }
+
   @Get('purchase-orders')
   purchaseOrders() {
     return this.northStar.purchaseOrders()
   }
 
+  @Post('purchase-orders')
+  createPurchaseOrder(
+    @Body()
+    body: {
+      supplierId?: string
+      materialId?: string
+      quantityGrams?: number
+      unitCost?: number
+      currency?: string
+      expectedDate?: string
+    },
+  ) {
+    return this.northStar.createPurchaseOrder(body)
+  }
+
+  @Patch('purchase-orders/:id/status')
+  updatePurchaseOrderStatus(@Param('id') id: string, @Body() body: { status?: 'DRAFT' | 'SENT' | 'PARTIAL' | 'RECEIVED' }) {
+    return this.northStar.updatePurchaseOrderStatus(id, body.status ?? 'SENT')
+  }
+
   @Post('purchase-orders/:id/receive')
-  receivePurchaseOrder(@Param('id') id: string) {
-    return this.northStar.receivePurchaseOrder(id)
+  receivePurchaseOrder(@Param('id') id: string, @Body() body: { receivedGrams?: number }) {
+    return this.northStar.receivePurchaseOrder(id, body)
+  }
+
+  @Get('materials/:id/price-history')
+  materialPriceHistory(@Param('id') id: string) {
+    return this.northStar.materialPriceHistory(id)
   }
 
   @Get('catalog/skus')
