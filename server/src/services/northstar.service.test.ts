@@ -170,6 +170,29 @@ describe('NorthStarService', () => {
     expect(result.dashboard.requirements.find((item) => item.id === 'REQ-COA-lot-iso-001')?.status).toBe('review')
   })
 
+  it('approves generated documents before external sharing', () => {
+    const service = new NorthStarService()
+    const generated = service.generateDocument({ type: 'CoA', linkedTo: 'lot-iso-001' }).data.document
+
+    expect(() => service.shareDocument(generated.id, { recipient: 'client@example.com' })).toThrow(
+      UnprocessableEntityException,
+    )
+
+    const approved = service.approveDocument(generated.id, { actor: 'Compliance Lead' }).data
+    const shared = service.shareDocument(generated.id, {
+      recipient: 'client@example.com',
+      actor: 'Compliance Lead',
+    }).data
+
+    expect(approved.document.status).toBe('APPROVED')
+    expect(approved.audit.action).toBe('document.approve')
+    expect(shared.document.status).toBe('SHARED')
+    expect(shared.shareLink.recipient).toBe('client@example.com')
+    expect(shared.shareLink.permission).toBe('external-view')
+    expect(shared.audit.action).toBe('document.externalShare')
+    expect(service.documentDownloadAudit().data.some((event) => event.action === 'document.externalShare')).toBe(true)
+  })
+
   it('blocks cross-tenant and missing-permission probes', () => {
     const service = new NorthStarService()
 
@@ -297,6 +320,24 @@ describe('NorthStarService', () => {
     expect(secondLogin.revokedForLimit.length).toBeGreaterThanOrEqual(1)
     expect(activeOwnerSessions.length).toBeLessThanOrEqual(consoleState.securityPolicy.concurrentSessionLimit)
     expect(secondLogin.invariant).toContain('idle and absolute')
+  })
+
+  it('signs up a new tenant with an owner session', () => {
+    const service = new NorthStarService()
+    const result = service.signup({
+      organizationName: 'Atelier Smoke Test',
+      workspaceSlug: 'atelier-smoke',
+      email: 'owner@atelier-smoke.test',
+      name: 'Atelier Owner',
+    }).data
+    const consoleState = service.tenantConsole().data
+
+    expect(result.organization.slug).toBe('atelier-smoke')
+    expect(result.membership.role).toBe('Owner')
+    expect(result.session.email).toBe('owner@atelier-smoke.test')
+    expect(result.audit.action).toBe('auth.signup')
+    expect(consoleState.organization.id).toBe(result.organization.id)
+    expect(consoleState.memberships.some((membership) => membership.email === result.membership.email)).toBe(true)
   })
 
   it('touches active sessions without changing absolute expiry', () => {
@@ -693,6 +734,30 @@ describe('NorthStarService', () => {
     expect(result.movements.length).toBeGreaterThan(0)
     expect(result.movements.every((movement) => movement.type === 'PRODUCTION_CONSUMPTION')).toBe(true)
     expect(result.invariant).toContain('separate from lab usage')
+  })
+
+  it('gates production batches by approved formula, consumption, QC, and release state', () => {
+    const service = new NorthStarService()
+    const draft = service.createFormulaDraft({ name: 'Unapproved production test' }).data.formula
+
+    expect(() => service.createProductionBatch(draft.id, 25)).toThrow(/must be approved/)
+
+    const batch = service.createProductionBatch('frm-0421', 25).data
+    expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/must consume inventory/)
+
+    service.consumeProductionBatch(batch.id)
+    const filtration = service.updateProductionBatchStatus(batch.id, 'FILTRATION').data
+    expect(filtration.batch.status).toBe('FILTRATION')
+
+    const qc = service.updateProductionBatchStatus(batch.id, 'QC').data
+    expect(qc.batch.status).toBe('QC')
+
+    const passed = service.qcProductionBatch(batch.id, 'PASSED').data
+    expect(passed.status).toBe('BOTTLING')
+
+    const released = service.updateProductionBatchStatus(batch.id, 'RELEASED').data
+    expect(released.batch.status).toBe('RELEASED')
+    expect(released.invariant).toContain('audited and gated')
   })
 
   it('receives purchase orders into inventory through lot and IN movement', () => {

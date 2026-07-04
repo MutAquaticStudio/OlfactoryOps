@@ -16,6 +16,7 @@ import {
   FileLock2,
   FlaskConical,
   Gauge,
+  Globe2,
   KeyRound,
   Layers3,
   LockKeyhole,
@@ -48,6 +49,8 @@ import {
 import {
   auditEvents,
   authSessions,
+  apiKeys,
+  billingPlan,
   brandingConfig,
   brands,
   customFields,
@@ -61,6 +64,7 @@ import {
   formatSequenceValue,
   formulaTotals,
   formulas,
+  formulaVersions,
   initialLots,
   initialMovements,
   materials,
@@ -70,25 +74,31 @@ import {
   permissionCatalog,
   phases,
   planLabUsage,
+  productionBatches,
   readinessStats,
   records,
   resolveFormulaWithCatalog,
   rolePolicies,
   salesOrders,
+  ssoConfig,
   statusMeta,
   storageLocations,
   stockSummary,
   tenantSettings,
   tenantSecurityPolicy,
   organizations,
+  webhooks,
   type Allocation,
   type AuditEvent,
   type AuthSession,
+  type ApiKeyRecord,
   type BrandRecord,
   type BrandingConfig,
+  type BillingPlanRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentComplianceDashboard,
+  type DocumentShareLink,
   type DocumentType,
   type DomainKey,
   type DomainModule,
@@ -111,13 +121,16 @@ import {
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type PermissionDefinition,
+  type ProductionBatchRecord,
   type ResolvedLeaf,
   type RolePolicy,
+  type SsoConfigRecord,
   type SignedDocumentUrl,
   type StockTakeRecord,
   type StorageLocation,
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
+  type WebhookRecord,
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
@@ -148,6 +161,59 @@ type DocumentGenerationResponse = {
   document: DocumentRecord
   audit: AuditEvent
   dashboard: DocumentComplianceDashboard
+  invariant: string
+}
+
+type DocumentApprovalResponse = DocumentGenerationResponse
+
+type DocumentShareResponse = {
+  document: DocumentRecord
+  shareLink: DocumentShareLink
+  audit: AuditEvent
+  dashboard: DocumentComplianceDashboard
+  invariant: string
+}
+
+type LoginResponse = {
+  session: AuthSession
+  revokedForLimit: AuthSession[]
+  newDeviceAlert: boolean
+  securityPolicy: TenantSecurityPolicy
+  invariant: string
+}
+
+type SignupResponse = {
+  organization: OrganizationRecord
+  brand: BrandRecord
+  membership: MembershipRecord
+  session: AuthSession
+  audit: AuditEvent
+  invariant: string
+}
+
+type SaasConsoleResponse = {
+  plan: BillingPlanRecord
+  sso: SsoConfigRecord
+  apiKeys: ApiKeyRecord[]
+  webhooks: WebhookRecord[]
+}
+
+type AuditExportResponse = {
+  id: string
+  format: string
+  status: string
+  scope: string
+  audit: AuditEvent
+}
+
+type ProductionConsumeResponse = {
+  batchId: string
+  movements: InventoryMovement[]
+  invariant: string
+}
+
+type ProductionStatusResponse = {
+  batch: ProductionBatchRecord
   invariant: string
 }
 
@@ -448,6 +514,7 @@ const shellMotion = {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
+const authStorageKey = 'olfactoryops.auth.v1'
 
 async function requestApi<T>(path: string, init?: RequestInit) {
   const response = await fetch(`${apiBaseUrl}${path}`, init)
@@ -465,6 +532,43 @@ async function requestApi<T>(path: string, init?: RequestInit) {
   }
   const payload = (await response.json()) as ApiEnvelope<T>
   return payload.data
+}
+
+function readStoredAuthSession() {
+  try {
+    const raw = window.localStorage.getItem(authStorageKey)
+    if (!raw) {
+      return null
+    }
+    const parsed = JSON.parse(raw) as { version?: number; session?: AuthSession }
+    if (parsed.version !== 1 || !parsed.session?.id || parsed.session.status !== 'ACTIVE') {
+      return null
+    }
+    return parsed.session
+  } catch {
+    return null
+  }
+}
+
+function writeStoredAuthSession(session: AuthSession | null) {
+  if (!session) {
+    window.localStorage.removeItem(authStorageKey)
+    return
+  }
+  window.localStorage.setItem(authStorageKey, JSON.stringify({ version: 1, session }))
+}
+
+function tenantDisplayForSession(session: AuthSession) {
+  const organization = organizations.find((item) => item.id === session.organizationId)
+  const brand = brands.find((item) => item.organizationId === session.organizationId)
+  const fallbackName = session.email.split('@')[1] ?? 'Tenant workspace'
+
+  return {
+    scope: session.organizationId,
+    label: organization
+      ? `${organization.id.toUpperCase()} / ${brand?.name ?? organization.name}`
+      : `${session.organizationId.toUpperCase()} / ${fallbackName}`,
+  }
 }
 
 function mergeMovements(newMovements: InventoryMovement[], currentMovements: InventoryMovement[]) {
@@ -572,6 +676,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
+  const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
   const [commandOpen, setCommandOpen] = useState(false)
   const [modal, setModal] = useState<ModalKind>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -911,6 +1016,59 @@ function App() {
     }
   }
 
+  function acceptAuthSession(session: AuthSession) {
+    setCurrentSession(session)
+    writeStoredAuthSession(session)
+    setActiveKey('dashboard')
+  }
+
+  async function loginToWorkspace(email: string) {
+    const payload = await requestApi<LoginResponse>('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    })
+    acceptAuthSession(payload.session)
+    return payload
+  }
+
+  async function signupWorkspace(input: {
+    organizationName: string
+    workspaceSlug: string
+    email: string
+    name: string
+  }) {
+    const payload = await requestApi<SignupResponse>('/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    acceptAuthSession(payload.session)
+    return payload
+  }
+
+  async function logoutWorkspace() {
+    try {
+      await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
+    } catch {
+      // The local session must still be cleared if the demo API is unavailable.
+    } finally {
+      setCurrentSession(null)
+      writeStoredAuthSession(null)
+      setCommandOpen(false)
+      setModal(null)
+    }
+  }
+
+  if (!currentSession) {
+    return (
+      <AuthGateway
+        onLogin={loginToWorkspace}
+        onSignup={signupWorkspace}
+      />
+    )
+  }
+
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
@@ -918,13 +1076,16 @@ function App() {
         <Sidebar
           activeKey={activeKey}
           collapsed={sidebarCollapsed}
+          session={currentSession}
           onNavigate={setActiveKey}
           onToggle={() => setSidebarCollapsed((value) => !value)}
         />
         <main className="workspace">
           <Topbar
             activeDomain={selectedDomain}
+            session={currentSession}
             onCommand={() => setCommandOpen(true)}
+            onLogout={() => void logoutWorkspace()}
             onMenu={() => setSidebarCollapsed((value) => !value)}
           />
           <AnimatePresence mode="wait">
@@ -942,6 +1103,7 @@ function App() {
               <motion.div key={activeKey} {...shellMotion}>
                 <DomainWorkspace
                   domain={selectedDomain}
+                  session={currentSession}
                   lots={lots}
                   movements={movements}
                   storageLocations={storageLocationRecords}
@@ -1275,7 +1437,7 @@ function App() {
         <div className="popup-grid">
           <Metric label="Events" value="9,144" />
           <Metric label="Format" value="JSON" />
-          <Metric label="Scope" value="ORG-NXL" />
+          <Metric label="Scope" value={currentSession.organizationId} />
         </div>
       </BlackPopup>
 
@@ -1300,14 +1462,18 @@ function App() {
 function Sidebar({
   activeKey,
   collapsed,
+  session,
   onNavigate,
   onToggle,
 }: {
   activeKey: DomainKey
   collapsed: boolean
+  session: AuthSession
   onNavigate: (key: DomainKey) => void
   onToggle: () => void
 }) {
+  const tenantDisplay = tenantDisplayForSession(session)
+
   return (
     <aside className="sidebar glass">
       <div className="brand-row">
@@ -1357,7 +1523,7 @@ function Sidebar({
           <div className="mono-small">Tenant isolation</div>
           <div className="footer-status">
             <CheckCircle2 size={16} />
-            <span>Session scoped to ORG-NXL</span>
+            <span>Session scoped to {tenantDisplay.scope}</span>
           </div>
         </div>
       )}
@@ -1367,20 +1533,26 @@ function Sidebar({
 
 function Topbar({
   activeDomain,
+  session,
   onCommand,
+  onLogout,
   onMenu,
 }: {
   activeDomain?: DomainModule
+  session: AuthSession
   onCommand: () => void
+  onLogout: () => void
   onMenu: () => void
 }) {
+  const tenantDisplay = tenantDisplayForSession(session)
+
   return (
     <header className="topbar glass">
       <button className="icon-button mobile-menu" type="button" onClick={onMenu} aria-label="Open navigation">
         <Menu size={18} />
       </button>
       <div>
-        <div className="mono-small">ORG-NXL / Noxelis Fine Fragrance</div>
+        <div className="mono-small">{tenantDisplay.label}</div>
         <h1>{activeDomain ? activeDomain.name : 'North Star Console'}</h1>
       </div>
       <button className="command-button" type="button" onClick={onCommand}>
@@ -1390,11 +1562,155 @@ function Topbar({
       </button>
       <div className="topbar-actions">
         <DataTag icon={ShieldCheck} label="Tenant guard" value="On" tone="green" />
+        <DataTag icon={UsersRound} label={session.role} value={session.email} tone="blue" />
         <button className="icon-button" type="button" aria-label="Notifications">
           <Bell size={18} />
         </button>
+        <button className="ghost-button small" type="button" onClick={onLogout}>
+          Logout
+        </button>
       </div>
     </header>
+  )
+}
+
+function AuthGateway({
+  onLogin,
+  onSignup,
+}: {
+  onLogin: (email: string) => Promise<LoginResponse>
+  onSignup: (input: { organizationName: string; workspaceSlug: string; email: string; name: string }) => Promise<SignupResponse>
+}) {
+  const [mode, setMode] = useState<'login' | 'signup'>('login')
+  const [email, setEmail] = useState('owner@noxel.is')
+  const [name, setName] = useState('Thuan Le Minh')
+  const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
+  const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('Login with an active tenant membership, or sign up a new workspace.')
+
+  async function submitAuth() {
+    setBusy(true)
+    setStatus(mode === 'login' ? 'Checking tenant membership' : 'Provisioning isolated tenant')
+    try {
+      if (mode === 'login') {
+        const result = await onLogin(email)
+        setStatus(`${result.session.email} signed in with ${result.session.role} role`)
+      } else {
+        const result = await onSignup({ organizationName, workspaceSlug, email, name })
+        setStatus(`${result.organization.name} provisioned with owner access`)
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Authentication failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function switchMode(nextMode: 'login' | 'signup') {
+    setMode(nextMode)
+    setStatus(nextMode === 'login' ? 'Use owner@noxel.is for the seeded tenant.' : 'Create a new tenant workspace and owner session.')
+    if (nextMode === 'signup') {
+      setEmail('owner@newlab.test')
+      setName('Workspace Owner')
+      setOrganizationName('New Fragrance Lab')
+      setWorkspaceSlug('new-fragrance-lab')
+    } else {
+      setEmail('owner@noxel.is')
+      setName('Thuan Le Minh')
+      setOrganizationName('NOXELIS Lab')
+      setWorkspaceSlug('noxelis-live')
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-lab-bg text-[var(--text)]">
+      <LabBackdrop />
+      <main className="auth-shell">
+        <section className="auth-panel glass">
+          <div className="auth-copy">
+            <div className="brand-row">
+              <div className="brand-mark">
+                <Sparkles size={18} />
+              </div>
+              <div>
+                <div className="wordmark">OlfactoryOps</div>
+                <div className="mono-small">North Star OS</div>
+              </div>
+            </div>
+            <h1>{mode === 'login' ? 'Login to your lab tenant' : 'Create a tenant workspace'}</h1>
+            <p className="lead">
+              Tenant access starts here: membership, role, session TTL, MFA policy, and audit evidence are established before the console opens.
+            </p>
+            <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+              <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
+                Login
+              </button>
+              <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
+                Sign up
+              </button>
+            </div>
+          </div>
+
+          <div className="auth-form">
+            {mode === 'signup' && (
+              <>
+                <label className="field-row">
+                  <span>Organization</span>
+                  <input
+                    aria-label="Signup organization"
+                    value={organizationName}
+                    onChange={(event) => setOrganizationName(event.target.value)}
+                  />
+                </label>
+                <label className="field-row">
+                  <span>Workspace slug</span>
+                  <input
+                    aria-label="Signup workspace slug"
+                    value={workspaceSlug}
+                    onChange={(event) => setWorkspaceSlug(event.target.value)}
+                  />
+                </label>
+                <label className="field-row">
+                  <span>Owner name</span>
+                  <input
+                    aria-label="Signup owner name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            <label className="field-row">
+              <span>Email</span>
+              <input
+                aria-label={mode === 'login' ? 'Login email' : 'Signup email'}
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </label>
+            <button
+              className="primary-button full"
+              type="button"
+              onClick={() => void submitAuth()}
+              disabled={busy || !email.trim() || (mode === 'signup' && (!organizationName.trim() || !workspaceSlug.trim()))}
+            >
+              {busy ? 'Working' : mode === 'login' ? 'Login' : 'Create workspace'}
+            </button>
+            <div className="auth-status">
+              <ShieldCheck size={16} />
+              <span>{status}</span>
+            </div>
+            <div className="policy-list">
+              <li>Seeded login: owner@noxel.is</li>
+              <li>Signup provisions an active owner membership</li>
+              <li>Sessions use idle and absolute expiry windows</li>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   )
 }
 
@@ -1464,6 +1780,7 @@ function Dashboard({
 
 function DomainWorkspace({
   domain,
+  session,
   lots,
   movements,
   storageLocations,
@@ -1513,6 +1830,7 @@ function DomainWorkspace({
   onTransferStock,
 }: {
   domain: DomainModule
+  session: AuthSession
   lots: InventoryLot[]
   movements: InventoryMovement[]
   storageLocations: StorageLocation[]
@@ -1632,8 +1950,10 @@ function DomainWorkspace({
         />
       )}
       {domain.key === 'documents' && <DocumentsWorkspace />}
+      {domain.key === 'production' && <ProductionWorkspace />}
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
+      {domain.key === 'saas' && <SaasWorkspace session={session} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
       {domain.key === 'customization' && <CustomizationWorkspace />}
       {![
@@ -1644,8 +1964,10 @@ function DomainWorkspace({
         'inventory',
         'labUsage',
         'documents',
+        'production',
         'costing',
         'analytics',
+        'saas',
       ].includes(domain.key) && (
         <GenericDomainWorkspace domain={domain} onOpenModal={onOpenModal} />
       )}
@@ -3381,13 +3703,17 @@ function DocumentsWorkspace() {
     documentComplianceDashboard(documents, materials, initialLots, formulas),
   )
   const [downloadAudits, setDownloadAudits] = useState<AuditEvent[]>(
-    auditEvents.filter((event) => event.action === 'document.download'),
+    auditEvents.filter((event) => event.action.startsWith('document.')),
   )
   const [downloadResult, setDownloadResult] = useState<DocumentDownloadResponse | null>(null)
+  const [shareResult, setShareResult] = useState<DocumentShareResponse | null>(null)
   const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null)
+  const [approvingDocumentId, setApprovingDocumentId] = useState<string | null>(null)
+  const [sharingDocumentId, setSharingDocumentId] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [generationType, setGenerationType] = useState<DocumentType>('CoA')
   const [generationTarget, setGenerationTarget] = useState(initialLots[0]?.id ?? '')
+  const [shareRecipient, setShareRecipient] = useState('client@example.com')
   const [statusMessage, setStatusMessage] = useState('Live API sync pending')
   const selectedGenerationOption = generatedDocumentTypes.find((option) => option.value === generationType)
   const generationTargets = useMemo(() => {
@@ -3465,6 +3791,53 @@ function DocumentsWorkspace() {
     }
   }
 
+  async function approveDocument(documentId: string) {
+    setApprovingDocumentId(documentId)
+    setStatusMessage('Approving generated document before external sharing')
+
+    try {
+      const payload = await requestApi<DocumentApprovalResponse>(`/documents/${encodeURIComponent(documentId)}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actor: 'Compliance Lead', note: 'Reviewed from Documents workspace' }),
+      })
+      setDocumentRows((current) =>
+        current.map((document) => (document.id === documentId ? payload.document : document)),
+      )
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} approved`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document approval failed')
+    } finally {
+      setApprovingDocumentId(null)
+    }
+  }
+
+  async function shareDocument(documentId: string) {
+    setSharingDocumentId(documentId)
+    setStatusMessage('Creating tenant-scoped external share link')
+
+    try {
+      const payload = await requestApi<DocumentShareResponse>(`/documents/${encodeURIComponent(documentId)}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient: shareRecipient, actor: 'Compliance Lead' }),
+      })
+      setDocumentRows((current) =>
+        current.map((document) => (document.id === documentId ? payload.document : document)),
+      )
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setShareResult(payload)
+      setStatusMessage(`${payload.document.title} shared externally with audit review`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'External share failed')
+    } finally {
+      setSharingDocumentId(null)
+    }
+  }
+
   async function generateDocument() {
     if (!generationTarget) {
       return
@@ -3500,7 +3873,7 @@ function DocumentsWorkspace() {
           {documentRows.map((document) => (
             <div className="document-row" key={document.id}>
               <span className="mono-value">{document.id}</span>
-              <div>
+              <div className="document-main">
                 <strong>{document.title}</strong>
                 <span>
                   {document.type} / {document.linkedTo} / {document.sizeKb}KB
@@ -3509,15 +3882,36 @@ function DocumentsWorkspace() {
               </div>
               <DataTag label={document.sensitivity} value={document.status} />
               <span className="mono-value">{document.downloads} downloads</span>
-              <button
-                className="ghost-button small"
-                type="button"
-                onClick={() => void requestSignedUrl(document.id)}
-                disabled={loadingDocumentId === document.id}
-              >
-                <KeyRound size={14} />
-                {loadingDocumentId === document.id ? 'Signing' : 'Sign URL'}
-              </button>
+              <div className="document-actions">
+                {document.status === 'REVIEW_REQUIRED' && (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void approveDocument(document.id)}
+                    disabled={approvingDocumentId === document.id}
+                  >
+                    {approvingDocumentId === document.id ? 'Approving' : 'Approve'}
+                  </button>
+                )}
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void requestSignedUrl(document.id)}
+                  disabled={loadingDocumentId === document.id}
+                >
+                  <KeyRound size={14} />
+                  {loadingDocumentId === document.id ? 'Signing' : 'Sign URL'}
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void shareDocument(document.id)}
+                  disabled={sharingDocumentId === document.id || document.status === 'REVIEW_REQUIRED'}
+                >
+                  <Globe2 size={14} />
+                  {sharingDocumentId === document.id ? 'Sharing' : 'Share'}
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -3600,17 +3994,338 @@ function DocumentsWorkspace() {
           </div>
         )}
       </Panel>
+      <Panel title="External Share" icon={Globe2}>
+        <label className="field-row">
+          <span>Recipient email</span>
+          <input
+            aria-label="External share recipient"
+            type="email"
+            value={shareRecipient}
+            onChange={(event) => setShareRecipient(event.target.value)}
+          />
+        </label>
+        {shareResult ? (
+          <div className="signed-card share-card">
+            <div>
+              <span className="mono-small">{shareResult.document.id}</span>
+              <strong>{shareResult.shareLink.recipient}</strong>
+              <span>{shareResult.invariant}</span>
+            </div>
+            <div className="signed-url">{shareResult.shareLink.url}</div>
+            <div className="tag-row">
+              <DataTag label="TTL" value={`${Math.round(shareResult.shareLink.ttlSeconds / 3600)}h`} tone="blue" />
+              <DataTag label="Permission" value={shareResult.shareLink.permission} tone="green" />
+              <DataTag label="Audit" value={shareResult.audit.requestId} tone="amber" />
+            </div>
+          </div>
+        ) : (
+          <div className="empty-state compact">
+            Approve review documents before issuing an external share link.
+          </div>
+        )}
+      </Panel>
       <Panel title="Download Policy" icon={ShieldCheck}>
         <div className="policy-list">
           <li>{statusMessage}</li>
           <li>Private bucket only, no public object URL</li>
           <li>Signed URL created after permission check</li>
+          <li>Generated documents require approval before external share</li>
+          <li>External share links are time-boxed and audit-reviewed</li>
           <li>Formula exports are Highly Confidential</li>
           <li>DownloadAuditLog records actor, IP, requestId</li>
         </div>
       </Panel>
-      <Panel title="Download Audit" icon={ClipboardCheck}>
+      <Panel title="Document Workflow Audit" icon={ClipboardCheck}>
         <AuditList events={downloadAudits.slice(0, 4)} />
+      </Panel>
+    </div>
+  )
+}
+
+const productionStatusTone: Record<ProductionBatchRecord['status'], DomainStatus> = {
+  PLANNED: 'draft',
+  WEIGHING: 'active',
+  MACERATION: 'testing',
+  FILTRATION: 'testing',
+  QC: 'review',
+  BOTTLING: 'active',
+  RELEASED: 'stable',
+  HOLD: 'alert',
+}
+
+const productionLifecycle: ProductionBatchRecord['status'][] = [
+  'WEIGHING',
+  'MACERATION',
+  'FILTRATION',
+  'QC',
+  'BOTTLING',
+  'RELEASED',
+]
+
+function ProductionWorkspace() {
+  const approvedFormulaIds = useMemo(
+    () => new Set(formulaVersions.filter((version) => version.status === 'APPROVED').map((version) => version.formulaId)),
+    [],
+  )
+  const approvedFormulas = useMemo(
+    () => formulas.filter((formula) => approvedFormulaIds.has(formula.id)),
+    [approvedFormulaIds],
+  )
+  const [batches, setBatches] = useState<ProductionBatchRecord[]>(productionBatches)
+  const [selectedFormulaId, setSelectedFormulaId] = useState(approvedFormulas[0]?.id ?? 'frm-0421')
+  const [targetGrams, setTargetGrams] = useState(25)
+  const [statusMessage, setStatusMessage] = useState('Loading production batches')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [lastMovements, setLastMovements] = useState<InventoryMovement[]>([])
+  const activeBatch = batches[0]
+
+  const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
+    const leaves = resolveFormulaWithCatalog(batch.formulaId, formulas, materials)
+    return formulaTotals(leaves).costPerGram * batch.targetGrams
+  }, [])
+
+  const updateBatch = useCallback((updated: ProductionBatchRecord) => {
+    setBatches((current) => current.map((batch) => (batch.id === updated.id ? updated : batch)))
+  }, [])
+
+  const loadBatches = useCallback(async () => {
+    try {
+      const payload = await requestApi<ProductionBatchRecord[]>('/production/batches')
+      setBatches(payload)
+      setStatusMessage('Production batches synced from live API')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Using local production batch seed')
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadBatches()
+  }, [loadBatches])
+
+  async function createBatch() {
+    setCreating(true)
+    setStatusMessage('Creating production batch from approved formula')
+    try {
+      const batch = await requestApi<ProductionBatchRecord>('/production/batches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formulaId: selectedFormulaId, targetGrams }),
+      })
+      setBatches((current) => [batch, ...current])
+      setStatusMessage(`${batch.id} created from ${batch.formulaCode}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Production batch creation failed')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function consumeBatch(batchId: string) {
+    setBusyId(batchId)
+    setStatusMessage(`Consuming inventory for ${batchId}`)
+    try {
+      const payload = await requestApi<ProductionConsumeResponse>(`/production/batches/${encodeURIComponent(batchId)}/consume`, {
+        method: 'POST',
+      })
+      setLastMovements(payload.movements)
+      await loadBatches()
+      setStatusMessage(`${batchId} consumed through ${payload.movements.length} production movement(s)`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Production consumption failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function recordQc(batchId: string, result: 'PASSED' | 'FAILED') {
+    setBusyId(batchId)
+    setStatusMessage(`Recording ${result} QC for ${batchId}`)
+    try {
+      const batch = await requestApi<ProductionBatchRecord>(`/production/batches/${encodeURIComponent(batchId)}/qc`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ result }),
+      })
+      updateBatch(batch)
+      setStatusMessage(`${batch.id} QC ${result}; status is now ${batch.status}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function moveBatch(batchId: string, status: ProductionBatchRecord['status']) {
+    setBusyId(batchId)
+    setStatusMessage(`Moving ${batchId} to ${status}`)
+    try {
+      const payload = await requestApi<ProductionStatusResponse>(`/production/batches/${encodeURIComponent(batchId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      updateBatch(payload.batch)
+      setStatusMessage(`${payload.batch.id} moved to ${payload.batch.status}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Lifecycle update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="workspace-grid production-grid">
+      <Panel title="Create Production Batch" icon={PackageCheck}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Approved formula</span>
+            <select value={selectedFormulaId} onChange={(event) => setSelectedFormulaId(event.target.value)}>
+              {approvedFormulas.map((formula) => (
+                <option value={formula.id} key={formula.id}>
+                  {formula.code} / {formula.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Target grams</span>
+            <input
+              min={1}
+              step={1}
+              type="number"
+              value={targetGrams}
+              onChange={(event) => setTargetGrams(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void createBatch()} disabled={creating || targetGrams <= 0}>
+            {creating ? 'Creating' : 'Create batch'}
+          </button>
+        </div>
+        <ul className="policy-list">
+          <li>Only formulas with an approved version snapshot can enter production.</li>
+          <li>Batch consumption writes PRODUCTION_CONSUMPTION, never LAB_CONSUMPTION.</li>
+          <li>{statusMessage}</li>
+        </ul>
+      </Panel>
+
+      <Panel title="Lifecycle Gate" icon={ClipboardCheck}>
+        {activeBatch ? (
+          <div className="production-timeline">
+            {productionLifecycle.map((status) => (
+              <button
+                className={`timeline-step ${activeBatch.status === status ? 'is-current' : ''} ${productionLifecycle.indexOf(activeBatch.status) > productionLifecycle.indexOf(status) ? 'is-done' : ''}`}
+                key={status}
+                type="button"
+                onClick={() => void moveBatch(activeBatch.id, status)}
+                disabled={busyId === activeBatch.id || status === 'WEIGHING'}
+              >
+                <span>{status}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">No batch created yet.</div>
+        )}
+        {activeBatch && (
+          <div className="metric-grid">
+            <Metric label="Active batch" value={activeBatch.id} />
+            <Metric label="Status" value={activeBatch.status} />
+            <Metric label="QC" value={activeBatch.qcStatus} />
+            <Metric label="Cost basis" value={formatCurrency(batchCostBasis(activeBatch))} />
+          </div>
+        )}
+      </Panel>
+
+      <Panel className="wide" title="Batch Board" icon={Activity}>
+        <div className="document-list compact-list production-list">
+          {batches.map((batch) => (
+            <div className="document-row production-row" key={batch.id}>
+              <div>
+                <strong>{batch.id} / {batch.formulaCode}</strong>
+                <span>{formatGrams(batch.targetGrams)} target / {formatGrams(batch.consumedGrams)} consumed / {batch.owner}</span>
+                <span>Cost basis {formatCurrency(batchCostBasis(batch))}</span>
+              </div>
+              <StatusBadge status={productionStatusTone[batch.status]} label={batch.status} />
+              <div className="document-actions">
+                <button
+                  className="primary-button small"
+                  type="button"
+                  onClick={() => void consumeBatch(batch.id)}
+                  disabled={busyId === batch.id || batch.consumedGrams > 0}
+                >
+                  Consume
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void moveBatch(batch.id, 'FILTRATION')}
+                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                >
+                  Filtration
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void moveBatch(batch.id, 'QC')}
+                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                >
+                  QC ready
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void recordQc(batch.id, 'PASSED')}
+                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.qcStatus === 'PASSED'}
+                >
+                  QC pass
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void recordQc(batch.id, 'FAILED')}
+                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                >
+                  Hold
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void moveBatch(batch.id, 'RELEASED')}
+                  disabled={busyId === batch.id || batch.qcStatus !== 'PASSED' || batch.status === 'RELEASED'}
+                >
+                  Release
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Production Movement Evidence" icon={Database}>
+        {lastMovements.length > 0 ? (
+          <div className="document-list compact-list">
+            {lastMovements.slice(0, 5).map((movement) => (
+              <div className="document-row" key={movement.id}>
+                <div>
+                  <strong>{movement.id}</strong>
+                  <span>{movement.type} / {movement.direction} / {movement.ref}</span>
+                </div>
+                <div className="mono-value">{formatGrams(movement.quantityGrams)}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Consume a batch to see audit-critical production movements.</div>
+        )}
+      </Panel>
+
+      <Panel title="Phase 9 Guardrails" icon={ShieldCheck}>
+        <ul className="policy-list">
+          <li>Release is blocked until inventory is consumed and QC passes.</li>
+          <li>Failed QC moves the batch to HOLD for deviation review.</li>
+          <li>Batch records are append/audit-oriented and not hard-deleted.</li>
+        </ul>
       </Panel>
     </div>
   )
@@ -3673,6 +4388,168 @@ function AnalyticsWorkspace({
             </div>
           ))}
         </div>
+      </Panel>
+    </div>
+  )
+}
+
+function SaasWorkspace({ session }: { session: AuthSession }) {
+  const fallback = useMemo<SaasConsoleResponse>(() => ({
+    plan: billingPlan,
+    sso: ssoConfig,
+    apiKeys,
+    webhooks,
+  }), [])
+  const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
+  const [statusMessage, setStatusMessage] = useState('Loading SaaS readiness controls')
+  const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const activeSeats = memberships.filter((membership) => membership.status === 'ACTIVE').length
+  const storageUsedGb = documents.reduce((sum, document) => sum + document.sizeKb, 0) / 1024 / 1024
+  const apiUsage = Math.min(saasData.plan.apiQuota, auditEvents.length * 320)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadSaasConsole() {
+      try {
+        const [planResponse, ssoResponse, apiKeyResponse, webhookResponse] = await Promise.all([
+          fetch(`${apiBaseUrl}/billing/plan`, { signal: controller.signal }),
+          fetch(`${apiBaseUrl}/sso-config`, { signal: controller.signal }),
+          fetch(`${apiBaseUrl}/api-keys`, { signal: controller.signal }),
+          fetch(`${apiBaseUrl}/webhooks`, { signal: controller.signal }),
+        ])
+        if (![planResponse, ssoResponse, apiKeyResponse, webhookResponse].every((response) => response.ok)) {
+          throw new Error('SaaS readiness API failed')
+        }
+        const [planPayload, ssoPayload, apiKeyPayload, webhookPayload] = await Promise.all([
+          planResponse.json() as Promise<ApiEnvelope<BillingPlanRecord>>,
+          ssoResponse.json() as Promise<ApiEnvelope<SsoConfigRecord>>,
+          apiKeyResponse.json() as Promise<ApiEnvelope<ApiKeyRecord[]>>,
+          webhookResponse.json() as Promise<ApiEnvelope<WebhookRecord[]>>,
+        ])
+        setSaasData({
+          plan: planPayload.data,
+          sso: ssoPayload.data,
+          apiKeys: apiKeyPayload.data,
+          webhooks: webhookPayload.data,
+        })
+        setStatusMessage('SaaS readiness synced from live API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setStatusMessage('Using local SaaS readiness seed until API is reachable')
+        }
+      }
+    }
+
+    void loadSaasConsole()
+
+    return () => controller.abort()
+  }, [])
+
+  async function queueAuditExport() {
+    setExporting(true)
+    setStatusMessage('Queueing tenant-scoped audit export')
+    try {
+      const payload = await requestApi<AuditExportResponse>('/audit/export', { method: 'POST' })
+      setAuditExport(payload)
+      setStatusMessage(`${payload.id} queued for ${payload.scope}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Audit export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  return (
+    <div className="workspace-grid saas-grid">
+      <Panel title="Billing & Plan Limits" icon={BadgeDollarSign}>
+        <div className="metric-grid">
+          <Metric label="Plan" value={saasData.plan.name} />
+          <Metric label="Monthly" value={formatCurrency(saasData.plan.monthlyPrice)} />
+          <Metric label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} />
+          <Metric label="Storage" value={`${storageUsedGb.toFixed(3)}/${saasData.plan.storageGb}GB`} />
+        </div>
+        <div className="usage-meter">
+          <span style={{ width: `${Math.min(100, (activeSeats / saasData.plan.seats) * 100)}%` }} />
+        </div>
+        <ul className="policy-list">
+          <li>Plan limits visible before billing enforcement.</li>
+          <li>Tenant status can freeze writes without crossing org boundary.</li>
+          <li>{statusMessage}</li>
+        </ul>
+      </Panel>
+
+      <Panel title="SSO / SCIM Readiness" icon={LockKeyhole}>
+        <div className="tenant-summary">
+          <span className="mono-small">{saasData.sso.id}</span>
+          <strong>{saasData.sso.provider} for {saasData.sso.domain}</strong>
+          <span>Configuration status: {saasData.sso.status}</span>
+        </div>
+        <div className="record-grid compact-record-grid">
+          {Object.entries(saasData.sso.roleMapping).map(([group, role]) => (
+            <div className="record-card" key={group}>
+              <div>
+                <span className="mono-small">{group}</span>
+                <strong>{role}</strong>
+                <span>SCIM deprovision revokes sessions</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="API Keys" icon={KeyRound}>
+        <div className="document-list compact-list">
+          {saasData.apiKeys.map((key) => (
+            <div className="document-row" key={key.id}>
+              <div>
+                <strong>{key.label}</strong>
+                <span>{key.id} / ****{key.lastFour} / rotated {new Date(key.rotatedAt).toLocaleDateString()}</span>
+              </div>
+              <StatusBadge status={key.status === 'active' ? 'stable' : 'alert'} label={key.status.toUpperCase()} />
+            </div>
+          ))}
+        </div>
+        <div className="tag-row">
+          <DataTag label="Quota" value={`${apiUsage}/${saasData.plan.apiQuota}`} tone="blue" />
+          <DataTag label="Managed by" value="security.apiKeys.manage" tone="amber" />
+        </div>
+      </Panel>
+
+      <Panel title="Webhooks" icon={Globe2}>
+        <div className="document-list compact-list">
+          {saasData.webhooks.map((webhook) => (
+            <div className="document-row" key={webhook.id}>
+              <div>
+                <strong>{webhook.id}</strong>
+                <span>{webhook.url}</span>
+                <span>{webhook.events.join(', ')}</span>
+              </div>
+              <StatusBadge status={webhook.status === 'active' ? 'stable' : 'review'} label={webhook.status.toUpperCase()} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel className="wide" title="Audit Export & Enterprise Evidence" icon={ClipboardCheck}>
+        <div className="action-row">
+          <button className="primary-button" type="button" onClick={() => void queueAuditExport()} disabled={exporting}>
+            {exporting ? 'Queueing' : 'Queue audit export'}
+          </button>
+          <DataTag label="Scope" value={session.organizationId} tone="blue" />
+          <DataTag label="Format" value="JSON" tone="green" />
+        </div>
+        {auditExport ? (
+          <div className="audit-export-card">
+            <span className="mono-small">{auditExport.id}</span>
+            <strong>{auditExport.status}</strong>
+            <span>{auditExport.format} evidence export for {auditExport.scope}</span>
+            <span>Audit: {auditExport.audit.requestId}</span>
+          </div>
+        ) : (
+          <div className="empty-state compact">No export queued in this session.</div>
+        )}
       </Panel>
     </div>
   )

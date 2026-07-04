@@ -315,6 +315,11 @@ export class NorthStarController {
     return this.northStar.login(body.email)
   }
 
+  @Post('auth/signup')
+  signup(@Body() body: { organizationName?: string; workspaceSlug?: string; email?: string; name?: string }) {
+    return this.northStar.signup(body)
+  }
+
   @Post('auth/logout')
   logout() {
     return this.northStar.logout()
@@ -486,6 +491,16 @@ export class NorthStarController {
     return this.northStar.generateDocument(body)
   }
 
+  @Post('documents/:id/approve')
+  approveDocument(@Param('id') id: string, @Body() body: { actor?: string; note?: string }) {
+    return this.northStar.approveDocument(id, body)
+  }
+
+  @Post('documents/:id/share')
+  shareDocument(@Param('id') id: string, @Body() body: { recipient?: string; actor?: string }) {
+    return this.northStar.shareDocument(id, body)
+  }
+
   @Get('documents/download-audit')
   documentDownloadAudit() {
     return this.northStar.documentDownloadAudit()
@@ -567,6 +582,14 @@ export class NorthStarController {
   @Post('production/batches/:id/qc')
   qcProductionBatch(@Param('id') id: string, @Body() body: { result?: 'PASSED' | 'FAILED' }) {
     return this.northStar.qcProductionBatch(id, body.result)
+  }
+
+  @Patch('production/batches/:id/status')
+  updateProductionBatchStatus(
+    @Param('id') id: string,
+    @Body() body: { status?: 'PLANNED' | 'WEIGHING' | 'MACERATION' | 'FILTRATION' | 'QC' | 'BOTTLING' | 'RELEASED' | 'HOLD' },
+  ) {
+    return this.northStar.updateProductionBatchStatus(id, body.status ?? 'MACERATION')
   }
 
   @Get('suppliers')

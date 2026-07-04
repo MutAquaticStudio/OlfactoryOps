@@ -8,6 +8,7 @@ import {
   brands,
   canDownloadDocument,
   commercialSkus,
+  createDocumentShareLink,
   customFields,
   createSignedDocumentUrl,
   documentComplianceDashboard,
@@ -54,6 +55,7 @@ import {
   type BrandingConfig,
   type CustomFieldDefinition,
   type DocumentRecord,
+  type DocumentShareLink,
   type DocumentType,
   type FeatureFlagRecord,
   type Formula,
@@ -109,6 +111,24 @@ type GenerateDocumentBody = {
   linkedTo?: string
   actor?: string
 }
+
+type SignupBody = {
+  organizationName?: string
+  workspaceSlug?: string
+  email?: string
+  name?: string
+}
+
+const productionLifecycleStatuses: ProductionBatchRecord['status'][] = [
+  'PLANNED',
+  'WEIGHING',
+  'MACERATION',
+  'FILTRATION',
+  'QC',
+  'BOTTLING',
+  'RELEASED',
+  'HOLD',
+]
 
 type RolePermissionMatrix = {
   role: string
@@ -1267,6 +1287,73 @@ export class NorthStarService {
     }
   }
 
+  signup(body: SignupBody = {}) {
+    const email = body.email?.trim().toLowerCase()
+    const organizationName = body.organizationName?.trim() || 'New Fragrance Lab'
+    const workspaceSlug = this.slugify(body.workspaceSlug || organizationName)
+    const name = body.name?.trim() || 'Workspace Owner'
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new UnprocessableEntityException('A valid signup email is required')
+    }
+    if (this.membershipRecords.some((membership) => membership.email.toLowerCase() === email)) {
+      throw new UnprocessableEntityException('A member with this email already exists')
+    }
+    if (this.organizationRecords.some((organization) => organization.slug === workspaceSlug)) {
+      throw new UnprocessableEntityException('Workspace slug is already taken')
+    }
+
+    const createdAt = new Date().toISOString()
+    const organizationId = `org-${workspaceSlug}`
+    const brandId = `brand-${workspaceSlug}`
+    const userId = `usr-${workspaceSlug}-owner`
+    const organization: OrganizationRecord = {
+      id: organizationId,
+      name: organizationName,
+      slug: workspaceSlug,
+      plan: 'Team',
+      status: 'ACTIVE',
+      primaryContact: email,
+      createdAt,
+    }
+    const brand: BrandRecord = {
+      id: brandId,
+      organizationId,
+      name: organizationName,
+      status: 'ACTIVE',
+      defaultCurrency: this.settingsRecord.currency,
+    }
+    const membership: MembershipRecord = {
+      id: `MBR-${workspaceSlug.toUpperCase().slice(0, 12)}`,
+      userId,
+      email,
+      name,
+      organizationId,
+      brandIds: [brandId],
+      role: 'Owner',
+      status: 'ACTIVE',
+      mfaEnabled: false,
+      lastActiveAt: createdAt,
+      invitedAt: createdAt,
+    }
+
+    this.organizationRecords = [organization, ...this.organizationRecords]
+    this.brandRecords = [brand, ...this.brandRecords]
+    this.membershipRecords = [membership, ...this.membershipRecords]
+    const session = this.login(email).data.session
+    const audit = this.recordAudit('auth.signup', organization.id, session.userId, 'allowed')
+
+    return {
+      data: {
+        organization,
+        brand,
+        membership,
+        session,
+        audit,
+        invariant: 'signup provisions an isolated tenant and owner session before app access',
+      },
+    }
+  }
+
   me() {
     const session = this.currentSession()
     return {
@@ -1837,8 +1924,82 @@ export class NorthStarService {
     }
   }
 
+  approveDocument(id: string, body: { actor?: string; note?: string } = {}) {
+    const document = this.documentRecords.find((item) => item.id === id)
+    if (!document) {
+      throw new NotFoundException(`Document ${id} was not found`)
+    }
+    if (document.status !== 'REVIEW_REQUIRED') {
+      throw new UnprocessableEntityException('Only review-required documents can be approved')
+    }
+
+    const approvedDocument: DocumentRecord = {
+      ...document,
+      status: 'APPROVED',
+      lastAccessed: new Date().toISOString(),
+    }
+    this.documentRecords = this.documentRecords.map((item) => (item.id === id ? approvedDocument : item))
+    const audit = this.recordAudit('document.approve', id, body.actor?.trim() || 'api:compliance', 'allowed')
+
+    return {
+      data: {
+        document: approvedDocument,
+        audit,
+        dashboard: documentComplianceDashboard(
+          this.documentRecords,
+          this.materialRecords,
+          this.lots,
+          this.formulaRecords,
+        ),
+        invariant: 'approval moves generated documents out of review before external share',
+      },
+    }
+  }
+
+  shareDocument(id: string, body: { recipient?: string; actor?: string } = {}) {
+    const document = this.documentRecords.find((item) => item.id === id)
+    if (!document) {
+      throw new NotFoundException(`Document ${id} was not found`)
+    }
+    if (document.status === 'REVIEW_REQUIRED') {
+      throw new UnprocessableEntityException('Review-required documents must be approved before external sharing')
+    }
+    const recipient = body.recipient?.trim().toLowerCase()
+    if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      throw new UnprocessableEntityException('A valid external recipient email is required')
+    }
+
+    const shareLink: DocumentShareLink = createDocumentShareLink(document, recipient)
+    const sharedDocument: DocumentRecord = {
+      ...document,
+      status: 'SHARED',
+      lastAccessed: new Date().toISOString(),
+    }
+    this.documentRecords = this.documentRecords.map((item) => (item.id === id ? sharedDocument : item))
+    const audit = this.recordAudit('document.externalShare', id, body.actor?.trim() || 'api:compliance', 'review')
+
+    return {
+      data: {
+        document: sharedDocument,
+        shareLink,
+        audit,
+        dashboard: documentComplianceDashboard(
+          this.documentRecords,
+          this.materialRecords,
+          this.lots,
+          this.formulaRecords,
+        ),
+        invariant: 'external share link is tenant-scoped, time-boxed, and audit-reviewed',
+      },
+    }
+  }
+
   documentDownloadAudit() {
-    return { data: this.auditEvents.filter((event) => event.action === 'document.download') }
+    return {
+      data: this.auditEvents.filter((event) =>
+        ['document.download', 'document.generate', 'document.approve', 'document.externalShare'].includes(event.action),
+      ),
+    }
   }
 
   requestDocumentSignedUrl(
@@ -2168,6 +2329,12 @@ export class NorthStarService {
     if (!formula) {
       throw new NotFoundException(`Formula ${formulaId} was not found`)
     }
+    const approvedVersion = this.formulaVersionRecords.some(
+      (version) => version.formulaId === formulaId && version.status === 'APPROVED',
+    )
+    if (!approvedVersion) {
+      throw new UnprocessableEntityException(`Formula ${formula.code} must be approved before production`)
+    }
     const id = this.nextNumber('batch').data.value
     const batch: ProductionBatchRecord = {
       id,
@@ -2238,12 +2405,45 @@ export class NorthStarService {
     if (!batch) {
       throw new NotFoundException(`Production batch ${id} was not found`)
     }
-    const status = result === 'PASSED' ? 'RELEASED' : 'QC'
+    if (batch.consumedGrams <= 0) {
+      throw new UnprocessableEntityException(`Production batch ${id} must consume inventory before QC`)
+    }
+    const status = result === 'PASSED' ? 'BOTTLING' : 'HOLD'
     this.productionBatchRecords = this.productionBatchRecords.map((item) =>
       item.id === id ? { ...item, qcStatus: result, status } : item,
     )
     this.recordAudit('production.batch.qc', id, 'api:qc', result === 'PASSED' ? 'allowed' : 'review')
     return { data: this.productionBatchRecords.find((item) => item.id === id)! }
+  }
+
+  updateProductionBatchStatus(id: string, status: ProductionBatchRecord['status']) {
+    const batch = this.productionBatchRecords.find((item) => item.id === id)
+    if (!batch) {
+      throw new NotFoundException(`Production batch ${id} was not found`)
+    }
+    if (!productionLifecycleStatuses.includes(status)) {
+      throw new UnprocessableEntityException(`Production batch status ${status} is not supported`)
+    }
+    if (['FILTRATION', 'QC', 'BOTTLING', 'RELEASED'].includes(status) && batch.consumedGrams <= 0) {
+      throw new UnprocessableEntityException(`Production batch ${id} must consume inventory before ${status}`)
+    }
+    if (status === 'RELEASED' && batch.qcStatus !== 'PASSED') {
+      throw new UnprocessableEntityException(`Production batch ${id} must pass QC before release`)
+    }
+    if (status === 'WEIGHING' && batch.consumedGrams > 0) {
+      throw new UnprocessableEntityException(`Production batch ${id} cannot return to weighing after consumption`)
+    }
+
+    this.productionBatchRecords = this.productionBatchRecords.map((item) =>
+      item.id === id ? { ...item, status } : item,
+    )
+    this.recordAudit('production.batch.status', id, 'api:manufacturing', status === 'HOLD' ? 'review' : 'allowed')
+    return {
+      data: {
+        batch: this.productionBatchRecords.find((item) => item.id === id)!,
+        invariant: 'production lifecycle transitions are audited and gated by consumption and QC state',
+      },
+    }
   }
 
   suppliers() {
@@ -2859,6 +3059,11 @@ export class NorthStarService {
       hash = (hash * 33 + value.charCodeAt(index)) >>> 0
     }
     return `sha256:${hash.toString(16).padStart(8, '0')}`
+  }
+
+  private slugify(value: string) {
+    const slug = value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+    return slug || `tenant-${Date.now()}`
   }
 
   private recordAudit(

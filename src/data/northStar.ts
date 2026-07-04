@@ -244,7 +244,7 @@ export type DocumentType =
   | 'Formula Spec Sheet'
   | 'Finished Product SDS'
 
-export type DocumentStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'EXPIRING' | 'EXPIRED'
+export type DocumentStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'EXPIRING' | 'EXPIRED' | 'SHARED'
 
 export interface DocumentRecord {
   id: string
@@ -295,6 +295,14 @@ export interface SignedDocumentUrl {
   expiresAt: string
   ttlSeconds: number
   method: 'GET'
+}
+
+export interface DocumentShareLink {
+  url: string
+  recipient: string
+  expiresAt: string
+  ttlSeconds: number
+  permission: 'external-view'
 }
 
 export interface AuditEvent {
@@ -435,7 +443,7 @@ export interface ProductionBatchRecord {
   id: string
   formulaId: string
   formulaCode: string
-  status: 'PLANNED' | 'WEIGHING' | 'MACERATION' | 'QC' | 'RELEASED'
+  status: 'PLANNED' | 'WEIGHING' | 'MACERATION' | 'FILTRATION' | 'QC' | 'BOTTLING' | 'RELEASED' | 'HOLD'
   targetGrams: number
   consumedGrams: number
   qcStatus: 'PENDING' | 'PASSED' | 'FAILED'
@@ -604,7 +612,7 @@ export const phases: Phase[] = [
   { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, QC, stock take', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 92 },
   { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'active', securityLayer: 'L5', coverage: 84 },
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, generation, compliance coverage', gate: 'Access logged and coverage visible', status: 'active', securityLayer: 'L5', coverage: 76 },
-  { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'testing', securityLayer: 'L5', coverage: 64 },
+  { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'active', securityLayer: 'L5', coverage: 78 },
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'testing', securityLayer: 'L4/L5', coverage: 62 },
   { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'testing', securityLayer: 'L4', coverage: 58 },
   { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'testing', securityLayer: 'L5', coverage: 62 },
@@ -766,15 +774,15 @@ export const domains: DomainModule[] = [
     responsibility: 'Approved formula to production batch, QC, lifecycle, yield',
     status: 'testing',
     health: 64,
-    risk: 'Batch create/consume/QC API live; full lifecycle UI remains next gate',
+    risk: 'Batch create, consume, QC, and lifecycle controls are live; persistence remains next gate',
     owner: 'Manufacturing',
     entities: ['ProductionBatch', 'BatchConsumption', 'QCRecord'],
-    features: ['Scale batch', 'Consume lots', 'QC checkpoint', 'Yield reconcile'],
+    features: ['Scale batch', 'Consume lots', 'QC checkpoint', 'Lifecycle state machine', 'Yield reconcile'],
     invariants: ['Production movement separated from lab usage', 'Batch records no hard-delete'],
-    apis: ['/api/v1/batches', '/api/v1/batches/:id/consume', '/api/v1/batches/:id/qc'],
+    apis: ['/api/v1/batches', '/api/v1/batches/:id/consume', '/api/v1/batches/:id/qc', '/api/v1/batches/:id/status'],
     permissions: ['production.view', 'production.consume', 'production.qc'],
     screens: ['Batch timeline', 'QC record', 'Batch cost'],
-    activity: 'Production consumption writes PRODUCTION_CONSUMPTION movements',
+    activity: 'Production batches advance through consume, filtration, QC, bottling, and release gates',
   },
   {
     key: 'procurement',
@@ -2024,6 +2032,28 @@ export function createSignedDocumentUrl(
     expiresAt: expiresAt.toISOString(),
     ttlSeconds,
     method: 'GET',
+  }
+}
+
+export function createDocumentShareLink(
+  document: DocumentRecord,
+  recipient: string,
+  now = new Date(),
+  ttlSeconds = 7 * 24 * 60 * 60,
+): DocumentShareLink {
+  const expiresAt = new Date(now.getTime() + ttlSeconds * 1000)
+  const expires = Math.floor(expiresAt.getTime() / 1000)
+  const normalizedRecipient = recipient.trim().toLowerCase()
+  const token = `${document.id}-${document.version}-${normalizedRecipient}-${expires}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+
+  return {
+    url: `https://share.olfactoryops.local/documents/${encodeURIComponent(document.id)}?recipient=${encodeURIComponent(normalizedRecipient)}&expires=${expires}&token=${token}`,
+    recipient: normalizedRecipient,
+    expiresAt: expiresAt.toISOString(),
+    ttlSeconds,
+    permission: 'external-view',
   }
 }
 
