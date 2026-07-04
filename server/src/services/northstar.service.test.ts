@@ -812,6 +812,50 @@ describe('NorthStarService', () => {
     expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
   })
 
+  it('runs commerce SKU, price list, quote, and sample workflow without stock movement', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const skuCreate = service.createCatalogSku({
+      materialId: 'mat-hedione',
+      name: 'Hedione HC 10g',
+      description: 'High clarity hedione studio pack',
+      packSizeGrams: 10,
+      price: 9,
+      tier: 'Studio',
+      moqPacks: 1,
+    }).data
+    expect(skuCreate.invariant).toContain('stores no stock')
+    expect(skuCreate.sku.canSellPacks).toBeGreaterThan(0)
+
+    const priceList = service.createPriceList({
+      name: 'Studio Loyalty',
+      customerGroup: 'Studio',
+      multiplier: 0.9,
+      sampleEligible: true,
+    }).data
+    expect(priceList.invariant).toContain('without mutating inventory')
+
+    const quote = service.createQuote({
+      skuId: skuCreate.sku.id,
+      customer: 'Maison Trial Studio',
+      customerGroup: 'Studio',
+      quantityPacks: 2,
+    }).data
+    expect(quote.quote.status).toBe('SENT')
+    expect(quote.quote.total).toBe(16.2)
+    expect(quote.invariant).toContain('creates no reservation or movement')
+
+    const sample = service.requestSample({
+      skuId: skuCreate.sku.id,
+      customer: 'Maison Trial Studio',
+      packs: 1,
+    }).data
+    expect(sample.sample.status).toBe('REQUESTED')
+    expect(sample.invariant).toContain('does not reserve or move stock')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
   it('reserves orders without movement and fulfills with OUT movement', () => {
     const service = new NorthStarService()
     const beforeMovements = service.inventoryMovements().data.length

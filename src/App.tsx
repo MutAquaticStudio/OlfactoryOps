@@ -53,6 +53,7 @@ import {
   billingPlan,
   brandingConfig,
   brands,
+  commercialSkus,
   customFields,
   documents,
   documentComplianceDashboard,
@@ -74,13 +75,16 @@ import {
   permissionCatalog,
   phases,
   planLabUsage,
+  priceLists,
   priceHistory,
   productionBatches,
   purchaseOrders,
+  quotes,
   readinessStats,
   records,
   resolveFormulaWithCatalog,
   rolePolicies,
+  sampleRequests,
   salesOrders,
   ssoConfig,
   statusMeta,
@@ -98,6 +102,7 @@ import {
   type BrandRecord,
   type BrandingConfig,
   type BillingPlanRecord,
+  type CommercialSkuRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentComplianceDashboard,
@@ -125,10 +130,13 @@ import {
   type OrganizationRecord,
   type PermissionDefinition,
   type PriceHistoryRecord,
+  type PriceListRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
+  type QuoteRecord,
   type ResolvedLeaf,
   type RolePolicy,
+  type SampleRequestRecord,
   type SsoConfigRecord,
   type SignedDocumentUrl,
   type StockTakeRecord,
@@ -242,6 +250,37 @@ type PurchaseOrderReceiptResponse = {
   movement: InventoryMovement
   purchaseOrder: PurchaseOrderRecord
   priceHistory: PriceHistoryRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type CatalogSkuAvailability = CommercialSkuRecord & {
+  availableGrams: number
+  canSellPacks: number
+}
+
+type CatalogSkuCreateResponse = {
+  sku: CatalogSkuAvailability
+  audit: AuditEvent
+  invariant: string
+}
+
+type PriceListCreateResponse = {
+  priceList: PriceListRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type QuoteCreateResponse = {
+  quote: QuoteRecord
+  availability: CatalogSkuAvailability
+  audit: AuditEvent
+  invariant: string
+}
+
+type SampleRequestCreateResponse = {
+  sample: SampleRequestRecord
+  availability: CatalogSkuAvailability
   audit: AuditEvent
   invariant: string
 }
@@ -1110,6 +1149,7 @@ function App() {
         <Sidebar
           activeKey={activeKey}
           collapsed={sidebarCollapsed && !mobileNavOpen}
+          mobileOpen={mobileNavOpen}
           session={currentSession}
           onNavigate={navigateToDomain}
           onToggle={() => {
@@ -1502,12 +1542,14 @@ function App() {
 function Sidebar({
   activeKey,
   collapsed,
+  mobileOpen,
   session,
   onNavigate,
   onToggle,
 }: {
   activeKey: DomainKey
   collapsed: boolean
+  mobileOpen: boolean
   session: AuthSession
   onNavigate: (key: DomainKey) => void
   onToggle: () => void
@@ -1515,7 +1557,7 @@ function Sidebar({
   const tenantDisplay = tenantDisplayForSession(session)
 
   return (
-    <aside className="sidebar glass">
+    <aside className="sidebar glass" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
       <div className="brand-row">
         <div className="brand-mark">
           <Sparkles size={18} />
@@ -1999,6 +2041,7 @@ function DomainWorkspace({
           onMovementsChange={onMovementsChange}
         />
       )}
+      {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} />}
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
       {domain.key === 'saas' && <SaasWorkspace session={session} />}
@@ -2014,6 +2057,7 @@ function DomainWorkspace({
         'documents',
         'production',
         'procurement',
+        'commerce',
         'costing',
         'analytics',
         'saas',
@@ -4935,6 +4979,544 @@ function ProcurementWorkspace({
           <li>PO state transitions are explicit: DRAFT, SENT, PARTIAL, RECEIVED.</li>
           <li>Goods receipt creates immutable price history snapshots.</li>
           <li>RFQ comparison remains the next procurement depth item.</li>
+        </ul>
+      </Panel>
+    </div>
+  )
+}
+
+const skuStatusTone: Record<CommercialSkuRecord['status'], DomainStatus> = {
+  ACTIVE: 'active',
+  DRAFT: 'draft',
+  ARCHIVED: 'review',
+}
+
+const quoteStatusTone: Record<QuoteRecord['status'], DomainStatus> = {
+  DRAFT: 'draft',
+  REVIEW: 'review',
+  SENT: 'stable',
+}
+
+const sampleStatusTone: Record<SampleRequestRecord['status'], DomainStatus> = {
+  REQUESTED: 'active',
+  APPROVED: 'stable',
+  CONVERTED: 'review',
+}
+
+function CommerceWorkspace({
+  stock,
+  materialRecords,
+}: {
+  stock: ReturnType<typeof stockSummary>
+  materialRecords: Material[]
+}) {
+  const materialOptions = materialRecords.length > 0 ? materialRecords : materials
+  const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
+    () =>
+      commercialSkus.map((sku) => {
+        const summary = stock.find((item) => item.material.id === sku.materialId)
+        return {
+          ...sku,
+          availableGrams: summary?.available ?? 0,
+          canSellPacks: Math.floor((summary?.available ?? 0) / sku.packSizeGrams),
+        }
+      }),
+    [stock],
+  )
+  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(seedSkuAvailability)
+  const [priceListRows, setPriceListRows] = useState<PriceListRecord[]>(priceLists)
+  const [quoteRows, setQuoteRows] = useState<QuoteRecord[]>(quotes)
+  const [sampleRows, setSampleRows] = useState<SampleRequestRecord[]>(sampleRequests)
+  const [selectedSkuId, setSelectedSkuId] = useState(commercialSkus[0]?.id ?? '')
+  const [statusMessage, setStatusMessage] = useState('Loading commerce workspace')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [skuDraft, setSkuDraft] = useState({
+    materialId: materialOptions[0]?.id ?? '',
+    name: 'Hedione HC 10g',
+    description: 'White-label aroma material pack',
+    packSizeGrams: 10,
+    price: 9,
+    currency: 'USD',
+    tier: 'Studio' as CommercialSkuRecord['tier'],
+    moqPacks: 1,
+    labelTemplate: `${brandingConfig.displayName} Neutral Pack`,
+  })
+  const [priceListDraft, setPriceListDraft] = useState({
+    name: 'Studio Loyalty',
+    customerGroup: 'Studio' as PriceListRecord['customerGroup'],
+    currency: 'USD',
+    multiplier: 0.9,
+    sampleEligible: true,
+  })
+  const [quoteDraft, setQuoteDraft] = useState({
+    customer: 'Maison Trial Studio',
+    customerGroup: 'Studio' as PriceListRecord['customerGroup'],
+    quantityPacks: 2,
+  })
+  const [sampleDraft, setSampleDraft] = useState({
+    customer: 'Atelier Preview',
+    packs: 1,
+  })
+
+  const materialById = useMemo(
+    () => new Map(materialOptions.map((material) => [material.id, material])),
+    [materialOptions],
+  )
+  const selectedSku = skuRows.find((sku) => sku.id === selectedSkuId) ?? skuRows[0]
+  const selectedMaterial = selectedSku ? materialById.get(selectedSku.materialId) : undefined
+  const activePriceList = useMemo(
+    () =>
+      priceListRows.find((priceList) => priceList.customerGroup === quoteDraft.customerGroup && priceList.status === 'ACTIVE') ??
+      priceListRows.find((priceList) => priceList.customerGroup === selectedSku?.tier && priceList.status === 'ACTIVE') ??
+      priceListRows[0],
+    [priceListRows, quoteDraft.customerGroup, selectedSku?.tier],
+  )
+  const quoteUnitPrice = selectedSku && activePriceList ? selectedSku.price * activePriceList.multiplier : 0
+  const quoteTotal = quoteUnitPrice * quoteDraft.quantityPacks
+
+  useEffect(() => {
+    setSkuRows((current) =>
+      current.map((sku) => {
+        const summary = stock.find((item) => item.material.id === sku.materialId)
+        return {
+          ...sku,
+          availableGrams: summary?.available ?? sku.availableGrams,
+          canSellPacks: Math.floor((summary?.available ?? sku.availableGrams) / sku.packSizeGrams),
+        }
+      }),
+    )
+  }, [stock])
+
+  useEffect(() => {
+    let active = true
+    async function loadCommerce() {
+      try {
+        const [skuPayload, priceListPayload, quotePayload, samplePayload] = await Promise.all([
+          requestApi<CatalogSkuAvailability[]>('/catalog/skus'),
+          requestApi<PriceListRecord[]>('/price-lists'),
+          requestApi<QuoteRecord[]>('/quotes'),
+          requestApi<SampleRequestRecord[]>('/samples'),
+        ])
+        if (!active) {
+          return
+        }
+        setSkuRows(skuPayload)
+        setPriceListRows(priceListPayload)
+        setQuoteRows(quotePayload)
+        setSampleRows(samplePayload)
+        setSelectedSkuId((current) => (skuPayload.some((sku) => sku.id === current) ? current : skuPayload[0]?.id ?? ''))
+        setStatusMessage('Commerce API synced: catalog, price lists, quotes, and sample queue are live')
+      } catch (error) {
+        if (active) {
+          setStatusMessage(error instanceof Error ? error.message : 'Using local commerce seed until API is reachable')
+        }
+      }
+    }
+    void loadCommerce()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    setSkuDraft((current) => ({
+      ...current,
+      materialId: materialOptions.some((material) => material.id === current.materialId)
+        ? current.materialId
+        : materialOptions[0]?.id ?? '',
+    }))
+  }, [materialOptions])
+
+  async function createSku() {
+    setBusyId('sku-create')
+    setStatusMessage('Creating commercial SKU without stock storage')
+    try {
+      const payload = await requestApi<CatalogSkuCreateResponse>('/catalog/skus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...skuDraft,
+          packSizeGrams: Number(skuDraft.packSizeGrams),
+          price: Number(skuDraft.price),
+          moqPacks: Number(skuDraft.moqPacks),
+        }),
+      })
+      setSkuRows((current) => [payload.sku, ...current])
+      setSelectedSkuId(payload.sku.id)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'SKU create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function createPriceList() {
+    setBusyId('price-list-create')
+    setStatusMessage('Creating customer price list')
+    try {
+      const payload = await requestApi<PriceListCreateResponse>('/price-lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...priceListDraft,
+          multiplier: Number(priceListDraft.multiplier),
+        }),
+      })
+      setPriceListRows((current) => [payload.priceList, ...current])
+      setQuoteDraft((current) => ({ ...current, customerGroup: payload.priceList.customerGroup }))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Price list create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function createQuote() {
+    if (!selectedSku) {
+      return
+    }
+    setBusyId('quote-create')
+    setStatusMessage('Creating quote from inventory-derived SKU availability')
+    try {
+      const payload = await requestApi<QuoteCreateResponse>('/quotes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skuId: selectedSku.id,
+          customer: quoteDraft.customer,
+          customerGroup: quoteDraft.customerGroup,
+          quantityPacks: Number(quoteDraft.quantityPacks),
+        }),
+      })
+      setQuoteRows((current) => [payload.quote, ...current])
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Quote create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function requestSample() {
+    if (!selectedSku) {
+      return
+    }
+    setBusyId('sample-create')
+    setStatusMessage('Requesting sample without reservation')
+    try {
+      const payload = await requestApi<SampleRequestCreateResponse>('/samples', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          skuId: selectedSku.id,
+          customer: sampleDraft.customer,
+          packs: Number(sampleDraft.packs),
+        }),
+      })
+      setSampleRows((current) => [payload.sample, ...current])
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Sample request failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="workspace-grid commerce-grid">
+      <Panel title="SKU Catalog" icon={BadgeDollarSign} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="SKU material"
+              value={skuDraft.materialId}
+              onChange={(event) => setSkuDraft((current) => ({ ...current, materialId: event.target.value }))}
+            >
+              {materialOptions.map((material) => (
+                <option key={material.id} value={material.id}>
+                  {material.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>SKU name</span>
+            <input
+              aria-label="SKU name"
+              value={skuDraft.name}
+              onChange={(event) => setSkuDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Pack grams</span>
+            <input
+              aria-label="SKU pack grams"
+              min={1}
+              type="number"
+              value={skuDraft.packSizeGrams}
+              onChange={(event) => setSkuDraft((current) => ({ ...current, packSizeGrams: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Price</span>
+            <input
+              aria-label="SKU price"
+              min={0.01}
+              step={0.01}
+              type="number"
+              value={skuDraft.price}
+              onChange={(event) => setSkuDraft((current) => ({ ...current, price: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Tier</span>
+            <select
+              aria-label="SKU tier"
+              value={skuDraft.tier}
+              onChange={(event) => setSkuDraft((current) => ({ ...current, tier: event.target.value as CommercialSkuRecord['tier'] }))}
+            >
+              <option value="Studio">Studio</option>
+              <option value="Lab">Lab</option>
+              <option value="Bulk">Bulk</option>
+            </select>
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createSku()}
+            disabled={busyId === 'sku-create' || !skuDraft.name.trim() || skuDraft.packSizeGrams <= 0 || skuDraft.price <= 0}
+          >
+            <Plus size={16} />
+            Create SKU
+          </button>
+        </div>
+        <div className="document-list compact-list sku-list">
+          {skuRows.map((sku) => {
+            const material = materialById.get(sku.materialId)
+            return (
+              <button
+                className={`document-row sku-row ${selectedSku?.id === sku.id ? 'is-active' : ''}`}
+                key={sku.id}
+                type="button"
+                onClick={() => setSelectedSkuId(sku.id)}
+              >
+                <div>
+                  <strong>{sku.name}</strong>
+                  <span>{material?.name ?? sku.materialId} / {formatGrams(sku.packSizeGrams)} pack / {sku.tier}</span>
+                  <span>{sku.description}</span>
+                </div>
+                <StatusBadge status={skuStatusTone[sku.status]} label={sku.status} />
+                <DataTag label="Can sell" value={`${sku.canSellPacks} packs`} tone={sku.canSellPacks > 0 ? 'green' : 'amber'} />
+                <div className="mono-value">{formatCurrency(sku.price)}</div>
+              </button>
+            )
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Price Lists" icon={Database}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Name</span>
+            <input
+              aria-label="Price list name"
+              value={priceListDraft.name}
+              onChange={(event) => setPriceListDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Customer group</span>
+            <select
+              aria-label="Price list customer group"
+              value={priceListDraft.customerGroup}
+              onChange={(event) =>
+                setPriceListDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))
+              }
+            >
+              <option value="Studio">Studio</option>
+              <option value="Lab">Lab</option>
+              <option value="Bulk">Bulk</option>
+              <option value="Contract">Contract</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Multiplier</span>
+            <input
+              aria-label="Price list multiplier"
+              min={0.1}
+              step={0.01}
+              type="number"
+              value={priceListDraft.multiplier}
+              onChange={(event) => setPriceListDraft((current) => ({ ...current, multiplier: Number(event.target.value) }))}
+            />
+          </label>
+          <label className="toggle-row">
+            <input
+              checked={priceListDraft.sampleEligible}
+              type="checkbox"
+              onChange={(event) => setPriceListDraft((current) => ({ ...current, sampleEligible: event.target.checked }))}
+            />
+            Sample eligible
+          </label>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createPriceList()}
+            disabled={busyId === 'price-list-create' || !priceListDraft.name.trim() || priceListDraft.multiplier <= 0}
+          >
+            Create Price List
+          </button>
+        </div>
+        <div className="document-list compact-list">
+          {priceListRows.slice(0, 5).map((priceList) => (
+            <div className="document-row price-list-row" key={priceList.id}>
+              <div>
+                <strong>{priceList.name}</strong>
+                <span>{priceList.customerGroup} / {priceList.currency} / multiplier {priceList.multiplier.toFixed(2)}</span>
+              </div>
+              <StatusBadge status={priceList.status === 'ACTIVE' ? 'active' : 'draft'} label={priceList.status} />
+              <DataTag label="Samples" value={priceList.sampleEligible ? 'Yes' : 'No'} tone={priceList.sampleEligible ? 'green' : 'amber'} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Quote Builder" icon={ClipboardCheck}>
+        {selectedSku ? (
+          <>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Customer</span>
+                <input
+                  aria-label="Quote customer"
+                  value={quoteDraft.customer}
+                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customer: event.target.value }))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Customer group</span>
+                <select
+                  aria-label="Quote customer group"
+                  value={quoteDraft.customerGroup}
+                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))}
+                >
+                  <option value="Studio">Studio</option>
+                  <option value="Lab">Lab</option>
+                  <option value="Bulk">Bulk</option>
+                  <option value="Contract">Contract</option>
+                </select>
+              </label>
+              <label className="field-row">
+                <span>Quantity packs</span>
+                <input
+                  aria-label="Quote quantity packs"
+                  min={1}
+                  type="number"
+                  value={quoteDraft.quantityPacks}
+                  onChange={(event) => setQuoteDraft((current) => ({ ...current, quantityPacks: Number(event.target.value) }))}
+                />
+              </label>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void createQuote()}
+                disabled={busyId === 'quote-create' || !quoteDraft.customer.trim() || quoteDraft.quantityPacks <= 0}
+              >
+                Create Quote
+              </button>
+            </div>
+            <div className="metric-grid">
+              <Metric label="Selected SKU" value={selectedSku.name} />
+              <Metric label="Available" value={`${selectedSku.canSellPacks} packs`} />
+              <Metric label="Unit quote" value={formatCurrency(quoteUnitPrice)} />
+              <Metric label="Quote total" value={formatCurrency(quoteTotal)} />
+            </div>
+          </>
+        ) : (
+          <div className="empty-state compact">Create or select a SKU to build a quote.</div>
+        )}
+      </Panel>
+
+      <Panel title="Sample Queue & Label" icon={PackageCheck}>
+        {selectedSku ? (
+          <>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Customer</span>
+                <input
+                  aria-label="Sample customer"
+                  value={sampleDraft.customer}
+                  onChange={(event) => setSampleDraft((current) => ({ ...current, customer: event.target.value }))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Packs</span>
+                <input
+                  aria-label="Sample packs"
+                  min={1}
+                  max={2}
+                  type="number"
+                  value={sampleDraft.packs}
+                  onChange={(event) => setSampleDraft((current) => ({ ...current, packs: Number(event.target.value) }))}
+                />
+              </label>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void requestSample()}
+                disabled={busyId === 'sample-create' || !sampleDraft.customer.trim() || sampleDraft.packs <= 0}
+              >
+                Request Sample
+              </button>
+            </div>
+            <div className="label-preview-card commerce-label-preview">
+              <strong>{brandingConfig.displayName}</strong>
+              <span>{selectedSku.labelTemplate}</span>
+              <code>{selectedSku.id} / {selectedMaterial?.cas ?? selectedSku.materialId} / {formatGrams(selectedSku.packSizeGrams)}</code>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state compact">Select a SKU to preview tenant label and sample request.</div>
+        )}
+      </Panel>
+
+      <Panel className="wide" title="Quote & Sample Evidence" icon={Activity}>
+        <div className="commerce-evidence-grid">
+          <div className="document-list compact-list">
+            {quoteRows.slice(0, 5).map((quote) => (
+              <div className="document-row quote-row" key={quote.id}>
+                <div>
+                  <strong>{quote.id} / {skuRows.find((sku) => sku.id === quote.skuId)?.name ?? quote.skuId}</strong>
+                  <span>{quote.customer} / {quote.customerGroup} / {quote.quantityPacks} packs</span>
+                </div>
+                <StatusBadge status={quoteStatusTone[quote.status]} label={quote.status} />
+                <div className="mono-value">{formatCurrency(quote.total)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="document-list compact-list">
+            {sampleRows.slice(0, 5).map((sample) => (
+              <div className="document-row sample-row" key={sample.id}>
+                <div>
+                  <strong>{sample.id} / {skuRows.find((sku) => sku.id === sample.skuId)?.name ?? sample.skuId}</strong>
+                  <span>{sample.customer} / {sample.packs} pack(s)</span>
+                </div>
+                <StatusBadge status={sampleStatusTone[sample.status]} label={sample.status} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Phase 11 Guardrails" icon={ShieldCheck}>
+        <ul className="policy-list">
+          <li>SKU records store pack, price, label, and material mapping only.</li>
+          <li>Available packs are derived from approved inventory lots at read time.</li>
+          <li>Quotes and samples do not create reservations or InventoryMovement rows.</li>
+          <li>Public storefront, customer portal, and document-per-SKU surfacing remain next gates.</li>
         </ul>
       </Panel>
     </div>

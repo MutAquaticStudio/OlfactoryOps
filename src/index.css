@@ -1273,6 +1273,7 @@ kbd {
 .documents-grid,
 .production-grid,
 .procurement-grid,
+.commerce-grid,
 .identity-grid,
 .customization-grid,
 .saas-grid {
@@ -1363,6 +1364,38 @@ kbd {
 
 .price-history-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sku-list .sku-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+}
+
+.sku-row.is-active,
+.sku-row:hover {
+  border-color: rgba(77, 155, 255, 0.26);
+  background: rgba(77, 155, 255, 0.075);
+}
+
+.price-list-row,
+.quote-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.sample-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.commerce-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.commerce-label-preview {
+  margin-top: 12px;
 }
 
 .document-generate-form {
@@ -2046,12 +2079,14 @@ input[type='range'] {
     z-index: 40;
     inset: 10px auto 10px 10px;
     width: min(300px, calc(100vw - 20px));
-    transform: translateX(-110%);
-    transition: transform 0.25s;
+    transform: none;
+    transition: left 0.25s;
   }
 
-  .sidebar.glass-hover:hover {
-    transform: translateX(-110%);
+  .app-shell:not(.is-mobile-nav-open) .sidebar,
+  .app-shell:not(.is-mobile-nav-open) .sidebar.glass-hover:hover {
+    left: -320px;
+    transform: none;
   }
 
   .app-shell.is-rail .sidebar {
@@ -2061,9 +2096,10 @@ input[type='range'] {
   }
 
   .app-shell.is-mobile-nav-open .sidebar {
+    left: 10px;
     width: min(300px, calc(100vw - 20px));
     overflow: auto;
-    transform: translateX(0);
+    transform: none !important;
   }
 
   .app-shell.is-rail .sidebar.glass-hover:hover {
@@ -2127,6 +2163,7 @@ input[type='range'] {
   .documents-grid,
   .production-grid,
   .procurement-grid,
+  .commerce-grid,
   .identity-grid,
   .customization-grid,
   .saas-grid,
@@ -2150,6 +2187,7 @@ input[type='range'] {
   .stock-grid,
   .record-grid,
   .metric-grid,
+  .commerce-evidence-grid,
   .inspector-grid {
     grid-template-columns: 1fr;
   }
@@ -2190,7 +2228,11 @@ input[type='range'] {
   .permission-row-card,
   .allocation-row,
   .weighing-row,
-  .weighing-evidence-row {
+  .weighing-evidence-row,
+  .sku-list .sku-row,
+  .price-list-row,
+  .quote-row,
+  .sample-row {
     grid-template-columns: 1fr;
     align-items: start;
   }
@@ -2255,4 +2297,9 @@ input[type='range'] {
     animation: none !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.app-shell.is-mobile-nav-open > .sidebar {
+  left: 10px;
+  transform: none !important;
 }

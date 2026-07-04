@@ -33,11 +33,14 @@ import {
   permissionCatalog,
   phases,
   planLabUsage,
+  priceLists,
   priceHistory,
   productionBatches,
   purchaseOrders,
+  quotes,
   resolveFormulaWithCatalog,
   rolePolicies,
+  sampleRequests,
   salesOrders,
   skuAvailability,
   ssoConfig,
@@ -54,6 +57,7 @@ import {
   type AuthSession,
   type BrandRecord,
   type BrandingConfig,
+  type CommercialSkuRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentShareLink,
@@ -78,9 +82,12 @@ import {
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type PriceHistoryRecord,
+  type PriceListRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
+  type QuoteRecord,
   type RolePolicy,
+  type SampleRequestRecord,
   type SalesOrderRecord,
   type StockTakeRecord,
   type StorageLocation,
@@ -138,6 +145,39 @@ type CreateSupplierBody = {
   contactEmail?: string
   paymentTerms?: string
   preferredMaterialIds?: string[]
+}
+
+type CreateCatalogSkuBody = {
+  materialId?: string
+  name?: string
+  description?: string
+  packSizeGrams?: number
+  price?: number
+  currency?: string
+  tier?: CommercialSkuRecord['tier']
+  moqPacks?: number
+  labelTemplate?: string
+}
+
+type CreatePriceListBody = {
+  name?: string
+  customerGroup?: PriceListRecord['customerGroup']
+  currency?: string
+  multiplier?: number
+  sampleEligible?: boolean
+}
+
+type CreateQuoteBody = {
+  skuId?: string
+  customer?: string
+  customerGroup?: PriceListRecord['customerGroup']
+  quantityPacks?: number
+}
+
+type CreateSampleRequestBody = {
+  skuId?: string
+  customer?: string
+  packs?: number
 }
 
 const productionLifecycleStatuses: ProductionBatchRecord['status'][] = [
@@ -221,6 +261,10 @@ export class NorthStarService {
   private supplierRecords: SupplierRecord[] = structuredClone(suppliers)
   private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
   private priceHistoryRecords: PriceHistoryRecord[] = structuredClone(priceHistory)
+  private commercialSkuRecords: CommercialSkuRecord[] = structuredClone(commercialSkus)
+  private priceListRecords: PriceListRecord[] = structuredClone(priceLists)
+  private quoteRecords: QuoteRecord[] = structuredClone(quotes)
+  private sampleRequestRecords: SampleRequestRecord[] = structuredClone(sampleRequests)
   private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
   private auditCounter = auditEvents.length
 
@@ -2696,7 +2740,196 @@ export class NorthStarService {
   }
 
   catalogSkus() {
-    return { data: skuAvailability(commercialSkus, this.lots) }
+    return {
+      data: skuAvailability(this.commercialSkuRecords, this.lots, this.materialRecords),
+    }
+  }
+
+  createCatalogSku(body: CreateCatalogSkuBody = {}) {
+    const material = this.materialRecords.find((item) => item.id === body.materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${body.materialId ?? 'unknown'} was not found`)
+    }
+    const name = body.name?.trim()
+    if (!name) {
+      throw new UnprocessableEntityException('SKU name is required')
+    }
+    if (this.commercialSkuRecords.some((sku) => sku.name.toLowerCase() === name.toLowerCase())) {
+      throw new UnprocessableEntityException(`SKU ${name} already exists`)
+    }
+    const packSizeGrams = Number(body.packSizeGrams ?? 0)
+    if (!Number.isFinite(packSizeGrams) || packSizeGrams <= 0) {
+      throw new UnprocessableEntityException('SKU packSizeGrams must be greater than 0')
+    }
+    const price = Number(body.price ?? 0)
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new UnprocessableEntityException('SKU price must be greater than 0')
+    }
+    const moqPacks = Math.round(Number(body.moqPacks ?? 1))
+    if (!Number.isFinite(moqPacks) || moqPacks <= 0) {
+      throw new UnprocessableEntityException('SKU moqPacks must be greater than 0')
+    }
+    const tier = body.tier ?? 'Studio'
+    if (!['Studio', 'Lab', 'Bulk'].includes(tier)) {
+      throw new UnprocessableEntityException(`SKU tier ${tier} is not supported`)
+    }
+
+    const sku: CommercialSkuRecord = {
+      id: `SKU-${material.id.replace('mat-', '').slice(0, 3).toUpperCase()}-${String(this.commercialSkuRecords.length + 51).padStart(3, '0')}`,
+      materialId: material.id,
+      name,
+      description: body.description?.trim() || `${material.name} commercial pack`,
+      packSizeGrams,
+      price,
+      currency: body.currency?.trim().toUpperCase() || 'USD',
+      tier,
+      status: 'ACTIVE',
+      moqPacks,
+      labelTemplate: body.labelTemplate?.trim() || `${this.brandingRecord.displayName} Neutral Pack`,
+    }
+    this.commercialSkuRecords = [sku, ...this.commercialSkuRecords]
+    const audit = this.recordAudit('commerce.sku.create', sku.id, 'api:commerce', 'allowed')
+    return {
+      data: {
+        sku: skuAvailability([sku], this.lots, this.materialRecords)[0],
+        audit,
+        invariant: 'commerce SKU creation stores no stock; availability is derived from Inventory lots',
+      },
+    }
+  }
+
+  priceLists() {
+    return { data: this.priceListRecords }
+  }
+
+  createPriceList(body: CreatePriceListBody = {}) {
+    const name = body.name?.trim()
+    if (!name) {
+      throw new UnprocessableEntityException('Price list name is required')
+    }
+    const customerGroup = body.customerGroup ?? 'Studio'
+    if (!['Studio', 'Lab', 'Bulk', 'Contract'].includes(customerGroup)) {
+      throw new UnprocessableEntityException(`Customer group ${customerGroup} is not supported`)
+    }
+    const multiplier = Number(body.multiplier ?? 1)
+    if (!Number.isFinite(multiplier) || multiplier <= 0) {
+      throw new UnprocessableEntityException('Price list multiplier must be greater than 0')
+    }
+
+    const priceList: PriceListRecord = {
+      id: `PL-${customerGroup.toUpperCase()}-${String(this.priceListRecords.length + 1).padStart(3, '0')}`,
+      name,
+      customerGroup,
+      currency: body.currency?.trim().toUpperCase() || 'USD',
+      multiplier,
+      sampleEligible: body.sampleEligible ?? customerGroup !== 'Bulk',
+      status: 'ACTIVE',
+    }
+    this.priceListRecords = [priceList, ...this.priceListRecords]
+    const audit = this.recordAudit('commerce.price-list.create', priceList.id, 'api:commerce', 'allowed')
+    return {
+      data: {
+        priceList,
+        audit,
+        invariant: 'price list changes affect quote pricing without mutating inventory',
+      },
+    }
+  }
+
+  quotes() {
+    return { data: this.quoteRecords }
+  }
+
+  createQuote(body: CreateQuoteBody = {}) {
+    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
+    if (!sku) {
+      throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
+    }
+    const customer = body.customer?.trim()
+    if (!customer) {
+      throw new UnprocessableEntityException('Quote customer is required')
+    }
+    const customerGroup = body.customerGroup ?? sku.tier
+    const priceList =
+      this.priceListRecords.find((item) => item.customerGroup === customerGroup && item.status === 'ACTIVE') ??
+      this.priceListRecords.find((item) => item.customerGroup === sku.tier && item.status === 'ACTIVE')
+    if (!priceList) {
+      throw new NotFoundException(`Active price list for ${customerGroup} was not found`)
+    }
+    const quantityPacks = Math.round(Number(body.quantityPacks ?? 1))
+    if (!Number.isFinite(quantityPacks) || quantityPacks <= 0) {
+      throw new UnprocessableEntityException('Quote quantityPacks must be greater than 0')
+    }
+    const availability = skuAvailability([sku], this.lots, this.materialRecords)[0]
+    const unitPrice = Number((sku.price * priceList.multiplier).toFixed(2))
+    const quote: QuoteRecord = {
+      id: `QTE-2026-${String(this.quoteRecords.length + 34).padStart(3, '0')}`,
+      skuId: sku.id,
+      customer,
+      customerGroup,
+      quantityPacks,
+      unitPrice,
+      total: Number((unitPrice * quantityPacks).toFixed(2)),
+      currency: priceList.currency,
+      status: quantityPacks <= availability.canSellPacks ? 'SENT' : 'REVIEW',
+      createdAt: new Date().toISOString(),
+    }
+    this.quoteRecords = [quote, ...this.quoteRecords]
+    const audit = this.recordAudit('commerce.quote.create', quote.id, 'api:commerce', quote.status === 'REVIEW' ? 'review' : 'allowed')
+    return {
+      data: {
+        quote,
+        availability,
+        audit,
+        invariant: 'quote creation reads SKU availability from inventory and creates no reservation or movement',
+      },
+    }
+  }
+
+  samples() {
+    return { data: this.sampleRequestRecords }
+  }
+
+  requestSample(body: CreateSampleRequestBody = {}) {
+    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
+    if (!sku) {
+      throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
+    }
+    const customer = body.customer?.trim()
+    if (!customer) {
+      throw new UnprocessableEntityException('Sample customer is required')
+    }
+    const packs = Math.round(Number(body.packs ?? 1))
+    if (!Number.isFinite(packs) || packs <= 0 || packs > 2) {
+      throw new UnprocessableEntityException('Sample packs must be between 1 and 2')
+    }
+    const priceList = this.priceListRecords.find((item) => item.customerGroup === sku.tier && item.status === 'ACTIVE')
+    if (priceList && !priceList.sampleEligible) {
+      throw new UnprocessableEntityException(`Samples are not enabled for ${sku.tier} price list`)
+    }
+    const availability = skuAvailability([sku], this.lots, this.materialRecords)[0]
+    if (packs > availability.canSellPacks) {
+      throw new UnprocessableEntityException(`Sample request exceeds available packs for ${sku.id}`)
+    }
+
+    const sample: SampleRequestRecord = {
+      id: `SMP-2026-${String(this.sampleRequestRecords.length + 18).padStart(3, '0')}`,
+      skuId: sku.id,
+      customer,
+      packs,
+      status: 'REQUESTED',
+      createdAt: new Date().toISOString(),
+    }
+    this.sampleRequestRecords = [sample, ...this.sampleRequestRecords]
+    const audit = this.recordAudit('commerce.sample.request', sample.id, 'api:commerce', 'allowed')
+    return {
+      data: {
+        sample,
+        availability,
+        audit,
+        invariant: 'sample request validates inventory-derived availability but does not reserve or move stock',
+      },
+    }
   }
 
   orders() {
@@ -2708,11 +2941,11 @@ export class NorthStarService {
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
-    const sku = commercialSkus.find((item) => item.id === order.skuId)
+    const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
     if (!sku) {
       throw new NotFoundException(`SKU ${order.skuId} was not found`)
     }
-    const requiredGrams = orderRequiredGrams(order)
+    const requiredGrams = orderRequiredGrams(order, this.commercialSkuRecords)
     const allocations = this.pickLotsForMaterial(sku.materialId, requiredGrams)
     const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
     allocations.forEach((allocation) => {
@@ -2737,7 +2970,7 @@ export class NorthStarService {
     if (order.status !== 'RESERVED') {
       throw new UnprocessableEntityException(`Sales order ${id} must be reserved before fulfillment`)
     }
-    const sku = commercialSkus.find((item) => item.id === order.skuId)
+    const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
     if (!sku) {
       throw new NotFoundException(`SKU ${order.skuId} was not found`)
     }

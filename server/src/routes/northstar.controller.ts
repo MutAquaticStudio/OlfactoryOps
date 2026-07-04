@@ -19,6 +19,39 @@ type LabUsageBody = {
   actor?: string
 }
 
+type CatalogSkuBody = {
+  materialId?: string
+  name?: string
+  description?: string
+  packSizeGrams?: number
+  price?: number
+  currency?: string
+  tier?: 'Studio' | 'Lab' | 'Bulk'
+  moqPacks?: number
+  labelTemplate?: string
+}
+
+type PriceListBody = {
+  name?: string
+  customerGroup?: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
+  currency?: string
+  multiplier?: number
+  sampleEligible?: boolean
+}
+
+type QuoteBody = {
+  skuId?: string
+  customer?: string
+  customerGroup?: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
+  quantityPacks?: number
+}
+
+type SampleRequestBody = {
+  skuId?: string
+  customer?: string
+  packs?: number
+}
+
 @Controller()
 export class NorthStarController {
   constructor(@Inject(NorthStarService) private readonly northStar: NorthStarService) {}
@@ -650,6 +683,41 @@ export class NorthStarController {
   @Get('catalog/skus')
   catalogSkus() {
     return this.northStar.catalogSkus()
+  }
+
+  @Post('catalog/skus')
+  createCatalogSku(@Body() body: CatalogSkuBody) {
+    return this.northStar.createCatalogSku(body)
+  }
+
+  @Get('price-lists')
+  priceLists() {
+    return this.northStar.priceLists()
+  }
+
+  @Post('price-lists')
+  createPriceList(@Body() body: PriceListBody) {
+    return this.northStar.createPriceList(body)
+  }
+
+  @Get('quotes')
+  quotes() {
+    return this.northStar.quotes()
+  }
+
+  @Post('quotes')
+  createQuote(@Body() body: QuoteBody) {
+    return this.northStar.createQuote(body)
+  }
+
+  @Get('samples')
+  samples() {
+    return this.northStar.samples()
+  }
+
+  @Post('samples')
+  requestSample(@Body() body: SampleRequestBody) {
+    return this.northStar.requestSample(body)
   }
 
   @Get('orders')

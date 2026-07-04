@@ -490,9 +490,46 @@ export interface CommercialSkuRecord {
   id: string
   materialId: string
   name: string
+  description: string
   packSizeGrams: number
   price: number
+  currency: string
   tier: 'Studio' | 'Lab' | 'Bulk'
+  status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
+  moqPacks: number
+  labelTemplate: string
+}
+
+export interface PriceListRecord {
+  id: string
+  name: string
+  customerGroup: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
+  currency: string
+  multiplier: number
+  sampleEligible: boolean
+  status: 'ACTIVE' | 'DRAFT' | 'ARCHIVED'
+}
+
+export interface QuoteRecord {
+  id: string
+  skuId: string
+  customer: string
+  customerGroup: PriceListRecord['customerGroup']
+  quantityPacks: number
+  unitPrice: number
+  total: number
+  currency: string
+  status: 'DRAFT' | 'REVIEW' | 'SENT'
+  createdAt: string
+}
+
+export interface SampleRequestRecord {
+  id: string
+  skuId: string
+  customer: string
+  packs: number
+  status: 'REQUESTED' | 'APPROVED' | 'CONVERTED'
+  createdAt: string
 }
 
 export interface SalesOrderRecord {
@@ -632,7 +669,7 @@ export const phases: Phase[] = [
   { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, generation, compliance coverage', gate: 'Access logged and coverage visible', status: 'active', securityLayer: 'L5', coverage: 76 },
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'active', securityLayer: 'L5', coverage: 78 },
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
-  { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'testing', securityLayer: 'L4', coverage: 58 },
+  { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'active', securityLayer: 'L4', coverage: 74 },
   { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'testing', securityLayer: 'L5', coverage: 62 },
   { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'testing', securityLayer: 'L4/L5', coverage: 58 },
   { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'testing', securityLayer: 'L4', coverage: 56 },
@@ -826,17 +863,17 @@ export const domains: DomainModule[] = [
     name: 'Aroma Materials Commerce',
     shortName: 'Commerce',
     responsibility: 'SKU, pack size, price list, quote, sample, neutral labels',
-    status: 'testing',
-    health: 58,
-    risk: 'Catalog availability API reads inventory; quote/sample flow remains next gate',
+    status: 'active',
+    health: 74,
+    risk: 'Catalog, price-list, quote, and sample flows read inventory availability without creating stock movement; storefront remains next gate',
     owner: 'Commercial',
     entities: ['CommercialSKU', 'PackSize', 'PriceList', 'Sample', 'Quote'],
-    features: ['SKU availability', 'Pack conversion', 'Price tiers', 'Quote/sample'],
+    features: ['SKU availability', 'Pack conversion', 'Price tiers', 'Quote builder', 'Sample queue', 'White-label label'],
     invariants: ['SKU does not hold separate stock', 'Label uses tenant branding'],
-    apis: ['/api/v1/catalog/skus', '/api/v1/price-lists', '/api/v1/quotes'],
+    apis: ['/api/v1/catalog/skus', '/api/v1/price-lists', '/api/v1/quotes', '/api/v1/samples'],
     permissions: ['commerce.view', 'commerce.manage'],
     screens: ['Catalog', 'Quote builder', 'Sample queue'],
-    activity: 'SKU availability derives from approved lot summary',
+    activity: 'Commercial SKU cards, quote totals, and sample queue derive availability from approved lot summary',
   },
   {
     key: 'orders',
@@ -1904,8 +1941,88 @@ export const priceHistory: PriceHistoryRecord[] = [
 ]
 
 export const commercialSkus: CommercialSkuRecord[] = [
-  { id: 'SKU-ISO-050', materialId: 'mat-iso', name: 'Iso E Super 50g', packSizeGrams: 50, price: 18, tier: 'Studio' },
-  { id: 'SKU-BER-025', materialId: 'mat-bergamot', name: 'Bergamot FCF 25g', packSizeGrams: 25, price: 16, tier: 'Studio' },
+  {
+    id: 'SKU-ISO-050',
+    materialId: 'mat-iso',
+    name: 'Iso E Super 50g',
+    description: 'White-label aroma material pack for studio trials',
+    packSizeGrams: 50,
+    price: 18,
+    currency: 'USD',
+    tier: 'Studio',
+    status: 'ACTIVE',
+    moqPacks: 1,
+    labelTemplate: 'NOXELIS Neutral 50g',
+  },
+  {
+    id: 'SKU-BER-025',
+    materialId: 'mat-bergamot',
+    name: 'Bergamot FCF 25g',
+    description: 'Citrus top-note sample pack with tenant label',
+    packSizeGrams: 25,
+    price: 16,
+    currency: 'USD',
+    tier: 'Studio',
+    status: 'ACTIVE',
+    moqPacks: 1,
+    labelTemplate: 'NOXELIS Neutral 25g',
+  },
+]
+
+export const priceLists: PriceListRecord[] = [
+  {
+    id: 'PL-STUDIO',
+    name: 'Studio Pack List',
+    customerGroup: 'Studio',
+    currency: 'USD',
+    multiplier: 1,
+    sampleEligible: true,
+    status: 'ACTIVE',
+  },
+  {
+    id: 'PL-LAB',
+    name: 'Lab Volume List',
+    customerGroup: 'Lab',
+    currency: 'USD',
+    multiplier: 0.88,
+    sampleEligible: true,
+    status: 'ACTIVE',
+  },
+  {
+    id: 'PL-BULK',
+    name: 'Bulk Commercial List',
+    customerGroup: 'Bulk',
+    currency: 'USD',
+    multiplier: 0.74,
+    sampleEligible: false,
+    status: 'DRAFT',
+  },
+]
+
+export const quotes: QuoteRecord[] = [
+  {
+    id: 'QTE-2026-033',
+    skuId: 'SKU-ISO-050',
+    customer: 'Studio Sample Desk',
+    customerGroup: 'Studio',
+    quantityPacks: 4,
+    unitPrice: 18,
+    total: 72,
+    currency: 'USD',
+    status: 'SENT',
+    createdAt: '2026-07-02T08:00:00.000Z',
+  },
+]
+
+export const sampleRequests: SampleRequestRecord[] = [
+  {
+    id: 'SMP-2026-017',
+    skuId: 'SKU-BER-025',
+    customer: 'Atelier Preview',
+    packs: 1,
+    status: 'APPROVED',
+    createdAt: '2026-07-02T10:45:00.000Z',
+  },
 ]
 
 export const salesOrders: SalesOrderRecord[] = [
@@ -2050,8 +2167,12 @@ export function formatSequenceValue(sequence: NumberingSequenceRecord, value = s
   return sequence.pattern.replace('####', padded)
 }
 
-export function skuAvailability(skus: CommercialSkuRecord[], lots: InventoryLot[] = initialLots) {
-  const summary = stockSummary(lots)
+export function skuAvailability(
+  skus: CommercialSkuRecord[],
+  lots: InventoryLot[] = initialLots,
+  materialCatalog: Material[] = materials,
+) {
+  const summary = stockSummary(lots, materialCatalog)
   return skus.map((sku) => {
     const stock = summary.find((item) => item.material.id === sku.materialId)
     return {
