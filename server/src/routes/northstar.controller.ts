@@ -52,6 +52,45 @@ type SampleRequestBody = {
   packs?: number
 }
 
+type CustomerBody = {
+  name?: string
+  group?: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
+  creditLimit?: number
+  paymentTerms?: 'NET_15' | 'NET_30' | 'PREPAID'
+  contactEmail?: string
+  billingAddress?: {
+    label?: string
+    line1?: string
+    city?: string
+    country?: string
+  }
+  shippingAddress?: {
+    label?: string
+    line1?: string
+    city?: string
+    country?: string
+  }
+}
+
+type SalesOrderBody = {
+  skuId?: string
+  customerId?: string
+  quantity?: number
+  discountPercent?: number
+  taxPercent?: number
+  shippingCost?: number
+  currency?: string
+}
+
+type PackOrderBody = {
+  weightGrams?: number
+}
+
+type ShipOrderBody = {
+  carrier?: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
+  trackingNumber?: string
+}
+
 @Controller()
 export class NorthStarController {
   constructor(@Inject(NorthStarService) private readonly northStar: NorthStarService) {}
@@ -720,9 +759,24 @@ export class NorthStarController {
     return this.northStar.requestSample(body)
   }
 
+  @Get('customers')
+  customers() {
+    return this.northStar.customers()
+  }
+
+  @Post('customers')
+  createCustomer(@Body() body: CustomerBody) {
+    return this.northStar.createCustomer(body)
+  }
+
   @Get('orders')
   orders() {
     return this.northStar.orders()
+  }
+
+  @Post('orders')
+  createOrder(@Body() body: SalesOrderBody) {
+    return this.northStar.createOrder(body)
   }
 
   @Post('orders/:id/reserve')
@@ -730,9 +784,34 @@ export class NorthStarController {
     return this.northStar.reserveOrder(id)
   }
 
+  @Post('orders/:id/cancel')
+  cancelOrder(@Param('id') id: string) {
+    return this.northStar.cancelOrder(id)
+  }
+
+  @Post('orders/:id/pack')
+  packOrder(@Param('id') id: string, @Body() body: PackOrderBody) {
+    return this.northStar.packOrder(id, body)
+  }
+
+  @Post('orders/:id/ship')
+  shipOrder(@Param('id') id: string, @Body() body: ShipOrderBody) {
+    return this.northStar.shipOrder(id, body)
+  }
+
   @Post('orders/:id/fulfill')
   fulfillOrder(@Param('id') id: string) {
     return this.northStar.fulfillOrder(id)
+  }
+
+  @Get('shipments')
+  shipments() {
+    return this.northStar.shipments()
+  }
+
+  @Get('order-documents')
+  orderDocuments() {
+    return this.northStar.orderDocuments()
   }
 
   @Get('billing/plan')

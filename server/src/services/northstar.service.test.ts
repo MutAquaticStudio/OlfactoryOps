@@ -856,16 +856,53 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
-  it('reserves orders without movement and fulfills with OUT movement', () => {
+  it('runs order lifecycle through reserve, pack, ship, and fulfillment trace', () => {
     const service = new NorthStarService()
     const beforeMovements = service.inventoryMovements().data.length
-    const reservation = service.reserveOrder('SO-2026-092').data
+    const order = service.createOrder({
+      skuId: 'SKU-ISO-050',
+      customerId: 'CUS-MAISON',
+      quantity: 1,
+      taxPercent: 8,
+      shippingCost: 12,
+    }).data.order
+    expect(order.status).toBe('CONFIRMED')
+
+    const reservation = service.reserveOrder(order.id).data
     const afterReserveMovements = service.inventoryMovements().data.length
-    const fulfillment = service.fulfillOrder('SO-2026-092').data
+    expect(() => service.reserveOrder(order.id)).toThrow(/cannot be reserved/)
+
+    const pack = service.packOrder(order.id).data
+    const ship = service.shipOrder(order.id, { carrier: 'DHL', trackingNumber: 'DHL-PHASE12' }).data
+    const fulfillment = service.fulfillOrder(order.id).data
 
     expect(reservation.invariant).toContain('creates no InventoryMovement')
     expect(afterReserveMovements).toBe(beforeMovements)
+    expect(pack.document.type).toBe('PACKING_SLIP')
+    expect(ship.shipment?.trackingNumber).toBe('DHL-PHASE12')
     expect(fulfillment.movements.every((movement) => movement.direction === 'OUT')).toBe(true)
+    expect(fulfillment.invariant).toContain('lot traceability')
+    expect(service.orderDocuments().data.map((document) => document.type)).toEqual(
+      expect.arrayContaining(['PICK_LIST', 'PACKING_SLIP', 'INVOICE', 'COA']),
+    )
+    expect(service.shipments().data[0]?.allocations.length).toBeGreaterThan(0)
+  })
+
+  it('cancels reserved orders by releasing reservation without movement', () => {
+    const service = new NorthStarService()
+    const order = service.createOrder({
+      skuId: 'SKU-ISO-050',
+      customerId: 'CUS-MAISON',
+      quantity: 1,
+    }).data.order
+    const beforeMovements = service.inventoryMovements().data.length
+
+    service.reserveOrder(order.id)
+    const cancellation = service.cancelOrder(order.id).data
+
+    expect(cancellation.invariant).toContain('without creating InventoryMovement')
+    expect(cancellation.releasedAllocations.length).toBeGreaterThan(0)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
   it('queues enterprise audit export as a tenant-scoped control', () => {

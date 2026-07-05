@@ -1274,6 +1274,7 @@ kbd {
 .production-grid,
 .procurement-grid,
 .commerce-grid,
+.orders-grid,
 .identity-grid,
 .customization-grid,
 .saas-grid {
@@ -1396,6 +1397,57 @@ kbd {
 
 .commerce-label-preview {
   margin-top: 12px;
+}
+
+.order-entry-grid,
+.order-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.entry-column {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.entry-column h4 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.form-triple {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.compact-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.order-list .order-row {
+  grid-template-columns: minmax(0, 1fr) auto minmax(520px, auto);
+  width: 100%;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.order-row.is-active,
+.order-row:hover {
+  border-color: rgba(77, 155, 255, 0.26);
+  background: rgba(77, 155, 255, 0.075);
+}
+
+.shipment-row,
+.order-document-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .document-generate-form {
@@ -2164,6 +2216,7 @@ input[type='range'] {
   .production-grid,
   .procurement-grid,
   .commerce-grid,
+  .orders-grid,
   .identity-grid,
   .customization-grid,
   .saas-grid,
@@ -2188,6 +2241,8 @@ input[type='range'] {
   .record-grid,
   .metric-grid,
   .commerce-evidence-grid,
+  .order-entry-grid,
+  .order-evidence-grid,
   .inspector-grid {
     grid-template-columns: 1fr;
   }
@@ -2232,7 +2287,10 @@ input[type='range'] {
   .sku-list .sku-row,
   .price-list-row,
   .quote-row,
-  .sample-row {
+  .sample-row,
+  .order-list .order-row,
+  .shipment-row,
+  .order-document-row {
     grid-template-columns: 1fr;
     align-items: start;
   }
@@ -2271,6 +2329,7 @@ input[type='range'] {
   .weighing-controls,
   .customization-form-grid,
   .material-form-grid,
+  .form-triple,
   .inventory-form-grid,
   .branding-preview {
     grid-template-columns: 1fr;

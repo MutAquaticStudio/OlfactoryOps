@@ -55,6 +55,7 @@ import {
   brands,
   commercialSkus,
   customFields,
+  customers,
   documents,
   documentComplianceDashboard,
   domains,
@@ -72,6 +73,7 @@ import {
   memberships,
   moleculeComponents,
   numberingSequences,
+  orderDocuments,
   permissionCatalog,
   phases,
   planLabUsage,
@@ -86,6 +88,7 @@ import {
   rolePolicies,
   sampleRequests,
   salesOrders,
+  shipments,
   ssoConfig,
   statusMeta,
   storageLocations,
@@ -103,6 +106,7 @@ import {
   type BrandingConfig,
   type BillingPlanRecord,
   type CommercialSkuRecord,
+  type CustomerRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentComplianceDashboard,
@@ -137,6 +141,9 @@ import {
   type ResolvedLeaf,
   type RolePolicy,
   type SampleRequestRecord,
+  type SalesOrderRecord,
+  type ShipmentRecord,
+  type OrderDocumentRecord,
   type SsoConfigRecord,
   type SignedDocumentUrl,
   type StockTakeRecord,
@@ -282,6 +289,55 @@ type SampleRequestCreateResponse = {
   sample: SampleRequestRecord
   availability: CatalogSkuAvailability
   audit: AuditEvent
+  invariant: string
+}
+
+type CustomerCreateResponse = {
+  customer: CustomerRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type SalesOrderCreateResponse = {
+  order: SalesOrderRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type OrderReservationResponse = {
+  orderId: string
+  allocations: Allocation[]
+  document: OrderDocumentRecord
+  invariant: string
+}
+
+type OrderCancellationResponse = {
+  orderId: string
+  releasedAllocations: Allocation[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type OrderPackResponse = {
+  orderId: string
+  shipment: ShipmentRecord
+  document: OrderDocumentRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type OrderShipResponse = {
+  orderId: string
+  shipment?: ShipmentRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type OrderFulfillmentResponse = {
+  orderId: string
+  movements: InventoryMovement[]
+  documents: OrderDocumentRecord[]
+  shipment?: ShipmentRecord
   invariant: string
 }
 
@@ -2042,6 +2098,7 @@ function DomainWorkspace({
         />
       )}
       {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} />}
+      {domain.key === 'orders' && <OrdersWorkspace stock={stock} />}
       {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
       {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
       {domain.key === 'saas' && <SaasWorkspace session={session} />}
@@ -2058,6 +2115,7 @@ function DomainWorkspace({
         'production',
         'procurement',
         'commerce',
+        'orders',
         'costing',
         'analytics',
         'saas',
@@ -5003,6 +5061,29 @@ const sampleStatusTone: Record<SampleRequestRecord['status'], DomainStatus> = {
   CONVERTED: 'review',
 }
 
+const orderStatusTone: Record<SalesOrderRecord['status'], DomainStatus> = {
+  DRAFT: 'draft',
+  CONFIRMED: 'active',
+  RESERVED: 'active',
+  BACKORDER: 'review',
+  PICKING: 'active',
+  PACKED: 'testing',
+  SHIPPED: 'stable',
+  FULFILLED: 'stable',
+  DELIVERED: 'stable',
+  INVOICED: 'stable',
+  CLOSED: 'stable',
+  CANCELLED: 'draft',
+  HOLD: 'review',
+}
+
+const shipmentStatusTone: Record<ShipmentRecord['status'], DomainStatus> = {
+  PICKING: 'active',
+  PACKED: 'testing',
+  SHIPPED: 'stable',
+  DELIVERED: 'stable',
+}
+
 function CommerceWorkspace({
   stock,
   materialRecords,
@@ -5517,6 +5598,534 @@ function CommerceWorkspace({
           <li>Available packs are derived from approved inventory lots at read time.</li>
           <li>Quotes and samples do not create reservations or InventoryMovement rows.</li>
           <li>Public storefront, customer portal, and document-per-SKU surfacing remain next gates.</li>
+        </ul>
+      </Panel>
+    </div>
+  )
+}
+
+function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) {
+  const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
+    () =>
+      commercialSkus.map((sku) => {
+        const summary = stock.find((item) => item.material.id === sku.materialId)
+        return {
+          ...sku,
+          availableGrams: summary?.available ?? 0,
+          canSellPacks: Math.floor((summary?.available ?? 0) / sku.packSizeGrams),
+        }
+      }),
+    [stock],
+  )
+  const [customerRows, setCustomerRows] = useState<CustomerRecord[]>(customers)
+  const [orderRows, setOrderRows] = useState<SalesOrderRecord[]>(salesOrders)
+  const [shipmentRows, setShipmentRows] = useState<ShipmentRecord[]>(shipments)
+  const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>(orderDocuments)
+  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(seedSkuAvailability)
+  const [selectedOrderId, setSelectedOrderId] = useState(salesOrders[0]?.id ?? '')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
+  const [customerDraft, setCustomerDraft] = useState({
+    name: 'North Star Studio',
+    group: 'Studio' as CustomerRecord['group'],
+    creditLimit: 300,
+    paymentTerms: 'NET_15' as CustomerRecord['paymentTerms'],
+    contactEmail: 'orders@north-star-studio.example',
+    city: 'Los Angeles',
+    country: 'US',
+  })
+  const [orderDraft, setOrderDraft] = useState({
+    customerId: customers[0]?.id ?? '',
+    skuId: commercialSkus[0]?.id ?? '',
+    quantity: 1,
+    discountPercent: 0,
+    taxPercent: 8,
+    shippingCost: 12,
+  })
+  const [shipDraft, setShipDraft] = useState({
+    carrier: 'DHL' as ShipmentRecord['carrier'],
+    trackingNumber: 'DHL-PHASE12',
+  })
+
+  const customerById = useMemo(() => new Map(customerRows.map((customer) => [customer.id, customer])), [customerRows])
+  const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
+  const selectedOrder = orderRows.find((order) => order.id === selectedOrderId) ?? orderRows[0]
+  const selectedSku = selectedOrder ? skuById.get(selectedOrder.skuId) : undefined
+  const selectedCustomer = selectedOrder ? customerById.get(selectedOrder.customerId) : undefined
+  const selectedShipments = shipmentRows.filter((shipment) => shipment.orderId === selectedOrder?.id)
+  const selectedDocuments = documentRows.filter((document) => document.orderId === selectedOrder?.id)
+  const draftSku = skuById.get(orderDraft.skuId)
+  const draftCustomer = customerById.get(orderDraft.customerId)
+  const draftPriceList = priceLists.find((priceList) => priceList.customerGroup === draftCustomer?.group && priceList.status === 'ACTIVE')
+  const draftUnitPrice = draftSku ? draftSku.price * (draftPriceList?.multiplier ?? 1) : 0
+  const draftSubtotal = draftUnitPrice * orderDraft.quantity
+  const draftTotal = draftSubtotal * (1 - orderDraft.discountPercent / 100) * (1 + orderDraft.taxPercent / 100) + orderDraft.shippingCost
+  const creditAvailable = draftCustomer ? draftCustomer.creditLimit - draftTotal : 0
+
+  const refreshOrders = useCallback(async () => {
+    const [customerPayload, orderPayload, shipmentPayload, documentPayload, skuPayload] = await Promise.all([
+      requestApi<CustomerRecord[]>('/customers'),
+      requestApi<SalesOrderRecord[]>('/orders'),
+      requestApi<ShipmentRecord[]>('/shipments'),
+      requestApi<OrderDocumentRecord[]>('/order-documents'),
+      requestApi<CatalogSkuAvailability[]>('/catalog/skus'),
+    ])
+    setCustomerRows(customerPayload)
+    setOrderRows(orderPayload)
+    setShipmentRows(shipmentPayload)
+    setDocumentRows(documentPayload)
+    setSkuRows(skuPayload)
+    setSelectedOrderId((current) => (orderPayload.some((order) => order.id === current) ? current : orderPayload[0]?.id ?? ''))
+    return orderPayload
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    async function loadOrders() {
+      try {
+        const orderPayload = await refreshOrders()
+        if (!active) {
+          return
+        }
+        setStatusMessage(`Orders API synced: ${orderPayload.length} order(s), reservation and shipment controls live`)
+      } catch (error) {
+        if (active) {
+          setStatusMessage(error instanceof Error ? error.message : 'Using local order seed until API is reachable')
+        }
+      }
+    }
+    void loadOrders()
+    return () => {
+      active = false
+    }
+  }, [refreshOrders])
+
+  useEffect(() => {
+    setOrderDraft((current) => ({
+      ...current,
+      customerId: customerRows.some((customer) => customer.id === current.customerId)
+        ? current.customerId
+        : customerRows[0]?.id ?? '',
+      skuId: skuRows.some((sku) => sku.id === current.skuId) ? current.skuId : skuRows[0]?.id ?? '',
+    }))
+  }, [customerRows, skuRows])
+
+  async function createCustomer() {
+    setBusyId('customer-create')
+    setStatusMessage('Creating customer profile without inventory impact')
+    try {
+      const payload = await requestApi<CustomerCreateResponse>('/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: customerDraft.name,
+          group: customerDraft.group,
+          creditLimit: Number(customerDraft.creditLimit),
+          paymentTerms: customerDraft.paymentTerms,
+          contactEmail: customerDraft.contactEmail,
+          billingAddress: {
+            line1: 'Billing address pending',
+            city: customerDraft.city,
+            country: customerDraft.country,
+          },
+          shippingAddress: {
+            line1: 'Shipping address pending',
+            city: customerDraft.city,
+            country: customerDraft.country,
+          },
+        }),
+      })
+      setCustomerRows((current) => [payload.customer, ...current])
+      setOrderDraft((current) => ({ ...current, customerId: payload.customer.id }))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Customer create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function createOrder() {
+    setBusyId('order-create')
+    setStatusMessage('Creating priced sales order without reserving stock')
+    try {
+      const payload = await requestApi<SalesOrderCreateResponse>('/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...orderDraft,
+          quantity: Number(orderDraft.quantity),
+          discountPercent: Number(orderDraft.discountPercent),
+          taxPercent: Number(orderDraft.taxPercent),
+          shippingCost: Number(orderDraft.shippingCost),
+        }),
+      })
+      setOrderRows((current) => [payload.order, ...current])
+      setSelectedOrderId(payload.order.id)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Order create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function runOrderAction(orderId: string, action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill') {
+    setBusyId(`${action}:${orderId}`)
+    const endpoint = `/orders/${encodeURIComponent(orderId)}/${action}`
+    try {
+      let invariant = ''
+      if (action === 'ship') {
+        const payload = await requestApi<OrderShipResponse>(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(shipDraft),
+        })
+        invariant = payload.invariant
+      } else if (action === 'pack') {
+        const payload = await requestApi<OrderPackResponse>(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ weightGrams: selectedOrder?.reservedGrams ?? selectedSku?.packSizeGrams ?? 0 }),
+        })
+        invariant = payload.invariant
+      } else if (action === 'reserve') {
+        const payload = await requestApi<OrderReservationResponse>(endpoint, { method: 'POST' })
+        invariant = payload.invariant
+      } else if (action === 'cancel') {
+        const payload = await requestApi<OrderCancellationResponse>(endpoint, { method: 'POST' })
+        invariant = payload.invariant
+      } else {
+        const payload = await requestApi<OrderFulfillmentResponse>(endpoint, { method: 'POST' })
+        invariant = payload.invariant
+      }
+      await refreshOrders()
+      setSelectedOrderId(orderId)
+      setStatusMessage(invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : `${action} failed`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <div className="workspace-grid orders-grid">
+      <Panel title="Customer & Order Entry" icon={ShoppingCart} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+        <div className="order-entry-grid">
+          <div className="entry-column">
+            <h4>Create Customer</h4>
+            <label className="field-row">
+              <span>Name</span>
+              <input
+                aria-label="Customer name"
+                value={customerDraft.name}
+                onChange={(event) => setCustomerDraft((current) => ({ ...current, name: event.target.value }))}
+              />
+            </label>
+            <label className="field-row">
+              <span>Group</span>
+              <select
+                aria-label="Customer group"
+                value={customerDraft.group}
+                onChange={(event) => setCustomerDraft((current) => ({ ...current, group: event.target.value as CustomerRecord['group'] }))}
+              >
+                <option value="Studio">Studio</option>
+                <option value="Lab">Lab</option>
+                <option value="Bulk">Bulk</option>
+                <option value="Contract">Contract</option>
+              </select>
+            </label>
+            <label className="field-row">
+              <span>Credit limit</span>
+              <input
+                aria-label="Customer credit limit"
+                min={0}
+                type="number"
+                value={customerDraft.creditLimit}
+                onChange={(event) => setCustomerDraft((current) => ({ ...current, creditLimit: Number(event.target.value) }))}
+              />
+            </label>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void createCustomer()}
+              disabled={busyId === 'customer-create' || !customerDraft.name.trim()}
+            >
+              <Plus size={16} />
+              Create Customer
+            </button>
+          </div>
+          <div className="entry-column">
+            <h4>Create Order</h4>
+            <label className="field-row">
+              <span>Customer</span>
+              <select
+                aria-label="Order customer"
+                value={orderDraft.customerId}
+                onChange={(event) => setOrderDraft((current) => ({ ...current, customerId: event.target.value }))}
+              >
+                {customerRows.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field-row">
+              <span>SKU</span>
+              <select
+                aria-label="Order SKU"
+                value={orderDraft.skuId}
+                onChange={(event) => setOrderDraft((current) => ({ ...current, skuId: event.target.value }))}
+              >
+                {skuRows.map((sku) => (
+                  <option key={sku.id} value={sku.id}>
+                    {sku.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="form-triple">
+              <label className="field-row">
+                <span>Packs</span>
+                <input
+                  aria-label="Order quantity"
+                  min={1}
+                  type="number"
+                  value={orderDraft.quantity}
+                  onChange={(event) => setOrderDraft((current) => ({ ...current, quantity: Number(event.target.value) }))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Tax %</span>
+                <input
+                  aria-label="Order tax percent"
+                  min={0}
+                  type="number"
+                  value={orderDraft.taxPercent}
+                  onChange={(event) => setOrderDraft((current) => ({ ...current, taxPercent: Number(event.target.value) }))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Ship</span>
+                <input
+                  aria-label="Order shipping cost"
+                  min={0}
+                  type="number"
+                  value={orderDraft.shippingCost}
+                  onChange={(event) => setOrderDraft((current) => ({ ...current, shippingCost: Number(event.target.value) }))}
+                />
+              </label>
+            </div>
+            <div className="metric-grid compact-metrics">
+              <Metric label="Draft total" value={formatCurrency(draftTotal)} />
+              <Metric label="Credit headroom" value={formatCurrency(creditAvailable)} />
+            </div>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void createOrder()}
+              disabled={busyId === 'order-create' || !orderDraft.customerId || !orderDraft.skuId || orderDraft.quantity <= 0}
+            >
+              Create Order
+            </button>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Order Board" icon={PackageSearch}>
+        <div className="document-list compact-list order-list">
+          {orderRows.map((order) => {
+            const sku = skuById.get(order.skuId)
+            const busy = busyId?.endsWith(order.id) ?? false
+            return (
+              <div
+                className={`document-row order-row ${selectedOrder?.id === order.id ? 'is-active' : ''}`}
+                key={order.id}
+                onClick={() => setSelectedOrderId(order.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    setSelectedOrderId(order.id)
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+              >
+                <div>
+                  <strong>{order.id} / {order.customer}</strong>
+                  <span>{sku?.name ?? order.skuId} / {order.quantity} pack(s) / {formatCurrency(order.total)}</span>
+                  <span>{formatGrams(order.reservedGrams)} reserved / {formatGrams(order.fulfilledGrams)} fulfilled</span>
+                </div>
+                <StatusBadge status={orderStatusTone[order.status]} label={order.status} />
+                <div className="document-actions">
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runOrderAction(order.id, 'reserve')
+                    }}
+                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status)}
+                  >
+                    Reserve
+                  </button>
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runOrderAction(order.id, 'pack')
+                    }}
+                    disabled={busy || order.status !== 'RESERVED'}
+                  >
+                    Pack
+                  </button>
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runOrderAction(order.id, 'ship')
+                    }}
+                    disabled={busy || order.status !== 'PACKED'}
+                  >
+                    Ship
+                  </button>
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runOrderAction(order.id, 'fulfill')
+                    }}
+                    disabled={busy || !['RESERVED', 'PACKED', 'SHIPPED'].includes(order.status)}
+                  >
+                    Fulfill
+                  </button>
+                  <button
+                    className="ghost-button small danger"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void runOrderAction(order.id, 'cancel')
+                    }}
+                    disabled={busy || ['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Reservation vs Available" icon={Boxes}>
+        {selectedOrder && selectedSku ? (
+          <>
+            <div className="metric-grid">
+              <Metric label="SKU" value={selectedSku.name} />
+              <Metric label="Can sell" value={`${selectedSku.canSellPacks} packs`} />
+              <Metric label="Required" value={formatGrams(selectedSku.packSizeGrams * selectedOrder.quantity)} />
+              <Metric label="Reserved" value={formatGrams(selectedOrder.reservedGrams)} />
+            </div>
+            <div className="allocation-list">
+              {(selectedOrder.reservationAllocations ?? []).length === 0 ? (
+                <div className="empty-state compact">Reserve this order to generate FEFO lot allocation trace.</div>
+              ) : (
+                selectedOrder.reservationAllocations?.map((allocation) => (
+                  <div className="allocation-row" key={`${allocation.lotId}-${allocation.allocatedGrams}`}>
+                    <span>{allocation.lotNumber}</span>
+                    <strong>{formatGrams(allocation.allocatedGrams)}</strong>
+                    <code>{allocation.materialName}</code>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="empty-state compact">Create or select an order to inspect availability.</div>
+        )}
+      </Panel>
+
+      <Panel title="Shipping & Documents" icon={Truck}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Carrier</span>
+            <select
+              aria-label="Shipment carrier"
+              value={shipDraft.carrier}
+              onChange={(event) => setShipDraft((current) => ({ ...current, carrier: event.target.value as ShipmentRecord['carrier'] }))}
+            >
+              <option value="DHL">DHL</option>
+              <option value="FedEx">FedEx</option>
+              <option value="UPS">UPS</option>
+              <option value="Pickup">Pickup</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Tracking</span>
+            <input
+              aria-label="Shipment tracking number"
+              value={shipDraft.trackingNumber}
+              onChange={(event) => setShipDraft((current) => ({ ...current, trackingNumber: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="order-evidence-grid">
+          <div className="document-list compact-list">
+            {selectedShipments.length === 0 ? (
+              <div className="empty-state compact">Pack the selected order to create shipment trace.</div>
+            ) : (
+              selectedShipments.map((shipment) => (
+                <div className="document-row shipment-row" key={shipment.id}>
+                  <div>
+                    <strong>{shipment.id} / {shipment.carrier}</strong>
+                    <span>{shipment.trackingNumber} / {formatGrams(shipment.weightGrams)}</span>
+                  </div>
+                  <StatusBadge status={shipmentStatusTone[shipment.status]} label={shipment.status} />
+                </div>
+              ))
+            )}
+          </div>
+          <div className="document-list compact-list">
+            {selectedDocuments.length === 0 ? (
+              <div className="empty-state compact">Reserve, pack, or fulfill to generate order documents.</div>
+            ) : (
+              selectedDocuments.map((document) => (
+                <div className="document-row order-document-row" key={document.id}>
+                  <div>
+                    <strong>{document.type}</strong>
+                    <span>{document.url}</span>
+                  </div>
+                  <StatusBadge status={document.status === 'READY' ? 'stable' : 'draft'} label={document.status} />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel title="Customer Credit" icon={UsersRound}>
+        {selectedCustomer ? (
+          <div className="metric-grid">
+            <Metric label="Customer" value={selectedCustomer.name} />
+            <Metric label="Terms" value={selectedCustomer.paymentTerms} />
+            <Metric label="Credit limit" value={formatCurrency(selectedCustomer.creditLimit)} />
+            <Metric label="Status" value={selectedCustomer.status} />
+          </div>
+        ) : (
+          <div className="empty-state compact">Select an order to inspect customer credit profile.</div>
+        )}
+      </Panel>
+
+      <Panel title="Phase 12 Guardrails" icon={ShieldCheck}>
+        <ul className="policy-list">
+          <li>Order creation prices SKU packs but does not reserve or move inventory.</li>
+          <li>Reservation reduces available stock only and creates no InventoryMovement.</li>
+          <li>Cancel releases reserved grams without writing a movement row.</li>
+          <li>Fulfillment creates OUT movements and keeps shipment lot traceability plus invoice/COA evidence.</li>
         </ul>
       </Panel>
     </div>

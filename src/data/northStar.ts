@@ -532,14 +532,81 @@ export interface SampleRequestRecord {
   createdAt: string
 }
 
+export interface CustomerAddress {
+  id: string
+  label: string
+  line1: string
+  city: string
+  country: string
+}
+
+export interface CustomerRecord {
+  id: string
+  name: string
+  group: PriceListRecord['customerGroup']
+  creditLimit: number
+  paymentTerms: 'NET_15' | 'NET_30' | 'PREPAID'
+  contactEmail: string
+  billingAddress: CustomerAddress
+  shippingAddress: CustomerAddress
+  status: 'ACTIVE' | 'CREDIT_HOLD' | 'ARCHIVED'
+}
+
+export interface ShipmentRecord {
+  id: string
+  orderId: string
+  carrier: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
+  trackingNumber: string
+  status: 'PICKING' | 'PACKED' | 'SHIPPED' | 'DELIVERED'
+  shippedAt?: string
+  deliveredAt?: string
+  weightGrams: number
+  allocations: Allocation[]
+}
+
+export interface OrderDocumentRecord {
+  id: string
+  orderId: string
+  type: 'PICK_LIST' | 'PACKING_SLIP' | 'INVOICE' | 'COA'
+  status: 'DRAFT' | 'READY' | 'SENT'
+  url: string
+  createdAt: string
+}
+
 export interface SalesOrderRecord {
   id: string
   skuId: string
+  customerId: string
   customer: string
   quantity: number
+  unitPrice: number
+  discountPercent: number
+  taxPercent: number
+  shippingCost: number
+  total: number
+  currency: string
   reservedGrams: number
   fulfilledGrams: number
-  status: 'DRAFT' | 'RESERVED' | 'FULFILLED' | 'BACKORDER'
+  status:
+    | 'DRAFT'
+    | 'CONFIRMED'
+    | 'RESERVED'
+    | 'BACKORDER'
+    | 'PICKING'
+    | 'PACKED'
+    | 'SHIPPED'
+    | 'FULFILLED'
+    | 'DELIVERED'
+    | 'INVOICED'
+    | 'CLOSED'
+    | 'CANCELLED'
+    | 'HOLD'
+  carrier?: ShipmentRecord['carrier']
+  trackingNumber?: string
+  reservationAllocations?: Allocation[]
+  shipmentId?: string
+  documentIds?: string[]
+  createdAt: string
 }
 
 export interface BillingPlanRecord {
@@ -670,7 +737,7 @@ export const phases: Phase[] = [
   { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'active', securityLayer: 'L5', coverage: 78 },
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'active', securityLayer: 'L4', coverage: 74 },
-  { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'testing', securityLayer: 'L5', coverage: 62 },
+  { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'active', securityLayer: 'L5', coverage: 76 },
   { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'testing', securityLayer: 'L4/L5', coverage: 58 },
   { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'testing', securityLayer: 'L4', coverage: 56 },
   { id: 15, name: 'SaaS Readiness', domain: 'saas', goal: 'Billing, SSO, SCIM, API keys, audit export', gate: 'Enterprise controls present', status: 'testing', securityLayer: 'L6/L7/L8', coverage: 66 },
@@ -881,17 +948,17 @@ export const domains: DomainModule[] = [
     name: 'Orders & Fulfillment',
     shortName: 'Orders',
     responsibility: 'Sales order, reservation, shipment, fulfillment movement',
-    status: 'testing',
-    health: 62,
-    risk: 'Reserve and fulfill APIs live; shipment docs remain next gate',
+    status: 'active',
+    health: 76,
+    risk: 'Order lifecycle, reservation release, shipment trace, and docs are live; portal and AR depth remain next gate',
     owner: 'Fulfillment',
-    entities: ['SalesOrder', 'OrderLine', 'StockReservation', 'Shipment'],
-    features: ['Reserve stock', 'Release reservation', 'Fulfill OUT', 'Partial/backorder'],
-    invariants: ['INV-016 reservation != movement', 'No negative stock'],
-    apis: ['/api/v1/orders', '/api/v1/orders/:id/reserve', '/api/v1/orders/:id/fulfill'],
+    entities: ['Customer', 'SalesOrder', 'OrderLine', 'StockReservation', 'Shipment', 'OrderDocument'],
+    features: ['Customer profile', 'Order entry', 'Reserve stock', 'Cancel/release', 'Pack/ship trace', 'Fulfill OUT', 'Order docs'],
+    invariants: ['INV-016 reservation != movement', 'No negative stock', 'Shipment keeps lot allocation trace'],
+    apis: ['/api/v1/customers', '/api/v1/orders', '/api/v1/orders/:id/reserve', '/api/v1/orders/:id/cancel', '/api/v1/orders/:id/pack', '/api/v1/orders/:id/ship', '/api/v1/orders/:id/fulfill'],
     permissions: ['orders.view', 'orders.reserve', 'orders.fulfill'],
-    screens: ['Order queue', 'Reservation drawer', 'Shipment'],
-    activity: 'SO-2026-092 reserve creates no movement; fulfill creates OUT movement',
+    screens: ['Order queue', 'Customer credit', 'Pick/pack/ship', 'Fulfillment evidence'],
+    activity: 'Order reserve creates no movement; pack/ship records carrier trace; fulfill creates OUT movement with invoice/COA docs',
   },
   {
     key: 'costing',
@@ -2025,17 +2092,79 @@ export const sampleRequests: SampleRequestRecord[] = [
   },
 ]
 
+export const customers: CustomerRecord[] = [
+  {
+    id: 'CUS-MAISON',
+    name: 'Maison Trial Studio',
+    group: 'Studio',
+    creditLimit: 250,
+    paymentTerms: 'NET_15',
+    contactEmail: 'ops@maison-trial.example',
+    billingAddress: {
+      id: 'ADDR-MAISON-BILL',
+      label: 'Billing',
+      line1: '22 Rue des Accords',
+      city: 'Paris',
+      country: 'FR',
+    },
+    shippingAddress: {
+      id: 'ADDR-MAISON-SHIP',
+      label: 'Studio Receiving',
+      line1: '18 Quai des Notes',
+      city: 'Paris',
+      country: 'FR',
+    },
+    status: 'ACTIVE',
+  },
+  {
+    id: 'CUS-ATELIER',
+    name: 'Atelier Preview',
+    group: 'Lab',
+    creditLimit: 500,
+    paymentTerms: 'NET_30',
+    contactEmail: 'orders@atelier-preview.example',
+    billingAddress: {
+      id: 'ADDR-ATELIER-BILL',
+      label: 'Billing',
+      line1: '104 Lab Row',
+      city: 'Geneva',
+      country: 'CH',
+    },
+    shippingAddress: {
+      id: 'ADDR-ATELIER-SHIP',
+      label: 'Pilot Lab',
+      line1: '11 Formulation Lane',
+      city: 'Geneva',
+      country: 'CH',
+    },
+    status: 'ACTIVE',
+  },
+]
+
 export const salesOrders: SalesOrderRecord[] = [
   {
     id: 'SO-2026-092',
     skuId: 'SKU-ISO-050',
+    customerId: 'CUS-MAISON',
     customer: 'Maison Trial Studio',
     quantity: 1,
+    unitPrice: 18,
+    discountPercent: 0,
+    taxPercent: 8,
+    shippingCost: 12,
+    total: 31.44,
+    currency: 'USD',
     reservedGrams: 0,
     fulfilledGrams: 0,
-    status: 'DRAFT',
+    status: 'CONFIRMED',
+    documentIds: [],
+    createdAt: '2026-07-03T09:20:00.000Z',
   },
 ]
+
+export const shipments: ShipmentRecord[] = []
+
+export const orderDocuments: OrderDocumentRecord[] = []
 
 export const billingPlan: BillingPlanRecord = {
   id: 'PLAN-GROWTH',

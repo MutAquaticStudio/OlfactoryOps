@@ -10,6 +10,7 @@ import {
   commercialSkus,
   createDocumentShareLink,
   customFields,
+  customers,
   createSignedDocumentUrl,
   documentComplianceDashboard,
   documentRequiredPermissions,
@@ -29,6 +30,7 @@ import {
   moleculeComponents,
   numberingSequences,
   organizations,
+  orderDocuments,
   orderRequiredGrams,
   permissionCatalog,
   phases,
@@ -42,6 +44,7 @@ import {
   rolePolicies,
   sampleRequests,
   salesOrders,
+  shipments,
   skuAvailability,
   ssoConfig,
   stockTakeRecords,
@@ -58,6 +61,8 @@ import {
   type BrandRecord,
   type BrandingConfig,
   type CommercialSkuRecord,
+  type CustomerAddress,
+  type CustomerRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentShareLink,
@@ -89,6 +94,8 @@ import {
   type RolePolicy,
   type SampleRequestRecord,
   type SalesOrderRecord,
+  type ShipmentRecord,
+  type OrderDocumentRecord,
   type StockTakeRecord,
   type StorageLocation,
   type SupplierRecord,
@@ -180,6 +187,35 @@ type CreateSampleRequestBody = {
   packs?: number
 }
 
+type CreateCustomerBody = {
+  name?: string
+  group?: PriceListRecord['customerGroup']
+  creditLimit?: number
+  paymentTerms?: CustomerRecord['paymentTerms']
+  contactEmail?: string
+  billingAddress?: Partial<CustomerAddress>
+  shippingAddress?: Partial<CustomerAddress>
+}
+
+type CreateSalesOrderBody = {
+  skuId?: string
+  customerId?: string
+  quantity?: number
+  discountPercent?: number
+  taxPercent?: number
+  shippingCost?: number
+  currency?: string
+}
+
+type PackOrderBody = {
+  weightGrams?: number
+}
+
+type ShipOrderBody = {
+  carrier?: ShipmentRecord['carrier']
+  trackingNumber?: string
+}
+
 const productionLifecycleStatuses: ProductionBatchRecord['status'][] = [
   'PLANNED',
   'WEIGHING',
@@ -265,7 +301,10 @@ export class NorthStarService {
   private priceListRecords: PriceListRecord[] = structuredClone(priceLists)
   private quoteRecords: QuoteRecord[] = structuredClone(quotes)
   private sampleRequestRecords: SampleRequestRecord[] = structuredClone(sampleRequests)
+  private customerRecords: CustomerRecord[] = structuredClone(customers)
   private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
+  private shipmentRecords: ShipmentRecord[] = structuredClone(shipments)
+  private orderDocumentRecords: OrderDocumentRecord[] = structuredClone(orderDocuments)
   private auditCounter = auditEvents.length
 
   phases() {
@@ -2936,10 +2975,129 @@ export class NorthStarService {
     return { data: this.salesOrderRecords }
   }
 
+  customers() {
+    return { data: this.customerRecords }
+  }
+
+  createCustomer(body: CreateCustomerBody = {}) {
+    const name = body.name?.trim()
+    if (!name) {
+      throw new UnprocessableEntityException('Customer name is required')
+    }
+    const group = body.group ?? 'Studio'
+    if (!['Studio', 'Lab', 'Bulk', 'Contract'].includes(group)) {
+      throw new UnprocessableEntityException(`Customer group ${group} is not supported`)
+    }
+    const creditLimit = Number(body.creditLimit ?? 250)
+    if (!Number.isFinite(creditLimit) || creditLimit < 0) {
+      throw new UnprocessableEntityException('Customer creditLimit must be zero or greater')
+    }
+    const paymentTerms = body.paymentTerms ?? 'NET_15'
+    if (!['NET_15', 'NET_30', 'PREPAID'].includes(paymentTerms)) {
+      throw new UnprocessableEntityException(`Payment terms ${paymentTerms} are not supported`)
+    }
+
+    const id = `CUS-${name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 18).toUpperCase()}`
+    const billingAddress: CustomerAddress = {
+      id: `ADDR-${id}-BILL`,
+      label: body.billingAddress?.label?.trim() || 'Billing',
+      line1: body.billingAddress?.line1?.trim() || 'Billing address pending',
+      city: body.billingAddress?.city?.trim() || 'TBD',
+      country: body.billingAddress?.country?.trim().toUpperCase() || 'US',
+    }
+    const shippingAddress: CustomerAddress = {
+      id: `ADDR-${id}-SHIP`,
+      label: body.shippingAddress?.label?.trim() || 'Shipping',
+      line1: body.shippingAddress?.line1?.trim() || billingAddress.line1,
+      city: body.shippingAddress?.city?.trim() || billingAddress.city,
+      country: body.shippingAddress?.country?.trim().toUpperCase() || billingAddress.country,
+    }
+    const customer: CustomerRecord = {
+      id: this.customerRecords.some((record) => record.id === id) ? `${id}-${this.customerRecords.length + 1}` : id,
+      name,
+      group,
+      creditLimit,
+      paymentTerms,
+      contactEmail: body.contactEmail?.trim() || `orders+${id.toLowerCase()}@example.com`,
+      billingAddress,
+      shippingAddress,
+      status: 'ACTIVE',
+    }
+    this.customerRecords = [customer, ...this.customerRecords]
+    const audit = this.recordAudit('orders.customer.create', customer.id, 'api:fulfillment', 'allowed')
+    return {
+      data: {
+        customer,
+        audit,
+        invariant: 'customer profile stores credit, terms, addresses, and contacts without touching inventory',
+      },
+    }
+  }
+
+  createOrder(body: CreateSalesOrderBody = {}) {
+    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
+    if (!sku) {
+      throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
+    }
+    if (sku.status !== 'ACTIVE') {
+      throw new UnprocessableEntityException(`SKU ${sku.id} is not active`)
+    }
+    const customer = this.customerRecords.find((item) => item.id === body.customerId)
+    if (!customer) {
+      throw new NotFoundException(`Customer ${body.customerId ?? 'unknown'} was not found`)
+    }
+    const quantity = Math.round(Number(body.quantity ?? 1))
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new UnprocessableEntityException('Order quantity must be greater than 0')
+    }
+    const discountPercent = Math.max(0, Math.min(90, Number(body.discountPercent ?? 0)))
+    const taxPercent = Math.max(0, Math.min(30, Number(body.taxPercent ?? 0)))
+    const shippingCost = Math.max(0, Number(body.shippingCost ?? 0))
+    const priceList = this.priceListRecords.find(
+      (item) => item.customerGroup === customer.group && item.status === 'ACTIVE',
+    )
+    const unitPrice = Number((sku.price * (priceList?.multiplier ?? 1)).toFixed(2))
+    const subtotal = unitPrice * quantity
+    const discounted = subtotal * (1 - discountPercent / 100)
+    const taxed = discounted * (1 + taxPercent / 100)
+    const total = Number((taxed + shippingCost).toFixed(2))
+    const order: SalesOrderRecord = {
+      id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
+      skuId: sku.id,
+      customerId: customer.id,
+      customer: customer.name,
+      quantity,
+      unitPrice,
+      discountPercent,
+      taxPercent,
+      shippingCost,
+      total,
+      currency: body.currency?.trim().toUpperCase() || priceList?.currency || sku.currency,
+      reservedGrams: 0,
+      fulfilledGrams: 0,
+      status: customer.status === 'CREDIT_HOLD' || total > customer.creditLimit ? 'HOLD' : 'CONFIRMED',
+      reservationAllocations: [],
+      documentIds: [],
+      createdAt: new Date().toISOString(),
+    }
+    this.salesOrderRecords = [order, ...this.salesOrderRecords]
+    const audit = this.recordAudit('orders.create', order.id, 'api:fulfillment', order.status === 'HOLD' ? 'review' : 'allowed')
+    return {
+      data: {
+        order,
+        audit,
+        invariant: 'order creation prices SKU packs and performs credit hold checks without reserving or moving stock',
+      },
+    }
+  }
+
   reserveOrder(id: string) {
     const order = this.salesOrderRecords.find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (!['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status)) {
+      throw new UnprocessableEntityException(`Sales order ${id} cannot be reserved from ${order.status}`)
     }
     const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
     if (!sku) {
@@ -2955,11 +3113,158 @@ export class NorthStarService {
       }
     })
     this.lots = Array.from(lotMap.values())
+    const pickList = this.createOrderDocument(id, 'PICK_LIST', 'READY')
     this.salesOrderRecords = this.salesOrderRecords.map((item) =>
-      item.id === id ? { ...item, reservedGrams: requiredGrams, status: 'RESERVED' } : item,
+      item.id === id
+        ? {
+            ...item,
+            reservedGrams: requiredGrams,
+            status: 'RESERVED',
+            reservationAllocations: allocations,
+            documentIds: [...(item.documentIds ?? []), pickList.id],
+          }
+        : item,
     )
     this.recordAudit('orders.reserve', id, 'api:fulfillment', 'allowed')
-    return { data: { orderId: id, allocations, invariant: 'reservation changes reserved stock but creates no InventoryMovement' } }
+    return {
+      data: {
+        orderId: id,
+        allocations,
+        document: pickList,
+        invariant: 'reservation changes reserved stock but creates no InventoryMovement',
+      },
+    }
+  }
+
+  cancelOrder(id: string) {
+    const order = this.salesOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED'].includes(order.status)) {
+      throw new UnprocessableEntityException(`Sales order ${id} cannot be cancelled from ${order.status}`)
+    }
+    const allocations = order.reservationAllocations ?? []
+    if (allocations.length > 0) {
+      const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
+      allocations.forEach((allocation) => {
+        const lot = lotMap.get(allocation.lotId)
+        if (lot) {
+          lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
+        }
+      })
+      this.lots = Array.from(lotMap.values())
+    }
+    this.salesOrderRecords = this.salesOrderRecords.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            reservedGrams: 0,
+            status: 'CANCELLED',
+            reservationAllocations: [],
+          }
+        : item,
+    )
+    const audit = this.recordAudit('orders.cancel', id, 'api:fulfillment', 'allowed')
+    return {
+      data: {
+        orderId: id,
+        releasedAllocations: allocations,
+        audit,
+        invariant: 'cancellation releases reservation without creating InventoryMovement',
+      },
+    }
+  }
+
+  packOrder(id: string, body: PackOrderBody = {}) {
+    const order = this.salesOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (order.status !== 'RESERVED') {
+      throw new UnprocessableEntityException(`Sales order ${id} must be reserved before pack`)
+    }
+    const allocations = order.reservationAllocations ?? []
+    if (allocations.length === 0) {
+      throw new UnprocessableEntityException(`Sales order ${id} has no reservation allocation trace`)
+    }
+    const packingSlip = this.createOrderDocument(id, 'PACKING_SLIP', 'READY')
+    const shipment: ShipmentRecord = {
+      id: `SHP-2026-${String(this.shipmentRecords.length + 41).padStart(3, '0')}`,
+      orderId: id,
+      carrier: order.carrier ?? 'DHL',
+      trackingNumber: order.trackingNumber ?? 'Pending',
+      status: 'PACKED',
+      weightGrams: Number(body.weightGrams ?? order.reservedGrams),
+      allocations,
+    }
+    this.shipmentRecords = [shipment, ...this.shipmentRecords]
+    this.salesOrderRecords = this.salesOrderRecords.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            status: 'PACKED',
+            shipmentId: shipment.id,
+            documentIds: [...(item.documentIds ?? []), packingSlip.id],
+          }
+        : item,
+    )
+    const audit = this.recordAudit('orders.pack', id, 'api:fulfillment', 'allowed')
+    return {
+      data: {
+        orderId: id,
+        shipment,
+        document: packingSlip,
+        audit,
+        invariant: 'pack creates shipment trace and packing slip without moving stock',
+      },
+    }
+  }
+
+  shipOrder(id: string, body: ShipOrderBody = {}) {
+    const order = this.salesOrderRecords.find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (order.status !== 'PACKED') {
+      throw new UnprocessableEntityException(`Sales order ${id} must be packed before ship`)
+    }
+    const carrier = body.carrier ?? order.carrier ?? 'DHL'
+    if (!['DHL', 'FedEx', 'UPS', 'Pickup'].includes(carrier)) {
+      throw new UnprocessableEntityException(`Carrier ${carrier} is not supported`)
+    }
+    const trackingNumber = body.trackingNumber?.trim() || `${carrier.toUpperCase()}-${id.replace(/\W/g, '')}`
+    const shippedAt = new Date().toISOString()
+    this.shipmentRecords = this.shipmentRecords.map((shipment) =>
+      shipment.id === order.shipmentId
+        ? {
+            ...shipment,
+            carrier,
+            trackingNumber,
+            status: 'SHIPPED',
+            shippedAt,
+          }
+        : shipment,
+    )
+    this.salesOrderRecords = this.salesOrderRecords.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            status: 'SHIPPED',
+            carrier,
+            trackingNumber,
+          }
+        : item,
+    )
+    const audit = this.recordAudit('orders.ship', id, 'api:fulfillment', 'allowed')
+    return {
+      data: {
+        orderId: id,
+        shipment: this.shipmentRecords.find((shipment) => shipment.id === order.shipmentId),
+        audit,
+        invariant: 'shipment records carrier and tracking while reserved stock remains untouched until fulfillment',
+      },
+    }
   }
 
   fulfillOrder(id: string) {
@@ -2967,19 +3272,25 @@ export class NorthStarService {
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
-    if (order.status !== 'RESERVED') {
+    if (!['RESERVED', 'PACKED', 'SHIPPED'].includes(order.status)) {
       throw new UnprocessableEntityException(`Sales order ${id} must be reserved before fulfillment`)
     }
     const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
     if (!sku) {
       throw new NotFoundException(`SKU ${order.skuId} was not found`)
     }
-    const allocations = this.pickLotsForMaterial(sku.materialId, order.reservedGrams, true)
+    const allocations =
+      order.reservationAllocations && order.reservationAllocations.length > 0
+        ? order.reservationAllocations
+        : this.pickLotsForMaterial(sku.materialId, order.reservedGrams, true)
     const lotMap = new Map(this.lots.map((lot) => [lot.id, { ...lot }]))
     const movements: InventoryMovement[] = allocations.map((allocation, index) => {
       const lot = lotMap.get(allocation.lotId)
       if (!lot) {
         throw new NotFoundException(`Lot ${allocation.lotId} was not found`)
+      }
+      if (lot.reservedGrams + 0.0001 < allocation.allocatedGrams) {
+        throw new UnprocessableEntityException(`Lot ${allocation.lotNumber} reservation is below fulfillment allocation`)
       }
       lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
       lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
@@ -2998,11 +3309,50 @@ export class NorthStarService {
     })
     this.lots = Array.from(lotMap.values())
     this.movements = [...movements, ...this.movements]
+    const invoice = this.createOrderDocument(id, 'INVOICE', 'READY')
+    const coa = this.createOrderDocument(id, 'COA', 'READY')
+    if (order.shipmentId) {
+      this.shipmentRecords = this.shipmentRecords.map((shipment) =>
+        shipment.id === order.shipmentId
+          ? {
+              ...shipment,
+              status: 'SHIPPED',
+              shippedAt: shipment.shippedAt ?? new Date().toISOString(),
+              allocations,
+            }
+          : shipment,
+      )
+    }
     this.salesOrderRecords = this.salesOrderRecords.map((item) =>
-      item.id === id ? { ...item, fulfilledGrams: order.reservedGrams, status: 'FULFILLED' } : item,
+      item.id === id
+        ? {
+            ...item,
+            fulfilledGrams: order.reservedGrams,
+            reservedGrams: 0,
+            status: 'FULFILLED',
+            reservationAllocations: allocations,
+            documentIds: [...(item.documentIds ?? []), invoice.id, coa.id],
+          }
+        : item,
     )
     this.recordAudit('orders.fulfill', id, 'api:fulfillment', 'allowed')
-    return { data: { orderId: id, movements, invariant: 'fulfillment creates OUT movement after reservation' } }
+    return {
+      data: {
+        orderId: id,
+        movements,
+        documents: [invoice, coa],
+        shipment: order.shipmentId ? this.shipmentRecords.find((shipment) => shipment.id === order.shipmentId) : undefined,
+        invariant: 'fulfillment creates OUT movement after reservation and preserves lot traceability on shipment',
+      },
+    }
+  }
+
+  shipments() {
+    return { data: this.shipmentRecords }
+  }
+
+  orderDocuments() {
+    return { data: this.orderDocumentRecords }
   }
 
   billingPlan() {
@@ -3415,6 +3765,27 @@ export class NorthStarService {
     }
 
     return allocations
+  }
+
+  private createOrderDocument(
+    orderId: string,
+    type: OrderDocumentRecord['type'],
+    status: OrderDocumentRecord['status'] = 'READY',
+  ) {
+    const existing = this.orderDocumentRecords.find((document) => document.orderId === orderId && document.type === type)
+    if (existing) {
+      return existing
+    }
+    const document: OrderDocumentRecord = {
+      id: `ORD-DOC-${String(this.orderDocumentRecords.length + 1).padStart(3, '0')}`,
+      orderId,
+      type,
+      status,
+      url: `/documents/orders/${orderId}/${type.toLowerCase().replace('_', '-')}.pdf`,
+      createdAt: new Date().toISOString(),
+    }
+    this.orderDocumentRecords = [document, ...this.orderDocumentRecords]
+    return document
   }
 
   private normalizeLabUsagePurpose(value?: LabUsagePurpose): LabUsagePurpose {
