@@ -171,6 +171,43 @@ type ApiEnvelope<T> = {
   data: T
 }
 
+type StockRows = ReturnType<typeof stockSummary>
+
+type CatalogSkuAvailability = CommercialSkuRecord & {
+  availableGrams: number
+  canSellPacks: number
+}
+
+function buildStockByMaterialId(stock: StockRows) {
+  return new Map(stock.map((row) => [row.material.id, row]))
+}
+
+function buildSkuAvailabilityRows(skus: CommercialSkuRecord[], stock: StockRows): CatalogSkuAvailability[] {
+  const stockByMaterialId = buildStockByMaterialId(stock)
+  return skus.map((sku) => {
+    const summary = stockByMaterialId.get(sku.materialId)
+    const availableGrams = summary?.available ?? 0
+    return {
+      ...sku,
+      availableGrams,
+      canSellPacks: Math.floor(availableGrams / sku.packSizeGrams),
+    }
+  })
+}
+
+function syncSkuAvailabilityRows(skus: CatalogSkuAvailability[], stock: StockRows) {
+  const stockByMaterialId = buildStockByMaterialId(stock)
+  return skus.map((sku) => {
+    const summary = stockByMaterialId.get(sku.materialId)
+    const availableGrams = summary?.available ?? sku.availableGrams
+    return {
+      ...sku,
+      availableGrams,
+      canSellPacks: Math.floor(availableGrams / sku.packSizeGrams),
+    }
+  })
+}
+
 type DocumentDownloadResponse = {
   document: DocumentRecord
   signedUrl: SignedDocumentUrl
@@ -259,11 +296,6 @@ type PurchaseOrderReceiptResponse = {
   priceHistory: PriceHistoryRecord
   audit: AuditEvent
   invariant: string
-}
-
-type CatalogSkuAvailability = CommercialSkuRecord & {
-  availableGrams: number
-  canSellPacks: number
 }
 
 type CatalogSkuCreateResponse = {
@@ -2169,7 +2201,8 @@ function MaterialWorkspace({
   stock: ReturnType<typeof stockSummary>
 }) {
   const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
-  const selectedStock = stock.find((item) => item.material.id === selected.id)
+  const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
+  const selectedStock = stockByMaterialId.get(selected.id)
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [createName, setCreateName] = useState('Vetiveryl Acetate')
   const [createCas, setCreateCas] = useState('68917-34-0')
@@ -2451,7 +2484,7 @@ function MaterialWorkspace({
         </ul>
         <div className="material-list">
           {materialRecords.map((material) => {
-            const summary = stock.find((item) => item.material.id === material.id)
+            const summary = stockByMaterialId.get(material.id)
             return (
               <button
                 key={material.id}
@@ -5093,18 +5126,10 @@ function CommerceWorkspace({
 }) {
   const materialOptions = materialRecords.length > 0 ? materialRecords : materials
   const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
-    () =>
-      commercialSkus.map((sku) => {
-        const summary = stock.find((item) => item.material.id === sku.materialId)
-        return {
-          ...sku,
-          availableGrams: summary?.available ?? 0,
-          canSellPacks: Math.floor((summary?.available ?? 0) / sku.packSizeGrams),
-        }
-      }),
+    () => buildSkuAvailabilityRows(commercialSkus, stock),
     [stock],
   )
-  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(seedSkuAvailability)
+  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(() => seedSkuAvailability)
   const [priceListRows, setPriceListRows] = useState<PriceListRecord[]>(priceLists)
   const [quoteRows, setQuoteRows] = useState<QuoteRecord[]>(quotes)
   const [sampleRows, setSampleRows] = useState<SampleRequestRecord[]>(sampleRequests)
@@ -5143,29 +5168,30 @@ function CommerceWorkspace({
     () => new Map(materialOptions.map((material) => [material.id, material])),
     [materialOptions],
   )
-  const selectedSku = skuRows.find((sku) => sku.id === selectedSkuId) ?? skuRows[0]
+  const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
+  const activePriceListByGroup = useMemo(() => {
+    const map = new Map<PriceListRecord['customerGroup'], PriceListRecord>()
+    priceListRows.forEach((priceList) => {
+      if (priceList.status === 'ACTIVE' && !map.has(priceList.customerGroup)) {
+        map.set(priceList.customerGroup, priceList)
+      }
+    })
+    return map
+  }, [priceListRows])
+  const selectedSku = useMemo(() => skuById.get(selectedSkuId) ?? skuRows[0], [selectedSkuId, skuById, skuRows])
   const selectedMaterial = selectedSku ? materialById.get(selectedSku.materialId) : undefined
   const activePriceList = useMemo(
     () =>
-      priceListRows.find((priceList) => priceList.customerGroup === quoteDraft.customerGroup && priceList.status === 'ACTIVE') ??
-      priceListRows.find((priceList) => priceList.customerGroup === selectedSku?.tier && priceList.status === 'ACTIVE') ??
+      activePriceListByGroup.get(quoteDraft.customerGroup) ??
+      (selectedSku ? activePriceListByGroup.get(selectedSku.tier) : undefined) ??
       priceListRows[0],
-    [priceListRows, quoteDraft.customerGroup, selectedSku?.tier],
+    [activePriceListByGroup, priceListRows, quoteDraft.customerGroup, selectedSku],
   )
   const quoteUnitPrice = selectedSku && activePriceList ? selectedSku.price * activePriceList.multiplier : 0
   const quoteTotal = quoteUnitPrice * quoteDraft.quantityPacks
 
   useEffect(() => {
-    setSkuRows((current) =>
-      current.map((sku) => {
-        const summary = stock.find((item) => item.material.id === sku.materialId)
-        return {
-          ...sku,
-          availableGrams: summary?.available ?? sku.availableGrams,
-          canSellPacks: Math.floor((summary?.available ?? sku.availableGrams) / sku.packSizeGrams),
-        }
-      }),
-    )
+    setSkuRows((current) => syncSkuAvailabilityRows(current, stock))
   }, [stock])
 
   useEffect(() => {
@@ -5570,7 +5596,7 @@ function CommerceWorkspace({
             {quoteRows.slice(0, 5).map((quote) => (
               <div className="document-row quote-row" key={quote.id}>
                 <div>
-                  <strong>{quote.id} / {skuRows.find((sku) => sku.id === quote.skuId)?.name ?? quote.skuId}</strong>
+                  <strong>{quote.id} / {skuById.get(quote.skuId)?.name ?? quote.skuId}</strong>
                   <span>{quote.customer} / {quote.customerGroup} / {quote.quantityPacks} packs</span>
                 </div>
                 <StatusBadge status={quoteStatusTone[quote.status]} label={quote.status} />
@@ -5582,7 +5608,7 @@ function CommerceWorkspace({
             {sampleRows.slice(0, 5).map((sample) => (
               <div className="document-row sample-row" key={sample.id}>
                 <div>
-                  <strong>{sample.id} / {skuRows.find((sku) => sku.id === sample.skuId)?.name ?? sample.skuId}</strong>
+                  <strong>{sample.id} / {skuById.get(sample.skuId)?.name ?? sample.skuId}</strong>
                   <span>{sample.customer} / {sample.packs} pack(s)</span>
                 </div>
                 <StatusBadge status={sampleStatusTone[sample.status]} label={sample.status} />
@@ -5606,22 +5632,14 @@ function CommerceWorkspace({
 
 function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) {
   const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
-    () =>
-      commercialSkus.map((sku) => {
-        const summary = stock.find((item) => item.material.id === sku.materialId)
-        return {
-          ...sku,
-          availableGrams: summary?.available ?? 0,
-          canSellPacks: Math.floor((summary?.available ?? 0) / sku.packSizeGrams),
-        }
-      }),
+    () => buildSkuAvailabilityRows(commercialSkus, stock),
     [stock],
   )
   const [customerRows, setCustomerRows] = useState<CustomerRecord[]>(customers)
   const [orderRows, setOrderRows] = useState<SalesOrderRecord[]>(salesOrders)
   const [shipmentRows, setShipmentRows] = useState<ShipmentRecord[]>(shipments)
   const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>(orderDocuments)
-  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(seedSkuAvailability)
+  const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(() => seedSkuAvailability)
   const [selectedOrderId, setSelectedOrderId] = useState(salesOrders[0]?.id ?? '')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
@@ -5649,11 +5667,19 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
 
   const customerById = useMemo(() => new Map(customerRows.map((customer) => [customer.id, customer])), [customerRows])
   const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
-  const selectedOrder = orderRows.find((order) => order.id === selectedOrderId) ?? orderRows[0]
+  const orderById = useMemo(() => new Map(orderRows.map((order) => [order.id, order])), [orderRows])
+  const selectedOrder = useMemo(() => orderById.get(selectedOrderId) ?? orderRows[0], [orderById, orderRows, selectedOrderId])
   const selectedSku = selectedOrder ? skuById.get(selectedOrder.skuId) : undefined
   const selectedCustomer = selectedOrder ? customerById.get(selectedOrder.customerId) : undefined
-  const selectedShipments = shipmentRows.filter((shipment) => shipment.orderId === selectedOrder?.id)
-  const selectedDocuments = documentRows.filter((document) => document.orderId === selectedOrder?.id)
+  const selectedOrderKey = selectedOrder?.id ?? ''
+  const selectedShipments = useMemo(
+    () => shipmentRows.filter((shipment) => shipment.orderId === selectedOrderKey),
+    [selectedOrderKey, shipmentRows],
+  )
+  const selectedDocuments = useMemo(
+    () => documentRows.filter((document) => document.orderId === selectedOrderKey),
+    [documentRows, selectedOrderKey],
+  )
   const draftSku = skuById.get(orderDraft.skuId)
   const draftCustomer = customerById.get(orderDraft.customerId)
   const draftPriceList = priceLists.find((priceList) => priceList.customerGroup === draftCustomer?.group && priceList.status === 'ACTIVE')
@@ -5701,14 +5727,16 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   }, [refreshOrders])
 
   useEffect(() => {
+    setSkuRows((current) => syncSkuAvailabilityRows(current, stock))
+  }, [stock])
+
+  useEffect(() => {
     setOrderDraft((current) => ({
       ...current,
-      customerId: customerRows.some((customer) => customer.id === current.customerId)
-        ? current.customerId
-        : customerRows[0]?.id ?? '',
-      skuId: skuRows.some((sku) => sku.id === current.skuId) ? current.skuId : skuRows[0]?.id ?? '',
+      customerId: customerById.has(current.customerId) ? current.customerId : customerRows[0]?.id ?? '',
+      skuId: skuById.has(current.skuId) ? current.skuId : skuRows[0]?.id ?? '',
     }))
-  }, [customerRows, skuRows])
+  }, [customerById, customerRows, skuById, skuRows])
 
   async function createCustomer() {
     setBusyId('customer-create')
