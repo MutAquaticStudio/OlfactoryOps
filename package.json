@@ -11,8 +11,9 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
+    "security:client-bundle": "node scripts/check-client-bundle-secrets.mjs",
     "prisma:generate": "prisma generate",
-    "prisma:validate": "cross-env DATABASE_URL=postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops?schema=public prisma validate",
+    "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {

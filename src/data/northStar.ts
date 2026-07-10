@@ -1665,7 +1665,7 @@ export const stockTakeRecords: StockTakeRecord[] = [
 export const initialMovements: InventoryMovement[] = [
   { id: 'MOV-1028', at: '2026-06-29 14:22', type: 'RECEIPT', direction: 'IN', materialId: 'mat-iso', lotId: 'lot-iso-001', quantityGrams: 250, balanceAfter: 250, ref: 'GR-2026-041', actor: 'Inventory Manager' },
   { id: 'MOV-1027', at: '2026-06-29 11:10', type: 'LAB_CONSUMPTION', direction: 'OUT', materialId: 'mat-hedione', lotId: 'lot-hed-001', quantityGrams: 1.5, balanceAfter: 186, ref: 'LAB-2026-088', actor: 'Perfumer' },
-  { id: 'MOV-1026', at: '2026-06-28 17:42', type: 'FULFILLMENT', direction: 'OUT', materialId: 'mat-vanillin', lotId: 'lot-van-001', quantityGrams: 12, balanceAfter: 80, ref: 'SO-2026-092', actor: 'Fulfillment' },
+  { id: 'MOV-1026', at: '2026-06-28 17:42', type: 'FULFILLMENT', direction: 'OUT', materialId: 'mat-vanillin', lotId: 'lot-van-001', quantityGrams: 12, balanceAfter: 80, ref: 'ORD-DEMO-092', actor: 'Fulfillment' },
   { id: 'MOV-1025', at: '2026-06-28 09:18', type: 'RECEIPT', direction: 'IN', materialId: 'mat-ambroxan', lotId: 'lot-amb-001', quantityGrams: 40, balanceAfter: 40, ref: 'GR-2026-039', actor: 'Inventory Manager' },
 ]
 
@@ -1757,7 +1757,7 @@ export const organizations: OrganizationRecord[] = [
     slug: 'noxelis',
     plan: 'Team',
     status: 'ACTIVE',
-    primaryContact: 'owner@noxel.is',
+    primaryContact: 'owner@example.test',
     createdAt: '2026-01-08T03:20:00.000Z',
   },
   {
@@ -1781,7 +1781,7 @@ export const memberships: MembershipRecord[] = [
   {
     id: 'MBR-OWNER',
     userId: 'usr-owner',
-    email: 'owner@noxel.is',
+    email: 'owner@example.test',
     name: 'Thuan Le Minh',
     organizationId: 'org-nxl',
     brandIds: ['brand-nxl', 'brand-atelier'],
@@ -1793,7 +1793,7 @@ export const memberships: MembershipRecord[] = [
   {
     id: 'MBR-LAB',
     userId: 'usr-lab',
-    email: 'lab@noxel.is',
+    email: 'lab@example.test',
     name: 'Bench Chemist',
     organizationId: 'org-nxl',
     brandIds: ['brand-nxl'],
@@ -1805,7 +1805,7 @@ export const memberships: MembershipRecord[] = [
   {
     id: 'MBR-VIEWER',
     userId: 'usr-viewer',
-    email: 'viewer@noxel.is',
+    email: 'viewer@example.test',
     name: 'Read Only Reviewer',
     organizationId: 'org-nxl',
     brandIds: ['brand-nxl'],
@@ -2038,7 +2038,7 @@ export const authSessions: AuthSession[] = [
   {
     id: 'SES-0001',
     userId: 'usr-owner',
-    email: 'owner@noxel.is',
+    email: 'owner@example.test',
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Owner',
@@ -2056,7 +2056,7 @@ export const authSessions: AuthSession[] = [
   {
     id: 'SES-0002',
     userId: 'usr-lab',
-    email: 'lab@noxel.is',
+    email: 'lab@example.test',
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Lab Manager',
@@ -2305,7 +2305,7 @@ export const sampleRequests: SampleRequestRecord[] = [
 
 export const customers: CustomerRecord[] = [
   {
-    id: 'CUS-MAISON',
+    id: 'CUS-DEMO',
     name: 'Maison Trial Studio',
     group: 'Studio',
     creditLimit: 250,
@@ -2354,9 +2354,9 @@ export const customers: CustomerRecord[] = [
 
 export const salesOrders: SalesOrderRecord[] = [
   {
-    id: 'SO-2026-092',
+    id: 'ORD-DEMO-092',
     skuId: 'SKU-ISO-050',
-    customerId: 'CUS-MAISON',
+    customerId: 'CUS-DEMO',
     customer: 'Maison Trial Studio',
     quantity: 1,
     unitPrice: 18,
@@ -2382,7 +2382,7 @@ export const scheduledReports: ScheduledReportRecord[] = [
     id: 'RPT-FIN-WEEKLY',
     name: 'Finance margin and valuation pack',
     cadence: 'WEEKLY',
-    audience: 'finance@noxel.is',
+    audience: 'finance@example.test',
     format: 'XLSX',
     status: 'ACTIVE',
     lastRunAt: '2026-07-01T08:00:00.000Z',
@@ -2391,7 +2391,7 @@ export const scheduledReports: ScheduledReportRecord[] = [
     id: 'RPT-INVENTORY-DAILY',
     name: 'Inventory risk digest',
     cadence: 'DAILY',
-    audience: 'inventory@noxel.is',
+    audience: 'inventory@example.test',
     format: 'PDF',
     status: 'ACTIVE',
     lastRunAt: '2026-07-03T07:00:00.000Z',
@@ -2410,7 +2410,7 @@ export const billingPlan: BillingPlanRecord = {
 export const ssoConfig: SsoConfigRecord = {
   id: 'SSO-NXL',
   provider: 'OIDC',
-  domain: 'noxel.is',
+  domain: 'example.test',
   status: 'verified',
   roleMapping: {
     'noxel-admins': 'Owner',
@@ -2421,8 +2421,8 @@ export const ssoConfig: SsoConfigRecord = {
 
 export const apiKeys: ApiKeyRecord[] = [
   {
-    id: 'KEY-PRIMARY',
-    label: 'Production integration',
+    id: 'KEY-DEMO',
+    label: 'Demo integration',
     lastFour: '9AF2',
     scopes: ['materials.read', 'orders.write', 'webhooks.read'],
     rotatedAt: '2026-06-18T09:00:00Z',
@@ -2433,7 +2433,7 @@ export const apiKeys: ApiKeyRecord[] = [
 export const webhooks: WebhookRecord[] = [
   {
     id: 'WH-ORDERS',
-    url: 'https://ops.noxel.is/hooks/orders',
+    url: 'https://hooks.example.test/orders',
     events: ['order.reserved', 'order.fulfilled', 'document.downloaded'],
     status: 'active',
     lastDelivery: '2026-06-30T08:44:00Z',
@@ -2487,7 +2487,7 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
     { id: 'QTE-2026-033', label: 'Studio sample quote', status: 'testing', amount: '$214', owner: 'Sales' },
   ],
   orders: [
-    { id: 'SO-2026-092', label: 'Discovery kit order', status: 'active', amount: 'Reserved', owner: 'Fulfillment' },
+    { id: 'ORD-DEMO-092', label: 'Discovery kit order', status: 'active', amount: 'Reserved', owner: 'Fulfillment' },
     { id: 'SHP-2026-041', label: 'Partial shipment', status: 'draft', amount: 'Awaiting CoA', owner: 'Fulfillment' },
   ],
   costing: [

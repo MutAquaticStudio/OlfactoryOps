@@ -258,7 +258,7 @@ describe('NorthStarService', () => {
   it('invites tenant members without creating a usable credential', () => {
     const service = new NorthStarService()
     const result = service.inviteMember({
-      email: 'new.viewer@noxel.is',
+      email: 'new.viewer@example.test',
       name: 'New Viewer',
       role: 'Viewer',
       brandIds: ['brand-nxl'],
@@ -268,7 +268,7 @@ describe('NorthStarService', () => {
     expect(result.membership.organizationId).toBe('org-nxl')
     expect(result.audit.action).toBe('membership.invite')
     expect(result.invariant).toContain('invitee sets password')
-    expect(() => service.login('new.viewer@noxel.is')).toThrow(ForbiddenException)
+    expect(() => service.login('new.viewer@example.test')).toThrow(ForbiddenException)
   })
 
   it('blocks cross-tenant brand grants during member invite', () => {
@@ -276,7 +276,7 @@ describe('NorthStarService', () => {
 
     expect(() =>
       service.inviteMember({
-        email: 'leaky.viewer@noxel.is',
+        email: 'leaky.viewer@example.test',
         role: 'Viewer',
         brandIds: ['brand-other'],
       }),
@@ -292,7 +292,7 @@ describe('NorthStarService', () => {
     expect(result.revokedSessions.some((session) => session.id === 'SES-0002')).toBe(true)
     expect(consoleState.sessions.find((session) => session.id === 'SES-0002')?.status).toBe('REVOKED')
     expect(result.invariant).toContain('revoke active sessions')
-    expect(() => service.login('lab@noxel.is')).toThrow(ForbiddenException)
+    expect(() => service.login('lab@example.test')).toThrow(ForbiddenException)
   })
 
   it('prevents deactivating the last active Owner and audits session revocation', () => {
@@ -308,11 +308,11 @@ describe('NorthStarService', () => {
 
   it('creates bounded login sessions and clamps concurrent sessions', () => {
     const service = new NorthStarService()
-    const firstLogin = service.login('owner@noxel.is').data
-    const secondLogin = service.login('owner@noxel.is').data
+    const firstLogin = service.login('owner@example.test').data
+    const secondLogin = service.login('owner@example.test').data
     const consoleState = service.tenantConsole().data
     const activeOwnerSessions = consoleState.sessions.filter(
-      (session) => session.email === 'owner@noxel.is' && session.status === 'ACTIVE',
+      (session) => session.email === 'owner@example.test' && session.status === 'ACTIVE',
     )
 
     expect(firstLogin.session.idleExpiresAt).toBeTruthy()
@@ -353,16 +353,16 @@ describe('NorthStarService', () => {
 
   it('revokes all active sessions for a tenant member while keeping current admin session', () => {
     const service = new NorthStarService()
-    const revoked = service.revokeAllSessions({ email: 'lab@noxel.is' }).data
+    const revoked = service.revokeAllSessions({ email: 'lab@example.test' }).data
     const consoleState = service.tenantConsole().data
     const activeLabSessions = consoleState.sessions.filter(
-      (session) => session.email === 'lab@noxel.is' && session.status === 'ACTIVE',
+      (session) => session.email === 'lab@example.test' && session.status === 'ACTIVE',
     )
 
     expect(revoked.revokedSessions.length).toBeGreaterThanOrEqual(1)
     expect(revoked.audit.action).toBe('session.revokeAll')
     expect(activeLabSessions).toHaveLength(0)
-    expect(consoleState.sessions.some((session) => session.email === 'owner@noxel.is' && session.status === 'ACTIVE')).toBe(true)
+    expect(consoleState.sessions.some((session) => session.email === 'owner@example.test' && session.status === 'ACTIVE')).toBe(true)
   })
 
   it('logs out the current session with audit evidence', () => {
@@ -861,7 +861,7 @@ describe('NorthStarService', () => {
     const beforeMovements = service.inventoryMovements().data.length
     const order = service.createOrder({
       skuId: 'SKU-ISO-050',
-      customerId: 'CUS-MAISON',
+      customerId: 'CUS-DEMO',
       quantity: 1,
       taxPercent: 8,
       shippingCost: 12,
@@ -892,7 +892,7 @@ describe('NorthStarService', () => {
     const service = new NorthStarService()
     const order = service.createOrder({
       skuId: 'SKU-ISO-050',
-      customerId: 'CUS-MAISON',
+      customerId: 'CUS-DEMO',
       quantity: 1,
     }).data.order
     const beforeMovements = service.inventoryMovements().data.length

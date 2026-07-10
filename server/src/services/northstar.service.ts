@@ -1349,7 +1349,7 @@ export class NorthStarService {
     }
   }
 
-  login(email = 'owner@noxel.is') {
+  login(email = 'owner@example.test') {
     const normalizedEmail = email.trim().toLowerCase()
     const membership = this.membershipRecords.find((item) => item.email.toLowerCase() === normalizedEmail)
     if (!membership || membership.status !== 'ACTIVE') {
@@ -1364,7 +1364,7 @@ export class NorthStarService {
     const issuedAt = new Date()
     const idleExpiresAt = new Date(issuedAt.getTime() + tenantSecurityPolicy.idleTimeoutMinutes * 60_000)
     const expiresAt = new Date(issuedAt.getTime() + tenantSecurityPolicy.absoluteSessionMinutes * 60_000)
-    const deviceId = normalizedEmail === 'owner@noxel.is' ? 'dev-owner-codex' : `dev-${membership.userId}`
+    const deviceId = normalizedEmail === 'owner@example.test' ? 'dev-owner-codex' : `dev-${membership.userId}`
     const knownDevice = this.sessions.some(
       (item) => item.email.toLowerCase() === normalizedEmail && item.deviceId === deviceId,
     )

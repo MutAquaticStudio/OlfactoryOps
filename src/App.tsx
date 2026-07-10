@@ -48,22 +48,9 @@ import {
 } from 'recharts'
 import {
   auditEvents,
-  analyticsDashboardReport as buildAnalyticsDashboardReport,
-  authSessions,
-  apiKeys,
-  batchCostReport as buildBatchCostReport,
-  billingPlan,
-  brandingConfig,
-  brands,
   commercialSkus,
-  costingOverview as buildCostingOverview,
-  customFields,
-  customers,
-  documents,
-  documentComplianceDashboard,
   domains,
   evaporationCurve,
-  featureFlags,
   formatCurrency,
   formatGrams,
   formatSequenceValue,
@@ -73,10 +60,7 @@ import {
   initialLots,
   initialMovements,
   materials,
-  memberships,
   moleculeComponents,
-  numberingSequences,
-  orderDocuments,
   permissionCatalog,
   phases,
   planLabUsage,
@@ -90,17 +74,10 @@ import {
   resolveFormulaWithCatalog,
   rolePolicies,
   sampleRequests,
-  salesOrders,
-  shipments,
-  ssoConfig,
   statusMeta,
   storageLocations,
   stockSummary,
   suppliers,
-  tenantSettings,
-  tenantSecurityPolicy,
-  organizations,
-  webhooks,
   type Allocation,
   type AuditEvent,
   type AuthSession,
@@ -185,6 +162,129 @@ type AnalyticsReportRunResponse = {
 }
 
 type StockRows = ReturnType<typeof stockSummary>
+
+const clientFallbackOrganization: OrganizationRecord = {
+  id: 'org-client-fallback',
+  name: 'API-backed tenant',
+  slug: 'api-backed-tenant',
+  plan: 'Enterprise',
+  status: 'ACTIVE',
+  primaryContact: 'owner@example.test',
+  createdAt: 'client-fallback',
+}
+
+const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
+  organizationId: clientFallbackOrganization.id,
+  mfaRequiredForOwnerAdmin: true,
+  sessionTimeoutMinutes: 60,
+  idleTimeoutMinutes: 15,
+  absoluteSessionMinutes: 480,
+  concurrentSessionLimit: 2,
+  newDeviceAlertEnabled: true,
+  ipAllowlist: [],
+  passwordPolicy: 'server-managed',
+}
+
+const clientFallbackDocumentDashboard: DocumentComplianceDashboard = {
+  coveragePercent: 0,
+  totalRequired: 0,
+  metCount: 0,
+  missingCount: 0,
+  expiringCount: 0,
+  reviewCount: 0,
+  generatedCount: 0,
+  requirements: [],
+  expiringDocuments: [],
+  invariant: 'client fallback contains no document seed; API is source of truth',
+}
+
+const clientFallbackPlan: BillingPlanRecord = {
+  id: 'PLAN-CLIENT-FALLBACK',
+  name: 'API managed',
+  seats: 0,
+  storageGb: 0,
+  apiQuota: 0,
+  monthlyPrice: 0,
+}
+
+const clientFallbackSso: SsoConfigRecord = {
+  id: 'SSO-CLIENT-FALLBACK',
+  provider: 'OIDC',
+  domain: 'example.test',
+  status: 'draft',
+  roleMapping: {},
+}
+
+const clientFallbackTenantSettings: TenantSettingsRecord = {
+  organizationId: clientFallbackOrganization.id,
+  locale: 'en-US',
+  timezone: 'UTC',
+  currency: 'USD',
+  defaultUnit: 'g',
+  defaultDilutionPercent: 10,
+}
+
+const clientFallbackBranding: BrandingConfig = {
+  organizationId: clientFallbackOrganization.id,
+  displayName: 'OlfactoryOps',
+  accentColor: '#4d9bff',
+  documentFooter: 'API managed branding',
+  labelTemplate: 'OLF-{sequence}',
+  logoMode: 'wordmark',
+}
+
+const clientFallbackCosting: CostingOverview = {
+  valuation: {
+    asOf: 'client-fallback',
+    totalValue: 0,
+    reservedValue: 0,
+    availableValue: 0,
+    lines: [],
+    invariant: 'client fallback contains no costing seed; API is source of truth',
+  },
+  formula: {
+    formulaId: '',
+    formulaCode: 'API',
+    method: 'MIXED_POLICY',
+    totalGrams: 0,
+    totalCost: 0,
+    costPerGram: 0,
+    costPerBottle: 0,
+    mostExpensiveMaterial: 'API pending',
+    lines: [],
+    trace: [],
+    invariant: 'client fallback contains no formula cost seed',
+  },
+  skuMargins: [],
+  cogs: [],
+  methodPolicies: [],
+  landedCosts: [],
+  invariant: 'client fallback contains no costing seed; API is source of truth',
+}
+
+const clientFallbackBatchCost: BatchCostReport = {
+  batchId: 'API',
+  formulaId: '',
+  targetGrams: 0,
+  materialCost: 0,
+  laborCost: 0,
+  overheadCost: 0,
+  totalCost: 0,
+  costPerGram: 0,
+  sourceFormulaCost: clientFallbackCosting.formula,
+  invariant: 'client fallback contains no batch cost seed; API is source of truth',
+}
+
+const clientFallbackAnalytics: AnalyticsDashboardReport = {
+  burnRate: [],
+  lowStockForecast: [],
+  expiryRisk: [],
+  costRanking: [],
+  inventoryAnalytics: [],
+  roleWidgets: [],
+  scheduledReports: [],
+  invariant: 'client fallback contains no analytics seed; API is source of truth',
+}
 
 type CatalogSkuAvailability = CommercialSkuRecord & {
   availableGrams: number
@@ -728,15 +828,11 @@ function writeStoredAuthSession(session: AuthSession | null) {
 }
 
 function tenantDisplayForSession(session: AuthSession) {
-  const organization = organizations.find((item) => item.id === session.organizationId)
-  const brand = brands.find((item) => item.organizationId === session.organizationId)
   const fallbackName = session.email.split('@')[1] ?? 'Tenant workspace'
 
   return {
     scope: session.organizationId,
-    label: organization
-      ? `${organization.id.toUpperCase()} / ${brand?.name ?? organization.name}`
-      : `${session.organizationId.toUpperCase()} / ${fallbackName}`,
+    label: `${session.organizationId.toUpperCase()} / ${fallbackName}`,
   }
 }
 
@@ -1765,7 +1861,7 @@ function AuthGateway({
   onSignup: (input: { organizationName: string; workspaceSlug: string; email: string; name: string }) => Promise<SignupResponse>
 }) {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
-  const [email, setEmail] = useState('owner@noxel.is')
+  const [email, setEmail] = useState('owner@example.test')
   const [name, setName] = useState('Thuan Le Minh')
   const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
   const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
@@ -1792,14 +1888,14 @@ function AuthGateway({
 
   function switchMode(nextMode: 'login' | 'signup') {
     setMode(nextMode)
-    setStatus(nextMode === 'login' ? 'Use owner@noxel.is for the seeded tenant.' : 'Create a new tenant workspace and owner session.')
+    setStatus(nextMode === 'login' ? 'Use owner@example.test for the demo tenant.' : 'Create a new tenant workspace and owner session.')
     if (nextMode === 'signup') {
       setEmail('owner@newlab.test')
       setName('Workspace Owner')
       setOrganizationName('New Fragrance Lab')
       setWorkspaceSlug('new-fragrance-lab')
     } else {
-      setEmail('owner@noxel.is')
+      setEmail('owner@example.test')
       setName('Thuan Le Minh')
       setOrganizationName('NOXELIS Lab')
       setWorkspaceSlug('noxelis-live')
@@ -1886,7 +1982,7 @@ function AuthGateway({
               <span>{status}</span>
             </div>
             <div className="policy-list">
-              <li>Seeded login: owner@noxel.is</li>
+              <li>Demo login: owner@example.test</li>
               <li>Signup provisions an active owner membership</li>
               <li>Sessions use idle and absolute expiry windows</li>
             </div>
@@ -2241,9 +2337,7 @@ function MaterialWorkspace({
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
   )
   const [provenanceRows, setProvenanceRows] = useState<Material['provenance']>(selected.provenance)
-  const [linkedDocuments, setLinkedDocuments] = useState<DocumentRecord[]>(() =>
-    documents.filter((document) => document.linkedTo === selected.id),
-  )
+  const [linkedDocuments, setLinkedDocuments] = useState<DocumentRecord[]>([])
 
   useEffect(() => {
     async function loadMaterials() {
@@ -2284,7 +2378,7 @@ function MaterialWorkspace({
     }))
     setMoleculeRows(moleculeComponents.filter((molecule) => molecule.materialId === selected.id))
     setProvenanceRows(selected.provenance)
-    setLinkedDocuments(documents.filter((document) => document.linkedTo === selected.id))
+    setLinkedDocuments([])
 
     async function loadIntelligence() {
       try {
@@ -3895,13 +3989,9 @@ function LabUsageWorkspace({
 }
 
 function DocumentsWorkspace() {
-  const [documentRows, setDocumentRows] = useState<DocumentRecord[]>(documents)
-  const [dashboard, setDashboard] = useState<DocumentComplianceDashboard>(() =>
-    documentComplianceDashboard(documents, materials, initialLots, formulas),
-  )
-  const [downloadAudits, setDownloadAudits] = useState<AuditEvent[]>(
-    auditEvents.filter((event) => event.action.startsWith('document.')),
-  )
+  const [documentRows, setDocumentRows] = useState<DocumentRecord[]>([])
+  const [dashboard, setDashboard] = useState<DocumentComplianceDashboard>(clientFallbackDocumentDashboard)
+  const [downloadAudits, setDownloadAudits] = useState<AuditEvent[]>([])
   const [downloadResult, setDownloadResult] = useState<DocumentDownloadResponse | null>(null)
   const [shareResult, setShareResult] = useState<DocumentShareResponse | null>(null)
   const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null)
@@ -3918,7 +4008,7 @@ function DocumentsWorkspace() {
       return formulas.map((formula) => ({ id: formula.id, label: `${formula.code} ${formula.name}` }))
     }
     if (selectedGenerationOption?.targetScope === 'order') {
-      return salesOrders.map((order) => ({ id: order.id, label: `${order.id} ${order.status}` }))
+      return []
     }
     return initialLots.map((lot) => ({ id: lot.id, label: `${lot.lotNumber} ${lot.qualityStatus}` }))
   }, [selectedGenerationOption?.targetScope])
@@ -5158,7 +5248,7 @@ function CommerceWorkspace({
     currency: 'USD',
     tier: 'Studio' as CommercialSkuRecord['tier'],
     moqPacks: 1,
-    labelTemplate: `${brandingConfig.displayName} Neutral Pack`,
+    labelTemplate: `${clientFallbackBranding.displayName} Neutral Pack`,
   })
   const [priceListDraft, setPriceListDraft] = useState({
     name: 'Studio Loyalty',
@@ -5593,7 +5683,7 @@ function CommerceWorkspace({
               </button>
             </div>
             <div className="label-preview-card commerce-label-preview">
-              <strong>{brandingConfig.displayName}</strong>
+              <strong>{clientFallbackBranding.displayName}</strong>
               <span>{selectedSku.labelTemplate}</span>
               <code>{selectedSku.id} / {selectedMaterial?.cas ?? selectedSku.materialId} / {formatGrams(selectedSku.packSizeGrams)}</code>
             </div>
@@ -5648,12 +5738,12 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     () => buildSkuAvailabilityRows(commercialSkus, stock),
     [stock],
   )
-  const [customerRows, setCustomerRows] = useState<CustomerRecord[]>(customers)
-  const [orderRows, setOrderRows] = useState<SalesOrderRecord[]>(salesOrders)
-  const [shipmentRows, setShipmentRows] = useState<ShipmentRecord[]>(shipments)
-  const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>(orderDocuments)
+  const [customerRows, setCustomerRows] = useState<CustomerRecord[]>([])
+  const [orderRows, setOrderRows] = useState<SalesOrderRecord[]>([])
+  const [shipmentRows, setShipmentRows] = useState<ShipmentRecord[]>([])
+  const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>([])
   const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(() => seedSkuAvailability)
-  const [selectedOrderId, setSelectedOrderId] = useState(salesOrders[0]?.id ?? '')
+  const [selectedOrderId, setSelectedOrderId] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
   const [customerDraft, setCustomerDraft] = useState({
@@ -5666,7 +5756,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     country: 'US',
   })
   const [orderDraft, setOrderDraft] = useState({
-    customerId: customers[0]?.id ?? '',
+    customerId: '',
     skuId: commercialSkus[0]?.id ?? '',
     quantity: 1,
     discountPercent: 0,
@@ -6174,10 +6264,8 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
 }
 
 function CostingWorkspace() {
-  const fallbackCosting = useMemo<CostingOverview>(() => buildCostingOverview(), [])
-  const fallbackBatch = useMemo<BatchCostReport>(() => buildBatchCostReport('BTH-2025-118'), [])
-  const [costingData, setCostingData] = useState<CostingOverview>(fallbackCosting)
-  const [batchCost, setBatchCost] = useState<BatchCostReport>(fallbackBatch)
+  const [costingData, setCostingData] = useState<CostingOverview>(clientFallbackCosting)
+  const [batchCost, setBatchCost] = useState<BatchCostReport>(clientFallbackBatchCost)
   const [statusMessage, setStatusMessage] = useState('Loading costing read models')
   const cogsTotal = costingData.cogs.reduce((sum, line) => sum + line.cogs, 0)
 
@@ -6331,8 +6419,7 @@ function CostingWorkspace() {
 }
 
 function AnalyticsWorkspace() {
-  const fallbackAnalytics = useMemo<AnalyticsDashboardReport>(() => buildAnalyticsDashboardReport(), [])
-  const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(fallbackAnalytics)
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(clientFallbackAnalytics)
   const [statusMessage, setStatusMessage] = useState('Loading analytics dashboard')
   const [runningReportId, setRunningReportId] = useState<string | null>(null)
   const burnChart = analyticsData.burnRate.map((row) => ({
@@ -6523,18 +6610,18 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const fallback = useMemo<SaasConsoleResponse>(() => ({
-    plan: billingPlan,
-    sso: ssoConfig,
-    apiKeys,
-    webhooks,
+    plan: clientFallbackPlan,
+    sso: clientFallbackSso,
+    apiKeys: [],
+    webhooks: [],
   }), [])
   const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
   const [statusMessage, setStatusMessage] = useState('Loading SaaS readiness controls')
   const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
   const [exporting, setExporting] = useState(false)
-  const activeSeats = memberships.filter((membership) => membership.status === 'ACTIVE').length
-  const storageUsedGb = documents.reduce((sum, document) => sum + document.sizeKb, 0) / 1024 / 1024
-  const apiUsage = Math.min(saasData.plan.apiQuota, auditEvents.length * 320)
+  const activeSeats = 0
+  const storageUsedGb = 0
+  const apiUsage = 0
 
   useEffect(() => {
     const controller = new AbortController()
@@ -6736,13 +6823,13 @@ function GenericDomainWorkspace({
 
 function buildCustomizationFallback(): CustomizationConsoleResponse {
   return {
-    settings: { ...tenantSettings },
-    featureFlags: featureFlags.map((flag) => ({ ...flag })),
-    numberingSequences: numberingSequences.map((sequence) => ({ ...sequence })),
-    customFields: customFields.map((field) => ({ ...field, options: [...field.options] })),
-    branding: { ...brandingConfig },
-    audit: auditEvents.filter((event) => event.action.startsWith('customization.')).slice(0, 8),
-    invariant: 'local customization seed fallback',
+    settings: { ...clientFallbackTenantSettings },
+    featureFlags: [],
+    numberingSequences: [{ key: 'formula', pattern: 'FRM-####', nextValue: 1, scope: 'brand' }],
+    customFields: [],
+    branding: { ...clientFallbackBranding },
+    audit: [],
+    invariant: 'client fallback contains no customization seed; API is source of truth',
   }
 }
 
@@ -7393,25 +7480,24 @@ function permissionRiskTone(risk: PermissionDefinition['risk']): 'green' | 'ambe
 
 function IdentityWorkspace() {
   const fallbackTenant = useMemo<TenantConsoleResponse>(() => {
-    const organization = organizations.find((item) => item.id === 'org-nxl') ?? organizations[0]!
     const organizationRolePolicies = rolePolicies.filter((item) => item.scope === 'organization')
     const organizationPermissionCatalog = permissionCatalog.filter((permission) => permission.scope === 'organization')
     return {
-      organization,
-      brands: brands.filter((item) => item.organizationId === organization.id),
-      memberships: memberships.filter((item) => item.organizationId === organization.id),
-      sessions: authSessions.filter((item) => item.organizationId === organization.id),
+      organization: clientFallbackOrganization,
+      brands: [],
+      memberships: [],
+      sessions: [],
       rolePolicies: organizationRolePolicies,
       permissionCatalog: organizationPermissionCatalog,
       permissionMatrix: buildRolePermissionMatrix(organizationRolePolicies, organizationPermissionCatalog),
-      securityPolicy: tenantSecurityPolicy,
-      audit: auditEvents.filter((event) => event.action.includes('auth') || event.action.includes('security')),
-      invariant: 'local tenant seed fallback',
+      securityPolicy: clientFallbackSecurityPolicy,
+      audit: [],
+      invariant: 'client fallback contains no tenant seed; API is source of truth',
     }
   }, [])
   const [tenantData, setTenantData] = useState<TenantConsoleResponse>(fallbackTenant)
   const [tenantStatus, setTenantStatus] = useState('Loading tenant console')
-  const [inviteEmail, setInviteEmail] = useState('new.viewer@noxel.is')
+  const [inviteEmail, setInviteEmail] = useState('new.viewer@example.test')
   const [inviteRole, setInviteRole] = useState('Viewer')
   const [permissionRole, setPermissionRole] = useState('Viewer')
   const [permissionName, setPermissionName] = useState('inventory.adjust')
@@ -7448,7 +7534,7 @@ function IdentityWorkspace() {
         body: JSON.stringify({
           email: inviteEmail,
           role: inviteRole,
-          brandIds: [tenantData.brands[0]?.id ?? 'brand-nxl'],
+          brandIds: [tenantData.brands[0]?.id ?? 'brand-client-fallback'],
         }),
       })
       if (!response.ok) {
