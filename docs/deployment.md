@@ -46,11 +46,15 @@ npm run d1:migrate:local
 
 ## 2. Deploy Worker API
 
-Update `CORS_ORIGINS` in `wrangler.toml` with the real Cloudflare Pages domain:
+`wrangler.toml` is configured for the Lab of Scent domain:
 
 ```toml
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://app.yourdomain.com"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscent.com,https://www.labofscent.com,https://app.labofscent.com"
+
+[[routes]]
+pattern = "api.labofscent.com"
+custom_domain = true
 ```
 
 Deploy:
@@ -68,8 +72,8 @@ curl https://<worker-host>/api/v1/persistence/status
 
 Optional custom API hostname:
 
-- Add a custom domain/route for the Worker in Cloudflare.
-- Use `https://api.yourdomain.com/api/v1` as the frontend API base.
+- The Worker custom domain is configured as `api.labofscent.com`.
+- Use `https://api.labofscent.com/api/v1` as the frontend API base.
 
 ## 3. Deploy Frontend On Cloudflare Pages
 
@@ -81,7 +85,7 @@ Create a Pages project connected to the GitHub repo.
 - Production environment variable:
 
 ```bash
-VITE_API_BASE_URL=https://api.yourdomain.com/api/v1
+VITE_API_BASE_URL=https://api.labofscent.com/api/v1
 ```
 
 If you do not set a custom Worker hostname yet, use the `workers.dev` URL:
@@ -89,6 +93,12 @@ If you do not set a custom Worker hostname yet, use the `workers.dev` URL:
 ```bash
 VITE_API_BASE_URL=https://<worker-host>/api/v1
 ```
+
+Recommended Pages custom domains:
+
+- `labofscent.com`
+- `www.labofscent.com`
+- Optional beta/admin app domain: `app.labofscent.com`
 
 The repo includes:
 
