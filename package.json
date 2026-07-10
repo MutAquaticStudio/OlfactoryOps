@@ -13,6 +13,7 @@
     "start:api": "node dist-api/server/src/main.js",
     "dev:worker": "wrangler dev --local --port 8787",
     "deploy:worker": "wrangler deploy",
+    "deploy:pages": "npm run build && wrangler --cwd dist pages deploy . --project-name labofscents --branch main",
     "d1:migrate:local": "wrangler d1 migrations apply olfactoryops-production --local",
     "d1:migrate:remote": "wrangler d1 migrations apply olfactoryops-production --remote",
     "lint": "oxlint",
