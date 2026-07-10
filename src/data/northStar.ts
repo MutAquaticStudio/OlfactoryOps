@@ -813,6 +813,121 @@ export interface BillingPlanRecord {
   storageGb: number
   apiQuota: number
   monthlyPrice: number
+  currency: string
+  limits: {
+    seats: number
+    materials: number
+    formulas: number
+    lots: number
+    documents: number
+    storageGb: number
+    apiCalls: number
+    webhooks: number
+    auditRetentionDays: number
+  }
+  features: string[]
+}
+
+export interface BillingSubscriptionRecord {
+  id: string
+  organizationId: string
+  planId: string
+  provider: 'manual' | 'paddle' | 'stripe'
+  collectionMode: 'manual_invoice' | 'hosted_checkout'
+  status: 'trialing' | 'active' | 'past_due' | 'grace' | 'frozen' | 'canceled'
+  currentPeriodStart: string
+  currentPeriodEnd: string
+  trialEndsAt?: string
+  graceEndsAt?: string
+  freezeReason?: string
+  providerCustomerId?: string
+  providerSubscriptionId?: string
+  canWrite: boolean
+  canExport: boolean
+  nextInvoiceAt: string
+  updatedAt: string
+}
+
+export interface BillingUsageMeterRecord {
+  id: string
+  organizationId: string
+  periodStart: string
+  periodEnd: string
+  activeSeats: number
+  materials: number
+  formulas: number
+  lots: number
+  documents: number
+  storageGb: number
+  apiCalls: number
+  webhooks: number
+  auditEvents: number
+  lastCalculatedAt: string
+}
+
+export interface BillingInvoiceRecord {
+  id: string
+  subscriptionId: string
+  number: string
+  status: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible'
+  amountDue: number
+  currency: string
+  dueAt: string
+  paidAt?: string
+  hostedInvoiceUrl: string
+  documentId?: string
+  providerInvoiceId?: string
+}
+
+export interface BillingLimitCheck {
+  key: keyof BillingPlanRecord['limits']
+  label: string
+  used: number
+  limit: number
+  percent: number
+  status: 'pass' | 'warning' | 'blocked'
+}
+
+export interface WebhookDeliveryRecord {
+  id: string
+  webhookId: string
+  event: string
+  status: 'delivered' | 'retrying' | 'failed'
+  attempts: number
+  lastAttemptAt: string
+  nextRetryAt?: string
+  responseCode?: number
+  idempotencyKey: string
+}
+
+export interface CommercialReadinessCheck {
+  key: string
+  label: string
+  status: 'pass' | 'warning' | 'blocked'
+  detail: string
+}
+
+export interface BillingActionResponse {
+  id: string
+  mode: 'checkout' | 'portal' | 'manual_sales' | 'freeze' | 'reactivate' | 'webhook_retry'
+  status: 'queued' | 'ready' | 'completed'
+  url?: string
+  audit: AuditEvent
+  invariant: string
+}
+
+export interface BillingConsoleResponse {
+  plan: BillingPlanRecord
+  subscription: BillingSubscriptionRecord
+  usage: BillingUsageMeterRecord
+  limitChecks: BillingLimitCheck[]
+  invoices: BillingInvoiceRecord[]
+  sso: SsoConfigRecord
+  apiKeys: ApiKeyRecord[]
+  webhooks: WebhookRecord[]
+  webhookDeliveries: WebhookDeliveryRecord[]
+  readiness: CommercialReadinessCheck[]
+  invariant: string
 }
 
 export interface SsoConfigRecord {
@@ -937,7 +1052,7 @@ export const phases: Phase[] = [
   { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'active', securityLayer: 'L5', coverage: 76 },
   { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'active', securityLayer: 'L4', coverage: 77 },
-  { id: 15, name: 'SaaS Readiness', domain: 'saas', goal: 'Billing, SSO, SCIM, API keys, audit export', gate: 'Enterprise controls present', status: 'testing', securityLayer: 'L6/L7/L8', coverage: 66 },
+  { id: 15, name: 'Commercial Readiness', domain: 'saas', goal: 'Billing, subscription gates, SSO, SCIM, API keys, audit export', gate: 'Sell-ready controls enforced', status: 'active', securityLayer: 'L6/L7/L8', coverage: 82 },
 ]
 
 export const domains: DomainModule[] = [
@@ -1196,20 +1311,20 @@ export const domains: DomainModule[] = [
   {
     key: 'saas',
     phase: '15',
-    name: 'SaaS & Enterprise Readiness',
+    name: 'Commercial & Enterprise Readiness',
     shortName: 'SaaS',
     responsibility: 'Billing, plans, SSO, SCIM, API keys, webhooks, audit export, platform admin',
     status: 'testing',
     health: 66,
-    risk: 'Plan, SSO, API key, webhook, audit export APIs live; external integrations pending',
+    risk: 'Subscription gates, usage metering, invoices, webhooks, and audit export are live; payment provider remains configurable',
     owner: 'Enterprise',
     entities: ['Plan', 'Subscription', 'UsageMeter', 'SSOConfig', 'SCIMToken', 'ApiKey', 'Webhook'],
-    features: ['Plan limit', 'SSO/SCIM', 'API key rotation', 'Audit export', 'Platform admin'],
-    invariants: ['Tenant admin never crosses org', 'Platform actions audited'],
-    apis: ['/api/v1/billing/plan', '/api/v1/sso-config', '/api/v1/audit/export', '/api/v1/platform/tenants'],
+    features: ['Plan limit enforcement', 'Subscription freeze/reactivate', 'Invoice lifecycle', 'SSO/SCIM', 'Webhook retry', 'Audit export', 'Platform admin'],
+    invariants: ['Tenant admin never crosses org', 'Platform actions audited', 'Frozen tenant cannot perform commercial writes'],
+    apis: ['/api/v1/billing/console', '/api/v1/billing/checkout', '/api/v1/billing/subscription/freeze', '/api/v1/sso-config', '/api/v1/audit/export', '/api/v1/platform/tenants'],
     permissions: ['billing.manage', 'security.sso.manage', 'audit.export'],
     screens: ['Billing', 'SSO/SCIM', 'API keys', 'Platform console'],
-    activity: 'Audit export queues tenant-scoped SOC 2 evidence job',
+    activity: 'Commercial console enforces limits, queues invoices/actions, retries webhooks, and exports tenant-scoped evidence',
   },
 ]
 
@@ -2399,13 +2514,62 @@ export const scheduledReports: ScheduledReportRecord[] = [
 ]
 
 export const billingPlan: BillingPlanRecord = {
-  id: 'PLAN-GROWTH',
-  name: 'Growth',
+  id: 'PLAN-ATELIER',
+  name: 'Atelier',
   seats: 12,
   storageGb: 100,
   apiQuota: 25000,
   monthlyPrice: 249,
+  currency: 'USD',
+  limits: {
+    seats: 12,
+    materials: 5000,
+    formulas: 2000,
+    lots: 10000,
+    documents: 25000,
+    storageGb: 100,
+    apiCalls: 25000,
+    webhooks: 10,
+    auditRetentionDays: 1095,
+  },
+  features: [
+    'Production batch operations',
+    'Procurement and purchase orders',
+    'Commerce and order fulfillment',
+    'API keys and signed webhooks',
+    'Audit export and 3 year retention',
+  ],
 }
+
+export const billingSubscription: BillingSubscriptionRecord = {
+  id: 'SUB-ATELIER-001',
+  organizationId: 'org-nxl',
+  planId: billingPlan.id,
+  provider: 'manual',
+  collectionMode: 'manual_invoice',
+  status: 'active',
+  currentPeriodStart: '2026-07-01T00:00:00.000Z',
+  currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+  canWrite: true,
+  canExport: true,
+  nextInvoiceAt: '2026-08-01T00:00:00.000Z',
+  updatedAt: '2026-07-10T00:00:00.000Z',
+}
+
+export const billingInvoices: BillingInvoiceRecord[] = [
+  {
+    id: 'INV-2026-0001',
+    subscriptionId: billingSubscription.id,
+    number: 'OO-2026-0001',
+    status: 'open',
+    amountDue: 249,
+    currency: 'USD',
+    dueAt: '2026-08-01T00:00:00.000Z',
+    hostedInvoiceUrl: 'https://billing.labofscents.org/invoices/OO-2026-0001',
+    documentId: 'DOC-INV-2026-0001',
+    providerInvoiceId: 'manual:OO-2026-0001',
+  },
+]
 
 export const ssoConfig: SsoConfigRecord = {
   id: 'SSO-NXL',
@@ -2437,6 +2601,30 @@ export const webhooks: WebhookRecord[] = [
     events: ['order.reserved', 'order.fulfilled', 'document.downloaded'],
     status: 'active',
     lastDelivery: '2026-06-30T08:44:00Z',
+  },
+]
+
+export const webhookDeliveries: WebhookDeliveryRecord[] = [
+  {
+    id: 'WHD-0001',
+    webhookId: 'WH-ORDERS',
+    event: 'order.fulfilled',
+    status: 'delivered',
+    attempts: 1,
+    lastAttemptAt: '2026-06-30T08:44:00Z',
+    responseCode: 200,
+    idempotencyKey: 'whd_order_fulfilled_ORD-DEMO-092',
+  },
+  {
+    id: 'WHD-0002',
+    webhookId: 'WH-ORDERS',
+    event: 'document.downloaded',
+    status: 'retrying',
+    attempts: 2,
+    lastAttemptAt: '2026-07-03T11:00:00Z',
+    nextRetryAt: '2026-07-03T11:15:00Z',
+    responseCode: 503,
+    idempotencyKey: 'whd_document_downloaded_DOC-121',
   },
 ]
 

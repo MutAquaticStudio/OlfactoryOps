@@ -81,11 +81,12 @@ import {
   type Allocation,
   type AuditEvent,
   type AuthSession,
-  type ApiKeyRecord,
   type AnalyticsDashboardReport,
   type BatchCostReport,
   type BrandRecord,
   type BrandingConfig,
+  type BillingActionResponse,
+  type BillingConsoleResponse,
   type BillingPlanRecord,
   type CommercialSkuRecord,
   type CostingOverview,
@@ -135,7 +136,6 @@ import {
   type SupplierRecord,
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
-  type WebhookRecord,
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
@@ -205,6 +205,19 @@ const clientFallbackPlan: BillingPlanRecord = {
   storageGb: 0,
   apiQuota: 0,
   monthlyPrice: 0,
+  currency: 'USD',
+  limits: {
+    seats: 0,
+    materials: 0,
+    formulas: 0,
+    lots: 0,
+    documents: 0,
+    storageGb: 0,
+    apiCalls: 0,
+    webhooks: 0,
+    auditRetentionDays: 0,
+  },
+  features: [],
 }
 
 const clientFallbackSso: SsoConfigRecord = {
@@ -362,12 +375,7 @@ type SignupResponse = {
   invariant: string
 }
 
-type SaasConsoleResponse = {
-  plan: BillingPlanRecord
-  sso: SsoConfigRecord
-  apiKeys: ApiKeyRecord[]
-  webhooks: WebhookRecord[]
-}
+type SaasConsoleResponse = BillingConsoleResponse
 
 type AuditExportResponse = {
   id: string
@@ -6611,45 +6619,74 @@ function AnalyticsWorkspace() {
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const fallback = useMemo<SaasConsoleResponse>(() => ({
     plan: clientFallbackPlan,
+    subscription: {
+      id: 'SUB-CLIENT-FALLBACK',
+      organizationId: session.organizationId,
+      planId: clientFallbackPlan.id,
+      provider: 'manual',
+      collectionMode: 'manual_invoice',
+      status: 'trialing',
+      currentPeriodStart: 'client-fallback',
+      currentPeriodEnd: 'client-fallback',
+      canWrite: false,
+      canExport: true,
+      nextInvoiceAt: 'client-fallback',
+      updatedAt: 'client-fallback',
+    },
+    usage: {
+      id: 'USG-CLIENT-FALLBACK',
+      organizationId: session.organizationId,
+      periodStart: 'client-fallback',
+      periodEnd: 'client-fallback',
+      activeSeats: 0,
+      materials: 0,
+      formulas: 0,
+      lots: 0,
+      documents: 0,
+      storageGb: 0,
+      apiCalls: 0,
+      webhooks: 0,
+      auditEvents: 0,
+      lastCalculatedAt: 'client-fallback',
+    },
+    limitChecks: [],
+    invoices: [],
     sso: clientFallbackSso,
     apiKeys: [],
     webhooks: [],
-  }), [])
+    webhookDeliveries: [],
+    readiness: [
+      {
+        key: 'api-offline',
+        label: 'Commercial console API',
+        status: 'warning',
+        detail: 'Client fallback is active until API is reachable',
+      },
+    ],
+    invariant: 'client fallback contains no commercial state; API is source of truth',
+  }), [session.organizationId])
   const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
   const [statusMessage, setStatusMessage] = useState('Loading SaaS readiness controls')
   const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
+  const [billingAction, setBillingAction] = useState<BillingActionResponse | null>(null)
   const [exporting, setExporting] = useState(false)
-  const activeSeats = 0
-  const storageUsedGb = 0
-  const apiUsage = 0
+  const [billingBusyAction, setBillingBusyAction] = useState<string | null>(null)
+  const activeSeats = saasData.usage.activeSeats
+  const storageUsedGb = saasData.usage.storageGb
+  const apiUsage = saasData.usage.apiCalls
 
   useEffect(() => {
     const controller = new AbortController()
 
     async function loadSaasConsole() {
       try {
-        const [planResponse, ssoResponse, apiKeyResponse, webhookResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/billing/plan`, { signal: controller.signal }),
-          fetch(`${apiBaseUrl}/sso-config`, { signal: controller.signal }),
-          fetch(`${apiBaseUrl}/api-keys`, { signal: controller.signal }),
-          fetch(`${apiBaseUrl}/webhooks`, { signal: controller.signal }),
-        ])
-        if (![planResponse, ssoResponse, apiKeyResponse, webhookResponse].every((response) => response.ok)) {
+        const response = await fetch(`${apiBaseUrl}/billing/console`, { signal: controller.signal })
+        if (!response.ok) {
           throw new Error('SaaS readiness API failed')
         }
-        const [planPayload, ssoPayload, apiKeyPayload, webhookPayload] = await Promise.all([
-          planResponse.json() as Promise<ApiEnvelope<BillingPlanRecord>>,
-          ssoResponse.json() as Promise<ApiEnvelope<SsoConfigRecord>>,
-          apiKeyResponse.json() as Promise<ApiEnvelope<ApiKeyRecord[]>>,
-          webhookResponse.json() as Promise<ApiEnvelope<WebhookRecord[]>>,
-        ])
-        setSaasData({
-          plan: planPayload.data,
-          sso: ssoPayload.data,
-          apiKeys: apiKeyPayload.data,
-          webhooks: webhookPayload.data,
-        })
-        setStatusMessage('SaaS readiness synced from live API')
+        const payload = (await response.json()) as ApiEnvelope<SaasConsoleResponse>
+        setSaasData(payload.data)
+        setStatusMessage('Commercial console synced from live API')
       } catch {
         if (!controller.signal.aborted) {
           setStatusMessage('Using local SaaS readiness seed until API is reachable')
@@ -6676,23 +6713,147 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  async function runBillingAction(
+    action: string,
+    path: string,
+    init?: RequestInit,
+  ) {
+    setBillingBusyAction(action)
+    setStatusMessage(`Running ${action}`)
+    try {
+      const payload = await requestApi<BillingActionResponse>(path, { method: 'POST', ...init })
+      setBillingAction(payload)
+      setStatusMessage(`${payload.mode} ${payload.status}`)
+      if (path.includes('/freeze') || path.includes('/reactivate')) {
+        const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
+        setSaasData(consolePayload)
+      }
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : `${action} failed`)
+    } finally {
+      setBillingBusyAction(null)
+    }
+  }
+
+  async function retryWebhookDelivery(deliveryId: string) {
+    setBillingBusyAction(deliveryId)
+    setStatusMessage(`Retrying ${deliveryId}`)
+    try {
+      await requestApi<{ invariant: string }>(`/webhooks/deliveries/${encodeURIComponent(deliveryId)}/retry`, {
+        method: 'POST',
+      })
+      const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
+      setSaasData(consolePayload)
+      setStatusMessage(`${deliveryId} delivered with preserved idempotency key`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Webhook retry failed')
+    } finally {
+      setBillingBusyAction(null)
+    }
+  }
+
   return (
     <div className="workspace-grid saas-grid">
       <Panel title="Billing & Plan Limits" icon={BadgeDollarSign}>
         <div className="metric-grid">
           <Metric label="Plan" value={saasData.plan.name} />
           <Metric label="Monthly" value={formatCurrency(saasData.plan.monthlyPrice)} />
+          <Metric label="Status" value={saasData.subscription.status.toUpperCase()} />
+          <Metric label="Next invoice" value={new Date(saasData.subscription.nextInvoiceAt).toLocaleDateString()} />
           <Metric label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} />
           <Metric label="Storage" value={`${storageUsedGb.toFixed(3)}/${saasData.plan.storageGb}GB`} />
         </div>
         <div className="usage-meter">
           <span style={{ width: `${Math.min(100, (activeSeats / saasData.plan.seats) * 100)}%` }} />
         </div>
+        <div className="action-row">
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void runBillingAction('checkout', '/billing/checkout', {
+              body: JSON.stringify({ planId: saasData.plan.id, mode: 'manual_sales' }),
+              headers: { 'Content-Type': 'application/json' },
+            })}
+            disabled={billingBusyAction !== null}
+          >
+            Start sale
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void runBillingAction('portal', '/billing/portal')}
+            disabled={billingBusyAction !== null}
+          >
+            Billing portal
+          </button>
+          {saasData.subscription.canWrite ? (
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => void runBillingAction('freeze', '/billing/subscription/freeze', {
+                body: JSON.stringify({ reason: 'Commercial readiness freeze test' }),
+                headers: { 'Content-Type': 'application/json' },
+              })}
+              disabled={billingBusyAction !== null}
+            >
+              Freeze tenant
+            </button>
+          ) : (
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void runBillingAction('reactivate', '/billing/subscription/reactivate')}
+              disabled={billingBusyAction !== null}
+            >
+              Reactivate
+            </button>
+          )}
+        </div>
         <ul className="policy-list">
-          <li>Plan limits visible before billing enforcement.</li>
-          <li>Tenant status can freeze writes without crossing org boundary.</li>
+          <li>Plan limits are enforced server-side before commercial writes.</li>
+          <li>Tenant freeze keeps read/export access and blocks create/update operations.</li>
           <li>{statusMessage}</li>
         </ul>
+        {billingAction ? (
+          <div className="audit-export-card">
+            <span className="mono-small">{billingAction.id}</span>
+            <strong>{billingAction.mode} / {billingAction.status}</strong>
+            {billingAction.url ? <span>{billingAction.url}</span> : null}
+            <span>{billingAction.invariant}</span>
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel title="Usage Enforcement" icon={Gauge}>
+        <div className="document-list compact-list">
+          {saasData.limitChecks.map((check) => (
+            <div className="document-row" key={check.key}>
+              <div>
+                <strong>{check.label}</strong>
+                <span>{check.used} / {check.limit} ({check.percent}%)</span>
+              </div>
+              <StatusBadge
+                status={check.status === 'blocked' ? 'alert' : check.status === 'warning' ? 'review' : 'stable'}
+                label={check.status.toUpperCase()}
+              />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Invoices & Collection" icon={ClipboardCheck}>
+        <div className="document-list compact-list">
+          {saasData.invoices.map((invoice) => (
+            <div className="document-row" key={invoice.id}>
+              <div>
+                <strong>{invoice.number}</strong>
+                <span>{formatCurrency(invoice.amountDue)} due {new Date(invoice.dueAt).toLocaleDateString()}</span>
+                <span>{invoice.hostedInvoiceUrl}</span>
+              </div>
+              <StatusBadge status={invoice.status === 'paid' ? 'stable' : 'review'} label={invoice.status.toUpperCase()} />
+            </div>
+          ))}
+        </div>
       </Panel>
 
       <Panel title="SSO / SCIM Readiness" icon={LockKeyhole}>
@@ -6742,6 +6903,53 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
                 <span>{webhook.events.join(', ')}</span>
               </div>
               <StatusBadge status={webhook.status === 'active' ? 'stable' : 'review'} label={webhook.status.toUpperCase()} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Webhook Delivery & Retry" icon={RotateCcw}>
+        <div className="document-list compact-list">
+          {saasData.webhookDeliveries.map((delivery) => (
+            <div className="document-row" key={delivery.id}>
+              <div>
+                <strong>{delivery.event}</strong>
+                <span>{delivery.id} / attempts {delivery.attempts} / key {delivery.idempotencyKey}</span>
+                <span>Last attempt {new Date(delivery.lastAttemptAt).toLocaleString()}</span>
+              </div>
+              <div className="row-actions">
+                <StatusBadge
+                  status={delivery.status === 'delivered' ? 'stable' : delivery.status === 'retrying' ? 'review' : 'alert'}
+                  label={delivery.status.toUpperCase()}
+                />
+                {delivery.status !== 'delivered' ? (
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={() => void retryWebhookDelivery(delivery.id)}
+                    disabled={billingBusyAction === delivery.id}
+                  >
+                    {billingBusyAction === delivery.id ? 'Retrying' : 'Retry'}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Commercial Readiness Gate" icon={ShieldCheck}>
+        <div className="document-list compact-list">
+          {saasData.readiness.map((check) => (
+            <div className="document-row" key={check.key}>
+              <div>
+                <strong>{check.label}</strong>
+                <span>{check.detail}</span>
+              </div>
+              <StatusBadge
+                status={check.status === 'blocked' ? 'alert' : check.status === 'warning' ? 'review' : 'stable'}
+                label={check.status.toUpperCase()}
+              />
             </div>
           ))}
         </div>

@@ -16,6 +16,8 @@ type Route = {
   method: string
   pattern: string
   mutates?: boolean
+  limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
+  writeGate?: boolean
   handler: (context: RouteContext) => unknown
 }
 
@@ -54,6 +56,9 @@ type SnapshotKey =
   | 'shipmentRecords'
   | 'orderDocumentRecords'
   | 'scheduledReportRecords'
+  | 'subscriptionRecord'
+  | 'invoiceRecords'
+  | 'webhookDeliveryRecords'
   | 'auditCounter'
 
 const API_PREFIX = '/api/v1'
@@ -93,6 +98,9 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'shipmentRecords',
   'orderDocumentRecords',
   'scheduledReportRecords',
+  'subscriptionRecord',
+  'invoiceRecords',
+  'webhookDeliveryRecords',
   'auditCounter',
 ]
 
@@ -104,7 +112,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
-  { method: 'POST', pattern: '/materials', mutates: true, handler: ({ service, body }) => service.createMaterial(body) },
+  { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
   { method: 'GET', pattern: '/materials/:id', handler: ({ service, params }) => service.material(params.id) },
   { method: 'PATCH', pattern: '/materials/:id', mutates: true, handler: ({ service, params, body }) => service.updateMaterial(params.id, body) },
   { method: 'POST', pattern: '/materials/:id/ingest', mutates: true, handler: ({ service, params, body }) => service.ingestMaterialDocument(params.id, body) },
@@ -113,7 +121,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials/:id/provenance', handler: ({ service, params }) => service.materialProvenance(params.id) },
   { method: 'GET', pattern: '/materials/:id/price-history', handler: ({ service, params }) => service.materialPriceHistory(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
-  { method: 'POST', pattern: '/formulas', mutates: true, handler: ({ service, body }) => service.createFormulaDraft(body) },
+  { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
   { method: 'POST', pattern: '/formulas/:id/lines', mutates: true, handler: ({ service, params, body }) => service.addFormulaLine(params.id, body) },
   { method: 'PATCH', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params, body }) => service.updateFormulaLine(params.id, params.lineId, body) },
   { method: 'DELETE', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params }) => service.deleteFormulaLine(params.id, params.lineId) },
@@ -135,17 +143,17 @@ const routes: Route[] = [
   { method: 'PATCH', pattern: '/lots/:id/quality', mutates: true, handler: ({ service, params, body }) => service.changeLotQuality(params.id, body) },
   { method: 'POST', pattern: '/lots/:id/label', handler: ({ service, params }) => service.lotLabel(params.id) },
   { method: 'GET', pattern: '/lots/:id/genealogy', handler: ({ service, params }) => service.lotGenealogy(params.id) },
-  { method: 'POST', pattern: '/inventory/receipts', mutates: true, handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
+  { method: 'POST', pattern: '/inventory/receipts', mutates: true, limitKey: 'lots', handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
   { method: 'POST', pattern: '/inventory/adjustments', mutates: true, handler: ({ service, body }) => service.adjustInventory(body) },
   { method: 'POST', pattern: '/inventory/transfers', mutates: true, handler: ({ service, body }) => service.transferInventory(body) },
-  { method: 'POST', pattern: '/auth/login', mutates: true, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
-  { method: 'POST', pattern: '/auth/signup', mutates: true, handler: ({ service, body }) => service.signup(body) },
-  { method: 'POST', pattern: '/auth/logout', mutates: true, handler: ({ service }) => service.logout() },
+  { method: 'POST', pattern: '/auth/login', mutates: true, writeGate: false, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
+  { method: 'POST', pattern: '/auth/signup', mutates: true, writeGate: false, handler: ({ service, body }) => service.signup(body) },
+  { method: 'POST', pattern: '/auth/logout', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
-  { method: 'POST', pattern: '/security/members/invite', mutates: true, handler: ({ service, body }) => service.inviteMember(body) },
+  { method: 'POST', pattern: '/security/members/invite', mutates: true, limitKey: 'seats', handler: ({ service, body }) => service.inviteMember(body) },
   { method: 'PATCH', pattern: '/security/members/:id/status', mutates: true, handler: ({ service, params, body }) => service.setMembershipStatus(params.id, body.status === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED') },
   { method: 'POST', pattern: '/security/sessions/:id/revoke', mutates: true, handler: ({ service, params }) => service.revokeSession(params.id) },
   { method: 'POST', pattern: '/security/sessions/revoke-all', mutates: true, handler: ({ service, body }) => service.revokeAllSessions(body) },
@@ -167,7 +175,7 @@ const routes: Route[] = [
   { method: 'PATCH', pattern: '/branding', mutates: true, handler: ({ service, body }) => service.updateBranding(body) },
   { method: 'GET', pattern: '/documents', handler: ({ service }) => service.documents() },
   { method: 'GET', pattern: '/documents/compliance-dashboard', handler: ({ service }) => service.documentComplianceDashboard() },
-  { method: 'POST', pattern: '/documents/generate', mutates: true, handler: ({ service, body }) => service.generateDocument(body) },
+  { method: 'POST', pattern: '/documents/generate', mutates: true, limitKey: 'documents', handler: ({ service, body }) => service.generateDocument(body) },
   { method: 'POST', pattern: '/documents/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveDocument(params.id, body) },
   { method: 'POST', pattern: '/documents/:id/share', mutates: true, handler: ({ service, params, body }) => service.shareDocument(params.id, body) },
   { method: 'GET', pattern: '/documents/download-audit', handler: ({ service }) => service.documentDownloadAudit() },
@@ -223,10 +231,19 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/analytics/reports', handler: ({ service }) => service.analyticsReports() },
   { method: 'POST', pattern: '/analytics/reports/:id/run', mutates: true, handler: ({ service, params }) => service.runAnalyticsReport(params.id) },
   { method: 'GET', pattern: '/billing/plan', handler: ({ service }) => service.billingPlan() },
+  { method: 'GET', pattern: '/billing/console', handler: ({ service }) => service.billingConsole() },
+  { method: 'GET', pattern: '/billing/subscription', handler: ({ service }) => service.billingSubscription() },
+  { method: 'GET', pattern: '/billing/usage', handler: ({ service }) => service.billingUsage() },
+  { method: 'GET', pattern: '/billing/invoices', handler: ({ service }) => service.billingInvoices() },
+  { method: 'POST', pattern: '/billing/checkout', mutates: true, writeGate: false, handler: ({ service, body }) => service.startBillingCheckout(body) },
+  { method: 'POST', pattern: '/billing/portal', mutates: true, writeGate: false, handler: ({ service }) => service.openBillingPortal() },
+  { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
+  { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
   { method: 'GET', pattern: '/sso-config', handler: ({ service }) => service.ssoConfig() },
   { method: 'GET', pattern: '/api-keys', handler: ({ service }) => service.apiKeys() },
   { method: 'GET', pattern: '/webhooks', handler: ({ service }) => service.webhooks() },
-  { method: 'POST', pattern: '/audit/export', mutates: true, handler: ({ service }) => service.auditExport() },
+  { method: 'POST', pattern: '/webhooks/deliveries/:id/retry', mutates: true, writeGate: false, handler: ({ service, params }) => service.retryWebhookDelivery(params.id) },
+  { method: 'POST', pattern: '/audit/export', mutates: true, writeGate: false, handler: ({ service }) => service.auditExport() },
 ]
 
 export default {
@@ -254,6 +271,12 @@ export default {
       const service = new NorthStarService()
       await hydrateSnapshots(env.DB, service)
       const body = await readJsonBody(request)
+      if (match.route.mutates && match.route.writeGate !== false) {
+        service.assertCommercialWriteAllowed(`${request.method} ${match.route.pattern}`)
+      }
+      if (match.route.limitKey) {
+        service.assertPlanCapacity(match.route.limitKey)
+      }
       const result = await match.route.handler({ service, params: match.params, query: url.searchParams, body })
 
       if (match.route.mutates) {

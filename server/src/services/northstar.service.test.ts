@@ -961,4 +961,36 @@ describe('NorthStarService', () => {
     expect(exportJob.scope).toBe('ORG-NXL')
     expect(exportJob.audit.action).toBe('audit.export')
   })
+
+  it('enforces commercial subscription freeze and plan capacity before writes', () => {
+    const service = new NorthStarService()
+    const consoleState = service.billingConsole().data
+
+    expect(consoleState.invariant).toContain('server-side')
+    expect(consoleState.limitChecks.every((check) => check.status !== 'blocked')).toBe(true)
+    expect(() => service.assertPlanCapacity('materials', 999999)).toThrow(UnprocessableEntityException)
+
+    const freeze = service.freezeSubscription({ reason: 'Dunning test' }).data
+    expect(freeze.mode).toBe('freeze')
+    expect(() => service.assertCommercialWriteAllowed('materials.create')).toThrow(ForbiddenException)
+
+    const reactivation = service.reactivateSubscription().data
+    expect(reactivation.mode).toBe('reactivate')
+    expect(() => service.assertCommercialWriteAllowed('materials.create')).not.toThrow()
+  })
+
+  it('serves billing actions and webhook retry evidence for sell-ready operations', () => {
+    const service = new NorthStarService()
+    const checkout = service.startBillingCheckout({ mode: 'manual_sales' }).data
+    const portal = service.openBillingPortal().data
+    const retry = service.retryWebhookDelivery('WHD-0002').data
+    const consoleState = service.billingConsole().data
+
+    expect(checkout.mode).toBe('manual_sales')
+    expect(checkout.url).toContain('sales@labofscents.org')
+    expect(portal.mode).toBe('portal')
+    expect(retry.delivery.status).toBe('delivered')
+    expect(retry.delivery.idempotencyKey).toBe('whd_document_downloaded_DOC-121')
+    expect(consoleState.webhookDeliveries.find((delivery) => delivery.id === 'WHD-0002')?.attempts).toBe(3)
+  })
 })

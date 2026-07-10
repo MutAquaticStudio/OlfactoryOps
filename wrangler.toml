@@ -6,14 +6,14 @@ minify = true
 workers_dev = true
 
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscent.com,https://www.labofscent.com,https://app.labofscent.com"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org"
 
 [[routes]]
-pattern = "api.labofscent.com"
+pattern = "api.labofscents.org"
 custom_domain = true
 
 [[d1_databases]]
 binding = "DB"
-database_name = "olfactoryops-beta"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "olfactoryops-production"
+database_id = "d70bc633-a4d8-4898-8149-d795032cf497"
 migrations_dir = "migrations"

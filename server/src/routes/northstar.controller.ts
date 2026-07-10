@@ -884,6 +884,51 @@ export class NorthStarController {
     return this.northStar.billingPlan()
   }
 
+  @Get('billing/console')
+  billingConsole() {
+    return this.northStar.billingConsole()
+  }
+
+  @Get('billing/subscription')
+  billingSubscription() {
+    return this.northStar.billingSubscription()
+  }
+
+  @Get('billing/usage')
+  billingUsage() {
+    return this.northStar.billingUsage()
+  }
+
+  @Get('billing/invoices')
+  billingInvoices() {
+    return this.northStar.billingInvoices()
+  }
+
+  @Post('billing/checkout')
+  startBillingCheckout(@Body() body: { planId?: string; mode?: 'checkout' | 'manual_sales' }) {
+    return this.northStar.startBillingCheckout(body)
+  }
+
+  @Post('billing/portal')
+  openBillingPortal() {
+    return this.northStar.openBillingPortal()
+  }
+
+  @Post('billing/subscription/freeze')
+  freezeSubscription(@Body() body: { reason?: string }) {
+    return this.northStar.freezeSubscription(body)
+  }
+
+  @Post('billing/subscription/reactivate')
+  reactivateSubscription() {
+    return this.northStar.reactivateSubscription()
+  }
+
+  @Post('webhooks/deliveries/:id/retry')
+  retryWebhookDelivery(@Param('id') id: string) {
+    return this.northStar.retryWebhookDelivery(id)
+  }
+
   @Get('sso-config')
   ssoConfig() {
     return this.northStar.ssoConfig()

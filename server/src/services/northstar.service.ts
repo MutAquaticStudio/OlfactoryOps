@@ -5,7 +5,9 @@ import {
   analyticsBurnRate,
   analyticsDashboardReport,
   authSessions,
+  billingInvoices,
   billingPlan,
+  billingSubscription,
   brandingConfig,
   brands,
   batchCostReport,
@@ -67,9 +69,17 @@ import {
   tenantSecurityPolicy,
   tenantSettings,
   webhooks,
+  webhookDeliveries,
   type Allocation,
   type AuditEvent,
   type AuthSession,
+  type BillingActionResponse,
+  type BillingConsoleResponse,
+  type BillingInvoiceRecord,
+  type BillingLimitCheck,
+  type BillingPlanRecord,
+  type BillingSubscriptionRecord,
+  type BillingUsageMeterRecord,
   type BrandRecord,
   type BrandingConfig,
   type CommercialSkuRecord,
@@ -113,6 +123,7 @@ import {
   type StorageLocation,
   type SupplierRecord,
   type TenantSettingsRecord,
+  type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
 
 type WeighingActualInput = {
@@ -229,6 +240,8 @@ type ShipOrderBody = {
   trackingNumber?: string
 }
 
+type BillingLimitKey = keyof BillingPlanRecord['limits']
+
 const productionLifecycleStatuses: ProductionBatchRecord['status'][] = [
   'PLANNED',
   'WEIGHING',
@@ -319,6 +332,9 @@ export class NorthStarService {
   private shipmentRecords: ShipmentRecord[] = structuredClone(shipments)
   private orderDocumentRecords: OrderDocumentRecord[] = structuredClone(orderDocuments)
   private scheduledReportRecords: ScheduledReportRecord[] = structuredClone(scheduledReports)
+  private subscriptionRecord: BillingSubscriptionRecord = structuredClone(billingSubscription)
+  private invoiceRecords: BillingInvoiceRecord[] = structuredClone(billingInvoices)
+  private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditCounter = auditEvents.length
 
   phases() {
@@ -3487,6 +3503,176 @@ export class NorthStarService {
     return { data: billingPlan }
   }
 
+  billingConsole(): { data: BillingConsoleResponse } {
+    const usage = this.billingUsageRecord()
+    const limitChecks = this.billingLimitChecks(usage)
+    return {
+      data: {
+        plan: billingPlan,
+        subscription: this.subscriptionRecord,
+        usage,
+        limitChecks,
+        invoices: this.invoiceRecords,
+        sso: ssoConfig,
+        apiKeys,
+        webhooks,
+        webhookDeliveries: this.webhookDeliveryRecords,
+        readiness: this.commercialReadinessChecks(limitChecks),
+        invariant: 'subscription status and plan limits are enforced server-side before commercial writes',
+      },
+    }
+  }
+
+  billingSubscription() {
+    return { data: this.subscriptionRecord }
+  }
+
+  billingUsage() {
+    return { data: this.billingUsageRecord() }
+  }
+
+  billingInvoices() {
+    return { data: this.invoiceRecords }
+  }
+
+  startBillingCheckout(body: { planId?: string; mode?: 'checkout' | 'manual_sales' } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const mode = body.mode === 'checkout' ? 'checkout' : 'manual_sales'
+    const planId = body.planId?.trim() || billingPlan.id
+    if (planId !== billingPlan.id) {
+      throw new UnprocessableEntityException(`Plan ${planId} is not available for this tenant`)
+    }
+    const audit = this.recordAudit('billing.checkout.start', planId, session.userId, 'allowed')
+    const response: BillingActionResponse = {
+      id: `BILL-ACT-${audit.id}`,
+      mode,
+      status: 'ready',
+      url:
+        mode === 'checkout'
+          ? `https://billing.labofscents.org/checkout/${this.subscriptionRecord.id}`
+          : `mailto:sales@labofscents.org?subject=OlfactoryOps%20${encodeURIComponent(billingPlan.name)}%20plan`,
+      audit,
+      invariant: 'checkout intent is tenant-scoped and auditable; payment provider webhooks must be idempotent',
+    }
+    return { data: response }
+  }
+
+  openBillingPortal() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const audit = this.recordAudit('billing.portal.open', this.subscriptionRecord.id, session.userId, 'allowed')
+    const response: BillingActionResponse = {
+      id: `BILL-ACT-${audit.id}`,
+      mode: 'portal',
+      status: 'ready',
+      url: `https://billing.labofscents.org/portal/${this.subscriptionRecord.id}`,
+      audit,
+      invariant: 'billing portal action never trusts tenant identity from the browser',
+    }
+    return { data: response }
+  }
+
+  freezeSubscription(body: { reason?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const reason = body.reason?.trim() || 'Manual billing freeze'
+    this.subscriptionRecord = {
+      ...this.subscriptionRecord,
+      status: 'frozen',
+      canWrite: false,
+      canExport: true,
+      freezeReason: reason,
+      updatedAt: new Date().toISOString(),
+    }
+    const audit = this.recordAudit('billing.subscription.freeze', this.subscriptionRecord.id, session.userId, 'allowed')
+    return {
+      data: {
+        id: `BILL-ACT-${audit.id}`,
+        mode: 'freeze',
+        status: 'completed',
+        audit,
+        invariant: 'frozen tenants keep read and export access but cannot create commercial writes',
+      } satisfies BillingActionResponse,
+    }
+  }
+
+  reactivateSubscription() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    this.subscriptionRecord = {
+      ...this.subscriptionRecord,
+      status: 'active',
+      canWrite: true,
+      canExport: true,
+      freezeReason: undefined,
+      graceEndsAt: undefined,
+      updatedAt: new Date().toISOString(),
+    }
+    const audit = this.recordAudit('billing.subscription.reactivate', this.subscriptionRecord.id, session.userId, 'allowed')
+    return {
+      data: {
+        id: `BILL-ACT-${audit.id}`,
+        mode: 'reactivate',
+        status: 'completed',
+        audit,
+        invariant: 'reactivation restores write access only after an audited billing action',
+      } satisfies BillingActionResponse,
+    }
+  }
+
+  retryWebhookDelivery(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'security.apiKeys.manage')
+    const delivery = this.webhookDeliveryRecords.find((item) => item.id === id)
+    if (!delivery) {
+      throw new NotFoundException(`Webhook delivery ${id} was not found`)
+    }
+    const nextDelivery: WebhookDeliveryRecord = {
+      ...delivery,
+      status: 'delivered',
+      attempts: delivery.attempts + 1,
+      lastAttemptAt: new Date().toISOString(),
+      nextRetryAt: undefined,
+      responseCode: 200,
+    }
+    this.webhookDeliveryRecords = this.webhookDeliveryRecords.map((item) => (item.id === id ? nextDelivery : item))
+    const audit = this.recordAudit('webhook.delivery.retry', id, session.userId, 'allowed')
+    return {
+      data: {
+        delivery: nextDelivery,
+        audit,
+        invariant: 'webhook retry preserves idempotency key and appends audit evidence',
+      },
+    }
+  }
+
+  assertCommercialWriteAllowed(action = 'commercial.write') {
+    if (!this.subscriptionRecord.canWrite || this.subscriptionRecord.status === 'frozen' || this.subscriptionRecord.status === 'canceled') {
+      throw new ForbiddenException({
+        message: 'Tenant writes are frozen by subscription state',
+        action,
+        subscriptionStatus: this.subscriptionRecord.status,
+        freezeReason: this.subscriptionRecord.freezeReason,
+      })
+    }
+  }
+
+  assertPlanCapacity(limitKey: BillingLimitKey, increment = 1) {
+    const usage = this.billingUsageRecord()
+    const current = this.usageValueForLimit(usage, limitKey)
+    const limit = billingPlan.limits[limitKey]
+    if (current + increment > limit) {
+      throw new UnprocessableEntityException({
+        message: `Plan limit exceeded for ${limitKey}`,
+        limitKey,
+        current,
+        increment,
+        limit,
+      })
+    }
+  }
+
   ssoConfig() {
     return { data: ssoConfig }
   }
@@ -3510,6 +3696,98 @@ export class NorthStarService {
         audit,
       },
     }
+  }
+
+  private billingUsageRecord(): BillingUsageMeterRecord {
+    const documentStorageGb =
+      this.documentRecords.reduce((total, document) => total + document.sizeKb, 0) / 1024 / 1024
+    return {
+      id: `USG-${this.subscriptionRecord.organizationId}-${this.subscriptionRecord.currentPeriodStart.slice(0, 7)}`,
+      organizationId: this.subscriptionRecord.organizationId,
+      periodStart: this.subscriptionRecord.currentPeriodStart,
+      periodEnd: this.subscriptionRecord.currentPeriodEnd,
+      activeSeats: this.membershipRecords.filter((membership) => membership.status === 'ACTIVE').length,
+      materials: this.materialRecords.length,
+      formulas: this.formulaRecords.length,
+      lots: this.lots.length,
+      documents: this.documentRecords.length,
+      storageGb: Number(documentStorageGb.toFixed(6)),
+      apiCalls: this.auditEvents.length,
+      webhooks: webhooks.filter((webhook) => webhook.status === 'active').length,
+      auditEvents: this.auditEvents.length,
+      lastCalculatedAt: new Date().toISOString(),
+    }
+  }
+
+  private billingLimitChecks(usage: BillingUsageMeterRecord): BillingLimitCheck[] {
+    const rows: { key: BillingLimitKey; label: string; used: number }[] = [
+      { key: 'seats', label: 'Active seats', used: usage.activeSeats },
+      { key: 'materials', label: 'Materials', used: usage.materials },
+      { key: 'formulas', label: 'Formulas', used: usage.formulas },
+      { key: 'lots', label: 'Lots', used: usage.lots },
+      { key: 'documents', label: 'Documents', used: usage.documents },
+      { key: 'storageGb', label: 'Document storage GB', used: usage.storageGb },
+      { key: 'apiCalls', label: 'Audited API activity', used: usage.apiCalls },
+      { key: 'webhooks', label: 'Active webhooks', used: usage.webhooks },
+    ]
+
+    return rows.map(({ key, label, used }) => {
+      const limit = billingPlan.limits[key]
+      const percent = limit === 0 ? 100 : Math.round((used / limit) * 100)
+      return {
+        key,
+        label,
+        used,
+        limit,
+        percent,
+        status: used > limit ? 'blocked' : percent >= 80 ? 'warning' : 'pass',
+      }
+    })
+  }
+
+  private commercialReadinessChecks(limitChecks: BillingLimitCheck[]) {
+    const hasBlockedLimit = limitChecks.some((check) => check.status === 'blocked')
+    const retryingDelivery = this.webhookDeliveryRecords.some((delivery) => delivery.status === 'retrying')
+    return [
+      {
+        key: 'subscription-state',
+        label: 'Subscription state gates writes',
+        status: this.subscriptionRecord.canWrite ? 'pass' : 'blocked',
+        detail: `${this.subscriptionRecord.status} subscription; write access is ${this.subscriptionRecord.canWrite ? 'enabled' : 'frozen'}`,
+      },
+      {
+        key: 'plan-limit-enforcement',
+        label: 'Plan limits enforced server-side',
+        status: hasBlockedLimit ? 'blocked' : 'pass',
+        detail: hasBlockedLimit ? 'At least one limit is exceeded' : 'All tracked usage is within plan limits',
+      },
+      {
+        key: 'invoice-lifecycle',
+        label: 'Invoice lifecycle present',
+        status: this.invoiceRecords.length > 0 ? 'pass' : 'warning',
+        detail: `${this.invoiceRecords.length} invoice record(s) linked to subscription ${this.subscriptionRecord.id}`,
+      },
+      {
+        key: 'webhook-idempotency',
+        label: 'Webhook retry/idempotency evidence',
+        status: retryingDelivery ? 'warning' : 'pass',
+        detail: retryingDelivery ? 'A delivery is retrying with preserved idempotency key' : 'Webhook deliveries are healthy',
+      },
+      {
+        key: 'enterprise-identity',
+        label: 'SSO/SCIM readiness',
+        status: ssoConfig.status === 'verified' ? 'pass' : 'warning',
+        detail: `${ssoConfig.provider} configuration for ${ssoConfig.domain} is ${ssoConfig.status}`,
+      },
+    ] satisfies BillingConsoleResponse['readiness']
+  }
+
+  private usageValueForLimit(usage: BillingUsageMeterRecord, limitKey: BillingLimitKey) {
+    if (limitKey === 'seats') return usage.activeSeats
+    if (limitKey === 'apiCalls') return usage.apiCalls
+    if (limitKey === 'storageGb') return usage.storageGb
+    if (limitKey === 'auditRetentionDays') return 0
+    return usage[limitKey]
   }
 
   private recordDocumentDownloadAudit(

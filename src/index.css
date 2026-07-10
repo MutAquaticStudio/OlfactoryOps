@@ -956,6 +956,14 @@ kbd {
   gap: 8px;
 }
 
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
 .compact-list .document-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
