@@ -486,6 +486,203 @@ export interface PriceHistoryRecord {
   source: 'PO_RECEIPT' | 'QUOTE'
 }
 
+export type CostMethod = 'FIFO' | 'LIFO' | 'WEIGHTED_AVERAGE' | 'STANDARD'
+
+export interface CostMethodPolicy {
+  materialId: string
+  method: CostMethod
+  standardCost?: number
+  overheadPercent: number
+}
+
+export interface LandedCostProfile {
+  materialId: string
+  freightPercent: number
+  dutyPercent: number
+  insurancePercent: number
+}
+
+export interface CostedFormulaLine {
+  materialId: string
+  materialName: string
+  grams: number
+  effectivePercent: number
+  unitCost: number
+  lineCost: number
+  contributionPercent: number
+  sourcePath: string
+  costSource: string
+}
+
+export interface FormulaCostReport {
+  formulaId: string
+  formulaCode: string
+  method: 'MIXED_POLICY'
+  totalGrams: number
+  totalCost: number
+  costPerGram: number
+  costPerBottle: number
+  mostExpensiveMaterial: string
+  lines: CostedFormulaLine[]
+  trace: string[]
+  invariant: string
+}
+
+export interface BatchCostReport {
+  batchId: string
+  formulaId: string
+  targetGrams: number
+  materialCost: number
+  laborCost: number
+  overheadCost: number
+  totalCost: number
+  costPerGram: number
+  sourceFormulaCost: FormulaCostReport
+  invariant: string
+}
+
+export interface SkuMarginReport {
+  skuId: string
+  skuName: string
+  materialId: string
+  packSizeGrams: number
+  price: number
+  currency: string
+  unitCost: number
+  packCost: number
+  margin: number
+  marginPercent: number
+  recommendedPrice: number
+  trace: string[]
+}
+
+export interface ValuationLine {
+  materialId: string
+  materialName: string
+  currentGrams: number
+  availableGrams: number
+  reservedGrams: number
+  unitCost: number
+  value: number
+  method: CostMethod
+  locationBreakdown: {
+    location: string
+    grams: number
+    value: number
+  }[]
+}
+
+export interface InventoryValuationReport {
+  asOf: string
+  totalValue: number
+  reservedValue: number
+  availableValue: number
+  lines: ValuationLine[]
+  invariant: string
+}
+
+export interface CogsLine {
+  ref: string
+  movementId: string
+  type: InventoryMovement['type']
+  materialId: string
+  materialName: string
+  quantityGrams: number
+  unitCost: number
+  cogs: number
+}
+
+export interface CostingOverview {
+  valuation: InventoryValuationReport
+  formula: FormulaCostReport
+  skuMargins: SkuMarginReport[]
+  cogs: CogsLine[]
+  methodPolicies: CostMethodPolicy[]
+  landedCosts: LandedCostProfile[]
+  invariant: string
+}
+
+export interface AnalyticsBurnRateRow {
+  materialId: string
+  materialName: string
+  usageGrams: number
+  dailyBurnGrams: number
+  eventCount: number
+  sourceMovementIds: string[]
+}
+
+export interface LowStockForecastRow {
+  materialId: string
+  materialName: string
+  availableGrams: number
+  dailyBurnGrams: number
+  daysToStockout: number
+  suggestedOrderGrams: number
+  source: 'MOVEMENT_LEDGER'
+}
+
+export interface ExpiryRiskRow {
+  lotId: string
+  lotNumber: string
+  materialId: string
+  materialName: string
+  expiryDate: string
+  daysUntilExpiry: number
+  gramsAtRisk: number
+  riskScore: number
+  status: 'LOW' | 'MEDIUM' | 'HIGH'
+}
+
+export interface CostRankingRow {
+  materialId: string
+  materialName: string
+  usageGrams: number
+  unitCost: number
+  extendedCost: number
+  rank: number
+}
+
+export interface InventoryAnalyticsRow {
+  materialId: string
+  materialName: string
+  family: string
+  currentGrams: number
+  availableGrams: number
+  inventoryValue: number
+  turnoverRatio: number
+  deadStock: boolean
+  agingDays: number
+}
+
+export interface RoleDashboardWidget {
+  id: string
+  role: 'Perfumer' | 'Inventory' | 'Finance' | 'Owner'
+  title: string
+  value: string
+  drilldown: string
+}
+
+export interface ScheduledReportRecord {
+  id: string
+  name: string
+  cadence: 'DAILY' | 'WEEKLY' | 'MONTHLY'
+  audience: string
+  format: 'PDF' | 'XLSX'
+  status: 'ACTIVE' | 'PAUSED'
+  lastRunAt?: string
+}
+
+export interface AnalyticsDashboardReport {
+  burnRate: AnalyticsBurnRateRow[]
+  lowStockForecast: LowStockForecastRow[]
+  expiryRisk: ExpiryRiskRow[]
+  costRanking: CostRankingRow[]
+  inventoryAnalytics: InventoryAnalyticsRow[]
+  roleWidgets: RoleDashboardWidget[]
+  scheduledReports: ScheduledReportRecord[]
+  invariant: string
+}
+
 export interface CommercialSkuRecord {
   id: string
   materialId: string
@@ -738,8 +935,8 @@ export const phases: Phase[] = [
   { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
   { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'active', securityLayer: 'L4', coverage: 74 },
   { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'active', securityLayer: 'L5', coverage: 76 },
-  { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'testing', securityLayer: 'L4/L5', coverage: 58 },
-  { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'testing', securityLayer: 'L4', coverage: 56 },
+  { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
+  { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'active', securityLayer: 'L4', coverage: 77 },
   { id: 15, name: 'SaaS Readiness', domain: 'saas', goal: 'Billing, SSO, SCIM, API keys, audit export', gate: 'Enterprise controls present', status: 'testing', securityLayer: 'L6/L7/L8', coverage: 66 },
 ]
 
@@ -965,36 +1162,36 @@ export const domains: DomainModule[] = [
     phase: '13',
     name: 'Costing & Finance',
     shortName: 'Costing',
-    responsibility: 'Material, formula, batch, SKU cost, valuation, margin',
-    status: 'testing',
-    health: 58,
-    risk: 'Formula cost roll-up live from resolved leaves',
+    responsibility: 'Material, formula, batch, SKU cost, valuation, COGS, margin',
+    status: 'active',
+    health: 78,
+    risk: 'Finance is read-model only; costing traces every source without posting accounting entries',
     owner: 'Finance',
-    entities: ['FormulaCost', 'BatchCost', 'SKUCost', 'Valuation'],
-    features: ['Cost per gram', 'Cost per bottle', 'Valuation', 'Margin view'],
-    invariants: ['INV-012 costing reconciles', 'Resolve before compute'],
-    apis: ['/api/v1/costing/formulas/:id', '/api/v1/costing/valuation'],
+    entities: ['CostSnapshot', 'FormulaCost', 'BatchCost', 'SKUCost', 'Valuation', 'COGS'],
+    features: ['Cost methods', 'Landed cost', 'Formula cost breakdown', 'Batch cost', 'SKU margin', 'COGS ledger', 'Valuation report'],
+    invariants: ['INV-012 costing reconciles', 'Resolve before compute', 'Finance read model does not mutate inventory'],
+    apis: ['/api/v1/costing/overview', '/api/v1/costing/formulas/:id', '/api/v1/costing/batches/:id', '/api/v1/costing/skus/:id', '/api/v1/costing/valuation'],
     permissions: ['costing.view', 'finance.viewMargin'],
-    screens: ['Formula cost', 'Inventory valuation', 'SKU margin'],
-    activity: 'FRM-0421 cost recalculated from lot snapshots',
+    screens: ['Formula cost', 'Cost method policy', 'Inventory valuation', 'SKU margin', 'COGS trace'],
+    activity: 'FRM-0421 cost recalculated from lot snapshots with landed-cost and overhead policy trace',
   },
   {
     key: 'analytics',
     phase: '14',
     name: 'Analytics & Intelligence',
     shortName: 'Analytics',
-    responsibility: 'Burn rate, low-stock forecast, expiry risk, compare',
-    status: 'testing',
-    health: 56,
-    risk: 'Read-only widgets, no mutation entry points',
+    responsibility: 'Burn rate, low-stock forecast, expiry risk, cost ranking, role dashboards',
+    status: 'active',
+    health: 77,
+    risk: 'Read-only widgets expose insights and scheduled reports without mutation entry points',
     owner: 'Insights',
-    entities: ['ReadModel', 'Aggregate', 'Forecast'],
-    features: ['Burn rate', 'Cost ranking', 'Expiry risk', 'Forecast PO suggestion'],
+    entities: ['ReadModel', 'Aggregate', 'Forecast', 'DashboardWidget', 'ScheduledReport'],
+    features: ['Burn rate', 'Cost ranking', 'Expiry risk', 'Forecast PO suggestion', 'Inventory analytics', 'Role dashboards', 'Report delivery'],
     invariants: ['Dashboard read-only', 'Analytics reconciles movement ledger'],
-    apis: ['/api/v1/analytics/burn-rate', '/api/v1/analytics/expiry-risk'],
+    apis: ['/api/v1/analytics/dashboard', '/api/v1/analytics/burn-rate', '/api/v1/analytics/low-stock-forecast', '/api/v1/analytics/expiry-risk', '/api/v1/analytics/cost-ranking', '/api/v1/analytics/reports'],
     permissions: ['analytics.view'],
-    screens: ['Analytics dashboard', 'Compare panel'],
-    activity: 'Expiry risk flags L-BER-032 within 34 days',
+    screens: ['Analytics dashboard', 'Inventory analytics', 'Scheduled reports', 'Compare panel'],
+    activity: 'Expiry risk, burn-rate and cost-ranking widgets reconcile from the movement ledger',
   },
   {
     key: 'saas',
@@ -2007,6 +2204,20 @@ export const priceHistory: PriceHistoryRecord[] = [
   },
 ]
 
+export const costMethodPolicies: CostMethodPolicy[] = [
+  { materialId: 'mat-iso', method: 'WEIGHTED_AVERAGE', overheadPercent: 6 },
+  { materialId: 'mat-bergamot', method: 'FIFO', overheadPercent: 8 },
+  { materialId: 'mat-hedione', method: 'FIFO', overheadPercent: 5 },
+  { materialId: 'mat-ambroxan', method: 'STANDARD', standardCost: 0.33, overheadPercent: 9 },
+  { materialId: 'mat-vanillin', method: 'LIFO', overheadPercent: 4 },
+]
+
+export const landedCostProfiles: LandedCostProfile[] = [
+  { materialId: 'mat-bergamot', freightPercent: 6, dutyPercent: 4, insurancePercent: 1 },
+  { materialId: 'mat-ambroxan', freightPercent: 3, dutyPercent: 2, insurancePercent: 1 },
+  { materialId: 'mat-muscenone', freightPercent: 4, dutyPercent: 3, insurancePercent: 1 },
+]
+
 export const commercialSkus: CommercialSkuRecord[] = [
   {
     id: 'SKU-ISO-050',
@@ -2165,6 +2376,27 @@ export const salesOrders: SalesOrderRecord[] = [
 export const shipments: ShipmentRecord[] = []
 
 export const orderDocuments: OrderDocumentRecord[] = []
+
+export const scheduledReports: ScheduledReportRecord[] = [
+  {
+    id: 'RPT-FIN-WEEKLY',
+    name: 'Finance margin and valuation pack',
+    cadence: 'WEEKLY',
+    audience: 'finance@noxel.is',
+    format: 'XLSX',
+    status: 'ACTIVE',
+    lastRunAt: '2026-07-01T08:00:00.000Z',
+  },
+  {
+    id: 'RPT-INVENTORY-DAILY',
+    name: 'Inventory risk digest',
+    cadence: 'DAILY',
+    audience: 'inventory@noxel.is',
+    format: 'PDF',
+    status: 'ACTIVE',
+    lastRunAt: '2026-07-03T07:00:00.000Z',
+  },
+]
 
 export const billingPlan: BillingPlanRecord = {
   id: 'PLAN-GROWTH',
@@ -2557,6 +2789,511 @@ export function formulaTotals(leaves: ResolvedLeaf[]) {
   const costPerGram = totalGrams > 0 ? totalCost / totalGrams : 0
   const costPerBottle = costPerGram * 50
   return { totalCost, totalGrams, costPerGram, costPerBottle }
+}
+
+function costPolicyForMaterial(materialId: string, policies: CostMethodPolicy[] = costMethodPolicies) {
+  return policies.find((policy) => policy.materialId === materialId) ?? {
+    materialId,
+    method: 'WEIGHTED_AVERAGE' as const,
+    overheadPercent: 0,
+  }
+}
+
+function landedCostForMaterial(materialId: string, profiles: LandedCostProfile[] = landedCostProfiles) {
+  return profiles.find((profile) => profile.materialId === materialId) ?? {
+    materialId,
+    freightPercent: 0,
+    dutyPercent: 0,
+    insurancePercent: 0,
+  }
+}
+
+function daysBetween(start: string, end: string) {
+  const dayMs = 24 * 60 * 60 * 1000
+  return Math.max(0, Math.ceil((new Date(`${end.slice(0, 10)}T00:00:00Z`).getTime() - new Date(`${start.slice(0, 10)}T00:00:00Z`).getTime()) / dayMs))
+}
+
+export function materialUnitCost(
+  material: Material,
+  lots: InventoryLot[] = initialLots,
+  history: PriceHistoryRecord[] = priceHistory,
+  policies: CostMethodPolicy[] = costMethodPolicies,
+  landedProfiles: LandedCostProfile[] = landedCostProfiles,
+) {
+  const policy = costPolicyForMaterial(material.id, policies)
+  const landed = landedCostForMaterial(material.id, landedProfiles)
+  const landedMultiplier = 1 + (landed.freightPercent + landed.dutyPercent + landed.insurancePercent) / 100
+  const materialLots = lots.filter((lot) => lot.materialId === material.id && lot.quantityGrams > 0)
+  const latestHistory = history
+    .filter((record) => record.materialId === material.id)
+    .sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))[0]
+  let baseCost = latestHistory?.unitCost ?? material.costPerGram
+  let source = latestHistory ? `${latestHistory.source}:${latestHistory.id}` : `MATERIAL:${material.id}`
+
+  if (policy.method === 'STANDARD') {
+    baseCost = policy.standardCost ?? material.costPerGram
+    source = `STANDARD:${policy.materialId}`
+  } else if (materialLots.length > 0) {
+    if (policy.method === 'FIFO' || policy.method === 'LIFO') {
+      const sortedLots = [...materialLots].sort((a, b) =>
+        policy.method === 'FIFO'
+          ? a.receivedDate.localeCompare(b.receivedDate)
+          : b.receivedDate.localeCompare(a.receivedDate),
+      )
+      baseCost = sortedLots[0]?.unitCost ?? baseCost
+      source = `${policy.method}:${sortedLots[0]?.lotNumber ?? material.id}`
+    } else {
+      const quantity = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)
+      const weighted = materialLots.reduce((sum, lot) => sum + lot.quantityGrams * lot.unitCost, 0)
+      baseCost = quantity > 0 ? weighted / quantity : baseCost
+      source = `WEIGHTED_AVERAGE:${materialLots.length} lots`
+    }
+  }
+
+  const unitCost = Number((baseCost * landedMultiplier * (1 + policy.overheadPercent / 100)).toFixed(4))
+  return { unitCost, method: policy.method, source, policy, landed }
+}
+
+export function formulaCostReport(
+  formulaId: string,
+  formulaCatalog: Formula[] = formulas,
+  materialCatalog: Material[] = materials,
+  lots: InventoryLot[] = initialLots,
+  history: PriceHistoryRecord[] = priceHistory,
+  policies: CostMethodPolicy[] = costMethodPolicies,
+  landedProfiles: LandedCostProfile[] = landedCostProfiles,
+): FormulaCostReport {
+  const formula = formulaCatalog.find((item) => item.id === formulaId)
+  const leaves = resolveFormulaWithCatalog(formulaId, formulaCatalog, materialCatalog)
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  const linesWithoutContribution = leaves.map((leaf) => {
+    const material = materialById.get(leaf.materialId)
+    const unit = material
+      ? materialUnitCost(material, lots, history, policies, landedProfiles)
+      : { unitCost: 0, source: 'MISSING_MATERIAL', method: 'WEIGHTED_AVERAGE' as CostMethod }
+    return {
+      materialId: leaf.materialId,
+      materialName: leaf.materialName,
+      grams: leaf.grams,
+      effectivePercent: leaf.effectivePercent,
+      unitCost: unit.unitCost,
+      lineCost: Number((leaf.grams * unit.unitCost).toFixed(4)),
+      contributionPercent: 0,
+      sourcePath: leaf.sourcePath,
+      costSource: unit.source,
+    }
+  })
+  const totalCost = linesWithoutContribution.reduce((sum, line) => sum + line.lineCost, 0)
+  const totalGrams = linesWithoutContribution.reduce((sum, line) => sum + line.grams, 0)
+  const lines = linesWithoutContribution
+    .map((line) => ({
+      ...line,
+      contributionPercent: totalCost > 0 ? Number(((line.lineCost / totalCost) * 100).toFixed(1)) : 0,
+    }))
+    .sort((a, b) => b.lineCost - a.lineCost)
+  const costPerGram = totalGrams > 0 ? totalCost / totalGrams : 0
+
+  return {
+    formulaId,
+    formulaCode: formula?.code ?? formulaId,
+    method: 'MIXED_POLICY',
+    totalGrams,
+    totalCost: Number(totalCost.toFixed(4)),
+    costPerGram: Number(costPerGram.toFixed(4)),
+    costPerBottle: Number((costPerGram * 50).toFixed(4)),
+    mostExpensiveMaterial: lines[0]?.materialName ?? 'n/a',
+    lines,
+    trace: lines.map((line) => `${line.materialName}: ${line.costSource}`),
+    invariant: 'formula costing resolves leaves before applying material cost policy and landed cost',
+  }
+}
+
+export function batchCostReport(
+  batchId: string,
+  batchCatalog: ProductionBatchRecord[] = productionBatches,
+  formulaCatalog: Formula[] = formulas,
+  materialCatalog: Material[] = materials,
+  lots: InventoryLot[] = initialLots,
+  history: PriceHistoryRecord[] = priceHistory,
+): BatchCostReport {
+  const batch = batchCatalog.find((item) => item.id === batchId)
+  const sourceFormulaCost = formulaCostReport(batch?.formulaId ?? formulaCatalog[0]?.id ?? '', formulaCatalog, materialCatalog, lots, history)
+  const formula = formulaCatalog.find((item) => item.id === sourceFormulaCost.formulaId)
+  const targetGrams = batch?.targetGrams ?? formula?.targetGrams ?? sourceFormulaCost.totalGrams
+  const scale = formula && formula.targetGrams > 0 ? targetGrams / formula.targetGrams : 1
+  const materialCost = sourceFormulaCost.totalCost * scale
+  const laborCost = targetGrams * 0.018
+  const overheadCost = materialCost * 0.12
+  const totalCost = materialCost + laborCost + overheadCost
+  return {
+    batchId,
+    formulaId: sourceFormulaCost.formulaId,
+    targetGrams,
+    materialCost: Number(materialCost.toFixed(2)),
+    laborCost: Number(laborCost.toFixed(2)),
+    overheadCost: Number(overheadCost.toFixed(2)),
+    totalCost: Number(totalCost.toFixed(2)),
+    costPerGram: targetGrams > 0 ? Number((totalCost / targetGrams).toFixed(4)) : 0,
+    sourceFormulaCost,
+    invariant: 'batch cost scales resolved formula cost and adds labor plus overhead without mutating production',
+  }
+}
+
+export function inventoryValuationReport(
+  lots: InventoryLot[] = initialLots,
+  materialCatalog: Material[] = materials,
+  history: PriceHistoryRecord[] = priceHistory,
+  asOf = inventoryAsOfDate,
+): InventoryValuationReport {
+  const lines = stockSummary(lots, materialCatalog).map((summary) => {
+    const cost = materialUnitCost(summary.material, lots, history)
+    const materialLots = lots.filter((lot) => lot.materialId === summary.material.id)
+    const byLocation = Array.from(
+      materialLots.reduce((map, lot) => {
+        const current = map.get(lot.location) ?? { grams: 0, value: 0 }
+        current.grams += lot.quantityGrams
+        current.value += lot.quantityGrams * cost.unitCost
+        map.set(lot.location, current)
+        return map
+      }, new Map<string, { grams: number; value: number }>()),
+    ).map(([location, record]) => ({
+      location,
+      grams: Number(record.grams.toFixed(2)),
+      value: Number(record.value.toFixed(2)),
+    }))
+    return {
+      materialId: summary.material.id,
+      materialName: summary.material.name,
+      currentGrams: summary.current,
+      availableGrams: summary.available,
+      reservedGrams: summary.reserved,
+      unitCost: cost.unitCost,
+      value: Number((summary.current * cost.unitCost).toFixed(2)),
+      method: cost.method,
+      locationBreakdown: byLocation,
+    }
+  })
+  const totalValue = lines.reduce((sum, line) => sum + line.value, 0)
+  const reservedValue = lines.reduce((sum, line) => sum + line.reservedGrams * line.unitCost, 0)
+  const availableValue = lines.reduce((sum, line) => sum + line.availableGrams * line.unitCost, 0)
+  return {
+    asOf,
+    totalValue: Number(totalValue.toFixed(2)),
+    reservedValue: Number(reservedValue.toFixed(2)),
+    availableValue: Number(availableValue.toFixed(2)),
+    lines: lines.sort((a, b) => b.value - a.value),
+    invariant: 'valuation reconciles current grams from inventory lots with material cost policy',
+  }
+}
+
+export function skuMarginReports(
+  skus: CommercialSkuRecord[] = commercialSkus,
+  materialCatalog: Material[] = materials,
+  lots: InventoryLot[] = initialLots,
+  history: PriceHistoryRecord[] = priceHistory,
+): SkuMarginReport[] {
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  return skus.map((sku) => {
+    const material = materialById.get(sku.materialId)
+    const unit = material ? materialUnitCost(material, lots, history) : { unitCost: 0, source: 'MISSING_MATERIAL' }
+    const packCost = Number((unit.unitCost * sku.packSizeGrams).toFixed(2))
+    const margin = Number((sku.price - packCost).toFixed(2))
+    return {
+      skuId: sku.id,
+      skuName: sku.name,
+      materialId: sku.materialId,
+      packSizeGrams: sku.packSizeGrams,
+      price: sku.price,
+      currency: sku.currency,
+      unitCost: unit.unitCost,
+      packCost,
+      margin,
+      marginPercent: sku.price > 0 ? Number(((margin / sku.price) * 100).toFixed(1)) : 0,
+      recommendedPrice: Number((packCost / 0.42).toFixed(2)),
+      trace: [unit.source, `pack ${sku.packSizeGrams}g`, `price ${sku.price} ${sku.currency}`],
+    }
+  })
+}
+
+export function cogsLines(
+  movements: InventoryMovement[] = initialMovements,
+  lots: InventoryLot[] = initialLots,
+  materialCatalog: Material[] = materials,
+  history: PriceHistoryRecord[] = priceHistory,
+): CogsLine[] {
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  const lotById = new Map(lots.map((lot) => [lot.id, lot]))
+  return movements
+    .filter((movement) => movement.direction === 'OUT')
+    .map((movement) => {
+      const material = materialById.get(movement.materialId)
+      const lot = lotById.get(movement.lotId)
+      const unitCost = lot?.unitCost ?? (material ? materialUnitCost(material, lots, history).unitCost : 0)
+      return {
+        ref: movement.ref,
+        movementId: movement.id,
+        type: movement.type,
+        materialId: movement.materialId,
+        materialName: material?.name ?? movement.materialId,
+        quantityGrams: movement.quantityGrams,
+        unitCost,
+        cogs: Number((movement.quantityGrams * unitCost).toFixed(2)),
+      }
+    })
+}
+
+export function costingOverview(
+  formulaId = 'frm-0421',
+  lots: InventoryLot[] = initialLots,
+  movements: InventoryMovement[] = initialMovements,
+  formulaCatalog: Formula[] = formulas,
+  materialCatalog: Material[] = materials,
+  skus: CommercialSkuRecord[] = commercialSkus,
+  history: PriceHistoryRecord[] = priceHistory,
+): CostingOverview {
+  return {
+    valuation: inventoryValuationReport(lots, materialCatalog, history),
+    formula: formulaCostReport(formulaId, formulaCatalog, materialCatalog, lots, history),
+    skuMargins: skuMarginReports(skus, materialCatalog, lots, history),
+    cogs: cogsLines(movements, lots, materialCatalog, history),
+    methodPolicies: costMethodPolicies,
+    landedCosts: landedCostProfiles,
+    invariant: 'costing read model reconciles formula resolve, inventory lots, COGS movements, and SKU prices',
+  }
+}
+
+function movementDay(movement: InventoryMovement) {
+  return movement.at.slice(0, 10)
+}
+
+export function analyticsBurnRate(
+  movements: InventoryMovement[] = initialMovements,
+  materialCatalog: Material[] = materials,
+  windowDays = 30,
+): AnalyticsBurnRateRow[] {
+  const asOf = new Date(`${inventoryAsOfDate}T00:00:00.000Z`).getTime()
+  const cutoff = asOf - windowDays * 24 * 60 * 60 * 1000
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  const outboundMovements = movements.filter((movement) => {
+    const movedAt = new Date(`${movementDay(movement)}T00:00:00.000Z`).getTime()
+    return movement.direction === 'OUT' && movement.type !== 'REVERSAL' && movedAt >= cutoff && movedAt <= asOf
+  })
+
+  return Array.from(
+    outboundMovements.reduce((map, movement) => {
+      const existing = map.get(movement.materialId) ?? {
+        materialId: movement.materialId,
+        usageGrams: 0,
+        firstDay: movementDay(movement),
+        eventCount: 0,
+        sourceMovementIds: [] as string[],
+      }
+      existing.usageGrams += movement.quantityGrams
+      existing.firstDay = existing.firstDay < movementDay(movement) ? existing.firstDay : movementDay(movement)
+      existing.eventCount += 1
+      existing.sourceMovementIds.push(movement.id)
+      map.set(movement.materialId, existing)
+      return map
+    }, new Map<string, { materialId: string; usageGrams: number; firstDay: string; eventCount: number; sourceMovementIds: string[] }>())
+      .values(),
+  )
+    .map((row) => {
+      const observedDays = Math.max(1, Math.min(windowDays, daysBetween(row.firstDay, inventoryAsOfDate) + 1))
+      return {
+        materialId: row.materialId,
+        materialName: materialById.get(row.materialId)?.name ?? row.materialId,
+        usageGrams: Number(row.usageGrams.toFixed(3)),
+        dailyBurnGrams: Number((row.usageGrams / observedDays).toFixed(3)),
+        eventCount: row.eventCount,
+        sourceMovementIds: row.sourceMovementIds,
+      }
+    })
+    .sort((a, b) => b.usageGrams - a.usageGrams)
+}
+
+export function lowStockForecast(
+  lots: InventoryLot[] = initialLots,
+  movements: InventoryMovement[] = initialMovements,
+  materialCatalog: Material[] = materials,
+): LowStockForecastRow[] {
+  const burnByMaterial = new Map(analyticsBurnRate(movements, materialCatalog).map((row) => [row.materialId, row]))
+  return stockSummary(lots, materialCatalog)
+    .map((summary) => {
+      const burn = burnByMaterial.get(summary.material.id)
+      const dailyBurnGrams = burn?.dailyBurnGrams ?? 0
+      const daysToStockout = dailyBurnGrams > 0 ? Math.ceil(summary.available / dailyBurnGrams) : 999
+      const targetCoverGrams = dailyBurnGrams * 30
+      return {
+        materialId: summary.material.id,
+        materialName: summary.material.name,
+        availableGrams: Number(summary.available.toFixed(2)),
+        dailyBurnGrams,
+        daysToStockout,
+        suggestedOrderGrams: Number(Math.max(0, targetCoverGrams - summary.available).toFixed(2)),
+        source: 'MOVEMENT_LEDGER' as const,
+      }
+    })
+    .sort((a, b) => a.daysToStockout - b.daysToStockout || a.availableGrams - b.availableGrams)
+}
+
+export function expiryRisk(
+  lots: InventoryLot[] = initialLots,
+  materialCatalog: Material[] = materials,
+  asOf = inventoryAsOfDate,
+): ExpiryRiskRow[] {
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  return lots
+    .filter((lot) => lot.quantityGrams > 0)
+    .map((lot) => {
+      const daysUntilExpiry = daysBetween(asOf, lot.expiryDate)
+      const agePressure = Math.max(0, 90 - daysUntilExpiry)
+      const stockPressure = Math.min(30, lot.quantityGrams / 10)
+      const status: ExpiryRiskRow['status'] =
+        lot.qualityStatus === 'EXPIRED' || daysUntilExpiry <= 30 ? 'HIGH' : daysUntilExpiry <= 90 ? 'MEDIUM' : 'LOW'
+      return {
+        lotId: lot.id,
+        lotNumber: lot.lotNumber,
+        materialId: lot.materialId,
+        materialName: materialById.get(lot.materialId)?.name ?? lot.materialId,
+        expiryDate: lot.expiryDate,
+        daysUntilExpiry,
+        gramsAtRisk: Number(lot.quantityGrams.toFixed(2)),
+        riskScore: Number(Math.min(100, agePressure + stockPressure).toFixed(1)),
+        status,
+      }
+    })
+    .sort((a, b) => b.riskScore - a.riskScore || a.daysUntilExpiry - b.daysUntilExpiry)
+}
+
+export function costRanking(
+  movements: InventoryMovement[] = initialMovements,
+  lots: InventoryLot[] = initialLots,
+  materialCatalog: Material[] = materials,
+  history: PriceHistoryRecord[] = priceHistory,
+): CostRankingRow[] {
+  return analyticsBurnRate(movements, materialCatalog)
+    .map((burn) => {
+      const material = materialCatalog.find((item) => item.id === burn.materialId)
+      const unit = material ? materialUnitCost(material, lots, history) : { unitCost: 0 }
+      return {
+        materialId: burn.materialId,
+        materialName: burn.materialName,
+        usageGrams: burn.usageGrams,
+        unitCost: unit.unitCost,
+        extendedCost: Number((burn.usageGrams * unit.unitCost).toFixed(2)),
+        rank: 0,
+      }
+    })
+    .sort((a, b) => b.extendedCost - a.extendedCost)
+    .map((row, index) => ({ ...row, rank: index + 1 }))
+}
+
+export function inventoryAnalytics(
+  lots: InventoryLot[] = initialLots,
+  movements: InventoryMovement[] = initialMovements,
+  materialCatalog: Material[] = materials,
+  history: PriceHistoryRecord[] = priceHistory,
+): InventoryAnalyticsRow[] {
+  const burnByMaterial = new Map(analyticsBurnRate(movements, materialCatalog).map((row) => [row.materialId, row]))
+  return stockSummary(lots, materialCatalog)
+    .map((summary) => {
+      const cost = materialUnitCost(summary.material, lots, history)
+      const materialLots = lots.filter((lot) => lot.materialId === summary.material.id)
+      const weightedAge = materialLots.reduce((sum, lot) => {
+        const age = daysBetween(lot.receivedDate, inventoryAsOfDate)
+        return sum + age * Math.max(0, lot.quantityGrams)
+      }, 0)
+      const totalGrams = materialLots.reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams), 0)
+      const monthlyUsage = (burnByMaterial.get(summary.material.id)?.dailyBurnGrams ?? 0) * 30
+      return {
+        materialId: summary.material.id,
+        materialName: summary.material.name,
+        family: summary.material.family,
+        currentGrams: Number(summary.current.toFixed(2)),
+        availableGrams: Number(summary.available.toFixed(2)),
+        inventoryValue: Number((summary.current * cost.unitCost).toFixed(2)),
+        turnoverRatio: summary.current > 0 ? Number((monthlyUsage / summary.current).toFixed(2)) : 0,
+        deadStock: summary.current > 0 && monthlyUsage === 0,
+        agingDays: totalGrams > 0 ? Math.round(weightedAge / totalGrams) : 0,
+      }
+    })
+    .sort((a, b) => b.inventoryValue - a.inventoryValue)
+}
+
+function roleDashboardWidgets(
+  costing: CostingOverview,
+  burnRate: AnalyticsBurnRateRow[],
+  forecast: LowStockForecastRow[],
+  risk: ExpiryRiskRow[],
+  ranking: CostRankingRow[],
+): RoleDashboardWidget[] {
+  const highestRisk = risk[0]
+  const urgentForecast = forecast.find((row) => row.daysToStockout < 90) ?? forecast[0]
+  const topBurn = burnRate[0]
+  const topCost = ranking[0]
+  return [
+    {
+      id: 'W-PERF-BURN',
+      role: 'Perfumer',
+      title: 'Top lab usage',
+      value: topBurn ? `${formatGrams(topBurn.usageGrams)} ${topBurn.materialName}` : 'No usage',
+      drilldown: 'burn-rate',
+    },
+    {
+      id: 'W-INV-FORECAST',
+      role: 'Inventory',
+      title: 'Earliest stockout',
+      value: urgentForecast ? `${urgentForecast.materialName} ${urgentForecast.daysToStockout}d` : 'No forecast',
+      drilldown: 'low-stock-forecast',
+    },
+    {
+      id: 'W-FIN-VALUATION',
+      role: 'Finance',
+      title: 'Inventory valuation',
+      value: formatCurrency(costing.valuation.totalValue),
+      drilldown: 'valuation',
+    },
+    {
+      id: 'W-FIN-COST',
+      role: 'Finance',
+      title: 'Top cost driver',
+      value: topCost ? `${topCost.materialName} ${formatCurrency(topCost.extendedCost)}` : 'No COGS',
+      drilldown: 'cost-ranking',
+    },
+    {
+      id: 'W-OWNER-RISK',
+      role: 'Owner',
+      title: 'Expiry risk',
+      value: highestRisk ? `${highestRisk.lotNumber} ${highestRisk.status}` : 'No risk',
+      drilldown: 'expiry-risk',
+    },
+  ]
+}
+
+export function analyticsDashboardReport(
+  lots: InventoryLot[] = initialLots,
+  movements: InventoryMovement[] = initialMovements,
+  materialCatalog: Material[] = materials,
+  history: PriceHistoryRecord[] = priceHistory,
+  reports: ScheduledReportRecord[] = scheduledReports,
+): AnalyticsDashboardReport {
+  const burnRate = analyticsBurnRate(movements, materialCatalog)
+  const forecast = lowStockForecast(lots, movements, materialCatalog)
+  const risk = expiryRisk(lots, materialCatalog)
+  const ranking = costRanking(movements, lots, materialCatalog, history)
+  const inventoryRows = inventoryAnalytics(lots, movements, materialCatalog, history)
+  const costing = costingOverview('frm-0421', lots, movements, formulas, materialCatalog, commercialSkus, history)
+
+  return {
+    burnRate,
+    lowStockForecast: forecast,
+    expiryRisk: risk,
+    costRanking: ranking,
+    inventoryAnalytics: inventoryRows,
+    roleWidgets: roleDashboardWidgets(costing, burnRate, forecast, risk, ranking),
+    scheduledReports: reports,
+    invariant: 'analytics dashboard is read-only and reconciles stock, movement ledger, costing, and report definitions',
+  }
 }
 
 export function evaporationCurve(leaves: ResolvedLeaf[]) {

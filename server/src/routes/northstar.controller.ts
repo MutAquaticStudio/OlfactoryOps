@@ -814,6 +814,71 @@ export class NorthStarController {
     return this.northStar.orderDocuments()
   }
 
+  @Get('costing/overview')
+  costingOverview() {
+    return this.northStar.costingOverview()
+  }
+
+  @Get('costing/formulas/:id')
+  costingFormula(@Param('id') id: string) {
+    return this.northStar.costingFormula(id)
+  }
+
+  @Get('costing/batches/:id')
+  costingBatch(@Param('id') id: string) {
+    return this.northStar.costingBatch(id)
+  }
+
+  @Get('costing/skus/:id')
+  costingSku(@Param('id') id: string) {
+    return this.northStar.costingSku(id)
+  }
+
+  @Get('costing/valuation')
+  costingValuation() {
+    return this.northStar.costingValuation()
+  }
+
+  @Get('analytics/dashboard')
+  analyticsDashboard() {
+    return this.northStar.analyticsDashboard()
+  }
+
+  @Get('analytics/burn-rate')
+  analyticsBurnRate() {
+    return this.northStar.analyticsBurnRate()
+  }
+
+  @Get('analytics/low-stock-forecast')
+  analyticsLowStockForecast() {
+    return this.northStar.analyticsLowStockForecast()
+  }
+
+  @Get('analytics/expiry-risk')
+  analyticsExpiryRisk() {
+    return this.northStar.analyticsExpiryRisk()
+  }
+
+  @Get('analytics/cost-ranking')
+  analyticsCostRanking() {
+    return this.northStar.analyticsCostRanking()
+  }
+
+  @Get('analytics/inventory')
+  analyticsInventory() {
+    return this.northStar.analyticsInventory()
+  }
+
+  @Get('analytics/reports')
+  analyticsReports() {
+    return this.northStar.analyticsReports()
+  }
+
+  @Post('analytics/reports/:id/run')
+  runAnalyticsReport(@Param('id') id: string) {
+    return this.northStar.runAnalyticsReport(id)
+  }
+
   @Get('billing/plan')
   billingPlan() {
     return this.northStar.billingPlan()

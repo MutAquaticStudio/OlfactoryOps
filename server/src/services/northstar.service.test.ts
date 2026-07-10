@@ -905,6 +905,54 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
+  it('builds costing read models from formula, batch, SKU margin, valuation, and COGS', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const overview = service.costingOverview().data
+    const formula = service.costingFormula('frm-0421').data
+    const batch = service.costingBatch('BTH-2025-118').data
+    const sku = service.costingSku('SKU-ISO-050').data
+    const valuation = service.costingValuation().data
+
+    expect(overview.formula.lines.length).toBeGreaterThan(0)
+    expect(overview.methodPolicies.length).toBeGreaterThan(0)
+    expect(overview.landedCosts.length).toBeGreaterThan(0)
+    expect(overview.cogs.length).toBeGreaterThan(0)
+    expect(formula.costPerGram).toBeGreaterThan(0)
+    expect(formula.mostExpensiveMaterial).not.toBe('n/a')
+    expect(batch.sourceFormulaCost.formulaId).toBe('frm-0421')
+    expect(batch.totalCost).toBeGreaterThan(batch.materialCost)
+    expect(sku.marginPercent).toBeGreaterThan(0)
+    expect(valuation.totalValue).toBeGreaterThan(0)
+    expect(valuation.invariant).toContain('reconciles')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('serves analytics read models and report runs without mutating the movement ledger', () => {
+    const service = new NorthStarService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const dashboard = service.analyticsDashboard().data
+    const burnRate = service.analyticsBurnRate().data
+    const forecast = service.analyticsLowStockForecast().data
+    const expiry = service.analyticsExpiryRisk().data
+    const ranking = service.analyticsCostRanking().data
+    const inventory = service.analyticsInventory().data
+    const reports = service.analyticsReports().data
+    const run = service.runAnalyticsReport('RPT-FIN-WEEKLY').data
+
+    expect(dashboard.invariant).toContain('read-only')
+    expect(dashboard.roleWidgets.length).toBeGreaterThan(0)
+    expect(burnRate.length).toBeGreaterThan(0)
+    expect(forecast.length).toBeGreaterThan(0)
+    expect(expiry.length).toBeGreaterThan(0)
+    expect(ranking[0]?.rank).toBe(1)
+    expect(inventory.length).toBeGreaterThan(0)
+    expect(reports.some((report) => report.id === 'RPT-FIN-WEEKLY')).toBe(true)
+    expect(run.report.lastRunAt).toBeDefined()
+    expect(run.audit.action).toBe('analytics.report.run')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
   it('queues enterprise audit export as a tenant-scoped control', () => {
     const service = new NorthStarService()
     const exportJob = service.auditExport().data

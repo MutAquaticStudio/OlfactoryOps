@@ -845,7 +845,11 @@ kbd {
 .usage-preview,
 .weighing-table,
 .weighing-evidence,
-.material-list {
+.material-list,
+.cost-policy-list,
+.cost-breakdown-list,
+.analytics-list,
+.analytics-widget-grid {
   display: grid;
   gap: 9px;
 }
@@ -870,7 +874,14 @@ kbd {
 .allocation-row,
 .weighing-row,
 .weighing-evidence-row,
-.material-row {
+.material-row,
+.cost-policy-row,
+.cost-breakdown-row,
+.margin-row,
+.valuation-row,
+.analytics-row,
+.report-row,
+.analytics-widget {
   display: grid;
   align-items: center;
   gap: 10px;
@@ -997,6 +1008,100 @@ kbd {
 
 .formula-card {
   grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.cost-policy-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.cost-breakdown-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.margin-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.valuation-row,
+.analytics-row {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.report-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.analytics-widget-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analytics-widget {
+  align-content: start;
+  min-height: 126px;
+}
+
+.cost-policy-row > div:first-child,
+.cost-breakdown-row > div:first-child,
+.margin-row > div:first-child,
+.valuation-row > div:first-child,
+.analytics-row > div:first-child,
+.report-row > div:first-child,
+.analytics-widget {
+  min-width: 0;
+}
+
+.cost-policy-row span,
+.cost-breakdown-row span,
+.margin-row span,
+.valuation-row span,
+.analytics-row span,
+.report-row span,
+.report-row small,
+.analytics-widget span,
+.analytics-widget small {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.cost-policy-row strong,
+.cost-breakdown-row strong,
+.margin-row strong,
+.valuation-row strong,
+.analytics-row strong,
+.report-row strong,
+.analytics-widget strong {
+  overflow-wrap: anywhere;
+}
+
+.analytics-widget p {
+  margin: 0;
+  color: var(--text);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.trace-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.trace-strip span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.75rem;
+}
+
+.compact-chart {
+  height: 180px;
+  margin-top: 12px;
 }
 
 .formula-line.is-editable {
@@ -1191,8 +1296,20 @@ kbd {
 }
 
 .workspace-grid.two-one,
+.costing-grid,
+.analytics-grid,
 .generic-grid {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
+}
+
+.costing-grid,
+.analytics-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.costing-grid > .panel:first-child,
+.analytics-grid > .panel:first-child {
+  grid-column: 1 / -1;
 }
 
 .auth-shell {
@@ -2217,6 +2334,8 @@ input[type='range'] {
   .procurement-grid,
   .commerce-grid,
   .orders-grid,
+  .costing-grid,
+  .analytics-grid,
   .identity-grid,
   .customization-grid,
   .saas-grid,
@@ -2243,6 +2362,7 @@ input[type='range'] {
   .commerce-evidence-grid,
   .order-entry-grid,
   .order-evidence-grid,
+  .analytics-widget-grid,
   .inspector-grid {
     grid-template-columns: 1fr;
   }
@@ -2290,7 +2410,14 @@ input[type='range'] {
   .sample-row,
   .order-list .order-row,
   .shipment-row,
-  .order-document-row {
+  .order-document-row,
+  .cost-policy-row,
+  .cost-breakdown-row,
+  .margin-row,
+  .valuation-row,
+  .analytics-row,
+  .report-row,
+  .analytics-widget {
     grid-template-columns: 1fr;
     align-items: start;
   }

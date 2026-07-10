@@ -48,12 +48,15 @@ import {
 } from 'recharts'
 import {
   auditEvents,
+  analyticsDashboardReport as buildAnalyticsDashboardReport,
   authSessions,
   apiKeys,
+  batchCostReport as buildBatchCostReport,
   billingPlan,
   brandingConfig,
   brands,
   commercialSkus,
+  costingOverview as buildCostingOverview,
   customFields,
   customers,
   documents,
@@ -102,10 +105,13 @@ import {
   type AuditEvent,
   type AuthSession,
   type ApiKeyRecord,
+  type AnalyticsDashboardReport,
+  type BatchCostReport,
   type BrandRecord,
   type BrandingConfig,
   type BillingPlanRecord,
   type CommercialSkuRecord,
+  type CostingOverview,
   type CustomerRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
@@ -142,6 +148,7 @@ import {
   type RolePolicy,
   type SampleRequestRecord,
   type SalesOrderRecord,
+  type ScheduledReportRecord,
   type ShipmentRecord,
   type OrderDocumentRecord,
   type SsoConfigRecord,
@@ -169,6 +176,12 @@ type ModalKind =
 
 type ApiEnvelope<T> = {
   data: T
+}
+
+type AnalyticsReportRunResponse = {
+  report: ScheduledReportRecord
+  audit: AuditEvent
+  invariant: string
 }
 
 type StockRows = ReturnType<typeof stockSummary>
@@ -2131,8 +2144,8 @@ function DomainWorkspace({
       )}
       {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} />}
       {domain.key === 'orders' && <OrdersWorkspace stock={stock} />}
-      {domain.key === 'costing' && <CostingWorkspace totals={totals} stock={stock} />}
-      {domain.key === 'analytics' && <AnalyticsWorkspace curve={curve} stock={stock} />}
+      {domain.key === 'costing' && <CostingWorkspace />}
+      {domain.key === 'analytics' && <AnalyticsWorkspace />}
       {domain.key === 'saas' && <SaasWorkspace session={session} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
       {domain.key === 'customization' && <CustomizationWorkspace />}
@@ -6160,63 +6173,349 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   )
 }
 
-function CostingWorkspace({
-  totals,
-  stock,
-}: {
-  totals: ReturnType<typeof formulaTotals>
-  stock: ReturnType<typeof stockSummary>
-}) {
-  const valuation = stock.reduce((sum, item) => sum + item.current * item.material.costPerGram, 0)
+function CostingWorkspace() {
+  const fallbackCosting = useMemo<CostingOverview>(() => buildCostingOverview(), [])
+  const fallbackBatch = useMemo<BatchCostReport>(() => buildBatchCostReport('BTH-2025-118'), [])
+  const [costingData, setCostingData] = useState<CostingOverview>(fallbackCosting)
+  const [batchCost, setBatchCost] = useState<BatchCostReport>(fallbackBatch)
+  const [statusMessage, setStatusMessage] = useState('Loading costing read models')
+  const cogsTotal = costingData.cogs.reduce((sum, line) => sum + line.cogs, 0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadCosting() {
+      try {
+        const [overview, batch] = await Promise.all([
+          requestApi<CostingOverview>('/costing/overview', { signal: controller.signal }),
+          requestApi<BatchCostReport>('/costing/batches/BTH-2025-118', { signal: controller.signal }),
+        ])
+        setCostingData(overview)
+        setBatchCost(batch)
+        setStatusMessage('Costing synced from live API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setStatusMessage('Using local costing seed until API is reachable')
+        }
+      }
+    }
+
+    void loadCosting()
+
+    return () => controller.abort()
+  }, [])
+
   return (
-    <div className="workspace-grid two-one">
-      <Panel title="Cost Trace" icon={BadgeDollarSign}>
-        <div className="metric-grid">
-          <Metric label="FRM-0421 / 100g" value={formatCurrency(totals.totalCost)} />
-          <Metric label="Cost / gram" value={formatCurrency(totals.costPerGram)} />
-          <Metric label="50g bottle" value={formatCurrency(totals.costPerBottle)} />
-          <Metric label="Inventory valuation" value={formatCurrency(valuation)} />
+    <div className="workspace-grid costing-grid">
+      <Panel title="Cost Trace" icon={BadgeDollarSign} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+        <div className="metric-grid costing-metrics">
+          <Metric label={`${costingData.formula.formulaCode} total`} value={formatCurrency(costingData.formula.totalCost)} />
+          <Metric label="Formula cost / gram" value={formatCurrency(costingData.formula.costPerGram)} />
+          <Metric label="50g bottle" value={formatCurrency(costingData.formula.costPerBottle)} />
+          <Metric label="Inventory valuation" value={formatCurrency(costingData.valuation.totalValue)} />
+          <Metric label="COGS captured" value={formatCurrency(cogsTotal)} />
+          <Metric label="Most expensive" value={costingData.formula.mostExpensiveMaterial} />
+        </div>
+        <div className="trace-strip">
+          {costingData.formula.trace.slice(0, 4).map((trace) => (
+            <span key={trace}>{trace}</span>
+          ))}
         </div>
       </Panel>
+
+      <Panel title="Batch Cost" icon={FlaskConical}>
+        <div className="metric-grid">
+          <Metric label={batchCost.batchId} value={formatCurrency(batchCost.totalCost)} />
+          <Metric label="Cost / gram" value={formatCurrency(batchCost.costPerGram)} />
+          <Metric label="Material" value={formatCurrency(batchCost.materialCost)} />
+          <Metric label="Labor + overhead" value={formatCurrency(batchCost.laborCost + batchCost.overheadCost)} />
+        </div>
+        <p className="caveat">{batchCost.invariant}</p>
+      </Panel>
+
+      <Panel title="Cost Methods & Landed Cost" icon={Database}>
+        <div className="cost-policy-list">
+          {costingData.methodPolicies.map((policy) => {
+            const landed = costingData.landedCosts.find((profile) => profile.materialId === policy.materialId)
+            return (
+              <div className="cost-policy-row" key={policy.materialId}>
+                <div>
+                  <strong>{policy.materialId}</strong>
+                  <span>{policy.method}</span>
+                </div>
+                <DataTag label="Overhead" value={`${policy.overheadPercent}%`} tone="amber" />
+                <DataTag
+                  label="Landed"
+                  value={landed ? `${landed.freightPercent + landed.dutyPercent + landed.insurancePercent}%` : '0%'}
+                  tone={landed ? 'blue' : undefined}
+                />
+              </div>
+            )
+          })}
+        </div>
+      </Panel>
+
+      <Panel title="Formula Cost Breakdown" icon={Layers3}>
+        <div className="cost-breakdown-list">
+          {costingData.formula.lines.map((line) => (
+            <div className="cost-breakdown-row" key={`${line.materialId}-${line.sourcePath}`}>
+              <div>
+                <strong>{line.materialName}</strong>
+                <span>{line.sourcePath}</span>
+              </div>
+              <span>{formatGrams(line.grams)}</span>
+              <span>{line.contributionPercent.toFixed(1)}%</span>
+              <strong>{formatCurrency(line.lineCost)}</strong>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="SKU Margin & Price List" icon={ShoppingCart}>
+        <div className="cost-breakdown-list">
+          {costingData.skuMargins.map((sku) => (
+            <div className="margin-row" key={sku.skuId}>
+              <div>
+                <strong>{sku.skuName}</strong>
+                <span>{sku.trace.join(' / ')}</span>
+              </div>
+              <DataTag label="Pack cost" value={formatCurrency(sku.packCost)} />
+              <DataTag label="Margin" value={`${sku.marginPercent.toFixed(1)}%`} tone={sku.marginPercent > 40 ? 'green' : 'amber'} />
+              <DataTag label="Target price" value={formatCurrency(sku.recommendedPrice)} tone="blue" />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Valuation Report" icon={Boxes}>
+        <div className="cost-breakdown-list compact-list">
+          {costingData.valuation.lines.slice(0, 6).map((line) => (
+            <div className="valuation-row" key={line.materialId}>
+              <div>
+                <strong>{line.materialName}</strong>
+                <span>{line.method} / {line.locationBreakdown.map((item) => item.location).join(', ')}</span>
+              </div>
+              <span>{formatGrams(line.currentGrams)}</span>
+              <span>{formatGrams(line.availableGrams)} available</span>
+              <strong>{formatCurrency(line.value)}</strong>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="COGS Trace" icon={ClipboardCheck}>
+        <div className="cost-breakdown-list compact-list">
+          {costingData.cogs.map((line) => (
+            <div className="valuation-row" key={line.movementId}>
+              <div>
+                <strong>{line.materialName}</strong>
+                <span>{line.type} / {line.ref}</span>
+              </div>
+              <span>{formatGrams(line.quantityGrams)}</span>
+              <span>{formatCurrency(line.unitCost)}/g</span>
+              <strong>{formatCurrency(line.cogs)}</strong>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
       <Panel title="Finance Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
-          <li>Margin hidden from perfumer role by feature flag</li>
-          <li>Formula ratio requires formulas.viewSensitive</li>
-          <li>Cost snapshots are point-in-time sources</li>
+          <li>Costing is a read model over formula resolve, lot cost, landed cost, and movement COGS.</li>
+          <li>Margin is guarded by costing.view and finance.viewMargin role permissions.</li>
+          <li>Formula, valuation, and COGS traces are source-backed snapshots, not accounting journal posts.</li>
         </ul>
       </Panel>
     </div>
   )
 }
 
-function AnalyticsWorkspace({
-  curve,
-  stock,
-}: {
-  curve: ReturnType<typeof evaporationCurve>
-  stock: ReturnType<typeof stockSummary>
-}) {
-  const lowStock = stock
-    .filter((item) => item.available < 50)
-    .sort((a, b) => a.available - b.available)
-    .slice(0, 4)
+function AnalyticsWorkspace() {
+  const fallbackAnalytics = useMemo<AnalyticsDashboardReport>(() => buildAnalyticsDashboardReport(), [])
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(fallbackAnalytics)
+  const [statusMessage, setStatusMessage] = useState('Loading analytics dashboard')
+  const [runningReportId, setRunningReportId] = useState<string | null>(null)
+  const burnChart = analyticsData.burnRate.map((row) => ({
+    name: row.materialName.split(' ')[0],
+    usage: row.usageGrams,
+    daily: row.dailyBurnGrams,
+  }))
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadAnalytics() {
+      try {
+        const dashboard = await requestApi<AnalyticsDashboardReport>('/analytics/dashboard', {
+          signal: controller.signal,
+        })
+        setAnalyticsData(dashboard)
+        setStatusMessage('Analytics synced from live API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setStatusMessage('Using local analytics seed until API is reachable')
+        }
+      }
+    }
+
+    void loadAnalytics()
+
+    return () => controller.abort()
+  }, [])
+
+  async function runReport(reportId: string) {
+    setRunningReportId(reportId)
+    try {
+      const result = await requestApi<AnalyticsReportRunResponse>(
+        `/analytics/reports/${encodeURIComponent(reportId)}/run`,
+        { method: 'POST' },
+      )
+      setAnalyticsData((current) => ({
+        ...current,
+        scheduledReports: current.scheduledReports.map((report) =>
+          report.id === result.report.id ? result.report : report,
+        ),
+      }))
+      setStatusMessage(`Ran ${result.report.name}`)
+    } catch {
+      setStatusMessage('Report run failed; keeping existing schedule')
+    } finally {
+      setRunningReportId(null)
+    }
+  }
+
   return (
-    <div className="workspace-grid two-one">
-      <Panel title="Read-only Intelligence" icon={BarChart3}>
-        <EvaporationChart curve={curve} />
+    <div className="workspace-grid analytics-grid">
+      <Panel title="Read-only Intelligence" icon={BarChart3} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+        <div className="metric-grid analytics-metrics">
+          <Metric label="Burn rows" value={String(analyticsData.burnRate.length)} />
+          <Metric label="Forecast rows" value={String(analyticsData.lowStockForecast.length)} />
+          <Metric label="Expiry risks" value={String(analyticsData.expiryRisk.length)} />
+          <Metric label="Reports" value={String(analyticsData.scheduledReports.length)} />
+        </div>
+        <div className="chart-wrap compact-chart">
+          <ResponsiveContainer width="100%" height={180}>
+            <AreaChart data={burnChart}>
+              <defs>
+                <linearGradient id="burnUsage" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#4d9bff" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#4d9bff" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+              <XAxis dataKey="name" stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
+              <YAxis stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
+              <Tooltip contentStyle={{ background: '#111827', border: '1px solid rgba(255,255,255,0.12)' }} />
+              <Area type="monotone" dataKey="usage" stroke="#4d9bff" fill="url(#burnUsage)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="caveat">{analyticsData.invariant}</p>
       </Panel>
-      <Panel title="Low Stock Forecast" icon={Gauge}>
-        <div className="material-list">
-          {lowStock.map((item) => (
-            <div className="material-row static" key={item.material.id}>
-              <div>
-                <strong>{item.material.name}</strong>
-                <span>Suggested PO if burn rate holds</span>
-              </div>
-              <div className="mono-value">{formatGrams(item.available)}</div>
+
+      <Panel title="Role Dashboards" icon={UsersRound}>
+        <div className="analytics-widget-grid">
+          {analyticsData.roleWidgets.map((widget) => (
+            <div className="analytics-widget" key={widget.id}>
+              <span>{widget.role}</span>
+              <strong>{widget.title}</strong>
+              <p>{widget.value}</p>
+              <small>{widget.drilldown}</small>
             </div>
           ))}
         </div>
+      </Panel>
+
+      <Panel title="Low Stock Forecast" icon={Gauge}>
+        <div className="analytics-list">
+          {analyticsData.lowStockForecast.slice(0, 6).map((row) => (
+            <div className="analytics-row" key={row.materialId}>
+              <div>
+                <strong>{row.materialName}</strong>
+                <span>{row.source} / {formatGrams(row.dailyBurnGrams)} daily burn</span>
+              </div>
+              <DataTag label="Available" value={formatGrams(row.availableGrams)} />
+              <DataTag label="Stockout" value={`${row.daysToStockout}d`} tone={row.daysToStockout < 90 ? 'amber' : 'green'} />
+              <DataTag label="Suggest" value={formatGrams(row.suggestedOrderGrams)} tone="blue" />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Expiry Risk" icon={Bell}>
+        <div className="analytics-list">
+          {analyticsData.expiryRisk.slice(0, 6).map((row) => (
+            <div className="analytics-row" key={row.lotId}>
+              <div>
+                <strong>{row.lotNumber}</strong>
+                <span>{row.materialName} / expires {row.expiryDate}</span>
+              </div>
+              <DataTag label="Risk" value={row.status} tone={row.status === 'HIGH' ? 'amber' : 'green'} />
+              <DataTag label="Days" value={String(row.daysUntilExpiry)} />
+              <DataTag label="At risk" value={formatGrams(row.gramsAtRisk)} tone="blue" />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Cost Ranking" icon={BadgeDollarSign}>
+        <div className="analytics-list compact-list">
+          {analyticsData.costRanking.map((row) => (
+            <div className="analytics-row" key={row.materialId}>
+              <div>
+                <strong>#{row.rank} {row.materialName}</strong>
+                <span>{formatGrams(row.usageGrams)} usage / {formatCurrency(row.unitCost)}/g</span>
+              </div>
+              <strong>{formatCurrency(row.extendedCost)}</strong>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Inventory Analytics" icon={PackageSearch}>
+        <div className="analytics-list compact-list">
+          {analyticsData.inventoryAnalytics.slice(0, 6).map((row) => (
+            <div className="analytics-row" key={row.materialId}>
+              <div>
+                <strong>{row.materialName}</strong>
+                <span>{row.family} / aging {row.agingDays}d</span>
+              </div>
+              <DataTag label="Value" value={formatCurrency(row.inventoryValue)} />
+              <DataTag label="Turnover" value={row.turnoverRatio.toFixed(2)} tone={row.deadStock ? 'amber' : 'green'} />
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Scheduled Reports" icon={FileLock2}>
+        <div className="analytics-list">
+          {analyticsData.scheduledReports.map((report) => (
+            <div className="report-row" key={report.id}>
+              <div>
+                <strong>{report.name}</strong>
+                <span>{report.audience} / {report.cadence} / {report.format}</span>
+                <small>Last run: {report.lastRunAt ? new Date(report.lastRunAt).toLocaleString() : 'never'}</small>
+              </div>
+              <StatusBadge status={report.status === 'ACTIVE' ? 'active' : 'draft'} label={report.status} />
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void runReport(report.id)}
+                disabled={runningReportId === report.id}
+              >
+                {runningReportId === report.id ? 'Running' : 'Run'}
+              </button>
+            </div>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Analytics Guardrails" icon={ShieldCheck}>
+        <ul className="policy-list">
+          <li>Dashboard endpoints are GET/read-model first and reconcile movement ledger before displaying insights.</li>
+          <li>Scheduled report run updates report evidence and audit only; it does not mutate inventory, orders, or formulas.</li>
+          <li>Role widgets surface different drilldowns without bypassing analytics.view permission.</li>
+        </ul>
       </Panel>
     </div>
   )

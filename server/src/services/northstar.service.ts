@@ -2,12 +2,17 @@ import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityE
 import {
   auditEvents,
   apiKeys,
+  analyticsBurnRate,
+  analyticsDashboardReport,
   authSessions,
   billingPlan,
   brandingConfig,
   brands,
+  batchCostReport,
   canDownloadDocument,
   commercialSkus,
+  costRanking,
+  costingOverview,
   createDocumentShareLink,
   customFields,
   customers,
@@ -16,7 +21,9 @@ import {
   documentRequiredPermissions,
   documents,
   domains,
+  expiryRisk,
   featureFlags,
+  formulaCostReport,
   formatSequenceValue,
   formulaTotals,
   formulaVersions,
@@ -24,7 +31,10 @@ import {
   formatGrams,
   initialLots,
   initialMovements,
+  inventoryAnalytics,
+  inventoryValuationReport,
   isLotEligibleForInventory,
+  lowStockForecast,
   materials,
   memberships,
   moleculeComponents,
@@ -44,7 +54,9 @@ import {
   rolePolicies,
   sampleRequests,
   salesOrders,
+  scheduledReports,
   shipments,
+  skuMarginReports,
   skuAvailability,
   ssoConfig,
   stockTakeRecords,
@@ -94,6 +106,7 @@ import {
   type RolePolicy,
   type SampleRequestRecord,
   type SalesOrderRecord,
+  type ScheduledReportRecord,
   type ShipmentRecord,
   type OrderDocumentRecord,
   type StockTakeRecord,
@@ -305,6 +318,7 @@ export class NorthStarService {
   private salesOrderRecords: SalesOrderRecord[] = structuredClone(salesOrders)
   private shipmentRecords: ShipmentRecord[] = structuredClone(shipments)
   private orderDocumentRecords: OrderDocumentRecord[] = structuredClone(orderDocuments)
+  private scheduledReportRecords: ScheduledReportRecord[] = structuredClone(scheduledReports)
   private auditCounter = auditEvents.length
 
   phases() {
@@ -3353,6 +3367,120 @@ export class NorthStarService {
 
   orderDocuments() {
     return { data: this.orderDocumentRecords }
+  }
+
+  costingOverview() {
+    return {
+      data: costingOverview(
+        'frm-0421',
+        this.lots,
+        this.movements,
+        this.formulaRecords,
+        this.materialRecords,
+        this.commercialSkuRecords,
+        this.priceHistoryRecords,
+      ),
+    }
+  }
+
+  costingFormula(id: string) {
+    if (!this.formulaRecords.some((formula) => formula.id === id)) {
+      throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    return {
+      data: formulaCostReport(id, this.formulaRecords, this.materialRecords, this.lots, this.priceHistoryRecords),
+    }
+  }
+
+  costingBatch(id: string) {
+    if (!this.productionBatchRecords.some((batch) => batch.id === id)) {
+      throw new NotFoundException(`Production batch ${id} was not found`)
+    }
+    return {
+      data: batchCostReport(
+        id,
+        this.productionBatchRecords,
+        this.formulaRecords,
+        this.materialRecords,
+        this.lots,
+        this.priceHistoryRecords,
+      ),
+    }
+  }
+
+  costingSku(id: string) {
+    const report = skuMarginReports(
+      this.commercialSkuRecords,
+      this.materialRecords,
+      this.lots,
+      this.priceHistoryRecords,
+    ).find((item) => item.skuId === id)
+    if (!report) {
+      throw new NotFoundException(`SKU ${id} was not found`)
+    }
+    return { data: report }
+  }
+
+  costingValuation() {
+    return { data: inventoryValuationReport(this.lots, this.materialRecords, this.priceHistoryRecords) }
+  }
+
+  analyticsDashboard() {
+    return {
+      data: analyticsDashboardReport(
+        this.lots,
+        this.movements,
+        this.materialRecords,
+        this.priceHistoryRecords,
+        this.scheduledReportRecords,
+      ),
+    }
+  }
+
+  analyticsBurnRate() {
+    return { data: analyticsBurnRate(this.movements, this.materialRecords) }
+  }
+
+  analyticsLowStockForecast() {
+    return { data: lowStockForecast(this.lots, this.movements, this.materialRecords) }
+  }
+
+  analyticsExpiryRisk() {
+    return { data: expiryRisk(this.lots, this.materialRecords) }
+  }
+
+  analyticsCostRanking() {
+    return { data: costRanking(this.movements, this.lots, this.materialRecords, this.priceHistoryRecords) }
+  }
+
+  analyticsInventory() {
+    return { data: inventoryAnalytics(this.lots, this.movements, this.materialRecords, this.priceHistoryRecords) }
+  }
+
+  analyticsReports() {
+    return { data: this.scheduledReportRecords }
+  }
+
+  runAnalyticsReport(id: string) {
+    const report = this.scheduledReportRecords.find((item) => item.id === id)
+    if (!report) {
+      throw new NotFoundException(`Scheduled report ${id} was not found`)
+    }
+    const nextReport: ScheduledReportRecord = {
+      ...report,
+      lastRunAt: new Date().toISOString(),
+    }
+    this.scheduledReportRecords = this.scheduledReportRecords.map((item) =>
+      item.id === id ? nextReport : item,
+    )
+    const audit = this.recordAudit('analytics.report.run', id, 'api:insights', 'allowed')
+    return {
+      data: {
+        report: nextReport,
+        audit,
+        invariant: 'scheduled analytics report run updates report evidence only and does not mutate inventory or orders',
+      },
+    }
   }
 
   billingPlan() {
