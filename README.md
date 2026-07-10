@@ -23,8 +23,14 @@ npm run dev
 npm run dev:api
 npm run build
 npm run build:api
+npm run start:api
 npm run test
+npm run deploy:check
 ```
+
+## Deployment
+
+See `docs/deployment.md` for the Cloudflare Pages + Node API + Supabase deployment path.
 
 ## Notes
 
