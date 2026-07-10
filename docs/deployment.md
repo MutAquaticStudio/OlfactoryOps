@@ -1,20 +1,77 @@
-# OlfactoryOps Deployment
+# OlfactoryOps Cloudflare Deployment
 
-This repo is split into two deployable surfaces:
+OlfactoryOps now has a Cloudflare-native beta deployment path:
 
-- Frontend: Vite static app, suitable for Cloudflare Pages.
-- API: NestJS/Fastify Node server, suitable for Render, Fly.io, Railway, Koyeb, or another Node host.
+- Frontend: Cloudflare Pages.
+- API: Cloudflare Workers.
+- Persistent beta data: Cloudflare D1.
+- Future document binaries: Cloudflare R2.
 
-Supabase can provide the production Postgres database. The current North Star API still serves the app from the in-memory domain service, so `DATABASE_URL` is deployment-ready but not yet used for persistence until the Prisma-backed service phase is implemented.
+The Worker reuses the existing North Star domain service and stores a D1-backed state snapshot in `northstar_snapshots`. This is intentionally optimized for beta speed and low cost. A later hardening phase can normalize the D1 schema table-by-table.
 
-## Recommended Free/Low-Cost Setup
+## 1. Create D1
 
-Use these hostnames with your Cloudflare zone:
+Log in to Wrangler:
 
-- `app.yourdomain.com` for Cloudflare Pages.
-- `api.yourdomain.com` for the Node API host.
+```bash
+npx wrangler login
+```
 
-## Frontend: Cloudflare Pages
+Create the beta database:
+
+```bash
+npx wrangler d1 create olfactoryops-beta
+```
+
+Copy the returned `database_id` into `wrangler.toml`:
+
+```toml
+[[d1_databases]]
+binding = "DB"
+database_name = "olfactoryops-beta"
+database_id = "<your-cloudflare-d1-database-id>"
+```
+
+Apply migrations:
+
+```bash
+npm run d1:migrate:remote
+```
+
+For local Worker testing:
+
+```bash
+npm run d1:migrate:local
+```
+
+## 2. Deploy Worker API
+
+Update `CORS_ORIGINS` in `wrangler.toml` with the real Cloudflare Pages domain:
+
+```toml
+[vars]
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://app.yourdomain.com"
+```
+
+Deploy:
+
+```bash
+npm run deploy:worker
+```
+
+Smoke test:
+
+```bash
+curl https://<worker-host>/api/v1/health
+curl https://<worker-host>/api/v1/persistence/status
+```
+
+Optional custom API hostname:
+
+- Add a custom domain/route for the Worker in Cloudflare.
+- Use `https://api.yourdomain.com/api/v1` as the frontend API base.
+
+## 3. Deploy Frontend On Cloudflare Pages
 
 Create a Pages project connected to the GitHub repo.
 
@@ -27,58 +84,35 @@ Create a Pages project connected to the GitHub repo.
 VITE_API_BASE_URL=https://api.yourdomain.com/api/v1
 ```
 
+If you do not set a custom Worker hostname yet, use the `workers.dev` URL:
+
+```bash
+VITE_API_BASE_URL=https://<worker-host>/api/v1
+```
+
 The repo includes:
 
 - `public/_redirects` for SPA fallback.
 - `public/_headers` for baseline browser security headers.
 
-After the first successful Pages deploy, add `app.yourdomain.com` under the Pages project's custom domains.
+## 4. Pre-Deploy Checks
 
-## API: Node Host
-
-The repo includes `render.yaml` for Render Blueprint deployment. For any Node host, use:
-
-```bash
-npm ci && npm run build:api
-npm run start:api
-```
-
-Production environment variables:
-
-```bash
-NODE_VERSION=22
-HOST=0.0.0.0
-PORT=<provided by host>
-CORS_ORIGINS=https://app.yourdomain.com
-DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DATABASE?schema=public
-```
-
-Health check path:
-
-```bash
-/api/v1/health
-```
-
-Once the host gives you a service URL, add `api.yourdomain.com` in Cloudflare DNS as a CNAME to that service hostname. Keep HTTPS enabled.
-
-## Supabase
-
-Create a Supabase project and copy the Postgres connection string into `DATABASE_URL` on the API host. Keep the password only in the host's secret environment settings.
-
-Use the direct connection string for migrations from a trusted local machine or CI. Use the pooler connection string for serverless or connection-constrained environments.
-
-## Pre-Deploy Checks
-
-Run locally before deploying:
+Run before pushing or deploying:
 
 ```bash
 npm run deploy:check
 ```
 
-For a live smoke test after deployment:
+This validates:
 
-```bash
-curl https://api.yourdomain.com/api/v1/health
-```
+- Frontend TypeScript and Vite build.
+- Legacy Nest API build.
+- Worker typecheck and dry-run bundle.
+- Vitest domain tests.
+- Client bundle secret scan.
 
-Then open `https://app.yourdomain.com`, log in with the current demo login, and verify dashboard data loads from the deployed API.
+## Notes
+
+- D1 is SQLite-compatible, not Postgres. The current Worker persistence layer stores North Star state snapshots for fast beta launch.
+- Keep documents and generated PDFs out of D1. Store document files in R2 and keep only metadata/signed URL evidence in D1.
+- For high-volume production, normalize high-write modules first: inventory movements, lab usage, orders, audit logs, documents, and auth sessions.

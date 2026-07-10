@@ -10,7 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-api
+dist-worker
 dist-ssr
+.wrangler
 *.local
 .env
 

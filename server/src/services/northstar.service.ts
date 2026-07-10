@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
+import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '../shared/http-error.js'
 import {
   auditEvents,
   apiKeys,

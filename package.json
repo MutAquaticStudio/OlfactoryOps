@@ -8,12 +8,18 @@
     "dev:api": "tsx watch --tsconfig server/tsconfig.json server/src/main.ts",
     "build": "tsc -b && vite build",
     "build:api": "tsc -p server/tsconfig.json",
+    "typecheck:worker": "tsc -p tsconfig.worker.json",
+    "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
     "start:api": "node dist-api/server/src/main.js",
+    "dev:worker": "wrangler dev --local --port 8787",
+    "deploy:worker": "wrangler deploy",
+    "d1:migrate:local": "wrangler d1 migrations apply olfactoryops-beta --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply olfactoryops-beta --remote",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
     "security:client-bundle": "node scripts/check-client-bundle-secrets.mjs",
-    "deploy:check": "npm run build && npm run build:api && npm run test && npm run security:client-bundle",
+    "deploy:check": "npm run build && npm run build:api && npm run typecheck:worker && npm run build:worker && npm run test && npm run security:client-bundle",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev"
@@ -32,6 +38,7 @@
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260708.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
@@ -48,6 +55,7 @@
     "tsx": "^4.22.4",
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.110.0"
   }
 }

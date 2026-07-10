@@ -1,5 +1,5 @@
-import { ForbiddenException, UnprocessableEntityException } from '@nestjs/common'
 import { describe, expect, it } from 'vitest'
+import { ForbiddenException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
 
 describe('NorthStarService', () => {

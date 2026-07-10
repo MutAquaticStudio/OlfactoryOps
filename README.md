@@ -21,16 +21,21 @@ OlfactoryOps is a full North Star product scaffold for a fragrance R&D operating
 npm install
 npm run dev
 npm run dev:api
+npm run dev:worker
 npm run build
 npm run build:api
+npm run build:worker
 npm run start:api
+npm run deploy:worker
+npm run d1:migrate:local
+npm run d1:migrate:remote
 npm run test
 npm run deploy:check
 ```
 
 ## Deployment
 
-See `docs/deployment.md` for the Cloudflare Pages + Node API + Supabase deployment path.
+See `docs/deployment.md` for the Cloudflare Pages + Workers API + D1 deployment path.
 
 ## Notes
 
