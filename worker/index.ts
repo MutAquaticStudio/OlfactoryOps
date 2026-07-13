@@ -1,6 +1,6 @@
 import { NorthStarService } from '../server/src/services/northstar.service.js'
 import { TooManyRequestsException } from '../server/src/shared/http-error.js'
-import type { AuditEvent, AuthSession } from '../src/data/northStar.js'
+import type { AuditEvent, AuthSession, InventoryLot, InventoryMovement, LabUsageRecord } from '../src/data/northStar.js'
 
 type Env = {
   DB: D1Database
@@ -80,12 +80,15 @@ type SnapshotKey =
 type ServiceState = Record<SnapshotKey, unknown> & {
   sessions: AuthSession[]
   auditEvents: AuditEvent[]
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
+  usageHistory: LabUsageRecord[]
   auditCounter: number
 }
 
 const API_PREFIX = '/api/v1'
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
-const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>(['sessions', 'auditEvents', 'auditCounter'])
+const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>(['sessions', 'auditEvents', 'auditCounter', 'lots', 'movements', 'usageHistory'])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
   'moleculeRecords',
@@ -131,7 +134,7 @@ const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KE
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits'] } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -511,6 +514,9 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureRateLimitTable(db)
   await ensureAuthSessionTable(db)
   await ensureAuditEventTable(db)
+  await ensureInventoryLotTable(db)
+  await ensureInventoryMovementTable(db)
+  await ensureLabUsageRecordTable(db)
 }
 
 async function ensureSnapshotTable(db: D1Database) {
@@ -589,6 +595,85 @@ async function ensureAuditEventTable(db: D1Database) {
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)').run()
 }
 
+async function ensureInventoryLotTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS inventory_lots (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL,
+        lot_number TEXT NOT NULL,
+        quantity_grams REAL NOT NULL,
+        reserved_grams REAL NOT NULL,
+        received_date TEXT NOT NULL,
+        expiry_date TEXT NOT NULL,
+        quality_status TEXT NOT NULL,
+        location TEXT NOT NULL,
+        unit_cost REAL NOT NULL,
+        supplier_lot_ref TEXT,
+        currency TEXT,
+        retest_date TEXT,
+        opened_date TEXT,
+        shelf_life_after_opening_days INTEGER,
+        container TEXT,
+        packaging TEXT,
+        coa_document_id TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_lots_material_quality ON inventory_lots(material_id, quality_status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_lots_expiry ON inventory_lots(expiry_date)').run()
+}
+
+async function ensureInventoryMovementTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS inventory_movements (
+        id TEXT PRIMARY KEY,
+        at TEXT NOT NULL,
+        type TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        material_id TEXT NOT NULL,
+        lot_id TEXT NOT NULL,
+        quantity_grams REAL NOT NULL,
+        balance_after REAL NOT NULL,
+        ref TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_movements_lot_at ON inventory_movements(lot_id, at)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_movements_ref ON inventory_movements(ref)').run()
+}
+
+async function ensureLabUsageRecordTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS lab_usage_records (
+        id TEXT PRIMARY KEY,
+        formula_id TEXT NOT NULL,
+        formula_code TEXT NOT NULL,
+        grams REAL NOT NULL,
+        batch_grams REAL NOT NULL,
+        status TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        project_code TEXT,
+        sample_code TEXT,
+        qc_link TEXT,
+        allocations_json TEXT NOT NULL,
+        weighing_session_json TEXT,
+        created_at TEXT NOT NULL,
+        reversed_at TEXT,
+        reversal_movements_json TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_lab_usage_records_formula_created ON lab_usage_records(formula_id, created_at)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_lab_usage_records_status ON lab_usage_records(status)').run()
+}
+
 async function hydrateSnapshots(db: D1Database, service: NorthStarService) {
   const snapshotRows = await db
     .prepare('SELECT key, value FROM northstar_snapshots')
@@ -656,6 +741,58 @@ type AuditEventRow = {
   outcome: string
 }
 
+type InventoryLotRow = {
+  id: string
+  material_id: string
+  lot_number: string
+  quantity_grams: number
+  reserved_grams: number
+  received_date: string
+  expiry_date: string
+  quality_status: string
+  location: string
+  unit_cost: number
+  supplier_lot_ref: string | null
+  currency: string | null
+  retest_date: string | null
+  opened_date: string | null
+  shelf_life_after_opening_days: number | null
+  container: string | null
+  packaging: string | null
+  coa_document_id: string | null
+}
+
+type InventoryMovementRow = {
+  id: string
+  at: string
+  type: string
+  direction: string
+  material_id: string
+  lot_id: string
+  quantity_grams: number
+  balance_after: number
+  ref: string
+  actor: string
+}
+
+type LabUsageRecordRow = {
+  id: string
+  formula_id: string
+  formula_code: string
+  grams: number
+  batch_grams: number
+  status: string
+  purpose: string
+  project_code: string | null
+  sample_code: string | null
+  qc_link: string | null
+  allocations_json: string
+  weighing_session_json: string | null
+  created_at: string
+  reversed_at: string | null
+  reversal_movements_json: string | null
+}
+
 async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState) {
   const sessionRows = await db
     .prepare(
@@ -688,11 +825,16 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   }
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+  await hydrateInventoryState(db, serviceState)
+  await hydrateLabUsageState(db, serviceState)
 }
 
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistInventoryLots(db, serviceState.lots, updatedAt)
+  await persistInventoryMovements(db, serviceState.movements, updatedAt)
+  await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
@@ -700,7 +842,8 @@ async function persistAuthSessions(db: D1Database, sessions: AuthSession[], upda
   if (!Array.isArray(sessions) || sessions.length === 0) {
     return
   }
-  await db.batch(
+  await runStatementBatches(
+    db,
     sessions.map((session) =>
       db
         .prepare(
@@ -761,7 +904,8 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
   if (!Array.isArray(events) || events.length === 0) {
     return
   }
-  await db.batch(
+  await runStatementBatches(
+    db,
     events.map((event) =>
       db
         .prepare(
@@ -777,6 +921,212 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
              updated_at = excluded.updated_at`,
         )
         .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
+    ),
+  )
+}
+
+async function hydrateInventoryState(db: D1Database, serviceState: ServiceState) {
+  const lotRows = await db
+    .prepare(
+      `SELECT id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
+        quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
+        shelf_life_after_opening_days, container, packaging, coa_document_id
+       FROM inventory_lots
+       ORDER BY received_date DESC, id DESC`,
+    )
+    .all<InventoryLotRow>()
+  const lots = (lotRows.results ?? []).map(inventoryLotFromRow)
+  if (lots.length > 0) {
+    serviceState.lots = lots
+  } else if (Array.isArray(serviceState.lots) && serviceState.lots.length > 0) {
+    await persistInventoryLots(db, serviceState.lots, new Date().toISOString())
+  }
+
+  const movementRows = await db
+    .prepare(
+      `SELECT id, at, type, direction, material_id, lot_id, quantity_grams, balance_after, ref, actor
+       FROM inventory_movements
+       ORDER BY at DESC, id DESC`,
+    )
+    .all<InventoryMovementRow>()
+  const movements = (movementRows.results ?? []).map(inventoryMovementFromRow)
+  if (movements.length > 0) {
+    serviceState.movements = movements
+  } else if (Array.isArray(serviceState.movements) && serviceState.movements.length > 0) {
+    await persistInventoryMovements(db, serviceState.movements, new Date().toISOString())
+  }
+}
+
+async function hydrateLabUsageState(db: D1Database, serviceState: ServiceState) {
+  const rows = await db
+    .prepare(
+      `SELECT id, formula_id, formula_code, grams, batch_grams, status, purpose, project_code,
+        sample_code, qc_link, allocations_json, weighing_session_json, created_at, reversed_at,
+        reversal_movements_json
+       FROM lab_usage_records
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<LabUsageRecordRow>()
+  const usages = (rows.results ?? []).map(labUsageFromRow)
+  if (usages.length > 0) {
+    serviceState.usageHistory = usages
+  } else if (Array.isArray(serviceState.usageHistory) && serviceState.usageHistory.length > 0) {
+    await persistLabUsageRecords(db, serviceState.usageHistory, new Date().toISOString())
+  }
+}
+
+async function persistInventoryLots(db: D1Database, lots: InventoryLot[], updatedAt: string) {
+  if (!Array.isArray(lots) || lots.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    lots.map((lot) =>
+      db
+        .prepare(
+          `INSERT INTO inventory_lots (
+            id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
+            quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
+            shelf_life_after_opening_days, container, packaging, coa_document_id, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+          ON CONFLICT(id) DO UPDATE SET
+            material_id = excluded.material_id,
+            lot_number = excluded.lot_number,
+            quantity_grams = excluded.quantity_grams,
+            reserved_grams = excluded.reserved_grams,
+            received_date = excluded.received_date,
+            expiry_date = excluded.expiry_date,
+            quality_status = excluded.quality_status,
+            location = excluded.location,
+            unit_cost = excluded.unit_cost,
+            supplier_lot_ref = excluded.supplier_lot_ref,
+            currency = excluded.currency,
+            retest_date = excluded.retest_date,
+            opened_date = excluded.opened_date,
+            shelf_life_after_opening_days = excluded.shelf_life_after_opening_days,
+            container = excluded.container,
+            packaging = excluded.packaging,
+            coa_document_id = excluded.coa_document_id,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          lot.id,
+          lot.materialId,
+          lot.lotNumber,
+          lot.quantityGrams,
+          lot.reservedGrams,
+          lot.receivedDate,
+          lot.expiryDate,
+          lot.qualityStatus,
+          lot.location,
+          lot.unitCost,
+          lot.supplierLotRef ?? null,
+          lot.currency ?? null,
+          lot.retestDate ?? null,
+          lot.openedDate ?? null,
+          lot.shelfLifeAfterOpeningDays ?? null,
+          lot.container ?? null,
+          lot.packaging ?? null,
+          lot.coaDocumentId ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistInventoryMovements(db: D1Database, movements: InventoryMovement[], updatedAt: string) {
+  if (!Array.isArray(movements) || movements.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    movements.map((movement) =>
+      db
+        .prepare(
+          `INSERT INTO inventory_movements (
+            id, at, type, direction, material_id, lot_id, quantity_grams, balance_after, ref, actor, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          ON CONFLICT(id) DO UPDATE SET
+            at = excluded.at,
+            type = excluded.type,
+            direction = excluded.direction,
+            material_id = excluded.material_id,
+            lot_id = excluded.lot_id,
+            quantity_grams = excluded.quantity_grams,
+            balance_after = excluded.balance_after,
+            ref = excluded.ref,
+            actor = excluded.actor,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          movement.id,
+          movement.at,
+          movement.type,
+          movement.direction,
+          movement.materialId,
+          movement.lotId,
+          movement.quantityGrams,
+          movement.balanceAfter,
+          movement.ref,
+          movement.actor,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistLabUsageRecords(db: D1Database, usages: LabUsageRecord[], updatedAt: string) {
+  if (!Array.isArray(usages) || usages.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    usages.map((usage) =>
+      db
+        .prepare(
+          `INSERT INTO lab_usage_records (
+            id, formula_id, formula_code, grams, batch_grams, status, purpose, project_code,
+            sample_code, qc_link, allocations_json, weighing_session_json, created_at, reversed_at,
+            reversal_movements_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          ON CONFLICT(id) DO UPDATE SET
+            formula_id = excluded.formula_id,
+            formula_code = excluded.formula_code,
+            grams = excluded.grams,
+            batch_grams = excluded.batch_grams,
+            status = excluded.status,
+            purpose = excluded.purpose,
+            project_code = excluded.project_code,
+            sample_code = excluded.sample_code,
+            qc_link = excluded.qc_link,
+            allocations_json = excluded.allocations_json,
+            weighing_session_json = excluded.weighing_session_json,
+            created_at = excluded.created_at,
+            reversed_at = excluded.reversed_at,
+            reversal_movements_json = excluded.reversal_movements_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          usage.id,
+          usage.formulaId,
+          usage.formulaCode,
+          usage.grams,
+          usage.batchGrams,
+          usage.status,
+          usage.purpose,
+          usage.projectCode ?? null,
+          usage.sampleCode ?? null,
+          usage.qcLink ?? null,
+          JSON.stringify(usage.allocations),
+          usage.weighingSession ? JSON.stringify(usage.weighingSession) : null,
+          usage.createdAt,
+          usage.reversedAt ?? null,
+          usage.reversalMovements ? JSON.stringify(usage.reversalMovements) : null,
+          updatedAt,
+        ),
     ),
   )
 }
@@ -817,6 +1167,71 @@ function auditEventFromRow(row: AuditEventRow): AuditEvent {
   }
 }
 
+function inventoryLotFromRow(row: InventoryLotRow): InventoryLot {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    lotNumber: row.lot_number,
+    quantityGrams: Number(row.quantity_grams),
+    reservedGrams: Number(row.reserved_grams),
+    receivedDate: row.received_date,
+    expiryDate: row.expiry_date,
+    qualityStatus: readLotQualityStatus(row.quality_status),
+    location: row.location,
+    unitCost: Number(row.unit_cost),
+    supplierLotRef: row.supplier_lot_ref ?? undefined,
+    currency: row.currency ?? undefined,
+    retestDate: row.retest_date ?? undefined,
+    openedDate: row.opened_date ?? undefined,
+    shelfLifeAfterOpeningDays: row.shelf_life_after_opening_days ?? undefined,
+    container: row.container ?? undefined,
+    packaging: row.packaging ?? undefined,
+    coaDocumentId: row.coa_document_id ?? undefined,
+  }
+}
+
+function inventoryMovementFromRow(row: InventoryMovementRow): InventoryMovement {
+  return {
+    id: row.id,
+    at: row.at,
+    type: readInventoryMovementType(row.type),
+    direction: readInventoryMovementDirection(row.direction),
+    materialId: row.material_id,
+    lotId: row.lot_id,
+    quantityGrams: Number(row.quantity_grams),
+    balanceAfter: Number(row.balance_after),
+    ref: row.ref,
+    actor: row.actor,
+  }
+}
+
+function labUsageFromRow(row: LabUsageRecordRow): LabUsageRecord {
+  const reversalMovements = row.reversal_movements_json
+    ? parseJson<InventoryMovement[]>(row.reversal_movements_json, []).map((movement) => ({
+        ...movement,
+        type: readInventoryMovementType(movement.type),
+        direction: readInventoryMovementDirection(movement.direction),
+      }))
+    : undefined
+  return {
+    id: row.id,
+    formulaId: row.formula_id,
+    formulaCode: row.formula_code,
+    grams: Number(row.grams),
+    batchGrams: Number(row.batch_grams),
+    status: row.status === 'REVERSED' ? 'REVERSED' : 'COMMITTED',
+    purpose: readLabUsagePurpose(row.purpose),
+    projectCode: row.project_code ?? undefined,
+    sampleCode: row.sample_code ?? undefined,
+    qcLink: row.qc_link ?? undefined,
+    allocations: parseJson<LabUsageRecord['allocations']>(row.allocations_json, []),
+    weighingSession: row.weighing_session_json ? parseJson<LabUsageRecord['weighingSession']>(row.weighing_session_json, undefined) : undefined,
+    createdAt: row.created_at,
+    reversedAt: row.reversed_at ?? undefined,
+    reversalMovements,
+  }
+}
+
 function readSessionStatus(value: string): AuthSession['status'] {
   if (value === 'ACTIVE' || value === 'REVOKED' || value === 'EXPIRED') {
     return value
@@ -829,6 +1244,56 @@ function readAuditOutcome(value: string): AuditEvent['outcome'] {
     return value
   }
   return 'review'
+}
+
+function readLotQualityStatus(value: string): InventoryLot['qualityStatus'] {
+  if (value === 'APPROVED' || value === 'QUARANTINE' || value === 'ON_HOLD' || value === 'REJECTED' || value === 'EXPIRED') {
+    return value
+  }
+  return 'QUARANTINE'
+}
+
+function readInventoryMovementType(value: string): InventoryMovement['type'] {
+  if (
+    value === 'RECEIPT' ||
+    value === 'LAB_CONSUMPTION' ||
+    value === 'REVERSAL' ||
+    value === 'PRODUCTION_CONSUMPTION' ||
+    value === 'FULFILLMENT' ||
+    value === 'ADJUSTMENT' ||
+    value === 'TRANSFER'
+  ) {
+    return value
+  }
+  return 'ADJUSTMENT'
+}
+
+function readInventoryMovementDirection(value: string): InventoryMovement['direction'] {
+  if (value === 'IN' || value === 'OUT' || value === 'MOVE') {
+    return value
+  }
+  return 'OUT'
+}
+
+function readLabUsagePurpose(value: string): LabUsageRecord['purpose'] {
+  if (value === 'trial' || value === 'sample' || value === 'production-prep' || value === 'qc' || value === 'waste') {
+    return value
+  }
+  return 'trial'
+}
+
+function parseJson<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+async function runStatementBatches(db: D1Database, statements: D1PreparedStatement[], batchSize = 50) {
+  for (let index = 0; index < statements.length; index += batchSize) {
+    await db.batch(statements.slice(index, index + batchSize))
+  }
 }
 
 function maxAuditCounter(events: AuditEvent[]) {

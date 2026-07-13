@@ -51,10 +51,10 @@ const testCases = [
       const persistence = await apiFetch('/persistence/status', {}, { useCookie: false })
       assertStatus(persistence, 200, 'persistence status should be public')
       assert(persistence.json?.data?.adapter === 'cloudflare-d1-hybrid', 'persistence adapter should be hybrid D1')
+      const requiredTables = ['auth_sessions', 'audit_events', 'inventory_lots', 'inventory_movements', 'lab_usage_records']
       assert(
-        persistence.json.data.normalizedTables.includes('auth_sessions') &&
-          persistence.json.data.normalizedTables.includes('audit_events'),
-        'persistence status should report normalized auth/audit tables',
+        requiredTables.every((table) => persistence.json.data.normalizedTables.includes(table)),
+        'persistence status should report normalized auth, audit, inventory, and lab usage tables',
       )
 
       const tenant = await apiFetch('/security/tenant-console', {}, { useCookie: false })
