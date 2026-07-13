@@ -1,7 +1,7 @@
 # OlfactoryOps Functional Test Report
 
-Generated: 2026-07-13T17:39:52.663Z
-Run started: 2026-07-13T17:39:25.597Z
+Generated: 2026-07-13T17:59:32.854Z
+Run started: 2026-07-13T17:58:46.915Z
 App URL: https://labofscents.pages.dev
 API URL: https://api.labofscents.org/api/v1
 Browser path: Playwright fallback
@@ -19,13 +19,13 @@ Production mutation mode: disabled
 
 | ID | Module | Priority | Result | Duration | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| TC-001 | Edge API / Auth Boundary | P0 | PASS | 4.73s | Health service: olfactoryops-worker-api |
-| TC-002 | Auth Session | P0 | PASS | 3.14s | Session id: SES-0026 |
-| TC-003 | Tenant / Permission Guard | P0 | PASS | 4.14s | Memberships scoped: 3 |
-| TC-004 | Core Read Models | P1 | PASS | 4.50s | Materials: 8 |
-| TC-005 | Documents | P1 | PASS | 2.48s | Missing CSRF status: 403 |
-| TC-006 | Production Phase 9 | P0 | PASS | 0.94s | Batches: 2 |
-| TC-007 | Frontend Auth / Production UI | P0 | PASS | 7.13s | Title: OlfactoryOps North Star |
+| TC-001 | Edge API / Auth Boundary | P0 | PASS | 7.60s | Health service: olfactoryops-worker-api |
+| TC-002 | Auth Session | P0 | PASS | 5.02s | Session id: SES-0028 |
+| TC-003 | Tenant / Permission Guard | P0 | PASS | 7.07s | Memberships scoped: 3 |
+| TC-004 | Core Read Models | P1 | PASS | 7.68s | Materials: 8 |
+| TC-005 | Documents | P1 | PASS | 4.36s | Missing CSRF status: 403 |
+| TC-006 | Production Phase 9 | P0 | PASS | 1.57s | Batches: 2 |
+| TC-007 | Frontend Auth / Production UI | P0 | PASS | 12.64s | Title: OlfactoryOps North Star |
 
 ## Detailed Test Cases
 
@@ -34,7 +34,7 @@ Production mutation mode: disabled
 Module: Edge API / Auth Boundary
 Priority: P0
 Result: PASS
-Duration: 4.73s
+Duration: 7.60s
 
 Objective:
 Verify the production Worker is reachable while tenant and secret-bearing routes require authentication.
@@ -47,13 +47,13 @@ Steps:
 
 Assertions:
 - /health returns 200 and service identity.
-- Persistence status reports hybrid D1 with normalized tenant, auth, audit, document, production, order, inventory, and lab usage tables.
+- Persistence status reports hybrid D1 with normalized sell-ready domain tables outside Formula.
 - Tenant console returns 401 without a session.
 - API keys return 401 without a session.
 
 Evidence:
 - Health service: olfactoryops-worker-api
-- Persistence: cloudflare-d1-hybrid / auth_sessions, audit_events, security_rate_limits, tenant_organizations, tenant_brands, tenant_memberships, role_policies, document_records, production_batches, sales_orders, order_shipments, order_documents, inventory_lots, inventory_movements, lab_usage_records
+- Persistence: cloudflare-d1-hybrid / auth_sessions, audit_events, security_rate_limits, tenant_organizations, tenant_brands, tenant_memberships, role_policies, material_records, molecule_components, storage_locations, stock_take_records, tenant_settings, feature_flags, numbering_sequences, custom_fields, tenant_branding, document_records, production_batches, suppliers, purchase_orders, price_history, commercial_skus, price_lists, quotes, sample_requests, customers, sales_orders, order_shipments, order_documents, scheduled_reports, billing_subscriptions, billing_invoices, webhook_deliveries, inventory_lots, inventory_movements, lab_usage_records
 - Anonymous tenant status: 401
 - Anonymous api-key status: 401
 
@@ -62,7 +62,7 @@ Evidence:
 Module: Auth Session
 Priority: P0
 Result: PASS
-Duration: 3.14s
+Duration: 5.02s
 
 Objective:
 Verify auth no longer depends on frontend-stored bearer secrets and the API can authenticate with the session cookie.
@@ -80,7 +80,7 @@ Assertions:
 - /me works with bearer fallback.
 
 Evidence:
-- Session id: SES-0026
+- Session id: SES-0028
 - Tenant: org-nxl
 - Role: Owner
 
@@ -89,7 +89,7 @@ Evidence:
 Module: Tenant / Permission Guard
 Priority: P0
 Result: PASS
-Duration: 4.14s
+Duration: 7.07s
 
 Objective:
 Verify server-side tenant isolation and role permission decisions for the active session.
@@ -117,7 +117,7 @@ Evidence:
 Module: Core Read Models
 Priority: P1
 Result: PASS
-Duration: 4.50s
+Duration: 7.68s
 
 Objective:
 Verify the main North Star modules still hydrate from the production Worker and D1 snapshot.
@@ -147,7 +147,7 @@ Evidence:
 Module: Documents
 Priority: P1
 Result: PASS
-Duration: 2.48s
+Duration: 4.36s
 
 Objective:
 Verify document download signing remains permission-gated and private object paths are represented as signed URLs.
@@ -165,7 +165,7 @@ Assertions:
 Evidence:
 - Missing CSRF status: 403
 - Document: DOC-118
-- Signed URL expires: 2026-07-13T17:44:45.841Z
+- Signed URL expires: 2026-07-13T18:04:19.622Z
 - Audit: allowed
 
 ### TC-006 - Production read model includes work order, QC protocol, genealogy, and output lot evidence
@@ -173,7 +173,7 @@ Evidence:
 Module: Production Phase 9
 Priority: P0
 Result: PASS
-Duration: 0.94s
+Duration: 1.57s
 
 Objective:
 Verify the Phase 9 production hardening is visible through API read models without creating a new batch by default.
@@ -199,7 +199,7 @@ Evidence:
 Module: Frontend Auth / Production UI
 Priority: P0
 Result: PASS
-Duration: 7.13s
+Duration: 12.64s
 
 Objective:
 Verify the deployed Pages app can authenticate with the cookie session, survive reload, and render the Phase 9 production panels.
@@ -223,5 +223,5 @@ Evidence:
 - Title: OlfactoryOps North Star
 - localStorage keys: olfactoryops.has_session.v1
 - oo_session cookie: HttpOnly=true, Secure=true, SameSite=None
-- Auth screenshot: evidence/2026-07-13T17-39-25-597Z/ui-authenticated-dashboard.png
-- Production screenshot: evidence/2026-07-13T17-39-25-597Z/ui-production-phase9.png
+- Auth screenshot: evidence/2026-07-13T17-58-46-915Z/ui-authenticated-dashboard.png
+- Production screenshot: evidence/2026-07-13T17-58-46-915Z/ui-production-phase9.png

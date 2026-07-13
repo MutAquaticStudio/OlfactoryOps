@@ -7,7 +7,7 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Persistent commercial state: Cloudflare D1.
 - Future document binaries: Cloudflare R2.
 
-The Worker reuses the existing North Star domain service and stores remaining broad domain state in the D1-backed `northstar_snapshots` table. The commercial hardening pass has moved tenant organizations, brands, memberships, role policies, auth sessions, audit events, auth rate limits, document metadata, production batches, sales orders, shipments, order documents, inventory lots, inventory movements, and lab usage records into normalized D1 tables so tenant isolation, security, compliance, production, fulfillment, and stock operations can be queried and persisted independently. A later hardening phase can continue normalizing billing, procurement, catalog, and tenant configuration table-by-table.
+The Worker reuses the existing North Star domain service and stores Formula-specific R&D state in the D1-backed `northstar_snapshots` table until the Formula module redesign is guided. The commercial hardening pass has moved tenant, auth, audit, material master, inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state into normalized D1 tables so sell-ready operations can be queried and persisted independently.
 
 ## 1. Create D1
 
@@ -131,9 +131,9 @@ The functional report verifies cookie auth, hybrid D1 persistence status, CSRF r
 
 ## Notes
 
-- D1 is SQLite-compatible, not Postgres. The current Worker persistence layer is hybrid: remaining broad domain state still uses snapshots, while `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `document_records`, `production_batches`, `sales_orders`, `order_shipments`, `order_documents`, `inventory_lots`, `inventory_movements`, and `lab_usage_records` are normalized D1 tables.
+- D1 is SQLite-compatible, not Postgres. The current Worker persistence layer is hybrid only for Formula R&D records awaiting the guided Formula pass. Sell-ready state now uses normalized D1 tables including `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `material_records`, `molecule_components`, `storage_locations`, `stock_take_records`, `tenant_settings`, `feature_flags`, `numbering_sequences`, `custom_fields`, `tenant_branding`, `document_records`, `production_batches`, `suppliers`, `purchase_orders`, `price_history`, `commercial_skus`, `price_lists`, `quotes`, `sample_requests`, `customers`, `sales_orders`, `order_shipments`, `order_documents`, `scheduled_reports`, `billing_subscriptions`, `billing_invoices`, `webhook_deliveries`, `inventory_lots`, `inventory_movements`, and `lab_usage_records`.
 - Apply D1 migrations before deploying Worker code that depends on new normalized tables.
 - Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only.
 - Keep document binaries and generated PDFs out of D1. Store files in R2 and keep only metadata/signed URL evidence in D1.
-- For high-volume production, continue normalizing billing/subscriptions, procurement, catalog/customer data, and tenant-owned configuration beyond core identity and role policy records.
+- The next persistence hardening target is Formula R&D once the Formula module behavior is finalized.
 

@@ -3,18 +3,40 @@ import { TooManyRequestsException } from '../server/src/shared/http-error.js'
 import type {
   AuditEvent,
   AuthSession,
+  BillingInvoiceRecord,
+  BillingSubscriptionRecord,
   BrandRecord,
+  BrandingConfig,
+  CommercialSkuRecord,
+  CustomFieldDefinition,
   DocumentRecord,
+  FeatureFlagRecord,
   InventoryLot,
   InventoryMovement,
   LabUsageRecord,
   MembershipRecord,
+  Material,
+  MoleculeComponent,
+  NumberingSequenceRecord,
   OrderDocumentRecord,
   OrganizationRecord,
+  PriceHistoryRecord,
+  PriceListRecord,
   ProductionBatchRecord,
+  PurchaseOrderRecord,
+  QuoteRecord,
   RolePolicy,
+  SampleRequestRecord,
   SalesOrderRecord,
+  ScheduledReportRecord,
   ShipmentRecord,
+  StockTakeRecord,
+  StorageLocation,
+  SupplierRecord,
+  TenantSettingsRecord,
+  WebhookDeliveryRecord,
+  CustomerRecord,
+  DomainStatus,
 } from '../src/data/northStar.js'
 
 type Env = {
@@ -99,11 +121,32 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   brandRecords: BrandRecord[]
   membershipRecords: MembershipRecord[]
   rolePolicyRecords: RolePolicy[]
+  materialRecords: Material[]
+  moleculeRecords: MoleculeComponent[]
+  locationRecords: StorageLocation[]
+  stockTakeRecords: StockTakeRecord[]
+  settingsRecord: TenantSettingsRecord
+  flagRecords: FeatureFlagRecord[]
+  sequences: NumberingSequenceRecord[]
+  customFieldRecords: CustomFieldDefinition[]
+  brandingRecord: BrandingConfig
   documentRecords: DocumentRecord[]
   productionBatchRecords: ProductionBatchRecord[]
+  supplierRecords: SupplierRecord[]
+  purchaseOrderRecords: PurchaseOrderRecord[]
+  priceHistoryRecords: PriceHistoryRecord[]
+  commercialSkuRecords: CommercialSkuRecord[]
+  priceListRecords: PriceListRecord[]
+  quoteRecords: QuoteRecord[]
+  sampleRequestRecords: SampleRequestRecord[]
+  customerRecords: CustomerRecord[]
   salesOrderRecords: SalesOrderRecord[]
   shipmentRecords: ShipmentRecord[]
   orderDocumentRecords: OrderDocumentRecord[]
+  scheduledReportRecords: ScheduledReportRecord[]
+  subscriptionRecord: BillingSubscriptionRecord
+  invoiceRecords: BillingInvoiceRecord[]
+  webhookDeliveryRecords: WebhookDeliveryRecord[]
   lots: InventoryLot[]
   movements: InventoryMovement[]
   usageHistory: LabUsageRecord[]
@@ -120,11 +163,32 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'brandRecords',
   'membershipRecords',
   'rolePolicyRecords',
+  'materialRecords',
+  'moleculeRecords',
+  'locationRecords',
+  'stockTakeRecords',
+  'settingsRecord',
+  'flagRecords',
+  'sequences',
+  'customFieldRecords',
+  'brandingRecord',
   'documentRecords',
   'productionBatchRecords',
+  'supplierRecords',
+  'purchaseOrderRecords',
+  'priceHistoryRecords',
+  'commercialSkuRecords',
+  'priceListRecords',
+  'quoteRecords',
+  'sampleRequestRecords',
+  'customerRecords',
   'salesOrderRecords',
   'shipmentRecords',
   'orderDocumentRecords',
+  'scheduledReportRecords',
+  'subscriptionRecord',
+  'invoiceRecords',
+  'webhookDeliveryRecords',
   'lots',
   'movements',
   'usageHistory',
@@ -178,11 +242,32 @@ const NORMALIZED_TABLES = [
   'tenant_brands',
   'tenant_memberships',
   'role_policies',
+  'material_records',
+  'molecule_components',
+  'storage_locations',
+  'stock_take_records',
+  'tenant_settings',
+  'feature_flags',
+  'numbering_sequences',
+  'custom_fields',
+  'tenant_branding',
   'document_records',
   'production_batches',
+  'suppliers',
+  'purchase_orders',
+  'price_history',
+  'commercial_skus',
+  'price_lists',
+  'quotes',
+  'sample_requests',
+  'customers',
   'sales_orders',
   'order_shipments',
   'order_documents',
+  'scheduled_reports',
+  'billing_subscriptions',
+  'billing_invoices',
+  'webhook_deliveries',
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
@@ -575,11 +660,32 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureTenantBrandTable(db)
   await ensureTenantMembershipTable(db)
   await ensureRolePolicyTable(db)
+  await ensureMaterialRecordTable(db)
+  await ensureMoleculeComponentTable(db)
+  await ensureStorageLocationTable(db)
+  await ensureStockTakeRecordTable(db)
+  await ensureTenantSettingsTable(db)
+  await ensureFeatureFlagTable(db)
+  await ensureNumberingSequenceTable(db)
+  await ensureCustomFieldTable(db)
+  await ensureTenantBrandingTable(db)
   await ensureDocumentRecordTable(db)
   await ensureProductionBatchTable(db)
+  await ensureSupplierTable(db)
+  await ensurePurchaseOrderTable(db)
+  await ensurePriceHistoryTable(db)
+  await ensureCommercialSkuTable(db)
+  await ensurePriceListTable(db)
+  await ensureQuoteTable(db)
+  await ensureSampleRequestTable(db)
+  await ensureCustomerTable(db)
   await ensureSalesOrderTable(db)
   await ensureOrderShipmentTable(db)
   await ensureOrderDocumentTable(db)
+  await ensureScheduledReportTable(db)
+  await ensureBillingSubscriptionTable(db)
+  await ensureBillingInvoiceTable(db)
+  await ensureWebhookDeliveryTable(db)
   await ensureInventoryLotTable(db)
   await ensureInventoryMovementTable(db)
   await ensureLabUsageRecordTable(db)
@@ -734,6 +840,154 @@ async function ensureRolePolicyTable(db: D1Database) {
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_role_policies_scope ON role_policies(scope)').run()
 }
 
+async function ensureMaterialRecordTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS material_records (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        cas TEXT NOT NULL,
+        family TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_material_records_cas ON material_records(cas)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_material_records_family ON material_records(family)').run()
+}
+
+async function ensureMoleculeComponentTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS molecule_components (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        cas TEXT NOT NULL,
+        status TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_molecule_components_material_status ON molecule_components(material_id, status)').run()
+}
+
+async function ensureStorageLocationTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS storage_locations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        zone TEXT NOT NULL,
+        status TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_storage_locations_zone_status ON storage_locations(zone, status)').run()
+}
+
+async function ensureStockTakeRecordTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS stock_take_records (
+        id TEXT PRIMARY KEY,
+        at TEXT NOT NULL,
+        lot_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        record_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_take_records_lot_at ON stock_take_records(lot_id, at)').run()
+}
+
+async function ensureTenantSettingsTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS tenant_settings (
+        organization_id TEXT PRIMARY KEY,
+        locale TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        default_unit TEXT NOT NULL,
+        default_dilution_percent REAL NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+}
+
+async function ensureFeatureFlagTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS feature_flags (
+        flag_key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        phase INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_feature_flags_phase ON feature_flags(phase)').run()
+}
+
+async function ensureNumberingSequenceTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS numbering_sequences (
+        sequence_key TEXT PRIMARY KEY,
+        pattern TEXT NOT NULL,
+        next_value INTEGER NOT NULL,
+        scope TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_numbering_sequences_scope ON numbering_sequences(scope)').run()
+}
+
+async function ensureCustomFieldTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS custom_fields (
+        id TEXT PRIMARY KEY,
+        entity TEXT NOT NULL,
+        field_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        field_type TEXT NOT NULL,
+        required INTEGER NOT NULL DEFAULT 0,
+        options_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_custom_fields_entity_status ON custom_fields(entity, status)').run()
+}
+
+async function ensureTenantBrandingTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS tenant_branding (
+        organization_id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        accent_color TEXT NOT NULL,
+        document_footer TEXT NOT NULL,
+        label_template TEXT NOT NULL,
+        logo_mode TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+}
+
 async function ensureDocumentRecordTable(db: D1Database) {
   await db
     .prepare(
@@ -788,6 +1042,168 @@ async function ensureProductionBatchTable(db: D1Database) {
     .run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_formula_status ON production_batches(formula_id, status)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_status ON production_batches(status)').run()
+}
+
+async function ensureSupplierTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS suppliers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        country TEXT NOT NULL,
+        lead_time_days INTEGER NOT NULL,
+        contact_email TEXT NOT NULL,
+        payment_terms TEXT NOT NULL,
+        preferred_material_ids_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_suppliers_status_country ON suppliers(status, country)').run()
+}
+
+async function ensurePurchaseOrderTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS purchase_orders (
+        id TEXT PRIMARY KEY,
+        supplier_id TEXT NOT NULL,
+        material_id TEXT NOT NULL,
+        quantity_grams REAL NOT NULL,
+        received_grams REAL NOT NULL,
+        status TEXT NOT NULL,
+        expected_date TEXT NOT NULL,
+        unit_cost REAL NOT NULL,
+        currency TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier_status ON purchase_orders(supplier_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_purchase_orders_material_status ON purchase_orders(material_id, status)').run()
+}
+
+async function ensurePriceHistoryTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS price_history (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL,
+        supplier_id TEXT NOT NULL,
+        purchase_order_id TEXT NOT NULL,
+        unit_cost REAL NOT NULL,
+        currency TEXT NOT NULL,
+        quantity_grams REAL NOT NULL,
+        captured_at TEXT NOT NULL,
+        source TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_price_history_material_captured ON price_history(material_id, captured_at)').run()
+}
+
+async function ensureCommercialSkuTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS commercial_skus (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        pack_size_grams REAL NOT NULL,
+        price REAL NOT NULL,
+        currency TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        status TEXT NOT NULL,
+        moq_packs INTEGER NOT NULL,
+        label_template TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_commercial_skus_material_status ON commercial_skus(material_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_commercial_skus_tier_status ON commercial_skus(tier, status)').run()
+}
+
+async function ensurePriceListTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS price_lists (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        customer_group TEXT NOT NULL,
+        currency TEXT NOT NULL,
+        multiplier REAL NOT NULL,
+        sample_eligible INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_price_lists_group_status ON price_lists(customer_group, status)').run()
+}
+
+async function ensureQuoteTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS quotes (
+        id TEXT PRIMARY KEY,
+        sku_id TEXT NOT NULL,
+        customer TEXT NOT NULL,
+        customer_group TEXT NOT NULL,
+        quantity_packs INTEGER NOT NULL,
+        unit_price REAL NOT NULL,
+        total REAL NOT NULL,
+        currency TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_quotes_sku_status ON quotes(sku_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_quotes_created_at ON quotes(created_at)').run()
+}
+
+async function ensureSampleRequestTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS sample_requests (
+        id TEXT PRIMARY KEY,
+        sku_id TEXT NOT NULL,
+        customer TEXT NOT NULL,
+        packs INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sample_requests_sku_status ON sample_requests(sku_id, status)').run()
+}
+
+async function ensureCustomerTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS customers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        customer_group TEXT NOT NULL,
+        credit_limit REAL NOT NULL,
+        payment_terms TEXT NOT NULL,
+        contact_email TEXT NOT NULL,
+        billing_address_json TEXT NOT NULL,
+        shipping_address_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_customers_group_status ON customers(customer_group, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_customers_contact_email ON customers(contact_email)').run()
 }
 
 async function ensureSalesOrderTable(db: D1Database) {
@@ -859,6 +1275,96 @@ async function ensureOrderDocumentTable(db: D1Database) {
     .run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_order_type ON order_documents(order_id, type)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_status ON order_documents(status)').run()
+}
+
+async function ensureScheduledReportTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS scheduled_reports (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        cadence TEXT NOT NULL,
+        audience TEXT NOT NULL,
+        format TEXT NOT NULL,
+        status TEXT NOT NULL,
+        last_run_at TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_reports_status_cadence ON scheduled_reports(status, cadence)').run()
+}
+
+async function ensureBillingSubscriptionTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS billing_subscriptions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        collection_mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_period_start TEXT NOT NULL,
+        current_period_end TEXT NOT NULL,
+        trial_ends_at TEXT,
+        grace_ends_at TEXT,
+        freeze_reason TEXT,
+        provider_customer_id TEXT,
+        provider_subscription_id TEXT,
+        can_write INTEGER NOT NULL DEFAULT 0,
+        can_export INTEGER NOT NULL DEFAULT 0,
+        next_invoice_at TEXT NOT NULL,
+        subscription_updated_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_org_status ON billing_subscriptions(organization_id, status)').run()
+}
+
+async function ensureBillingInvoiceTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS billing_invoices (
+        id TEXT PRIMARY KEY,
+        subscription_id TEXT NOT NULL,
+        number TEXT NOT NULL,
+        status TEXT NOT NULL,
+        amount_due REAL NOT NULL,
+        currency TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        paid_at TEXT,
+        hosted_invoice_url TEXT NOT NULL,
+        document_id TEXT,
+        provider_invoice_id TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_invoices_subscription_status ON billing_invoices(subscription_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_invoices_due_at ON billing_invoices(due_at)').run()
+}
+
+async function ensureWebhookDeliveryTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id TEXT PRIMARY KEY,
+        webhook_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        last_attempt_at TEXT NOT NULL,
+        next_retry_at TEXT,
+        response_code INTEGER,
+        idempotency_key TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status_retry ON webhook_deliveries(status, next_retry_at)').run()
+  await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_idempotency ON webhook_deliveries(idempotency_key)').run()
 }
 
 async function ensureInventoryLotTable(db: D1Database) {
@@ -1046,6 +1552,69 @@ type RolePolicyRow = {
   permissions_json: string
 }
 
+type MaterialRow = {
+  id: string
+  record_json: string
+}
+
+type MoleculeRow = {
+  id: string
+  record_json: string
+}
+
+type StorageLocationRow = {
+  id: string
+  record_json: string
+}
+
+type StockTakeRow = {
+  id: string
+  record_json: string
+}
+
+type TenantSettingsRow = {
+  organization_id: string
+  locale: string
+  timezone: string
+  currency: string
+  default_unit: string
+  default_dilution_percent: number
+}
+
+type FeatureFlagRow = {
+  flag_key: string
+  label: string
+  enabled: number
+  phase: number
+}
+
+type NumberingSequenceRow = {
+  sequence_key: string
+  pattern: string
+  next_value: number
+  scope: string
+}
+
+type CustomFieldRow = {
+  id: string
+  entity: string
+  field_key: string
+  label: string
+  field_type: string
+  required: number
+  options_json: string
+  status: string
+}
+
+type BrandingRow = {
+  organization_id: string
+  display_name: string
+  accent_color: string
+  document_footer: string
+  label_template: string
+  logo_mode: string
+}
+
 type DocumentRecordRow = {
   id: string
   type: string
@@ -1083,6 +1652,100 @@ type ProductionBatchRow = {
   genealogy_json: string
 }
 
+type SupplierRow = {
+  id: string
+  name: string
+  status: string
+  country: string
+  lead_time_days: number
+  contact_email: string
+  payment_terms: string
+  preferred_material_ids_json: string
+}
+
+type PurchaseOrderRow = {
+  id: string
+  supplier_id: string
+  material_id: string
+  quantity_grams: number
+  received_grams: number
+  status: string
+  expected_date: string
+  unit_cost: number
+  currency: string
+  created_at: string
+}
+
+type PriceHistoryRow = {
+  id: string
+  material_id: string
+  supplier_id: string
+  purchase_order_id: string
+  unit_cost: number
+  currency: string
+  quantity_grams: number
+  captured_at: string
+  source: string
+}
+
+type CommercialSkuRow = {
+  id: string
+  material_id: string
+  name: string
+  description: string
+  pack_size_grams: number
+  price: number
+  currency: string
+  tier: string
+  status: string
+  moq_packs: number
+  label_template: string
+}
+
+type PriceListRow = {
+  id: string
+  name: string
+  customer_group: string
+  currency: string
+  multiplier: number
+  sample_eligible: number
+  status: string
+}
+
+type QuoteRow = {
+  id: string
+  sku_id: string
+  customer: string
+  customer_group: string
+  quantity_packs: number
+  unit_price: number
+  total: number
+  currency: string
+  status: string
+  created_at: string
+}
+
+type SampleRequestRow = {
+  id: string
+  sku_id: string
+  customer: string
+  packs: number
+  status: string
+  created_at: string
+}
+
+type CustomerRow = {
+  id: string
+  name: string
+  customer_group: string
+  credit_limit: number
+  payment_terms: string
+  contact_email: string
+  billing_address_json: string
+  shipping_address_json: string
+  status: string
+}
+
 type SalesOrderRow = {
   id: string
   sku_id: string
@@ -1104,6 +1767,62 @@ type SalesOrderRow = {
   shipment_id: string | null
   document_ids_json: string | null
   created_at: string
+}
+
+type ScheduledReportRow = {
+  id: string
+  name: string
+  cadence: string
+  audience: string
+  format: string
+  status: string
+  last_run_at: string | null
+}
+
+type BillingSubscriptionRow = {
+  id: string
+  organization_id: string
+  plan_id: string
+  provider: string
+  collection_mode: string
+  status: string
+  current_period_start: string
+  current_period_end: string
+  trial_ends_at: string | null
+  grace_ends_at: string | null
+  freeze_reason: string | null
+  provider_customer_id: string | null
+  provider_subscription_id: string | null
+  can_write: number
+  can_export: number
+  next_invoice_at: string
+  subscription_updated_at: string
+}
+
+type BillingInvoiceRow = {
+  id: string
+  subscription_id: string
+  number: string
+  status: string
+  amount_due: number
+  currency: string
+  due_at: string
+  paid_at: string | null
+  hosted_invoice_url: string
+  document_id: string | null
+  provider_invoice_id: string | null
+}
+
+type WebhookDeliveryRow = {
+  id: string
+  webhook_id: string
+  event: string
+  status: string
+  attempts: number
+  last_attempt_at: string
+  next_retry_at: string | null
+  response_code: number | null
+  idempotency_key: string
 }
 
 type ShipmentRow = {
@@ -1212,9 +1931,15 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
   await hydrateTenantCoreState(db, serviceState)
+  await hydrateMaterialState(db, serviceState)
+  await hydrateCustomizationState(db, serviceState)
   await hydrateDocumentState(db, serviceState)
+  await hydrateProcurementState(db, serviceState)
+  await hydrateCatalogState(db, serviceState)
   await hydrateProductionState(db, serviceState)
   await hydrateOrderState(db, serviceState)
+  await hydrateAnalyticsState(db, serviceState)
+  await hydrateBillingState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
 }
@@ -1223,9 +1948,15 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
+  await persistMaterialState(db, serviceState, updatedAt)
+  await persistCustomizationState(db, serviceState, updatedAt)
   await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
+  await persistProcurementState(db, serviceState, updatedAt)
+  await persistCatalogState(db, serviceState, updatedAt)
   await persistProductionBatches(db, serviceState.productionBatchRecords, updatedAt)
   await persistOrderState(db, serviceState, updatedAt)
+  await persistScheduledReports(db, serviceState.scheduledReportRecords, updatedAt)
+  await persistBillingState(db, serviceState, updatedAt)
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
@@ -1383,6 +2114,371 @@ async function persistTenantCoreState(db: D1Database, serviceState: ServiceState
   await persistBrands(db, serviceState.brandRecords, updatedAt)
   await persistMemberships(db, serviceState.membershipRecords, updatedAt)
   await persistRolePolicies(db, serviceState.rolePolicyRecords, updatedAt)
+}
+
+async function hydrateMaterialState(db: D1Database, serviceState: ServiceState) {
+  const materialRows = await db
+    .prepare('SELECT id, record_json FROM material_records ORDER BY name ASC')
+    .all<MaterialRow>()
+  const materials = (materialRows.results ?? [])
+    .map((row) => parseJsonOptional<Material>(row.record_json))
+    .filter(isDefined)
+  if (materials.length > 0) {
+    serviceState.materialRecords = materials
+  } else if (Array.isArray(serviceState.materialRecords) && serviceState.materialRecords.length > 0) {
+    await persistMaterials(db, serviceState.materialRecords, new Date().toISOString())
+  }
+
+  const moleculeRows = await db
+    .prepare('SELECT id, record_json FROM molecule_components ORDER BY material_id ASC, name ASC')
+    .all<MoleculeRow>()
+  const molecules = (moleculeRows.results ?? [])
+    .map((row) => parseJsonOptional<MoleculeComponent>(row.record_json))
+    .filter(isDefined)
+  if (molecules.length > 0) {
+    serviceState.moleculeRecords = molecules
+  } else if (Array.isArray(serviceState.moleculeRecords) && serviceState.moleculeRecords.length > 0) {
+    await persistMolecules(db, serviceState.moleculeRecords, new Date().toISOString())
+  }
+
+  const locationRows = await db
+    .prepare('SELECT id, record_json FROM storage_locations ORDER BY zone ASC, name ASC')
+    .all<StorageLocationRow>()
+  const locations = (locationRows.results ?? [])
+    .map((row) => parseJsonOptional<StorageLocation>(row.record_json))
+    .filter(isDefined)
+  if (locations.length > 0) {
+    serviceState.locationRecords = locations
+  } else if (Array.isArray(serviceState.locationRecords) && serviceState.locationRecords.length > 0) {
+    await persistStorageLocations(db, serviceState.locationRecords, new Date().toISOString())
+  }
+
+  const stockTakeRows = await db
+    .prepare('SELECT id, record_json FROM stock_take_records ORDER BY at DESC, id DESC')
+    .all<StockTakeRow>()
+  const stockTakes = (stockTakeRows.results ?? [])
+    .map((row) => parseJsonOptional<StockTakeRecord>(row.record_json))
+    .filter(isDefined)
+  if (stockTakes.length > 0) {
+    serviceState.stockTakeRecords = stockTakes
+  } else if (Array.isArray(serviceState.stockTakeRecords) && serviceState.stockTakeRecords.length > 0) {
+    await persistStockTakes(db, serviceState.stockTakeRecords, new Date().toISOString())
+  }
+}
+
+async function persistMaterialState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistMaterials(db, serviceState.materialRecords, updatedAt)
+  await persistMolecules(db, serviceState.moleculeRecords, updatedAt)
+  await persistStorageLocations(db, serviceState.locationRecords, updatedAt)
+  await persistStockTakes(db, serviceState.stockTakeRecords, updatedAt)
+}
+
+async function persistMaterials(db: D1Database, materials: Material[], updatedAt: string) {
+  if (!Array.isArray(materials) || materials.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    materials.map((material) =>
+      db
+        .prepare(
+          `INSERT INTO material_records (id, name, cas, family, tier, record_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             cas = excluded.cas,
+             family = excluded.family,
+             tier = excluded.tier,
+             record_json = excluded.record_json,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(material.id, material.name, material.cas, material.family, material.tier, JSON.stringify(material), updatedAt),
+    ),
+  )
+}
+
+async function persistMolecules(db: D1Database, molecules: MoleculeComponent[], updatedAt: string) {
+  if (!Array.isArray(molecules) || molecules.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    molecules.map((molecule) =>
+      db
+        .prepare(
+          `INSERT INTO molecule_components (id, material_id, name, cas, status, record_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(id) DO UPDATE SET
+             material_id = excluded.material_id,
+             name = excluded.name,
+             cas = excluded.cas,
+             status = excluded.status,
+             record_json = excluded.record_json,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(molecule.id, molecule.materialId, molecule.name, molecule.cas, molecule.status, JSON.stringify(molecule), updatedAt),
+    ),
+  )
+}
+
+async function persistStorageLocations(db: D1Database, locations: StorageLocation[], updatedAt: string) {
+  if (!Array.isArray(locations) || locations.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    locations.map((location) =>
+      db
+        .prepare(
+          `INSERT INTO storage_locations (id, name, zone, status, record_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             zone = excluded.zone,
+             status = excluded.status,
+             record_json = excluded.record_json,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(location.id, location.name, location.zone, location.status ?? 'ACTIVE', JSON.stringify(location), updatedAt),
+    ),
+  )
+}
+
+async function persistStockTakes(db: D1Database, stockTakes: StockTakeRecord[], updatedAt: string) {
+  if (!Array.isArray(stockTakes) || stockTakes.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    stockTakes.map((stockTake) =>
+      db
+        .prepare(
+          `INSERT INTO stock_take_records (id, at, lot_id, status, record_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(id) DO UPDATE SET
+             at = excluded.at,
+             lot_id = excluded.lot_id,
+             status = excluded.status,
+             record_json = excluded.record_json,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(stockTake.id, stockTake.at, stockTake.lotId, stockTake.status, JSON.stringify(stockTake), updatedAt),
+    ),
+  )
+}
+
+async function hydrateCustomizationState(db: D1Database, serviceState: ServiceState) {
+  const settingsRows = await db
+    .prepare(
+      `SELECT organization_id, locale, timezone, currency, default_unit, default_dilution_percent
+       FROM tenant_settings
+       ORDER BY organization_id ASC`,
+    )
+    .all<TenantSettingsRow>()
+  const settings = settingsRows.results?.[0]
+  if (settings) {
+    serviceState.settingsRecord = tenantSettingsFromRow(settings)
+  } else if (serviceState.settingsRecord) {
+    await persistTenantSettings(db, serviceState.settingsRecord, new Date().toISOString())
+  }
+
+  const flagRows = await db
+    .prepare('SELECT flag_key, label, enabled, phase FROM feature_flags ORDER BY phase ASC, flag_key ASC')
+    .all<FeatureFlagRow>()
+  const flags = (flagRows.results ?? []).map(featureFlagFromRow)
+  if (flags.length > 0) {
+    serviceState.flagRecords = flags
+  } else if (Array.isArray(serviceState.flagRecords) && serviceState.flagRecords.length > 0) {
+    await persistFeatureFlags(db, serviceState.flagRecords, new Date().toISOString())
+  }
+
+  const sequenceRows = await db
+    .prepare('SELECT sequence_key, pattern, next_value, scope FROM numbering_sequences ORDER BY sequence_key ASC')
+    .all<NumberingSequenceRow>()
+  const sequences = (sequenceRows.results ?? []).map(numberingSequenceFromRow)
+  if (sequences.length > 0) {
+    serviceState.sequences = sequences
+  } else if (Array.isArray(serviceState.sequences) && serviceState.sequences.length > 0) {
+    await persistNumberingSequences(db, serviceState.sequences, new Date().toISOString())
+  }
+
+  const fieldRows = await db
+    .prepare(
+      `SELECT id, entity, field_key, label, field_type, required, options_json, status
+       FROM custom_fields
+       ORDER BY entity ASC, id ASC`,
+    )
+    .all<CustomFieldRow>()
+  const fields = (fieldRows.results ?? []).map(customFieldFromRow)
+  if (fields.length > 0) {
+    serviceState.customFieldRecords = fields
+  } else if (Array.isArray(serviceState.customFieldRecords) && serviceState.customFieldRecords.length > 0) {
+    await persistCustomFields(db, serviceState.customFieldRecords, new Date().toISOString())
+  }
+
+  const brandingRows = await db
+    .prepare(
+      `SELECT organization_id, display_name, accent_color, document_footer, label_template, logo_mode
+       FROM tenant_branding
+       ORDER BY organization_id ASC`,
+    )
+    .all<BrandingRow>()
+  const branding = brandingRows.results?.[0]
+  if (branding) {
+    serviceState.brandingRecord = brandingFromRow(branding)
+  } else if (serviceState.brandingRecord) {
+    await persistBranding(db, serviceState.brandingRecord, new Date().toISOString())
+  }
+}
+
+async function persistCustomizationState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistTenantSettings(db, serviceState.settingsRecord, updatedAt)
+  await persistFeatureFlags(db, serviceState.flagRecords, updatedAt)
+  await persistNumberingSequences(db, serviceState.sequences, updatedAt)
+  await persistCustomFields(db, serviceState.customFieldRecords, updatedAt)
+  await persistBranding(db, serviceState.brandingRecord, updatedAt)
+}
+
+async function persistTenantSettings(db: D1Database, settings: TenantSettingsRecord, updatedAt: string) {
+  if (!settings) {
+    return
+  }
+  await db
+    .prepare(
+      `INSERT INTO tenant_settings (
+        organization_id, locale, timezone, currency, default_unit, default_dilution_percent, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      ON CONFLICT(organization_id) DO UPDATE SET
+        locale = excluded.locale,
+        timezone = excluded.timezone,
+        currency = excluded.currency,
+        default_unit = excluded.default_unit,
+        default_dilution_percent = excluded.default_dilution_percent,
+        updated_at = excluded.updated_at`,
+    )
+    .bind(
+      settings.organizationId,
+      settings.locale,
+      settings.timezone,
+      settings.currency,
+      settings.defaultUnit,
+      settings.defaultDilutionPercent,
+      updatedAt,
+    )
+    .run()
+}
+
+async function persistFeatureFlags(db: D1Database, flags: FeatureFlagRecord[], updatedAt: string) {
+  if (!Array.isArray(flags) || flags.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    flags.map((flag) =>
+      db
+        .prepare(
+          `INSERT INTO feature_flags (flag_key, label, enabled, phase, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(flag_key) DO UPDATE SET
+             label = excluded.label,
+             enabled = excluded.enabled,
+             phase = excluded.phase,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(flag.key, flag.label, flag.enabled ? 1 : 0, flag.phase, updatedAt),
+    ),
+  )
+}
+
+async function persistNumberingSequences(db: D1Database, sequences: NumberingSequenceRecord[], updatedAt: string) {
+  if (!Array.isArray(sequences) || sequences.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    sequences.map((sequence) =>
+      db
+        .prepare(
+          `INSERT INTO numbering_sequences (sequence_key, pattern, next_value, scope, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(sequence_key) DO UPDATE SET
+             pattern = excluded.pattern,
+             next_value = excluded.next_value,
+             scope = excluded.scope,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(sequence.key, sequence.pattern, sequence.nextValue, sequence.scope, updatedAt),
+    ),
+  )
+}
+
+async function persistCustomFields(db: D1Database, fields: CustomFieldDefinition[], updatedAt: string) {
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    fields.map((field) =>
+      db
+        .prepare(
+          `INSERT INTO custom_fields (
+            id, entity, field_key, label, field_type, required, options_json, status, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          ON CONFLICT(id) DO UPDATE SET
+            entity = excluded.entity,
+            field_key = excluded.field_key,
+            label = excluded.label,
+            field_type = excluded.field_type,
+            required = excluded.required,
+            options_json = excluded.options_json,
+            status = excluded.status,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          field.id,
+          field.entity,
+          field.key,
+          field.label,
+          field.fieldType,
+          field.required ? 1 : 0,
+          JSON.stringify(field.options),
+          field.status,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistBranding(db: D1Database, branding: BrandingConfig, updatedAt: string) {
+  if (!branding) {
+    return
+  }
+  await db
+    .prepare(
+      `INSERT INTO tenant_branding (
+        organization_id, display_name, accent_color, document_footer, label_template, logo_mode, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      ON CONFLICT(organization_id) DO UPDATE SET
+        display_name = excluded.display_name,
+        accent_color = excluded.accent_color,
+        document_footer = excluded.document_footer,
+        label_template = excluded.label_template,
+        logo_mode = excluded.logo_mode,
+        updated_at = excluded.updated_at`,
+    )
+    .bind(
+      branding.organizationId,
+      branding.displayName,
+      branding.accentColor,
+      branding.documentFooter,
+      branding.labelTemplate,
+      branding.logoMode,
+      updatedAt,
+    )
+    .run()
 }
 
 async function persistOrganizations(db: D1Database, organizations: OrganizationRecord[], updatedAt: string) {
@@ -1579,6 +2675,453 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
           document.checksum,
           document.owner,
           document.generatedFrom ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function hydrateProcurementState(db: D1Database, serviceState: ServiceState) {
+  const supplierRows = await db
+    .prepare(
+      `SELECT id, name, status, country, lead_time_days, contact_email, payment_terms, preferred_material_ids_json
+       FROM suppliers
+       ORDER BY name ASC`,
+    )
+    .all<SupplierRow>()
+  const suppliers = (supplierRows.results ?? []).map(supplierFromRow)
+  if (suppliers.length > 0) {
+    serviceState.supplierRecords = suppliers
+  } else if (Array.isArray(serviceState.supplierRecords) && serviceState.supplierRecords.length > 0) {
+    await persistSuppliers(db, serviceState.supplierRecords, new Date().toISOString())
+  }
+
+  const poRows = await db
+    .prepare(
+      `SELECT id, supplier_id, material_id, quantity_grams, received_grams, status,
+        expected_date, unit_cost, currency, created_at
+       FROM purchase_orders
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<PurchaseOrderRow>()
+  const purchaseOrders = (poRows.results ?? []).map(purchaseOrderFromRow)
+  if (purchaseOrders.length > 0) {
+    serviceState.purchaseOrderRecords = purchaseOrders
+  } else if (Array.isArray(serviceState.purchaseOrderRecords) && serviceState.purchaseOrderRecords.length > 0) {
+    await persistPurchaseOrders(db, serviceState.purchaseOrderRecords, new Date().toISOString())
+  }
+
+  const priceRows = await db
+    .prepare(
+      `SELECT id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
+        quantity_grams, captured_at, source
+       FROM price_history
+       ORDER BY captured_at DESC, id DESC`,
+    )
+    .all<PriceHistoryRow>()
+  const priceHistory = (priceRows.results ?? []).map(priceHistoryFromRow)
+  if (priceHistory.length > 0) {
+    serviceState.priceHistoryRecords = priceHistory
+  } else if (Array.isArray(serviceState.priceHistoryRecords) && serviceState.priceHistoryRecords.length > 0) {
+    await persistPriceHistory(db, serviceState.priceHistoryRecords, new Date().toISOString())
+  }
+}
+
+async function persistProcurementState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistSuppliers(db, serviceState.supplierRecords, updatedAt)
+  await persistPurchaseOrders(db, serviceState.purchaseOrderRecords, updatedAt)
+  await persistPriceHistory(db, serviceState.priceHistoryRecords, updatedAt)
+}
+
+async function persistSuppliers(db: D1Database, suppliers: SupplierRecord[], updatedAt: string) {
+  if (!Array.isArray(suppliers) || suppliers.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    suppliers.map((supplier) =>
+      db
+        .prepare(
+          `INSERT INTO suppliers (
+            id, name, status, country, lead_time_days, contact_email, payment_terms,
+            preferred_material_ids_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            status = excluded.status,
+            country = excluded.country,
+            lead_time_days = excluded.lead_time_days,
+            contact_email = excluded.contact_email,
+            payment_terms = excluded.payment_terms,
+            preferred_material_ids_json = excluded.preferred_material_ids_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          supplier.id,
+          supplier.name,
+          supplier.status,
+          supplier.country,
+          supplier.leadTimeDays,
+          supplier.contactEmail,
+          supplier.paymentTerms,
+          JSON.stringify(supplier.preferredMaterialIds),
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistPurchaseOrders(db: D1Database, purchaseOrders: PurchaseOrderRecord[], updatedAt: string) {
+  if (!Array.isArray(purchaseOrders) || purchaseOrders.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    purchaseOrders.map((order) =>
+      db
+        .prepare(
+          `INSERT INTO purchase_orders (
+            id, supplier_id, material_id, quantity_grams, received_grams, status,
+            expected_date, unit_cost, currency, created_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          ON CONFLICT(id) DO UPDATE SET
+            supplier_id = excluded.supplier_id,
+            material_id = excluded.material_id,
+            quantity_grams = excluded.quantity_grams,
+            received_grams = excluded.received_grams,
+            status = excluded.status,
+            expected_date = excluded.expected_date,
+            unit_cost = excluded.unit_cost,
+            currency = excluded.currency,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          order.id,
+          order.supplierId,
+          order.materialId,
+          order.quantityGrams,
+          order.receivedGrams,
+          order.status,
+          order.expectedDate,
+          order.unitCost,
+          order.currency,
+          order.createdAt,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistPriceHistory(db: D1Database, records: PriceHistoryRecord[], updatedAt: string) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db
+        .prepare(
+          `INSERT INTO price_history (
+            id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
+            quantity_grams, captured_at, source, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(id) DO UPDATE SET
+            material_id = excluded.material_id,
+            supplier_id = excluded.supplier_id,
+            purchase_order_id = excluded.purchase_order_id,
+            unit_cost = excluded.unit_cost,
+            currency = excluded.currency,
+            quantity_grams = excluded.quantity_grams,
+            captured_at = excluded.captured_at,
+            source = excluded.source,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          record.id,
+          record.materialId,
+          record.supplierId,
+          record.purchaseOrderId,
+          record.unitCost,
+          record.currency,
+          record.quantityGrams,
+          record.capturedAt,
+          record.source,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
+  const skuRows = await db
+    .prepare(
+      `SELECT id, material_id, name, description, pack_size_grams, price, currency,
+        tier, status, moq_packs, label_template
+       FROM commercial_skus
+       ORDER BY name ASC`,
+    )
+    .all<CommercialSkuRow>()
+  const skus = (skuRows.results ?? []).map(commercialSkuFromRow)
+  if (skus.length > 0) {
+    serviceState.commercialSkuRecords = skus
+  } else if (Array.isArray(serviceState.commercialSkuRecords) && serviceState.commercialSkuRecords.length > 0) {
+    await persistCommercialSkus(db, serviceState.commercialSkuRecords, new Date().toISOString())
+  }
+
+  const priceListRows = await db
+    .prepare(
+      `SELECT id, name, customer_group, currency, multiplier, sample_eligible, status
+       FROM price_lists
+       ORDER BY customer_group ASC, id ASC`,
+    )
+    .all<PriceListRow>()
+  const priceLists = (priceListRows.results ?? []).map(priceListFromRow)
+  if (priceLists.length > 0) {
+    serviceState.priceListRecords = priceLists
+  } else if (Array.isArray(serviceState.priceListRecords) && serviceState.priceListRecords.length > 0) {
+    await persistPriceLists(db, serviceState.priceListRecords, new Date().toISOString())
+  }
+
+  const quoteRows = await db
+    .prepare(
+      `SELECT id, sku_id, customer, customer_group, quantity_packs, unit_price,
+        total, currency, status, created_at
+       FROM quotes
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<QuoteRow>()
+  const quotes = (quoteRows.results ?? []).map(quoteFromRow)
+  if (quotes.length > 0) {
+    serviceState.quoteRecords = quotes
+  } else if (Array.isArray(serviceState.quoteRecords) && serviceState.quoteRecords.length > 0) {
+    await persistQuotes(db, serviceState.quoteRecords, new Date().toISOString())
+  }
+
+  const sampleRows = await db
+    .prepare(
+      `SELECT id, sku_id, customer, packs, status, created_at
+       FROM sample_requests
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<SampleRequestRow>()
+  const samples = (sampleRows.results ?? []).map(sampleRequestFromRow)
+  if (samples.length > 0) {
+    serviceState.sampleRequestRecords = samples
+  } else if (Array.isArray(serviceState.sampleRequestRecords) && serviceState.sampleRequestRecords.length > 0) {
+    await persistSampleRequests(db, serviceState.sampleRequestRecords, new Date().toISOString())
+  }
+
+  const customerRows = await db
+    .prepare(
+      `SELECT id, name, customer_group, credit_limit, payment_terms, contact_email,
+        billing_address_json, shipping_address_json, status
+       FROM customers
+       ORDER BY name ASC`,
+    )
+    .all<CustomerRow>()
+  const customers = (customerRows.results ?? []).map(customerFromRow)
+  if (customers.length > 0) {
+    serviceState.customerRecords = customers
+  } else if (Array.isArray(serviceState.customerRecords) && serviceState.customerRecords.length > 0) {
+    await persistCustomers(db, serviceState.customerRecords, new Date().toISOString())
+  }
+}
+
+async function persistCatalogState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistCommercialSkus(db, serviceState.commercialSkuRecords, updatedAt)
+  await persistPriceLists(db, serviceState.priceListRecords, updatedAt)
+  await persistQuotes(db, serviceState.quoteRecords, updatedAt)
+  await persistSampleRequests(db, serviceState.sampleRequestRecords, updatedAt)
+  await persistCustomers(db, serviceState.customerRecords, updatedAt)
+}
+
+async function persistCommercialSkus(db: D1Database, skus: CommercialSkuRecord[], updatedAt: string) {
+  if (!Array.isArray(skus) || skus.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    skus.map((sku) =>
+      db
+        .prepare(
+          `INSERT INTO commercial_skus (
+            id, material_id, name, description, pack_size_grams, price, currency,
+            tier, status, moq_packs, label_template, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          ON CONFLICT(id) DO UPDATE SET
+            material_id = excluded.material_id,
+            name = excluded.name,
+            description = excluded.description,
+            pack_size_grams = excluded.pack_size_grams,
+            price = excluded.price,
+            currency = excluded.currency,
+            tier = excluded.tier,
+            status = excluded.status,
+            moq_packs = excluded.moq_packs,
+            label_template = excluded.label_template,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          sku.id,
+          sku.materialId,
+          sku.name,
+          sku.description,
+          sku.packSizeGrams,
+          sku.price,
+          sku.currency,
+          sku.tier,
+          sku.status,
+          sku.moqPacks,
+          sku.labelTemplate,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistPriceLists(db: D1Database, priceLists: PriceListRecord[], updatedAt: string) {
+  if (!Array.isArray(priceLists) || priceLists.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    priceLists.map((priceList) =>
+      db
+        .prepare(
+          `INSERT INTO price_lists (
+            id, name, customer_group, currency, multiplier, sample_eligible, status, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            customer_group = excluded.customer_group,
+            currency = excluded.currency,
+            multiplier = excluded.multiplier,
+            sample_eligible = excluded.sample_eligible,
+            status = excluded.status,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          priceList.id,
+          priceList.name,
+          priceList.customerGroup,
+          priceList.currency,
+          priceList.multiplier,
+          priceList.sampleEligible ? 1 : 0,
+          priceList.status,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: string) {
+  if (!Array.isArray(quotes) || quotes.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    quotes.map((quote) =>
+      db
+        .prepare(
+          `INSERT INTO quotes (
+            id, sku_id, customer, customer_group, quantity_packs, unit_price,
+            total, currency, status, created_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          ON CONFLICT(id) DO UPDATE SET
+            sku_id = excluded.sku_id,
+            customer = excluded.customer,
+            customer_group = excluded.customer_group,
+            quantity_packs = excluded.quantity_packs,
+            unit_price = excluded.unit_price,
+            total = excluded.total,
+            currency = excluded.currency,
+            status = excluded.status,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          quote.id,
+          quote.skuId,
+          quote.customer,
+          quote.customerGroup,
+          quote.quantityPacks,
+          quote.unitPrice,
+          quote.total,
+          quote.currency,
+          quote.status,
+          quote.createdAt,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistSampleRequests(db: D1Database, samples: SampleRequestRecord[], updatedAt: string) {
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    samples.map((sample) =>
+      db
+        .prepare(
+          `INSERT INTO sample_requests (id, sku_id, customer, packs, status, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(id) DO UPDATE SET
+             sku_id = excluded.sku_id,
+             customer = excluded.customer,
+             packs = excluded.packs,
+             status = excluded.status,
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(sample.id, sample.skuId, sample.customer, sample.packs, sample.status, sample.createdAt, updatedAt),
+    ),
+  )
+}
+
+async function persistCustomers(db: D1Database, customers: CustomerRecord[], updatedAt: string) {
+  if (!Array.isArray(customers) || customers.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    customers.map((customer) =>
+      db
+        .prepare(
+          `INSERT INTO customers (
+            id, name, customer_group, credit_limit, payment_terms, contact_email,
+            billing_address_json, shipping_address_json, status, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            customer_group = excluded.customer_group,
+            credit_limit = excluded.credit_limit,
+            payment_terms = excluded.payment_terms,
+            contact_email = excluded.contact_email,
+            billing_address_json = excluded.billing_address_json,
+            shipping_address_json = excluded.shipping_address_json,
+            status = excluded.status,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          customer.id,
+          customer.name,
+          customer.group,
+          customer.creditLimit,
+          customer.paymentTerms,
+          customer.contactEmail,
+          JSON.stringify(customer.billingAddress),
+          JSON.stringify(customer.shippingAddress),
+          customer.status,
           updatedAt,
         ),
     ),
@@ -1834,6 +3377,255 @@ async function persistOrderDocuments(db: D1Database, documents: OrderDocumentRec
              updated_at = excluded.updated_at`,
         )
         .bind(document.id, document.orderId, document.type, document.status, document.url, document.createdAt, updatedAt),
+    ),
+  )
+}
+
+async function hydrateAnalyticsState(db: D1Database, serviceState: ServiceState) {
+  const rows = await db
+    .prepare(
+      `SELECT id, name, cadence, audience, format, status, last_run_at
+       FROM scheduled_reports
+       ORDER BY id ASC`,
+    )
+    .all<ScheduledReportRow>()
+  const reports = (rows.results ?? []).map(scheduledReportFromRow)
+  if (reports.length > 0) {
+    serviceState.scheduledReportRecords = reports
+  } else if (Array.isArray(serviceState.scheduledReportRecords) && serviceState.scheduledReportRecords.length > 0) {
+    await persistScheduledReports(db, serviceState.scheduledReportRecords, new Date().toISOString())
+  }
+}
+
+async function persistScheduledReports(db: D1Database, reports: ScheduledReportRecord[], updatedAt: string) {
+  if (!Array.isArray(reports) || reports.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    reports.map((report) =>
+      db
+        .prepare(
+          `INSERT INTO scheduled_reports (
+            id, name, cadence, audience, format, status, last_run_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            cadence = excluded.cadence,
+            audience = excluded.audience,
+            format = excluded.format,
+            status = excluded.status,
+            last_run_at = excluded.last_run_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          report.id,
+          report.name,
+          report.cadence,
+          report.audience,
+          report.format,
+          report.status,
+          report.lastRunAt ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function hydrateBillingState(db: D1Database, serviceState: ServiceState) {
+  const subscriptionRows = await db
+    .prepare(
+      `SELECT id, organization_id, plan_id, provider, collection_mode, status,
+        current_period_start, current_period_end, trial_ends_at, grace_ends_at,
+        freeze_reason, provider_customer_id, provider_subscription_id, can_write,
+        can_export, next_invoice_at, subscription_updated_at
+       FROM billing_subscriptions
+       ORDER BY subscription_updated_at DESC
+       LIMIT 1`,
+    )
+    .all<BillingSubscriptionRow>()
+  const subscription = subscriptionRows.results?.[0]
+  if (subscription) {
+    serviceState.subscriptionRecord = billingSubscriptionFromRow(subscription)
+  } else if (serviceState.subscriptionRecord) {
+    await persistBillingSubscription(db, serviceState.subscriptionRecord, new Date().toISOString())
+  }
+
+  const invoiceRows = await db
+    .prepare(
+      `SELECT id, subscription_id, number, status, amount_due, currency, due_at,
+        paid_at, hosted_invoice_url, document_id, provider_invoice_id
+       FROM billing_invoices
+       ORDER BY due_at DESC, id DESC`,
+    )
+    .all<BillingInvoiceRow>()
+  const invoices = (invoiceRows.results ?? []).map(billingInvoiceFromRow)
+  if (invoices.length > 0) {
+    serviceState.invoiceRecords = invoices
+  } else if (Array.isArray(serviceState.invoiceRecords) && serviceState.invoiceRecords.length > 0) {
+    await persistBillingInvoices(db, serviceState.invoiceRecords, new Date().toISOString())
+  }
+
+  const deliveryRows = await db
+    .prepare(
+      `SELECT id, webhook_id, event, status, attempts, last_attempt_at, next_retry_at,
+        response_code, idempotency_key
+       FROM webhook_deliveries
+       ORDER BY last_attempt_at DESC, id DESC`,
+    )
+    .all<WebhookDeliveryRow>()
+  const deliveries = (deliveryRows.results ?? []).map(webhookDeliveryFromRow)
+  if (deliveries.length > 0) {
+    serviceState.webhookDeliveryRecords = deliveries
+  } else if (Array.isArray(serviceState.webhookDeliveryRecords) && serviceState.webhookDeliveryRecords.length > 0) {
+    await persistWebhookDeliveries(db, serviceState.webhookDeliveryRecords, new Date().toISOString())
+  }
+}
+
+async function persistBillingState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistBillingSubscription(db, serviceState.subscriptionRecord, updatedAt)
+  await persistBillingInvoices(db, serviceState.invoiceRecords, updatedAt)
+  await persistWebhookDeliveries(db, serviceState.webhookDeliveryRecords, updatedAt)
+}
+
+async function persistBillingSubscription(db: D1Database, subscription: BillingSubscriptionRecord, updatedAt: string) {
+  if (!subscription) {
+    return
+  }
+  await db
+    .prepare(
+      `INSERT INTO billing_subscriptions (
+        id, organization_id, plan_id, provider, collection_mode, status,
+        current_period_start, current_period_end, trial_ends_at, grace_ends_at,
+        freeze_reason, provider_customer_id, provider_subscription_id, can_write,
+        can_export, next_invoice_at, subscription_updated_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+      ON CONFLICT(id) DO UPDATE SET
+        organization_id = excluded.organization_id,
+        plan_id = excluded.plan_id,
+        provider = excluded.provider,
+        collection_mode = excluded.collection_mode,
+        status = excluded.status,
+        current_period_start = excluded.current_period_start,
+        current_period_end = excluded.current_period_end,
+        trial_ends_at = excluded.trial_ends_at,
+        grace_ends_at = excluded.grace_ends_at,
+        freeze_reason = excluded.freeze_reason,
+        provider_customer_id = excluded.provider_customer_id,
+        provider_subscription_id = excluded.provider_subscription_id,
+        can_write = excluded.can_write,
+        can_export = excluded.can_export,
+        next_invoice_at = excluded.next_invoice_at,
+        subscription_updated_at = excluded.subscription_updated_at,
+        updated_at = excluded.updated_at`,
+    )
+    .bind(
+      subscription.id,
+      subscription.organizationId,
+      subscription.planId,
+      subscription.provider,
+      subscription.collectionMode,
+      subscription.status,
+      subscription.currentPeriodStart,
+      subscription.currentPeriodEnd,
+      subscription.trialEndsAt ?? null,
+      subscription.graceEndsAt ?? null,
+      subscription.freezeReason ?? null,
+      subscription.providerCustomerId ?? null,
+      subscription.providerSubscriptionId ?? null,
+      subscription.canWrite ? 1 : 0,
+      subscription.canExport ? 1 : 0,
+      subscription.nextInvoiceAt,
+      subscription.updatedAt,
+      updatedAt,
+    )
+    .run()
+}
+
+async function persistBillingInvoices(db: D1Database, invoices: BillingInvoiceRecord[], updatedAt: string) {
+  if (!Array.isArray(invoices) || invoices.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    invoices.map((invoice) =>
+      db
+        .prepare(
+          `INSERT INTO billing_invoices (
+            id, subscription_id, number, status, amount_due, currency, due_at,
+            paid_at, hosted_invoice_url, document_id, provider_invoice_id, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          ON CONFLICT(id) DO UPDATE SET
+            subscription_id = excluded.subscription_id,
+            number = excluded.number,
+            status = excluded.status,
+            amount_due = excluded.amount_due,
+            currency = excluded.currency,
+            due_at = excluded.due_at,
+            paid_at = excluded.paid_at,
+            hosted_invoice_url = excluded.hosted_invoice_url,
+            document_id = excluded.document_id,
+            provider_invoice_id = excluded.provider_invoice_id,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          invoice.id,
+          invoice.subscriptionId,
+          invoice.number,
+          invoice.status,
+          invoice.amountDue,
+          invoice.currency,
+          invoice.dueAt,
+          invoice.paidAt ?? null,
+          invoice.hostedInvoiceUrl,
+          invoice.documentId ?? null,
+          invoice.providerInvoiceId ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistWebhookDeliveries(db: D1Database, deliveries: WebhookDeliveryRecord[], updatedAt: string) {
+  if (!Array.isArray(deliveries) || deliveries.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    deliveries.map((delivery) =>
+      db
+        .prepare(
+          `INSERT INTO webhook_deliveries (
+            id, webhook_id, event, status, attempts, last_attempt_at, next_retry_at,
+            response_code, idempotency_key, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(id) DO UPDATE SET
+            webhook_id = excluded.webhook_id,
+            event = excluded.event,
+            status = excluded.status,
+            attempts = excluded.attempts,
+            last_attempt_at = excluded.last_attempt_at,
+            next_retry_at = excluded.next_retry_at,
+            response_code = excluded.response_code,
+            idempotency_key = excluded.idempotency_key,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          delivery.id,
+          delivery.webhookId,
+          delivery.event,
+          delivery.status,
+          delivery.attempts,
+          delivery.lastAttemptAt,
+          delivery.nextRetryAt ?? null,
+          delivery.responseCode ?? null,
+          delivery.idempotencyKey,
+          updatedAt,
+        ),
     ),
   )
 }
@@ -2129,6 +3921,59 @@ function rolePolicyFromRow(row: RolePolicyRow): RolePolicy {
   }
 }
 
+function tenantSettingsFromRow(row: TenantSettingsRow): TenantSettingsRecord {
+  return {
+    organizationId: row.organization_id,
+    locale: row.locale,
+    timezone: row.timezone,
+    currency: row.currency,
+    defaultUnit: row.default_unit === 'ml' ? 'ml' : 'g',
+    defaultDilutionPercent: Number(row.default_dilution_percent),
+  }
+}
+
+function featureFlagFromRow(row: FeatureFlagRow): FeatureFlagRecord {
+  return {
+    key: row.flag_key,
+    label: row.label,
+    enabled: row.enabled === 1,
+    phase: Number(row.phase),
+  }
+}
+
+function numberingSequenceFromRow(row: NumberingSequenceRow): NumberingSequenceRecord {
+  return {
+    key: row.sequence_key,
+    pattern: row.pattern,
+    nextValue: Number(row.next_value),
+    scope: row.scope === 'brand' ? 'brand' : 'organization',
+  }
+}
+
+function customFieldFromRow(row: CustomFieldRow): CustomFieldDefinition {
+  return {
+    id: row.id,
+    entity: readCustomFieldEntity(row.entity),
+    key: row.field_key,
+    label: row.label,
+    fieldType: readCustomFieldType(row.field_type),
+    required: row.required === 1,
+    options: parseJson<string[]>(row.options_json, []).filter((option): option is string => typeof option === 'string'),
+    status: row.status === 'ARCHIVED' ? 'ARCHIVED' : 'ACTIVE',
+  }
+}
+
+function brandingFromRow(row: BrandingRow): BrandingConfig {
+  return {
+    organizationId: row.organization_id,
+    displayName: row.display_name,
+    accentColor: row.accent_color,
+    documentFooter: row.document_footer,
+    labelTemplate: row.label_template,
+    logoMode: row.logo_mode === 'monogram' ? 'monogram' : 'wordmark',
+  }
+}
+
 function documentFromRow(row: DocumentRecordRow): DocumentRecord {
   return {
     id: row.id,
@@ -2148,6 +3993,50 @@ function documentFromRow(row: DocumentRecordRow): DocumentRecord {
     checksum: row.checksum,
     owner: row.owner,
     generatedFrom: row.generated_from ?? undefined,
+  }
+}
+
+function supplierFromRow(row: SupplierRow): SupplierRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    status: readDomainStatus(row.status),
+    country: row.country,
+    leadTimeDays: Number(row.lead_time_days),
+    contactEmail: row.contact_email,
+    paymentTerms: row.payment_terms,
+    preferredMaterialIds: parseJson<string[]>(row.preferred_material_ids_json, []).filter(
+      (materialId): materialId is string => typeof materialId === 'string',
+    ),
+  }
+}
+
+function purchaseOrderFromRow(row: PurchaseOrderRow): PurchaseOrderRecord {
+  return {
+    id: row.id,
+    supplierId: row.supplier_id,
+    materialId: row.material_id,
+    quantityGrams: Number(row.quantity_grams),
+    receivedGrams: Number(row.received_grams),
+    status: readPurchaseOrderRecordStatus(row.status),
+    expectedDate: row.expected_date,
+    unitCost: Number(row.unit_cost),
+    currency: row.currency,
+    createdAt: row.created_at,
+  }
+}
+
+function priceHistoryFromRow(row: PriceHistoryRow): PriceHistoryRecord {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    supplierId: row.supplier_id,
+    purchaseOrderId: row.purchase_order_id,
+    unitCost: Number(row.unit_cost),
+    currency: row.currency,
+    quantityGrams: Number(row.quantity_grams),
+    capturedAt: row.captured_at,
+    source: row.source === 'QUOTE' ? 'QUOTE' : 'PO_RECEIPT',
   }
 }
 
@@ -2181,6 +4070,86 @@ function productionBatchFromRow(row: ProductionBatchRow): ProductionBatchRecord 
   }
 }
 
+function commercialSkuFromRow(row: CommercialSkuRow): CommercialSkuRecord {
+  return {
+    id: row.id,
+    materialId: row.material_id,
+    name: row.name,
+    description: row.description,
+    packSizeGrams: Number(row.pack_size_grams),
+    price: Number(row.price),
+    currency: row.currency,
+    tier: readCommercialSkuTier(row.tier),
+    status: readCommercialStatus(row.status),
+    moqPacks: Number(row.moq_packs),
+    labelTemplate: row.label_template,
+  }
+}
+
+function priceListFromRow(row: PriceListRow): PriceListRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    customerGroup: readCustomerGroup(row.customer_group),
+    currency: row.currency,
+    multiplier: Number(row.multiplier),
+    sampleEligible: row.sample_eligible === 1,
+    status: readCommercialStatus(row.status),
+  }
+}
+
+function quoteFromRow(row: QuoteRow): QuoteRecord {
+  return {
+    id: row.id,
+    skuId: row.sku_id,
+    customer: row.customer,
+    customerGroup: readCustomerGroup(row.customer_group),
+    quantityPacks: Number(row.quantity_packs),
+    unitPrice: Number(row.unit_price),
+    total: Number(row.total),
+    currency: row.currency,
+    status: readQuoteStatus(row.status),
+    createdAt: row.created_at,
+  }
+}
+
+function sampleRequestFromRow(row: SampleRequestRow): SampleRequestRecord {
+  return {
+    id: row.id,
+    skuId: row.sku_id,
+    customer: row.customer,
+    packs: Number(row.packs),
+    status: readSampleRequestStatus(row.status),
+    createdAt: row.created_at,
+  }
+}
+
+function customerFromRow(row: CustomerRow): CustomerRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    group: readCustomerGroup(row.customer_group),
+    creditLimit: Number(row.credit_limit),
+    paymentTerms: readPaymentTerms(row.payment_terms),
+    contactEmail: row.contact_email,
+    billingAddress: parseJson<CustomerRecord['billingAddress']>(row.billing_address_json, {
+      id: `${row.id}-BILL`,
+      label: 'Billing',
+      line1: '',
+      city: '',
+      country: '',
+    }),
+    shippingAddress: parseJson<CustomerRecord['shippingAddress']>(row.shipping_address_json, {
+      id: `${row.id}-SHIP`,
+      label: 'Shipping',
+      line1: '',
+      city: '',
+      country: '',
+    }),
+    status: readCustomerStatus(row.status),
+  }
+}
+
 function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
   return {
     id: row.id,
@@ -2205,6 +4174,70 @@ function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
     shipmentId: row.shipment_id ?? undefined,
     documentIds: row.document_ids_json ? parseJson<string[]>(row.document_ids_json, []) : undefined,
     createdAt: row.created_at,
+  }
+}
+
+function scheduledReportFromRow(row: ScheduledReportRow): ScheduledReportRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    cadence: readScheduledReportCadence(row.cadence),
+    audience: row.audience,
+    format: row.format === 'XLSX' ? 'XLSX' : 'PDF',
+    status: row.status === 'PAUSED' ? 'PAUSED' : 'ACTIVE',
+    lastRunAt: row.last_run_at ?? undefined,
+  }
+}
+
+function billingSubscriptionFromRow(row: BillingSubscriptionRow): BillingSubscriptionRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    planId: row.plan_id,
+    provider: readBillingProvider(row.provider),
+    collectionMode: row.collection_mode === 'hosted_checkout' ? 'hosted_checkout' : 'manual_invoice',
+    status: readBillingSubscriptionStatus(row.status),
+    currentPeriodStart: row.current_period_start,
+    currentPeriodEnd: row.current_period_end,
+    trialEndsAt: row.trial_ends_at ?? undefined,
+    graceEndsAt: row.grace_ends_at ?? undefined,
+    freezeReason: row.freeze_reason ?? undefined,
+    providerCustomerId: row.provider_customer_id ?? undefined,
+    providerSubscriptionId: row.provider_subscription_id ?? undefined,
+    canWrite: row.can_write === 1,
+    canExport: row.can_export === 1,
+    nextInvoiceAt: row.next_invoice_at,
+    updatedAt: row.subscription_updated_at,
+  }
+}
+
+function billingInvoiceFromRow(row: BillingInvoiceRow): BillingInvoiceRecord {
+  return {
+    id: row.id,
+    subscriptionId: row.subscription_id,
+    number: row.number,
+    status: readBillingInvoiceStatus(row.status),
+    amountDue: Number(row.amount_due),
+    currency: row.currency,
+    dueAt: row.due_at,
+    paidAt: row.paid_at ?? undefined,
+    hostedInvoiceUrl: row.hosted_invoice_url,
+    documentId: row.document_id ?? undefined,
+    providerInvoiceId: row.provider_invoice_id ?? undefined,
+  }
+}
+
+function webhookDeliveryFromRow(row: WebhookDeliveryRow): WebhookDeliveryRecord {
+  return {
+    id: row.id,
+    webhookId: row.webhook_id,
+    event: row.event,
+    status: readWebhookDeliveryStatus(row.status),
+    attempts: Number(row.attempts),
+    lastAttemptAt: row.last_attempt_at,
+    nextRetryAt: row.next_retry_at ?? undefined,
+    responseCode: row.response_code ?? undefined,
+    idempotencyKey: row.idempotency_key,
   }
 }
 
@@ -2347,6 +4380,27 @@ function readRolePolicyScope(value: string): RolePolicy['scope'] {
   return 'organization'
 }
 
+function readDomainStatus(value: string): DomainStatus {
+  if (value === 'stable' || value === 'active' || value === 'testing' || value === 'review' || value === 'draft' || value === 'alert') {
+    return value
+  }
+  return 'review'
+}
+
+function readCustomFieldEntity(value: string): CustomFieldDefinition['entity'] {
+  if (value === 'material' || value === 'formula' || value === 'lot' || value === 'document' || value === 'supplier' || value === 'order') {
+    return value
+  }
+  return 'material'
+}
+
+function readCustomFieldType(value: string): CustomFieldDefinition['fieldType'] {
+  if (value === 'text' || value === 'number' || value === 'select' || value === 'date' || value === 'boolean') {
+    return value
+  }
+  return 'text'
+}
+
 function readDocumentType(value: string): DocumentRecord['type'] {
   if (
     value === 'SDS' ||
@@ -2377,6 +4431,62 @@ function readDocumentStatus(value: string): DocumentRecord['status'] {
     return value
   }
   return 'REVIEW_REQUIRED'
+}
+
+function readPurchaseOrderRecordStatus(value: string): PurchaseOrderRecord['status'] {
+  if (value === 'DRAFT' || value === 'SENT' || value === 'PARTIAL' || value === 'RECEIVED') {
+    return value
+  }
+  return 'DRAFT'
+}
+
+function readCommercialSkuTier(value: string): CommercialSkuRecord['tier'] {
+  if (value === 'Studio' || value === 'Lab' || value === 'Bulk') {
+    return value
+  }
+  return 'Studio'
+}
+
+function readCommercialStatus(value: string): CommercialSkuRecord['status'] {
+  if (value === 'DRAFT' || value === 'ACTIVE' || value === 'ARCHIVED') {
+    return value
+  }
+  return 'DRAFT'
+}
+
+function readCustomerGroup(value: string): PriceListRecord['customerGroup'] {
+  if (value === 'Studio' || value === 'Lab' || value === 'Bulk' || value === 'Contract') {
+    return value
+  }
+  return 'Studio'
+}
+
+function readQuoteStatus(value: string): QuoteRecord['status'] {
+  if (value === 'DRAFT' || value === 'REVIEW' || value === 'SENT') {
+    return value
+  }
+  return 'REVIEW'
+}
+
+function readSampleRequestStatus(value: string): SampleRequestRecord['status'] {
+  if (value === 'REQUESTED' || value === 'APPROVED' || value === 'CONVERTED') {
+    return value
+  }
+  return 'REQUESTED'
+}
+
+function readPaymentTerms(value: string): CustomerRecord['paymentTerms'] {
+  if (value === 'NET_15' || value === 'NET_30' || value === 'PREPAID') {
+    return value
+  }
+  return 'PREPAID'
+}
+
+function readCustomerStatus(value: string): CustomerRecord['status'] {
+  if (value === 'ACTIVE' || value === 'CREDIT_HOLD' || value === 'ARCHIVED') {
+    return value
+  }
+  return 'ACTIVE'
 }
 
 function readProductionBatchRecordStatus(value: string): ProductionBatchRecord['status'] {
@@ -2451,6 +4561,48 @@ function readOrderDocumentStatus(value: string): OrderDocumentRecord['status'] {
   return 'DRAFT'
 }
 
+function readScheduledReportCadence(value: string): ScheduledReportRecord['cadence'] {
+  if (value === 'DAILY' || value === 'WEEKLY' || value === 'MONTHLY') {
+    return value
+  }
+  return 'WEEKLY'
+}
+
+function readBillingProvider(value: string): BillingSubscriptionRecord['provider'] {
+  if (value === 'manual' || value === 'paddle' || value === 'stripe') {
+    return value
+  }
+  return 'manual'
+}
+
+function readBillingSubscriptionStatus(value: string): BillingSubscriptionRecord['status'] {
+  if (
+    value === 'trialing' ||
+    value === 'active' ||
+    value === 'past_due' ||
+    value === 'grace' ||
+    value === 'frozen' ||
+    value === 'canceled'
+  ) {
+    return value
+  }
+  return 'past_due'
+}
+
+function readBillingInvoiceStatus(value: string): BillingInvoiceRecord['status'] {
+  if (value === 'draft' || value === 'open' || value === 'paid' || value === 'void' || value === 'uncollectible') {
+    return value
+  }
+  return 'draft'
+}
+
+function readWebhookDeliveryStatus(value: string): WebhookDeliveryRecord['status'] {
+  if (value === 'delivered' || value === 'retrying' || value === 'failed') {
+    return value
+  }
+  return 'retrying'
+}
+
 function readLotQualityStatus(value: string): InventoryLot['qualityStatus'] {
   if (value === 'APPROVED' || value === 'QUARANTINE' || value === 'ON_HOLD' || value === 'REJECTED' || value === 'EXPIRED') {
     return value
@@ -2493,6 +4645,21 @@ function parseJson<T>(value: string, fallback: T): T {
   } catch {
     return fallback
   }
+}
+
+function parseJsonOptional<T>(value: string | null | undefined): T | undefined {
+  if (!value) {
+    return undefined
+  }
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return undefined
+  }
+}
+
+function isDefined<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined
 }
 
 async function runStatementBatches(db: D1Database, statements: D1PreparedStatement[], batchSize = 50) {
