@@ -1422,7 +1422,12 @@ function App() {
     const payload = await requestApi<SignupResponse>('/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        organizationName: input.organizationName.trim(),
+        workspaceSlug: toWorkspaceSlug(input.workspaceSlug),
+        email: input.email.trim().toLowerCase(),
+        name: input.name.trim(),
+      }),
     })
     acceptAuthSession(payload.session, payload.csrfToken)
     return payload
@@ -1965,6 +1970,10 @@ function Topbar({
   )
 }
 
+function toWorkspaceSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
+}
+
 function AuthGateway({
   onLogin,
   onSignup,
@@ -1977,6 +1986,7 @@ function AuthGateway({
   const [name, setName] = useState('Thuan Le Minh')
   const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
   const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
+  const [workspaceSlugTouched, setWorkspaceSlugTouched] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Login with an active tenant membership, or sign up a new workspace.')
 
@@ -2001,17 +2011,31 @@ function AuthGateway({
   function switchMode(nextMode: 'login' | 'signup') {
     setMode(nextMode)
     setStatus(nextMode === 'login' ? 'Use owner@example.test for the demo tenant.' : 'Create a new tenant workspace and owner session.')
+    setWorkspaceSlugTouched(false)
     if (nextMode === 'signup') {
+      const defaultOrganizationName = 'New Fragrance Lab'
       setEmail('owner@newlab.test')
       setName('Workspace Owner')
-      setOrganizationName('New Fragrance Lab')
-      setWorkspaceSlug('new-fragrance-lab')
+      setOrganizationName(defaultOrganizationName)
+      setWorkspaceSlug(toWorkspaceSlug(defaultOrganizationName))
     } else {
       setEmail('owner@example.test')
       setName('Thuan Le Minh')
       setOrganizationName('NOXELIS Lab')
       setWorkspaceSlug('noxelis-live')
     }
+  }
+
+  function updateOrganizationName(value: string) {
+    setOrganizationName(value)
+    if (!workspaceSlugTouched) {
+      setWorkspaceSlug(toWorkspaceSlug(value))
+    }
+  }
+
+  function updateWorkspaceSlug(value: string) {
+    setWorkspaceSlug(toWorkspaceSlug(value))
+    setWorkspaceSlugTouched(true)
   }
 
   return (
@@ -2051,7 +2075,7 @@ function AuthGateway({
                   <input
                     aria-label="Signup organization"
                     value={organizationName}
-                    onChange={(event) => setOrganizationName(event.target.value)}
+                    onChange={(event) => updateOrganizationName(event.target.value)}
                   />
                 </label>
                 <label className="field-row">
@@ -2059,7 +2083,7 @@ function AuthGateway({
                   <input
                     aria-label="Signup workspace slug"
                     value={workspaceSlug}
-                    onChange={(event) => setWorkspaceSlug(event.target.value)}
+                    onChange={(event) => updateWorkspaceSlug(event.target.value)}
                   />
                 </label>
                 <label className="field-row">
