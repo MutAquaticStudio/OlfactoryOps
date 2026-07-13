@@ -1,6 +1,17 @@
 import { NorthStarService } from '../server/src/services/northstar.service.js'
 import { TooManyRequestsException } from '../server/src/shared/http-error.js'
-import type { AuditEvent, AuthSession, DocumentRecord, InventoryLot, InventoryMovement, LabUsageRecord } from '../src/data/northStar.js'
+import type {
+  AuditEvent,
+  AuthSession,
+  BrandRecord,
+  DocumentRecord,
+  InventoryLot,
+  InventoryMovement,
+  LabUsageRecord,
+  MembershipRecord,
+  OrganizationRecord,
+  RolePolicy,
+} from '../src/data/northStar.js'
 
 type Env = {
   DB: D1Database
@@ -80,6 +91,10 @@ type SnapshotKey =
 type ServiceState = Record<SnapshotKey, unknown> & {
   sessions: AuthSession[]
   auditEvents: AuditEvent[]
+  organizationRecords: OrganizationRecord[]
+  brandRecords: BrandRecord[]
+  membershipRecords: MembershipRecord[]
+  rolePolicyRecords: RolePolicy[]
   documentRecords: DocumentRecord[]
   lots: InventoryLot[]
   movements: InventoryMovement[]
@@ -93,6 +108,10 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'sessions',
   'auditEvents',
   'auditCounter',
+  'organizationRecords',
+  'brandRecords',
+  'membershipRecords',
+  'rolePolicyRecords',
   'documentRecords',
   'lots',
   'movements',
@@ -143,7 +162,7 @@ const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KE
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'document_records', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'tenant_organizations', 'tenant_brands', 'tenant_memberships', 'role_policies', 'document_records', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -523,6 +542,10 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureRateLimitTable(db)
   await ensureAuthSessionTable(db)
   await ensureAuditEventTable(db)
+  await ensureTenantOrganizationTable(db)
+  await ensureTenantBrandTable(db)
+  await ensureTenantMembershipTable(db)
+  await ensureRolePolicyTable(db)
   await ensureDocumentRecordTable(db)
   await ensureInventoryLotTable(db)
   await ensureInventoryMovementTable(db)
@@ -603,6 +626,79 @@ async function ensureAuditEventTable(db: D1Database) {
     .run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)').run()
+}
+
+async function ensureTenantOrganizationTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS tenant_organizations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        plan TEXT NOT NULL,
+        status TEXT NOT NULL,
+        primary_contact TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_organizations_status ON tenant_organizations(status)').run()
+}
+
+async function ensureTenantBrandTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS tenant_brands (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        default_currency TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_brands_org_status ON tenant_brands(organization_id, status)').run()
+}
+
+async function ensureTenantMembershipTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS tenant_memberships (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        name TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        brand_ids_json TEXT NOT NULL,
+        role TEXT NOT NULL,
+        status TEXT NOT NULL,
+        mfa_enabled INTEGER NOT NULL DEFAULT 0,
+        last_active_at TEXT NOT NULL,
+        invited_at TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_memberships_org_status ON tenant_memberships(organization_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_memberships_email ON tenant_memberships(email)').run()
+}
+
+async function ensureRolePolicyTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS role_policies (
+        role TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        mfa_required INTEGER NOT NULL DEFAULT 0,
+        permissions_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (role, scope)
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_role_policies_scope ON role_policies(scope)').run()
 }
 
 async function ensureDocumentRecordTable(db: D1Database) {
@@ -781,6 +877,45 @@ type AuditEventRow = {
   outcome: string
 }
 
+type OrganizationRow = {
+  id: string
+  name: string
+  slug: string
+  plan: string
+  status: string
+  primary_contact: string
+  created_at: string
+}
+
+type BrandRow = {
+  id: string
+  organization_id: string
+  name: string
+  status: string
+  default_currency: string
+}
+
+type MembershipRow = {
+  id: string
+  user_id: string
+  email: string
+  name: string
+  organization_id: string
+  brand_ids_json: string
+  role: string
+  status: string
+  mfa_enabled: number
+  last_active_at: string
+  invited_at: string | null
+}
+
+type RolePolicyRow = {
+  role: string
+  scope: string
+  mfa_required: number
+  permissions_json: string
+}
+
 type DocumentRecordRow = {
   id: string
   type: string
@@ -885,6 +1020,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   }
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+  await hydrateTenantCoreState(db, serviceState)
   await hydrateDocumentState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
@@ -893,6 +1029,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistTenantCoreState(db, serviceState, updatedAt)
   await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
@@ -983,6 +1120,197 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
              updated_at = excluded.updated_at`,
         )
         .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
+    ),
+  )
+}
+
+async function hydrateTenantCoreState(db: D1Database, serviceState: ServiceState) {
+  const organizationRows = await db
+    .prepare(
+      `SELECT id, name, slug, plan, status, primary_contact, created_at
+       FROM tenant_organizations
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<OrganizationRow>()
+  const organizations = (organizationRows.results ?? []).map(organizationFromRow)
+  if (organizations.length > 0) {
+    serviceState.organizationRecords = organizations
+  } else if (Array.isArray(serviceState.organizationRecords) && serviceState.organizationRecords.length > 0) {
+    await persistOrganizations(db, serviceState.organizationRecords, new Date().toISOString())
+  }
+
+  const brandRows = await db
+    .prepare(
+      `SELECT id, organization_id, name, status, default_currency
+       FROM tenant_brands
+       ORDER BY organization_id ASC, id ASC`,
+    )
+    .all<BrandRow>()
+  const brands = (brandRows.results ?? []).map(brandFromRow)
+  if (brands.length > 0) {
+    serviceState.brandRecords = brands
+  } else if (Array.isArray(serviceState.brandRecords) && serviceState.brandRecords.length > 0) {
+    await persistBrands(db, serviceState.brandRecords, new Date().toISOString())
+  }
+
+  const membershipRows = await db
+    .prepare(
+      `SELECT id, user_id, email, name, organization_id, brand_ids_json, role, status,
+        mfa_enabled, last_active_at, invited_at
+       FROM tenant_memberships
+       ORDER BY organization_id ASC, id ASC`,
+    )
+    .all<MembershipRow>()
+  const memberships = (membershipRows.results ?? []).map(membershipFromRow)
+  if (memberships.length > 0) {
+    serviceState.membershipRecords = memberships
+  } else if (Array.isArray(serviceState.membershipRecords) && serviceState.membershipRecords.length > 0) {
+    await persistMemberships(db, serviceState.membershipRecords, new Date().toISOString())
+  }
+
+  const roleRows = await db
+    .prepare(
+      `SELECT role, scope, mfa_required, permissions_json
+       FROM role_policies
+       ORDER BY scope ASC, role ASC`,
+    )
+    .all<RolePolicyRow>()
+  const rolePolicies = (roleRows.results ?? []).map(rolePolicyFromRow)
+  if (rolePolicies.length > 0) {
+    serviceState.rolePolicyRecords = rolePolicies
+  } else if (Array.isArray(serviceState.rolePolicyRecords) && serviceState.rolePolicyRecords.length > 0) {
+    await persistRolePolicies(db, serviceState.rolePolicyRecords, new Date().toISOString())
+  }
+}
+
+async function persistTenantCoreState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistOrganizations(db, serviceState.organizationRecords, updatedAt)
+  await persistBrands(db, serviceState.brandRecords, updatedAt)
+  await persistMemberships(db, serviceState.membershipRecords, updatedAt)
+  await persistRolePolicies(db, serviceState.rolePolicyRecords, updatedAt)
+}
+
+async function persistOrganizations(db: D1Database, organizations: OrganizationRecord[], updatedAt: string) {
+  if (!Array.isArray(organizations) || organizations.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    organizations.map((organization) =>
+      db
+        .prepare(
+          `INSERT INTO tenant_organizations (
+            id, name, slug, plan, status, primary_contact, created_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            slug = excluded.slug,
+            plan = excluded.plan,
+            status = excluded.status,
+            primary_contact = excluded.primary_contact,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          organization.id,
+          organization.name,
+          organization.slug,
+          organization.plan,
+          organization.status,
+          organization.primaryContact,
+          organization.createdAt,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistBrands(db: D1Database, brands: BrandRecord[], updatedAt: string) {
+  if (!Array.isArray(brands) || brands.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    brands.map((brand) =>
+      db
+        .prepare(
+          `INSERT INTO tenant_brands (id, organization_id, name, status, default_currency, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(id) DO UPDATE SET
+             organization_id = excluded.organization_id,
+             name = excluded.name,
+             status = excluded.status,
+             default_currency = excluded.default_currency,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(brand.id, brand.organizationId, brand.name, brand.status, brand.defaultCurrency, updatedAt),
+    ),
+  )
+}
+
+async function persistMemberships(db: D1Database, memberships: MembershipRecord[], updatedAt: string) {
+  if (!Array.isArray(memberships) || memberships.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    memberships.map((membership) =>
+      db
+        .prepare(
+          `INSERT INTO tenant_memberships (
+            id, user_id, email, name, organization_id, brand_ids_json, role, status,
+            mfa_enabled, last_active_at, invited_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          ON CONFLICT(id) DO UPDATE SET
+            user_id = excluded.user_id,
+            email = excluded.email,
+            name = excluded.name,
+            organization_id = excluded.organization_id,
+            brand_ids_json = excluded.brand_ids_json,
+            role = excluded.role,
+            status = excluded.status,
+            mfa_enabled = excluded.mfa_enabled,
+            last_active_at = excluded.last_active_at,
+            invited_at = excluded.invited_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          membership.id,
+          membership.userId,
+          membership.email,
+          membership.name,
+          membership.organizationId,
+          JSON.stringify(membership.brandIds),
+          membership.role,
+          membership.status,
+          membership.mfaEnabled ? 1 : 0,
+          membership.lastActiveAt,
+          membership.invitedAt ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistRolePolicies(db: D1Database, rolePolicies: RolePolicy[], updatedAt: string) {
+  if (!Array.isArray(rolePolicies) || rolePolicies.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    rolePolicies.map((policy) =>
+      db
+        .prepare(
+          `INSERT INTO role_policies (role, scope, mfa_required, permissions_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)
+           ON CONFLICT(role, scope) DO UPDATE SET
+             mfa_required = excluded.mfa_required,
+             permissions_json = excluded.permissions_json,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(policy.role, policy.scope, policy.mfaRequired ? 1 : 0, JSON.stringify(policy.permissions), updatedAt),
     ),
   )
 }
@@ -1304,6 +1632,55 @@ function auditEventFromRow(row: AuditEventRow): AuditEvent {
   }
 }
 
+function organizationFromRow(row: OrganizationRow): OrganizationRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    plan: readOrganizationPlan(row.plan),
+    status: readOrganizationStatus(row.status),
+    primaryContact: row.primary_contact,
+    createdAt: row.created_at,
+  }
+}
+
+function brandFromRow(row: BrandRow): BrandRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    name: row.name,
+    status: readBrandStatus(row.status),
+    defaultCurrency: row.default_currency,
+  }
+}
+
+function membershipFromRow(row: MembershipRow): MembershipRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    email: row.email,
+    name: row.name,
+    organizationId: row.organization_id,
+    brandIds: parseJson<string[]>(row.brand_ids_json, []).filter((brandId): brandId is string => typeof brandId === 'string'),
+    role: row.role,
+    status: readMembershipStatus(row.status),
+    mfaEnabled: row.mfa_enabled === 1,
+    lastActiveAt: row.last_active_at,
+    invitedAt: row.invited_at ?? undefined,
+  }
+}
+
+function rolePolicyFromRow(row: RolePolicyRow): RolePolicy {
+  return {
+    role: row.role,
+    scope: readRolePolicyScope(row.scope),
+    mfaRequired: row.mfa_required === 1,
+    permissions: parseJson<string[]>(row.permissions_json, []).filter(
+      (permission): permission is string => typeof permission === 'string',
+    ),
+  }
+}
+
 function documentFromRow(row: DocumentRecordRow): DocumentRecord {
   return {
     id: row.id,
@@ -1403,6 +1780,41 @@ function readAuditOutcome(value: string): AuditEvent['outcome'] {
     return value
   }
   return 'review'
+}
+
+function readOrganizationPlan(value: string): OrganizationRecord['plan'] {
+  if (value === 'Free' || value === 'Pro' || value === 'Team' || value === 'Enterprise') {
+    return value
+  }
+  return 'Team'
+}
+
+function readOrganizationStatus(value: string): OrganizationRecord['status'] {
+  if (value === 'ACTIVE' || value === 'FROZEN' || value === 'SUSPENDED') {
+    return value
+  }
+  return 'ACTIVE'
+}
+
+function readBrandStatus(value: string): BrandRecord['status'] {
+  if (value === 'ACTIVE' || value === 'ARCHIVED') {
+    return value
+  }
+  return 'ACTIVE'
+}
+
+function readMembershipStatus(value: string): MembershipRecord['status'] {
+  if (value === 'ACTIVE' || value === 'INVITED' || value === 'DEACTIVATED') {
+    return value
+  }
+  return 'INVITED'
+}
+
+function readRolePolicyScope(value: string): RolePolicy['scope'] {
+  if (value === 'organization' || value === 'platform') {
+    return value
+  }
+  return 'organization'
 }
 
 function readDocumentType(value: string): DocumentRecord['type'] {

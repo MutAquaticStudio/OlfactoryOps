@@ -39,7 +39,7 @@ const testCases = [
     ],
     assertions: [
       '/health returns 200 and service identity.',
-      'Persistence status reports hybrid D1 with normalized auth, audit, document, inventory, and lab usage tables.',
+      'Persistence status reports hybrid D1 with normalized tenant, auth, audit, document, inventory, and lab usage tables.',
       'Tenant console returns 401 without a session.',
       'API keys return 401 without a session.',
     ],
@@ -54,6 +54,10 @@ const testCases = [
       const requiredTables = [
         'auth_sessions',
         'audit_events',
+        'tenant_organizations',
+        'tenant_brands',
+        'tenant_memberships',
+        'role_policies',
         'document_records',
         'inventory_lots',
         'inventory_movements',
