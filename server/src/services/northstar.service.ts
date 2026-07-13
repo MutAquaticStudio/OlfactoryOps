@@ -13,7 +13,8 @@ import {
   authSessions,
   billingInvoices,
   billingPlan,
-  billingSubscription,
+  billingPlans,
+  billingSubscriptions,
   brandingConfig,
   brands,
   batchCostReport,
@@ -338,7 +339,7 @@ export class NorthStarService {
   private shipmentRecords: ShipmentRecord[] = structuredClone(shipments)
   private orderDocumentRecords: OrderDocumentRecord[] = structuredClone(orderDocuments)
   private scheduledReportRecords: ScheduledReportRecord[] = structuredClone(scheduledReports)
-  private subscriptionRecord: BillingSubscriptionRecord = structuredClone(billingSubscription)
+  private subscriptionRecords: BillingSubscriptionRecord[] = structuredClone(billingSubscriptions)
   private invoiceRecords: BillingInvoiceRecord[] = structuredClone(billingInvoices)
   private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditCounter = auditEvents.length
@@ -1475,7 +1476,7 @@ export class NorthStarService {
       id: organizationId,
       name: organizationName,
       slug: workspaceSlug,
-      plan: 'Team',
+      plan: 'Free',
       status: 'ACTIVE',
       primaryContact: email,
       createdAt,
@@ -1488,7 +1489,7 @@ export class NorthStarService {
       defaultCurrency: this.settingsRecord.currency,
     }
     const membership: MembershipRecord = {
-      id: `MBR-${workspaceSlug.toUpperCase().slice(0, 12)}`,
+      id: `MBR-${workspaceSlug.toUpperCase()}`,
       userId,
       email,
       name,
@@ -1504,6 +1505,8 @@ export class NorthStarService {
     this.organizationRecords = [organization, ...this.organizationRecords]
     this.brandRecords = [brand, ...this.brandRecords]
     this.membershipRecords = [membership, ...this.membershipRecords]
+    const subscription = this.createSubscriptionRecord(organization.id, 'PLAN-APPRENTICE', createdAt)
+    this.upsertSubscription(subscription)
     const loginResult = this.login(email).data
     const session = loginResult.session
     const audit = this.recordAudit('auth.signup', organization.id, session.userId, 'allowed')
@@ -1513,6 +1516,7 @@ export class NorthStarService {
         organization,
         brand,
         membership,
+        subscription,
         session,
         csrfToken: loginResult.csrfToken,
         audit,
@@ -3592,58 +3596,86 @@ export class NorthStarService {
   }
 
   billingPlan() {
-    return { data: billingPlan }
+    return { data: this.planForSubscription(this.currentSubscription()) }
+  }
+
+  billingPlans() {
+    return { data: billingPlans }
   }
 
   billingConsole(): { data: BillingConsoleResponse } {
-    const usage = this.billingUsageRecord()
-    const limitChecks = this.billingLimitChecks(usage)
+    const subscription = this.currentSubscription()
+    const plan = this.planForSubscription(subscription)
+    const usage = this.billingUsageRecord(subscription)
+    const limitChecks = this.billingLimitChecks(usage, plan)
+    const invoices = this.invoicesForSubscription(subscription.id)
     return {
       data: {
-        plan: billingPlan,
-        subscription: this.subscriptionRecord,
+        plans: billingPlans,
+        plan,
+        subscription,
         usage,
         limitChecks,
-        invoices: this.invoiceRecords,
+        invoices,
         sso: ssoConfig,
         apiKeys,
         webhooks,
         webhookDeliveries: this.webhookDeliveryRecords,
-        readiness: this.commercialReadinessChecks(limitChecks),
+        readiness: this.commercialReadinessChecks(limitChecks, subscription, invoices),
         invariant: 'subscription status and plan limits are enforced server-side before commercial writes',
       },
     }
   }
 
   billingSubscription() {
-    return { data: this.subscriptionRecord }
+    return { data: this.currentSubscription() }
   }
 
   billingUsage() {
-    return { data: this.billingUsageRecord() }
+    return { data: this.billingUsageRecord(this.currentSubscription()) }
   }
 
   billingInvoices() {
-    return { data: this.invoiceRecords }
+    const subscription = this.currentSubscription()
+    return { data: this.invoicesForSubscription(subscription.id) }
+  }
+
+  selectBillingPlan(body: { planId?: string; billingCycle?: 'monthly' | 'annual' } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const plan = this.billingPlanForId(body.planId?.trim() || 'PLAN-APPRENTICE')
+    const subscription = this.activatePlanForOrganization(session.organizationId, plan)
+    const audit = this.recordAudit('billing.plan.select', plan.id, session.userId, 'allowed')
+    return {
+      data: {
+        id: `BILL-ACT-${audit.id}`,
+        mode: 'plan_selected',
+        status: 'completed',
+        url:
+          plan.monthlyPrice > 0
+            ? `https://billing.labofscents.org/checkout/${subscription.id}?plan=${encodeURIComponent(plan.id)}`
+            : undefined,
+        audit,
+        invariant: 'plan selection is tenant-scoped; paid plans start a no-card trial before hosted checkout collection',
+      } satisfies BillingActionResponse,
+    }
   }
 
   startBillingCheckout(body: { planId?: string; mode?: 'checkout' | 'manual_sales' } = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
+    const subscription = this.currentSubscription()
     const mode = body.mode === 'checkout' ? 'checkout' : 'manual_sales'
-    const planId = body.planId?.trim() || billingPlan.id
-    if (planId !== billingPlan.id) {
-      throw new UnprocessableEntityException(`Plan ${planId} is not available for this tenant`)
-    }
-    const audit = this.recordAudit('billing.checkout.start', planId, session.userId, 'allowed')
+    const plan = this.billingPlanForId(body.planId?.trim() || subscription.planId)
+    const audit = this.recordAudit('billing.checkout.start', plan.id, session.userId, 'allowed')
     const response: BillingActionResponse = {
       id: `BILL-ACT-${audit.id}`,
       mode,
       status: 'ready',
       url:
         mode === 'checkout'
-          ? `https://billing.labofscents.org/checkout/${this.subscriptionRecord.id}`
-          : `mailto:sales@labofscents.org?subject=OlfactoryOps%20${encodeURIComponent(billingPlan.name)}%20plan`,
+          ? `https://billing.labofscents.org/checkout/${subscription.id}?plan=${encodeURIComponent(plan.id)}`
+          : `mailto:sales@labofscents.org?subject=OlfactoryOps%20${encodeURIComponent(plan.name)}%20plan`,
       audit,
       invariant: 'checkout intent is tenant-scoped and auditable; payment provider webhooks must be idempotent',
     }
@@ -3653,12 +3685,13 @@ export class NorthStarService {
   openBillingPortal() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
-    const audit = this.recordAudit('billing.portal.open', this.subscriptionRecord.id, session.userId, 'allowed')
+    const subscription = this.currentSubscription()
+    const audit = this.recordAudit('billing.portal.open', subscription.id, session.userId, 'allowed')
     const response: BillingActionResponse = {
       id: `BILL-ACT-${audit.id}`,
       mode: 'portal',
       status: 'ready',
-      url: `https://billing.labofscents.org/portal/${this.subscriptionRecord.id}`,
+      url: `https://billing.labofscents.org/portal/${subscription.id}`,
       audit,
       invariant: 'billing portal action never trusts tenant identity from the browser',
     }
@@ -3669,15 +3702,16 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const reason = body.reason?.trim() || 'Manual billing freeze'
-    this.subscriptionRecord = {
-      ...this.subscriptionRecord,
+    const subscription = {
+      ...this.currentSubscription(),
       status: 'frozen',
       canWrite: false,
       canExport: true,
       freezeReason: reason,
       updatedAt: new Date().toISOString(),
-    }
-    const audit = this.recordAudit('billing.subscription.freeze', this.subscriptionRecord.id, session.userId, 'allowed')
+    } satisfies BillingSubscriptionRecord
+    this.upsertSubscription(subscription)
+    const audit = this.recordAudit('billing.subscription.freeze', subscription.id, session.userId, 'allowed')
     return {
       data: {
         id: `BILL-ACT-${audit.id}`,
@@ -3692,16 +3726,17 @@ export class NorthStarService {
   reactivateSubscription() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
-    this.subscriptionRecord = {
-      ...this.subscriptionRecord,
+    const subscription = {
+      ...this.currentSubscription(),
       status: 'active',
       canWrite: true,
       canExport: true,
       freezeReason: undefined,
       graceEndsAt: undefined,
       updatedAt: new Date().toISOString(),
-    }
-    const audit = this.recordAudit('billing.subscription.reactivate', this.subscriptionRecord.id, session.userId, 'allowed')
+    } satisfies BillingSubscriptionRecord
+    this.upsertSubscription(subscription)
+    const audit = this.recordAudit('billing.subscription.reactivate', subscription.id, session.userId, 'allowed')
     return {
       data: {
         id: `BILL-ACT-${audit.id}`,
@@ -3740,20 +3775,23 @@ export class NorthStarService {
   }
 
   assertCommercialWriteAllowed(action = 'commercial.write') {
-    if (!this.subscriptionRecord.canWrite || this.subscriptionRecord.status === 'frozen' || this.subscriptionRecord.status === 'canceled') {
+    const subscription = this.currentSubscription()
+    if (!subscription.canWrite || subscription.status === 'frozen' || subscription.status === 'canceled') {
       throw new ForbiddenException({
         message: 'Tenant writes are frozen by subscription state',
         action,
-        subscriptionStatus: this.subscriptionRecord.status,
-        freezeReason: this.subscriptionRecord.freezeReason,
+        subscriptionStatus: subscription.status,
+        freezeReason: subscription.freezeReason,
       })
     }
   }
 
   assertPlanCapacity(limitKey: BillingLimitKey, increment = 1) {
-    const usage = this.billingUsageRecord()
+    const subscription = this.currentSubscription()
+    const plan = this.planForSubscription(subscription)
+    const usage = this.billingUsageRecord(subscription)
     const current = this.usageValueForLimit(usage, limitKey)
-    const limit = billingPlan.limits[limitKey]
+    const limit = plan.limits[limitKey]
     if (current + increment > limit) {
       throw new UnprocessableEntityException({
         message: `Plan limit exceeded for ${limitKey}`,
@@ -3790,15 +3828,142 @@ export class NorthStarService {
     }
   }
 
-  private billingUsageRecord(): BillingUsageMeterRecord {
+  private currentSubscription() {
+    const session = this.currentSession()
+    return this.subscriptionForOrganization(session.organizationId)
+  }
+
+  private subscriptionForOrganization(organizationId: string) {
+    const existing = this.subscriptionRecords.find((subscription) => subscription.organizationId === organizationId)
+    if (existing) {
+      return existing
+    }
+    const subscription = this.createSubscriptionRecord(organizationId, 'PLAN-APPRENTICE', new Date().toISOString())
+    this.upsertSubscription(subscription)
+    return subscription
+  }
+
+  private createSubscriptionRecord(organizationId: string, planId: string, createdAt: string): BillingSubscriptionRecord {
+    const periodEnd = this.addMonths(createdAt, 1)
+    return {
+      id: `SUB-${organizationId.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 40)}`,
+      organizationId,
+      planId,
+      provider: 'manual',
+      collectionMode: 'manual_invoice',
+      status: 'active',
+      currentPeriodStart: createdAt,
+      currentPeriodEnd: periodEnd,
+      canWrite: true,
+      canExport: true,
+      nextInvoiceAt: periodEnd,
+      updatedAt: createdAt,
+    }
+  }
+
+  private activatePlanForOrganization(organizationId: string, plan: BillingPlanRecord) {
+    const now = new Date().toISOString()
+    const previous = this.subscriptionForOrganization(organizationId)
+    const trialEndsAt = plan.monthlyPrice > 0 ? this.addDays(now, 14) : undefined
+    const nextInvoiceAt = trialEndsAt ?? this.addMonths(now, 1)
+    const subscription: BillingSubscriptionRecord = {
+      ...previous,
+      planId: plan.id,
+      provider: 'manual',
+      collectionMode: 'manual_invoice',
+      status: plan.monthlyPrice > 0 ? 'trialing' : 'active',
+      currentPeriodStart: now,
+      currentPeriodEnd: this.addMonths(now, 1),
+      trialEndsAt,
+      graceEndsAt: undefined,
+      freezeReason: undefined,
+      canWrite: true,
+      canExport: true,
+      nextInvoiceAt,
+      updatedAt: now,
+    }
+    this.upsertSubscription(subscription)
+    this.organizationRecords = this.organizationRecords.map((organization) =>
+      organization.id === organizationId
+        ? { ...organization, plan: this.organizationPlanForBillingPlan(plan.id) }
+        : organization,
+    )
+    if (plan.monthlyPrice > 0) {
+      this.upsertInvoice({
+        id: `INV-${subscription.id}-${plan.id}`,
+        subscriptionId: subscription.id,
+        number: `OO-${now.slice(0, 10).replace(/-/g, '')}-${plan.id.replace('PLAN-', '')}`,
+        status: 'draft',
+        amountDue: plan.monthlyPrice,
+        currency: plan.currency,
+        dueAt: nextInvoiceAt,
+        hostedInvoiceUrl: `https://billing.labofscents.org/invoices/${subscription.id}-${plan.id}`,
+        providerInvoiceId: `manual:${subscription.id}:${plan.id}`,
+      })
+    }
+    return subscription
+  }
+
+  private upsertSubscription(subscription: BillingSubscriptionRecord) {
+    this.subscriptionRecords = [
+      subscription,
+      ...this.subscriptionRecords.filter((item) => item.id !== subscription.id),
+    ]
+  }
+
+  private upsertInvoice(invoice: BillingInvoiceRecord) {
+    this.invoiceRecords = [
+      invoice,
+      ...this.invoiceRecords.filter((item) => item.id !== invoice.id),
+    ]
+  }
+
+  private invoicesForSubscription(subscriptionId: string) {
+    return this.invoiceRecords.filter((invoice) => invoice.subscriptionId === subscriptionId)
+  }
+
+  private billingPlanForId(planId: string) {
+    const plan = billingPlans.find((item) => item.id === planId)
+    if (!plan) {
+      throw new UnprocessableEntityException(`Plan ${planId} is not available`)
+    }
+    return plan
+  }
+
+  private planForSubscription(subscription: BillingSubscriptionRecord) {
+    return this.billingPlanForId(subscription.planId)
+  }
+
+  private organizationPlanForBillingPlan(planId: string): OrganizationRecord['plan'] {
+    if (planId === 'PLAN-APPRENTICE') return 'Free'
+    if (planId === 'PLAN-ARTISAN') return 'Pro'
+    if (planId === 'PLAN-MAISON') return 'Enterprise'
+    return 'Team'
+  }
+
+  private addDays(value: string, days: number) {
+    const date = new Date(value)
+    date.setUTCDate(date.getUTCDate() + days)
+    return date.toISOString()
+  }
+
+  private addMonths(value: string, months: number) {
+    const date = new Date(value)
+    date.setUTCMonth(date.getUTCMonth() + months)
+    return date.toISOString()
+  }
+
+  private billingUsageRecord(subscription: BillingSubscriptionRecord): BillingUsageMeterRecord {
     const documentStorageGb =
       this.documentRecords.reduce((total, document) => total + document.sizeKb, 0) / 1024 / 1024
     return {
-      id: `USG-${this.subscriptionRecord.organizationId}-${this.subscriptionRecord.currentPeriodStart.slice(0, 7)}`,
-      organizationId: this.subscriptionRecord.organizationId,
-      periodStart: this.subscriptionRecord.currentPeriodStart,
-      periodEnd: this.subscriptionRecord.currentPeriodEnd,
-      activeSeats: this.membershipRecords.filter((membership) => membership.status === 'ACTIVE').length,
+      id: `USG-${subscription.organizationId}-${subscription.currentPeriodStart.slice(0, 7)}`,
+      organizationId: subscription.organizationId,
+      periodStart: subscription.currentPeriodStart,
+      periodEnd: subscription.currentPeriodEnd,
+      activeSeats: this.membershipRecords.filter(
+        (membership) => membership.organizationId === subscription.organizationId && membership.status === 'ACTIVE',
+      ).length,
       materials: this.materialRecords.length,
       formulas: this.formulaRecords.length,
       lots: this.lots.length,
@@ -3811,7 +3976,7 @@ export class NorthStarService {
     }
   }
 
-  private billingLimitChecks(usage: BillingUsageMeterRecord): BillingLimitCheck[] {
+  private billingLimitChecks(usage: BillingUsageMeterRecord, plan: BillingPlanRecord): BillingLimitCheck[] {
     const rows: { key: BillingLimitKey; label: string; used: number }[] = [
       { key: 'seats', label: 'Active seats', used: usage.activeSeats },
       { key: 'materials', label: 'Materials', used: usage.materials },
@@ -3824,7 +3989,7 @@ export class NorthStarService {
     ]
 
     return rows.map(({ key, label, used }) => {
-      const limit = billingPlan.limits[key]
+      const limit = plan.limits[key]
       const percent = limit === 0 ? 100 : Math.round((used / limit) * 100)
       return {
         key,
@@ -3837,15 +4002,19 @@ export class NorthStarService {
     })
   }
 
-  private commercialReadinessChecks(limitChecks: BillingLimitCheck[]) {
+  private commercialReadinessChecks(
+    limitChecks: BillingLimitCheck[],
+    subscription: BillingSubscriptionRecord,
+    invoices: BillingInvoiceRecord[],
+  ) {
     const hasBlockedLimit = limitChecks.some((check) => check.status === 'blocked')
     const retryingDelivery = this.webhookDeliveryRecords.some((delivery) => delivery.status === 'retrying')
     return [
       {
         key: 'subscription-state',
         label: 'Subscription state gates writes',
-        status: this.subscriptionRecord.canWrite ? 'pass' : 'blocked',
-        detail: `${this.subscriptionRecord.status} subscription; write access is ${this.subscriptionRecord.canWrite ? 'enabled' : 'frozen'}`,
+        status: subscription.canWrite ? 'pass' : 'blocked',
+        detail: `${subscription.status} subscription; write access is ${subscription.canWrite ? 'enabled' : 'frozen'}`,
       },
       {
         key: 'plan-limit-enforcement',
@@ -3856,8 +4025,8 @@ export class NorthStarService {
       {
         key: 'invoice-lifecycle',
         label: 'Invoice lifecycle present',
-        status: this.invoiceRecords.length > 0 ? 'pass' : 'warning',
-        detail: `${this.invoiceRecords.length} invoice record(s) linked to subscription ${this.subscriptionRecord.id}`,
+        status: subscription.status === 'active' || invoices.length > 0 ? 'pass' : 'warning',
+        detail: `${invoices.length} invoice record(s) linked to subscription ${subscription.id}`,
       },
       {
         key: 'webhook-idempotency',

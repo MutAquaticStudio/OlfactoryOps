@@ -884,6 +884,11 @@ export class NorthStarController {
     return this.northStar.billingPlan()
   }
 
+  @Get('billing/plans')
+  billingPlans() {
+    return this.northStar.billingPlans()
+  }
+
   @Get('billing/console')
   billingConsole() {
     return this.northStar.billingConsole()
@@ -907,6 +912,11 @@ export class NorthStarController {
   @Post('billing/checkout')
   startBillingCheckout(@Body() body: { planId?: string; mode?: 'checkout' | 'manual_sales' }) {
     return this.northStar.startBillingCheckout(body)
+  }
+
+  @Post('billing/subscription/select-plan')
+  selectBillingPlan(@Body() body: { planId?: string; billingCycle?: 'monthly' | 'annual' }) {
+    return this.northStar.selectBillingPlan(body)
   }
 
   @Post('billing/portal')

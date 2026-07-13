@@ -52,6 +52,9 @@ try {
   assert(signupData?.session?.organizationId === expectedOrganizationId, 'signup session should be scoped to the new tenant')
   assert(signupData.session.brandId === expectedBrandId, 'signup session should use the default brand')
   assert(signupData.session.email === email, 'signup session email should match signup email')
+  assert(signupData.subscription.organizationId === expectedOrganizationId, 'signup should create a tenant-scoped subscription')
+  assert(signupData.subscription.planId === 'PLAN-APPRENTICE', 'signup should start on the Free Apprentice plan')
+  assert(signupData.subscription.status === 'active', 'signup Free subscription should be active')
   csrfToken = signupData.csrfToken ?? null
   assert(csrfToken?.startsWith('csrf_'), 'signup should return a session-bound CSRF token')
 
@@ -66,6 +69,7 @@ try {
   evidence.push(`Signup brand: ${signupData.brand.id}`)
   evidence.push(`Signup membership: ${signupData.membership.id} / ${signupData.membership.email}`)
   evidence.push(`Signup session: ${signupData.session.id}`)
+  evidence.push(`Signup subscription: ${signupData.subscription.id} / ${signupData.subscription.planId}`)
 
   const me = await apiFetch('/me')
   assertStatus(me, 200, '/me should load with signup cookie')
@@ -93,6 +97,35 @@ try {
   )
   evidence.push(`Tenant console memberships: ${tenantData.memberships.length}`)
   evidence.push(`Tenant console role policies: ${tenantData.rolePolicies.length}`)
+
+  const billing = await apiFetch('/billing/console')
+  assertStatus(billing, 200, 'billing console should load for the signup tenant')
+  const billingData = billing.json?.data
+  assert(billingData.subscription.organizationId === expectedOrganizationId, 'billing subscription should be scoped to the new tenant')
+  assert(billingData.subscription.planId === 'PLAN-APPRENTICE', 'billing console should start on Apprentice')
+  assert(billingData.plan.id === 'PLAN-APPRENTICE', 'billing console should expose the active Free plan')
+  assert(
+    ['PLAN-APPRENTICE', 'PLAN-ARTISAN', 'PLAN-ATELIER', 'PLAN-MAISON'].every((planId) =>
+      billingData.plans.some((plan) => plan.id === planId),
+    ),
+    'billing console should expose the full plan catalog',
+  )
+  evidence.push(`Billing plan catalog: ${billingData.plans.map((plan) => plan.id).join(', ')}`)
+
+  const selectedPlan = await apiFetch('/billing/subscription/select-plan', {
+    method: 'POST',
+    body: JSON.stringify({ planId: 'PLAN-ARTISAN', billingCycle: 'monthly' }),
+  })
+  assertStatus(selectedPlan, 200, 'plan selection should start the Artisan trial')
+  assert(selectedPlan.json?.data?.mode === 'plan_selected', 'plan selection should return a plan_selected billing action')
+
+  const billingAfterSelection = await apiFetch('/billing/console')
+  assertStatus(billingAfterSelection, 200, 'billing console should reload after plan selection')
+  assert(billingAfterSelection.json?.data?.subscription?.organizationId === expectedOrganizationId, 'selected plan should stay inside the new tenant')
+  assert(billingAfterSelection.json.data.subscription.planId === 'PLAN-ARTISAN', 'selected subscription should use Artisan')
+  assert(billingAfterSelection.json.data.subscription.status === 'trialing', 'paid plan selection should start a no-card trial')
+  assert(billingAfterSelection.json.data.plan.id === 'PLAN-ARTISAN', 'active billing plan should be Artisan after selection')
+  evidence.push(`Selected billing plan: ${billingAfterSelection.json.data.plan.id} / ${billingAfterSelection.json.data.subscription.status}`)
 
   const crossTenant = await apiFetch('/security/tenant-probe?organizationId=org-nxl')
   assertStatus(crossTenant, 403, 'new signup tenant should not access org-nxl')
@@ -211,6 +244,8 @@ Signup email: ${email}
 - Signup cookie is HttpOnly, Secure, SameSite=None.
 - GET /me hydrates the signup session from the persisted Worker state.
 - GET /security/tenant-console returns only the new tenant's organization, brand, membership, and sessions.
+- GET /billing/console returns the new tenant's Free subscription and full plan catalog.
+- POST /billing/subscription/select-plan starts a tenant-scoped paid trial.
 - Cross-tenant probe to org-nxl is blocked.
 
 ## Evidence

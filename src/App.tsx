@@ -88,6 +88,7 @@ import {
   type BillingActionResponse,
   type BillingConsoleResponse,
   type BillingPlanRecord,
+  type BillingSubscriptionRecord,
   type CommercialSkuRecord,
   type CostingOverview,
   type CustomerRecord,
@@ -371,6 +372,7 @@ type SignupResponse = {
   organization: OrganizationRecord
   brand: BrandRecord
   membership: MembershipRecord
+  subscription: BillingSubscriptionRecord
   session: AuthSession
   csrfToken: string
   audit: AuditEvent
@@ -1007,6 +1009,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const [billingOnboarding, setBillingOnboarding] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [modal, setModal] = useState<ModalKind>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -1430,6 +1433,7 @@ function App() {
       }),
     })
     acceptAuthSession(payload.session, payload.csrfToken)
+    setBillingOnboarding(true)
     return payload
   }
 
@@ -1440,6 +1444,7 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
+      setBillingOnboarding(false)
       acceptCsrfToken()
       writeStoredAuthSession(null)
       setCommandOpen(false)
@@ -1452,6 +1457,18 @@ function App() {
       <AuthGateway
         onLogin={loginToWorkspace}
         onSignup={signupWorkspace}
+      />
+    )
+  }
+
+  if (billingOnboarding) {
+    return (
+      <PostSignupBillingGate
+        session={currentSession}
+        onComplete={() => {
+          setBillingOnboarding(false)
+          setActiveKey('dashboard')
+        }}
       />
     )
   }
@@ -1972,6 +1989,181 @@ function Topbar({
 
 function toWorkspaceSlug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
+}
+
+function billingPlanCta(plan: BillingPlanRecord) {
+  if (plan.monthlyPrice === 0) return 'Continue Free'
+  if (plan.id === 'PLAN-MAISON') return 'Start enterprise trial'
+  return 'Start 14-day trial'
+}
+
+function billingPlanAudience(plan: BillingPlanRecord) {
+  if (plan.id === 'PLAN-APPRENTICE') return 'Personal testing'
+  if (plan.id === 'PLAN-ARTISAN') return 'Solo founder'
+  if (plan.id === 'PLAN-MAISON') return 'Large lab'
+  return 'Small brand or lab'
+}
+
+function PostSignupBillingGate({
+  session,
+  onComplete,
+}: {
+  session: AuthSession
+  onComplete: () => void
+}) {
+  const fallback = useMemo<SaasConsoleResponse>(() => ({
+    plans: [clientFallbackPlan],
+    plan: clientFallbackPlan,
+    subscription: {
+      id: 'SUB-CLIENT-FALLBACK',
+      organizationId: session.organizationId,
+      planId: clientFallbackPlan.id,
+      provider: 'manual',
+      collectionMode: 'manual_invoice',
+      status: 'trialing',
+      currentPeriodStart: 'client-fallback',
+      currentPeriodEnd: 'client-fallback',
+      canWrite: false,
+      canExport: true,
+      nextInvoiceAt: 'client-fallback',
+      updatedAt: 'client-fallback',
+    },
+    usage: {
+      id: 'USG-CLIENT-FALLBACK',
+      organizationId: session.organizationId,
+      periodStart: 'client-fallback',
+      periodEnd: 'client-fallback',
+      activeSeats: 0,
+      materials: 0,
+      formulas: 0,
+      lots: 0,
+      documents: 0,
+      storageGb: 0,
+      apiCalls: 0,
+      webhooks: 0,
+      auditEvents: 0,
+      lastCalculatedAt: 'client-fallback',
+    },
+    limitChecks: [],
+    invoices: [],
+    sso: clientFallbackSso,
+    apiKeys: [],
+    webhooks: [],
+    webhookDeliveries: [],
+    readiness: [],
+    invariant: 'client fallback contains no commercial state; API is source of truth',
+  }), [session.organizationId])
+  const [billingData, setBillingData] = useState<SaasConsoleResponse>(fallback)
+  const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
+  const [status, setStatus] = useState('Choose the billing plan for this new tenant.')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadBilling() {
+      try {
+        const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
+        setBillingData(payload)
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setStatus(error instanceof Error ? error.message : 'Billing plans are temporarily unavailable')
+        }
+      }
+    }
+
+    void loadBilling()
+
+    return () => controller.abort()
+  }, [])
+
+  async function selectPlan(plan: BillingPlanRecord) {
+    setBusyPlanId(plan.id)
+    setStatus(`Selecting ${plan.name}`)
+    try {
+      await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId: plan.id, billingCycle: 'monthly' }),
+      })
+      const payload = await requestApi<SaasConsoleResponse>('/billing/console')
+      setBillingData(payload)
+      setStatus(`${payload.plan.name} is ready for ${session.email}`)
+      onComplete()
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Plan selection failed')
+    } finally {
+      setBusyPlanId(null)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-lab-bg text-[var(--text)]">
+      <LabBackdrop />
+      <main className="auth-shell">
+        <section className="billing-onboarding glass">
+          <div className="billing-onboarding-copy">
+            <div className="brand-row">
+              <div className="brand-mark">
+                <BadgeDollarSign size={18} />
+              </div>
+              <div>
+                <div className="wordmark">Choose your plan</div>
+                <div className="mono-small">{session.organizationId}</div>
+              </div>
+            </div>
+            <h1>Start on Free, or unlock a trial now.</h1>
+            <p className="lead">
+              Your tenant is already created. Pick the plan that matches this lab; paid plans begin with a no-card trial and can later connect to Stripe Checkout.
+            </p>
+            <div className="tag-row">
+              <DataTag icon={ShieldCheck} label="Tenant" value="Provisioned" tone="green" />
+              <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
+              <DataTag icon={CheckCircle2} label="Current" value={billingData.plan.name} tone="amber" />
+            </div>
+          </div>
+
+          <div className="plan-card-grid">
+            {billingData.plans.map((plan) => {
+              const isCurrent = billingData.subscription.planId === plan.id
+              return (
+                <article className={`plan-card ${isCurrent ? 'is-current' : ''}`} key={plan.id}>
+                  <div>
+                    <span className="mono-small">{billingPlanAudience(plan)}</span>
+                    <h2>{plan.name}</h2>
+                    <div className="price-line">
+                      <strong>{plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
+                      <span>/ month</span>
+                    </div>
+                  </div>
+                  <div className="plan-limits">
+                    <DataTag label="Seats" value={`${plan.seats}`} tone="blue" />
+                    <DataTag label="Storage" value={`${plan.storageGb}GB`} tone="green" />
+                  </div>
+                  <ul className="policy-list compact-policy-list">
+                    {plan.features.slice(0, 4).map((feature) => (
+                      <li key={feature}>{feature}</li>
+                    ))}
+                  </ul>
+                  <button
+                    className={isCurrent ? 'ghost-button full' : 'primary-button full'}
+                    type="button"
+                    onClick={() => void selectPlan(plan)}
+                    disabled={busyPlanId !== null}
+                  >
+                    {busyPlanId === plan.id ? 'Selecting' : billingPlanCta(plan)}
+                  </button>
+                </article>
+              )
+            })}
+          </div>
+          <div className="auth-status">
+            <ShieldCheck size={16} />
+            <span>{status}</span>
+          </div>
+        </section>
+      </main>
+    </div>
+  )
 }
 
 function AuthGateway({
@@ -6761,6 +6953,7 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const fallback = useMemo<SaasConsoleResponse>(() => ({
+    plans: [clientFallbackPlan],
     plan: clientFallbackPlan,
     subscription: {
       id: 'SUB-CLIENT-FALLBACK',
@@ -6874,6 +7067,26 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  async function selectBillingPlan(planId: string) {
+    setBillingBusyAction(planId)
+    setStatusMessage(`Selecting ${planId}`)
+    try {
+      const payload = await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId, billingCycle: 'monthly' }),
+      })
+      const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
+      setBillingAction(payload)
+      setSaasData(consolePayload)
+      setStatusMessage(`${consolePayload.plan.name} selected for this tenant`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Plan selection failed')
+    } finally {
+      setBillingBusyAction(null)
+    }
+  }
+
   async function retryWebhookDelivery(deliveryId: string) {
     setBillingBusyAction(deliveryId)
     setStatusMessage(`Retrying ${deliveryId}`)
@@ -6961,6 +7174,31 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <span>{billingAction.invariant}</span>
           </div>
         ) : null}
+      </Panel>
+
+      <Panel title="Plan Catalog" icon={BadgeDollarSign}>
+        <div className="mini-plan-list">
+          {saasData.plans.map((plan) => {
+            const selected = saasData.subscription.planId === plan.id
+            return (
+              <div className={`mini-plan-row ${selected ? 'is-current' : ''}`} key={plan.id}>
+                <div>
+                  <span className="mono-small">{billingPlanAudience(plan)}</span>
+                  <strong>{plan.name} / {plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
+                  <span>{plan.seats} seats / {plan.storageGb}GB / {plan.apiQuota} API calls</span>
+                </div>
+                <button
+                  className={selected ? 'ghost-button small' : 'primary-button small'}
+                  type="button"
+                  onClick={() => void selectBillingPlan(plan.id)}
+                  disabled={billingBusyAction !== null}
+                >
+                  {selected ? 'Current' : 'Select'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
       </Panel>
 
       <Panel title="Usage Enforcement" icon={Gauge}>

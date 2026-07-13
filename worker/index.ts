@@ -109,7 +109,7 @@ type SnapshotKey =
   | 'shipmentRecords'
   | 'orderDocumentRecords'
   | 'scheduledReportRecords'
-  | 'subscriptionRecord'
+  | 'subscriptionRecords'
   | 'invoiceRecords'
   | 'webhookDeliveryRecords'
   | 'auditCounter'
@@ -144,7 +144,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   shipmentRecords: ShipmentRecord[]
   orderDocumentRecords: OrderDocumentRecord[]
   scheduledReportRecords: ScheduledReportRecord[]
-  subscriptionRecord: BillingSubscriptionRecord
+  subscriptionRecords: BillingSubscriptionRecord[]
   invoiceRecords: BillingInvoiceRecord[]
   webhookDeliveryRecords: WebhookDeliveryRecord[]
   lots: InventoryLot[]
@@ -186,7 +186,7 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'shipmentRecords',
   'orderDocumentRecords',
   'scheduledReportRecords',
-  'subscriptionRecord',
+  'subscriptionRecords',
   'invoiceRecords',
   'webhookDeliveryRecords',
   'lots',
@@ -228,7 +228,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'shipmentRecords',
   'orderDocumentRecords',
   'scheduledReportRecords',
-  'subscriptionRecord',
+  'subscriptionRecords',
   'invoiceRecords',
   'webhookDeliveryRecords',
   'auditCounter',
@@ -400,11 +400,13 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/analytics/reports', handler: ({ service }) => service.analyticsReports() },
   { method: 'POST', pattern: '/analytics/reports/:id/run', mutates: true, handler: ({ service, params }) => service.runAnalyticsReport(params.id) },
   { method: 'GET', pattern: '/billing/plan', handler: ({ service }) => service.billingPlan() },
+  { method: 'GET', pattern: '/billing/plans', handler: ({ service }) => service.billingPlans() },
   { method: 'GET', pattern: '/billing/console', handler: ({ service }) => service.billingConsole() },
   { method: 'GET', pattern: '/billing/subscription', handler: ({ service }) => service.billingSubscription() },
   { method: 'GET', pattern: '/billing/usage', handler: ({ service }) => service.billingUsage() },
   { method: 'GET', pattern: '/billing/invoices', handler: ({ service }) => service.billingInvoices() },
   { method: 'POST', pattern: '/billing/checkout', mutates: true, writeGate: false, handler: ({ service, body }) => service.startBillingCheckout(body) },
+  { method: 'POST', pattern: '/billing/subscription/select-plan', mutates: true, writeGate: false, handler: ({ service, body }) => service.selectBillingPlan(body) },
   { method: 'POST', pattern: '/billing/portal', mutates: true, writeGate: false, handler: ({ service }) => service.openBillingPortal() },
   { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
   { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
@@ -3439,17 +3441,16 @@ async function hydrateBillingState(db: D1Database, serviceState: ServiceState) {
       `SELECT id, organization_id, plan_id, provider, collection_mode, status,
         current_period_start, current_period_end, trial_ends_at, grace_ends_at,
         freeze_reason, provider_customer_id, provider_subscription_id, can_write,
-        can_export, next_invoice_at, subscription_updated_at
+       can_export, next_invoice_at, subscription_updated_at
        FROM billing_subscriptions
-       ORDER BY subscription_updated_at DESC
-       LIMIT 1`,
+       ORDER BY subscription_updated_at DESC, id DESC`,
     )
     .all<BillingSubscriptionRow>()
-  const subscription = subscriptionRows.results?.[0]
-  if (subscription) {
-    serviceState.subscriptionRecord = billingSubscriptionFromRow(subscription)
-  } else if (serviceState.subscriptionRecord) {
-    await persistBillingSubscription(db, serviceState.subscriptionRecord, new Date().toISOString())
+  const subscriptions = (subscriptionRows.results ?? []).map(billingSubscriptionFromRow)
+  if (subscriptions.length > 0) {
+    serviceState.subscriptionRecords = subscriptions
+  } else if (Array.isArray(serviceState.subscriptionRecords) && serviceState.subscriptionRecords.length > 0) {
+    await persistBillingSubscriptions(db, serviceState.subscriptionRecords, new Date().toISOString())
   }
 
   const invoiceRows = await db
@@ -3484,16 +3485,30 @@ async function hydrateBillingState(db: D1Database, serviceState: ServiceState) {
 }
 
 async function persistBillingState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
-  await persistBillingSubscription(db, serviceState.subscriptionRecord, updatedAt)
+  await persistBillingSubscriptions(db, serviceState.subscriptionRecords, updatedAt)
   await persistBillingInvoices(db, serviceState.invoiceRecords, updatedAt)
   await persistWebhookDeliveries(db, serviceState.webhookDeliveryRecords, updatedAt)
+}
+
+async function persistBillingSubscriptions(db: D1Database, subscriptions: BillingSubscriptionRecord[], updatedAt: string) {
+  if (!Array.isArray(subscriptions) || subscriptions.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    subscriptions.map((subscription) => prepareBillingSubscriptionStatement(db, subscription, updatedAt)),
+  )
 }
 
 async function persistBillingSubscription(db: D1Database, subscription: BillingSubscriptionRecord, updatedAt: string) {
   if (!subscription) {
     return
   }
-  await db
+  await prepareBillingSubscriptionStatement(db, subscription, updatedAt).run()
+}
+
+function prepareBillingSubscriptionStatement(db: D1Database, subscription: BillingSubscriptionRecord, updatedAt: string) {
+  return db
     .prepare(
       `INSERT INTO billing_subscriptions (
         id, organization_id, plan_id, provider, collection_mode, status,
@@ -3541,7 +3556,6 @@ async function persistBillingSubscription(db: D1Database, subscription: BillingS
       subscription.updatedAt,
       updatedAt,
     )
-    .run()
 }
 
 async function persistBillingInvoices(db: D1Database, invoices: BillingInvoiceRecord[], updatedAt: string) {

@@ -702,6 +702,10 @@ kbd {
   width: 100%;
 }
 
+.ghost-button.full {
+  width: 100%;
+}
+
 .phase-strip {
   display: grid;
   grid-auto-columns: minmax(190px, 1fr);
@@ -1386,6 +1390,109 @@ kbd {
   color: var(--text-2);
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.billing-onboarding {
+  display: grid;
+  gap: 18px;
+  width: min(1180px, 100%);
+  padding: 18px;
+}
+
+.billing-onboarding-copy {
+  display: grid;
+  gap: 14px;
+}
+
+.plan-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.plan-card {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+  min-height: 360px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.plan-card.is-current,
+.mini-plan-row.is-current {
+  border-color: rgba(77, 155, 255, 0.58);
+  background: rgba(77, 155, 255, 0.08);
+}
+
+.plan-card h2 {
+  margin-top: 4px;
+  font-size: 1.1rem;
+}
+
+.price-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.price-line strong {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 1.5rem;
+}
+
+.price-line span {
+  color: var(--text-3);
+  font-size: 0.78rem;
+}
+
+.plan-limits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.compact-policy-list {
+  gap: 6px;
+}
+
+.compact-policy-list li {
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.mini-plan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.mini-plan-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.mini-plan-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mini-plan-row span {
+  color: var(--text-2);
+  font-size: 0.82rem;
 }
 
 .formula-grid {
@@ -2242,6 +2349,10 @@ input[type='range'] {
   .domain-matrix {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .plan-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 980px) {
@@ -2366,6 +2477,7 @@ input[type='range'] {
   .hero-metrics,
   .stock-grid,
   .record-grid,
+  .plan-card-grid,
   .metric-grid,
   .commerce-evidence-grid,
   .order-entry-grid,
@@ -2387,6 +2499,10 @@ input[type='range'] {
 
   .panel {
     padding: 13px;
+  }
+
+  .mini-plan-row {
+    grid-template-columns: 1fr;
   }
 
   .audit-row,

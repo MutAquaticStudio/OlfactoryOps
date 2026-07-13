@@ -952,7 +952,7 @@ export interface CommercialReadinessCheck {
 
 export interface BillingActionResponse {
   id: string
-  mode: 'checkout' | 'portal' | 'manual_sales' | 'freeze' | 'reactivate' | 'webhook_retry'
+  mode: 'checkout' | 'portal' | 'manual_sales' | 'plan_selected' | 'freeze' | 'reactivate' | 'webhook_retry'
   status: 'queued' | 'ready' | 'completed'
   url?: string
   audit: AuditEvent
@@ -960,6 +960,7 @@ export interface BillingActionResponse {
 }
 
 export interface BillingConsoleResponse {
+  plans: BillingPlanRecord[]
   plan: BillingPlanRecord
   subscription: BillingSubscriptionRecord
   usage: BillingUsageMeterRecord
@@ -2594,33 +2595,114 @@ export const scheduledReports: ScheduledReportRecord[] = [
   },
 ]
 
-export const billingPlan: BillingPlanRecord = {
-  id: 'PLAN-ATELIER',
-  name: 'Atelier',
-  seats: 12,
-  storageGb: 100,
-  apiQuota: 25000,
-  monthlyPrice: 249,
-  currency: 'USD',
-  limits: {
-    seats: 12,
-    materials: 5000,
-    formulas: 2000,
-    lots: 10000,
-    documents: 25000,
-    storageGb: 100,
-    apiCalls: 25000,
-    webhooks: 10,
-    auditRetentionDays: 1095,
+export const billingPlans: BillingPlanRecord[] = [
+  {
+    id: 'PLAN-APPRENTICE',
+    name: 'Apprentice',
+    seats: 1,
+    storageGb: 1,
+    apiQuota: 0,
+    monthlyPrice: 0,
+    currency: 'USD',
+    limits: {
+      seats: 1,
+      materials: 25,
+      formulas: 10,
+      lots: 25,
+      documents: 100,
+      storageGb: 1,
+      apiCalls: 0,
+      webhooks: 0,
+      auditRetentionDays: 30,
+    },
+    features: [
+      'Material library and formula costing',
+      'Inventory ledger and lab usage traceability',
+      'CSV import within starter limits',
+      '30 day audit retention',
+    ],
   },
-  features: [
-    'Production batch operations',
-    'Procurement and purchase orders',
-    'Commerce and order fulfillment',
-    'API keys and signed webhooks',
-    'Audit export and 3 year retention',
-  ],
-}
+  {
+    id: 'PLAN-ARTISAN',
+    name: 'Artisan',
+    seats: 2,
+    storageGb: 10,
+    apiQuota: 10000,
+    monthlyPrice: 24,
+    currency: 'USD',
+    limits: {
+      seats: 2,
+      materials: 300,
+      formulas: 1000,
+      lots: 300,
+      documents: 2500,
+      storageGb: 10,
+      apiCalls: 10000,
+      webhooks: 2,
+      auditRetentionDays: 365,
+    },
+    features: [
+      'Full personal creative workflow',
+      'Global search, costing, and basic analytics',
+      'QR lot scan and signed document access',
+      'Read API up to 10k calls per month',
+    ],
+  },
+  {
+    id: 'PLAN-ATELIER',
+    name: 'Atelier',
+    seats: 5,
+    storageGb: 100,
+    apiQuota: 100000,
+    monthlyPrice: 99,
+    currency: 'USD',
+    limits: {
+      seats: 5,
+      materials: 3000,
+      formulas: 10000,
+      lots: 5000,
+      documents: 25000,
+      storageGb: 100,
+      apiCalls: 100000,
+      webhooks: 10,
+      auditRetentionDays: 1095,
+    },
+    features: [
+      'Production batch operations',
+      'Procurement, purchase orders, and commerce',
+      'Collaboration, custom roles, and approvals',
+      'API keys, signed webhooks, and audit export',
+    ],
+  },
+  {
+    id: 'PLAN-MAISON',
+    name: 'Maison',
+    seats: 999,
+    storageGb: 1000,
+    apiQuota: 1000000,
+    monthlyPrice: 600,
+    currency: 'USD',
+    limits: {
+      seats: 999,
+      materials: 999999,
+      formulas: 999999,
+      lots: 999999,
+      documents: 999999,
+      storageGb: 1000,
+      apiCalls: 1000000,
+      webhooks: 100,
+      auditRetentionDays: 2555,
+    },
+    features: [
+      'SSO, SCIM, dedicated tenant, and SLA path',
+      'Data residency, IP policy, and enterprise audit',
+      'Custom API limits and migration support',
+      'AI credit packages and dedicated success support',
+    ],
+  },
+]
+
+export const billingPlan: BillingPlanRecord = billingPlans[2]!
 
 export const billingSubscription: BillingSubscriptionRecord = {
   id: 'SUB-ATELIER-001',
@@ -2636,6 +2718,8 @@ export const billingSubscription: BillingSubscriptionRecord = {
   nextInvoiceAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-07-10T00:00:00.000Z',
 }
+
+export const billingSubscriptions: BillingSubscriptionRecord[] = [billingSubscription]
 
 export const billingInvoices: BillingInvoiceRecord[] = [
   {

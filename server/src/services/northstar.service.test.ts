@@ -379,7 +379,9 @@ describe('NorthStarService', () => {
     const consoleState = service.tenantConsole().data
 
     expect(result.organization.slug).toBe('atelier-smoke')
+    expect(result.organization.plan).toBe('Free')
     expect(result.brand.organizationId).toBe(result.organization.id)
+    expect(result.membership.id).toBe('MBR-ATELIER-SMOKE')
     expect(result.membership.role).toBe('Owner')
     expect(result.membership.status).toBe('ACTIVE')
     expect(result.membership.organizationId).toBe(result.organization.id)
@@ -387,10 +389,13 @@ describe('NorthStarService', () => {
     expect(result.session.email).toBe('owner@atelier-smoke.test')
     expect(result.session.organizationId).toBe(result.organization.id)
     expect(result.session.brandId).toBe(result.brand.id)
+    expect(result.subscription.organizationId).toBe(result.organization.id)
+    expect(result.subscription.planId).toBe('PLAN-APPRENTICE')
     expect(result.audit.action).toBe('auth.signup')
     expect(consoleState.organization.id).toBe(result.organization.id)
     expect(consoleState.brands).toEqual([result.brand])
     expect(consoleState.memberships.some((membership) => membership.email === result.membership.email)).toBe(true)
+    expect(service.billingConsole().data.subscription.organizationId).toBe(result.organization.id)
     expect(() => service.tenantProbe('org-nxl')).toThrow(ForbiddenException)
   })
 
@@ -1028,6 +1033,12 @@ describe('NorthStarService', () => {
     const service = createAuthenticatedService()
     const consoleState = service.billingConsole().data
 
+    expect(consoleState.plans.map((plan) => plan.id)).toEqual([
+      'PLAN-APPRENTICE',
+      'PLAN-ARTISAN',
+      'PLAN-ATELIER',
+      'PLAN-MAISON',
+    ])
     expect(consoleState.invariant).toContain('server-side')
     expect(consoleState.limitChecks.every((check) => check.status !== 'blocked')).toBe(true)
     expect(() => service.assertPlanCapacity('materials', 999999)).toThrow(UnprocessableEntityException)
@@ -1039,6 +1050,32 @@ describe('NorthStarService', () => {
     const reactivation = service.reactivateSubscription().data
     expect(reactivation.mode).toBe('reactivate')
     expect(() => service.assertCommercialWriteAllowed('materials.create')).not.toThrow()
+  })
+
+  it('lets a new signup tenant choose a paid trial plan without leaking another tenant subscription', () => {
+    const service = new NorthStarService()
+    const signup = service.signup({
+      organizationName: 'Billing Onboarding Lab',
+      workspaceSlug: 'billing-onboarding-lab',
+      email: 'owner@billing-onboarding.test',
+      name: 'Billing Owner',
+    }).data
+
+    expect(signup.subscription.planId).toBe('PLAN-APPRENTICE')
+    expect(service.billingConsole().data.plan.name).toBe('Apprentice')
+
+    const selection = service.selectBillingPlan({ planId: 'PLAN-ARTISAN' }).data
+    const consoleState = service.billingConsole().data
+
+    expect(selection.mode).toBe('plan_selected')
+    expect(consoleState.subscription.organizationId).toBe(signup.organization.id)
+    expect(consoleState.subscription.planId).toBe('PLAN-ARTISAN')
+    expect(consoleState.subscription.status).toBe('trialing')
+    expect(consoleState.plan.name).toBe('Artisan')
+    expect(consoleState.usage.activeSeats).toBe(1)
+    expect(consoleState.invoices.some((invoice) => invoice.subscriptionId === consoleState.subscription.id)).toBe(true)
+    expect(service.tenantConsole().data.organization.plan).toBe('Pro')
+    expect(() => service.tenantProbe('org-nxl')).toThrow(ForbiddenException)
   })
 
   it('serves billing actions and webhook retry evidence for sell-ready operations', () => {
