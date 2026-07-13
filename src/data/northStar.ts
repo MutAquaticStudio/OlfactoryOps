@@ -439,6 +439,32 @@ export interface BrandingConfig {
   logoMode: 'wordmark' | 'monogram'
 }
 
+export interface ProductionWorkOrderStep {
+  id: string
+  label: string
+  status: 'PENDING' | 'READY' | 'DONE' | 'BLOCKED'
+  equipment: string
+  plannedMinutes: number
+  evidence?: string
+}
+
+export interface ProductionQcCheck {
+  id: string
+  label: string
+  result: 'PENDING' | 'PASSED' | 'FAILED'
+  recordedAt?: string
+  note?: string
+}
+
+export interface ProductionOutputLot {
+  id: string
+  lotNumber: string
+  formulaId: string
+  quantityGrams: number
+  qualityStatus: 'RELEASED' | 'HOLD'
+  releasedAt?: string
+}
+
 export interface ProductionBatchRecord {
   id: string
   formulaId: string
@@ -448,6 +474,22 @@ export interface ProductionBatchRecord {
   consumedGrams: number
   qcStatus: 'PENDING' | 'PASSED' | 'FAILED'
   owner: string
+  workOrder: {
+    id: string
+    scheduledStartAt: string
+    dueAt: string
+    equipment: string
+    steps: ProductionWorkOrderStep[]
+  }
+  qcChecks: ProductionQcCheck[]
+  yieldGrams?: number
+  yieldVariancePercent?: number
+  outputLot?: ProductionOutputLot
+  genealogy: {
+    inputLotIds: string[]
+    inputMovementIds: string[]
+    outputLotId?: string
+  }
 }
 
 export interface SupplierRecord {
@@ -1206,17 +1248,17 @@ export const domains: DomainModule[] = [
     name: 'Production Batch',
     shortName: 'Production',
     responsibility: 'Approved formula to production batch, QC, lifecycle, yield',
-    status: 'testing',
-    health: 64,
-    risk: 'Batch create, consume, QC, and lifecycle controls are live; persistence remains next gate',
+    status: 'active',
+    health: 80,
+    risk: 'Batch create, work order, consumption, QC protocol, output lot genealogy, and lifecycle controls are live; finished-goods inventory remains next gate',
     owner: 'Manufacturing',
     entities: ['ProductionBatch', 'BatchConsumption', 'QCRecord'],
-    features: ['Scale batch', 'Consume lots', 'QC checkpoint', 'Lifecycle state machine', 'Yield reconcile'],
+    features: ['Scale batch', 'Work order', 'Consume lots', 'QC protocol', 'Output lot genealogy', 'Lifecycle state machine', 'Yield reconcile'],
     invariants: ['Production movement separated from lab usage', 'Batch records no hard-delete'],
-    apis: ['/api/v1/batches', '/api/v1/batches/:id/consume', '/api/v1/batches/:id/qc', '/api/v1/batches/:id/status'],
+    apis: ['/api/v1/production/batches', '/api/v1/production/batches/:id/consume', '/api/v1/production/batches/:id/qc', '/api/v1/production/batches/:id/status'],
     permissions: ['production.view', 'production.consume', 'production.qc'],
-    screens: ['Batch timeline', 'QC record', 'Batch cost'],
-    activity: 'Production batches advance through consume, filtration, QC, bottling, and release gates',
+    screens: ['Batch timeline', 'Work order', 'QC protocol', 'Output genealogy', 'Batch cost'],
+    activity: 'Production batches create work orders, consume input lots, record QC evidence, and release output lots with genealogy',
   },
   {
     key: 'procurement',
@@ -2253,6 +2295,44 @@ export const productionBatches: ProductionBatchRecord[] = [
     consumedGrams: 0,
     qcStatus: 'PENDING',
     owner: 'Manufacturing',
+    workOrder: {
+      id: 'WO-BTH-2025-118',
+      scheduledStartAt: '2026-07-12T08:00:00.000Z',
+      dueAt: '2026-07-16T17:00:00.000Z',
+      equipment: 'Pilot kettle PK-02',
+      steps: [
+        {
+          id: 'WO-BTH-2025-118-01',
+          label: 'Weigh raw materials',
+          status: 'READY',
+          equipment: 'Balance A-12',
+          plannedMinutes: 45,
+        },
+        {
+          id: 'WO-BTH-2025-118-02',
+          label: 'Maceration hold',
+          status: 'PENDING',
+          equipment: 'Amber vessel AV-04',
+          plannedMinutes: 2880,
+        },
+        {
+          id: 'WO-BTH-2025-118-03',
+          label: 'Filter and bottle',
+          status: 'PENDING',
+          equipment: 'Filter skid FS-01',
+          plannedMinutes: 90,
+        },
+      ],
+    },
+    qcChecks: [
+      { id: 'QC-BTH-2025-118-ODOR', label: 'Organoleptic match', result: 'PENDING' },
+      { id: 'QC-BTH-2025-118-CLARITY', label: 'Clarity after filtration', result: 'PENDING' },
+      { id: 'QC-BTH-2025-118-DENSITY', label: 'Density check', result: 'PENDING' },
+    ],
+    genealogy: {
+      inputLotIds: [],
+      inputMovementIds: [],
+    },
   },
 ]
 
@@ -2759,14 +2839,25 @@ export function createSignedDocumentUrl(
 ): SignedDocumentUrl {
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000)
   const expires = Math.floor(expiresAt.getTime() / 1000)
-  const signature = `${document.id}-${document.version}-${expires}`.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const nonce = createSignedDocumentNonce(now)
+  const signature = `${document.id}-${document.version}-${expires}-${nonce}`.toLowerCase().replace(/[^a-z0-9]/g, '')
 
   return {
-    url: `https://files.olfactoryops.local/private/${encodeURIComponent(document.id)}?expires=${expires}&signature=${signature}`,
+    url: `https://files.olfactoryops.local/private/${encodeURIComponent(document.id)}?expires=${expires}&nonce=${nonce}&signature=${signature}`,
     expiresAt: expiresAt.toISOString(),
     ttlSeconds,
     method: 'GET',
   }
+}
+
+function createSignedDocumentNonce(now: Date) {
+  const randomUuid = globalThis.crypto?.randomUUID?.()
+  if (randomUuid) {
+    return randomUuid.replace(/-/g, '')
+  }
+  return `${now.getTime()}${Math.random().toString(36).slice(2, 14)}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
 }
 
 export function createDocumentShareLink(

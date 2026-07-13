@@ -1,4 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '../shared/http-error.js'
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+  UnprocessableEntityException,
+} from '../shared/http-error.js'
 import {
   auditEvents,
   apiKeys,
@@ -336,6 +342,7 @@ export class NorthStarService {
   private invoiceRecords: BillingInvoiceRecord[] = structuredClone(billingInvoices)
   private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditCounter = auditEvents.length
+  private activeSessionId: string | null = null
 
   phases() {
     return { data: phases }
@@ -1403,6 +1410,7 @@ export class NorthStarService {
       location: 'Bangkok, TH',
     }
     this.sessions = [session, ...this.sessions]
+    this.activeSessionId = session.id
     const revokedForLimit = this.enforceConcurrentSessionLimit(session.email, session.id)
     this.membershipRecords = this.membershipRecords.map((item) =>
       item.id === membership.id ? { ...item, lastActiveAt: issuedAt.toISOString() } : item,
@@ -1421,6 +1429,23 @@ export class NorthStarService {
         invariant: 'login creates bounded idle and absolute session windows',
       },
     }
+  }
+
+  authenticateSession(sessionId: string | undefined) {
+    this.refreshSessionStates()
+    const normalizedSessionId = sessionId?.trim()
+    if (!normalizedSessionId) {
+      throw new UnauthorizedException('Authentication required')
+    }
+
+    const session = this.sessions.find((item) => item.id === normalizedSessionId && item.status === 'ACTIVE')
+    if (!session) {
+      this.recordAudit('auth.session', normalizedSessionId, 'api:auth', 'blocked')
+      throw new UnauthorizedException('Invalid or expired session')
+    }
+
+    this.activeSessionId = session.id
+    return session
   }
 
   signup(body: SignupBody = {}) {
@@ -2142,13 +2167,14 @@ export class NorthStarService {
     id: string,
     context: { actor?: string; permissions?: string[]; ip?: string } = {},
   ) {
+    const session = this.currentSession()
     const document = this.documentRecords.find((item) => item.id === id)
     if (!document) {
       throw new NotFoundException(`Document ${id} was not found`)
     }
 
-    const actor = context.actor ?? 'api:compliance'
-    const permissions = context.permissions ?? ['documents.download']
+    const actor = context.actor ?? session.userId
+    const permissions = context.permissions ?? this.permissionsForRole(session.role)
     const allowed = canDownloadDocument(document, permissions)
     const audit = this.recordDocumentDownloadAudit(document, actor, allowed ? 'allowed' : 'blocked')
 
@@ -2457,6 +2483,7 @@ export class NorthStarService {
   }
 
   productionBatches() {
+    this.normalizeProductionBatches()
     return { data: this.productionBatchRecords }
   }
 
@@ -2472,6 +2499,7 @@ export class NorthStarService {
       throw new UnprocessableEntityException(`Formula ${formula.code} must be approved before production`)
     }
     const id = this.nextNumber('batch').data.value
+    const timestamp = new Date()
     const batch: ProductionBatchRecord = {
       id,
       formulaId,
@@ -2481,6 +2509,12 @@ export class NorthStarService {
       consumedGrams: 0,
       qcStatus: 'PENDING',
       owner: 'Manufacturing',
+      workOrder: this.createProductionWorkOrder(id, timestamp),
+      qcChecks: this.createProductionQcChecks(id),
+      genealogy: {
+        inputLotIds: [],
+        inputMovementIds: [],
+      },
     }
     this.productionBatchRecords = [batch, ...this.productionBatchRecords]
     this.recordAudit('production.batch.create', id, 'api:manufacturing', 'allowed')
@@ -2488,6 +2522,7 @@ export class NorthStarService {
   }
 
   consumeProductionBatch(id: string) {
+    this.normalizeProductionBatches()
     const batch = this.productionBatchRecords.find((item) => item.id === id)
     if (!batch) {
       throw new NotFoundException(`Production batch ${id} was not found`)
@@ -2530,13 +2565,26 @@ export class NorthStarService {
     this.lots = Array.from(lotMap.values())
     this.movements = [...movements, ...this.movements]
     this.productionBatchRecords = this.productionBatchRecords.map((item) =>
-      item.id === id ? { ...item, consumedGrams: batch.targetGrams, status: 'MACERATION' } : item,
+      item.id === id
+        ? {
+            ...item,
+            consumedGrams: batch.targetGrams,
+            status: 'MACERATION',
+            workOrder: this.updateWorkOrderStep(item.workOrder, 'Weigh raw materials', 'DONE', `${movements.length} input movement(s)`),
+            genealogy: {
+              ...item.genealogy,
+              inputLotIds: movements.map((movement) => movement.lotId),
+              inputMovementIds: movements.map((movement) => movement.id),
+            },
+          }
+        : item,
     )
     this.recordAudit('production.batch.consume', id, 'api:manufacturing', 'allowed')
     return { data: { batchId: id, movements, invariant: 'production consumption is separate from lab usage' } }
   }
 
   qcProductionBatch(id: string, result: 'PASSED' | 'FAILED' = 'PASSED') {
+    this.normalizeProductionBatches()
     const batch = this.productionBatchRecords.find((item) => item.id === id)
     if (!batch) {
       throw new NotFoundException(`Production batch ${id} was not found`)
@@ -2544,15 +2592,33 @@ export class NorthStarService {
     if (batch.consumedGrams <= 0) {
       throw new UnprocessableEntityException(`Production batch ${id} must consume inventory before QC`)
     }
+    const timestamp = new Date().toISOString()
     const status = result === 'PASSED' ? 'BOTTLING' : 'HOLD'
     this.productionBatchRecords = this.productionBatchRecords.map((item) =>
-      item.id === id ? { ...item, qcStatus: result, status } : item,
+      item.id === id
+        ? {
+            ...item,
+            qcStatus: result,
+            status,
+            qcChecks: item.qcChecks.map((check) => ({
+              ...check,
+              result,
+              recordedAt: timestamp,
+              note: result === 'PASSED' ? 'Within production release tolerance' : 'Deviation review required',
+            })),
+            workOrder:
+              result === 'PASSED'
+                ? this.updateWorkOrderStep(item.workOrder, 'Filter and bottle', 'READY', 'QC passed')
+                : item.workOrder,
+          }
+        : item,
     )
     this.recordAudit('production.batch.qc', id, 'api:qc', result === 'PASSED' ? 'allowed' : 'review')
     return { data: this.productionBatchRecords.find((item) => item.id === id)! }
   }
 
   updateProductionBatchStatus(id: string, status: ProductionBatchRecord['status']) {
+    this.normalizeProductionBatches()
     const batch = this.productionBatchRecords.find((item) => item.id === id)
     if (!batch) {
       throw new NotFoundException(`Production batch ${id} was not found`)
@@ -2570,9 +2636,13 @@ export class NorthStarService {
       throw new UnprocessableEntityException(`Production batch ${id} cannot return to weighing after consumption`)
     }
 
-    this.productionBatchRecords = this.productionBatchRecords.map((item) =>
-      item.id === id ? { ...item, status } : item,
-    )
+    this.productionBatchRecords = this.productionBatchRecords.map((item) => {
+      if (item.id !== id) {
+        return item
+      }
+      const released = status === 'RELEASED' ? this.releaseProductionOutputLot(item) : item
+      return { ...released, status }
+    })
     this.recordAudit('production.batch.status', id, 'api:manufacturing', status === 'HOLD' ? 'review' : 'allowed')
     return {
       data: {
@@ -3811,13 +3881,14 @@ export class NorthStarService {
 
   private currentSession() {
     this.refreshSessionStates()
-    const activeAdminSession = this.sessions.find(
-      (item) => item.status === 'ACTIVE' && this.roleHasPermission(item.role, 'security.manageUsers'),
-    )
-    if (activeAdminSession) {
-      return activeAdminSession
+    if (!this.activeSessionId) {
+      throw new UnauthorizedException('Authentication required')
     }
-    return this.login().data.session
+    const activeSession = this.sessions.find((item) => item.id === this.activeSessionId && item.status === 'ACTIVE')
+    if (activeSession) {
+      return activeSession
+    }
+    throw new UnauthorizedException('Invalid or expired session')
   }
 
   private requirePermission(role: string, permission: string) {
@@ -3882,6 +3953,117 @@ export class NorthStarService {
       reason: allowed
         ? `${role} includes ${permission} in the server-side role policy`
         : `${role} does not include ${permission} in the server-side role policy`,
+    }
+  }
+
+  private createProductionWorkOrder(batchId: string, now: Date): ProductionBatchRecord['workOrder'] {
+    return {
+      id: `WO-${batchId}`,
+      scheduledStartAt: now.toISOString(),
+      dueAt: new Date(now.getTime() + 4 * 24 * 60 * 60 * 1000).toISOString(),
+      equipment: 'Pilot kettle PK-02',
+      steps: [
+        {
+          id: `WO-${batchId}-01`,
+          label: 'Weigh raw materials',
+          status: 'READY',
+          equipment: 'Balance A-12',
+          plannedMinutes: 45,
+        },
+        {
+          id: `WO-${batchId}-02`,
+          label: 'Maceration hold',
+          status: 'PENDING',
+          equipment: 'Amber vessel AV-04',
+          plannedMinutes: 2880,
+        },
+        {
+          id: `WO-${batchId}-03`,
+          label: 'Filter and bottle',
+          status: 'PENDING',
+          equipment: 'Filter skid FS-01',
+          plannedMinutes: 90,
+        },
+      ],
+    }
+  }
+
+  private createProductionQcChecks(batchId: string): ProductionBatchRecord['qcChecks'] {
+    return [
+      { id: `QC-${batchId}-ODOR`, label: 'Organoleptic match', result: 'PENDING' },
+      { id: `QC-${batchId}-CLARITY`, label: 'Clarity after filtration', result: 'PENDING' },
+      { id: `QC-${batchId}-DENSITY`, label: 'Density check', result: 'PENDING' },
+    ]
+  }
+
+  private normalizeProductionBatches() {
+    this.productionBatchRecords = this.productionBatchRecords.map((batch) => {
+      const legacy = batch as ProductionBatchRecord & {
+        workOrder?: ProductionBatchRecord['workOrder']
+        qcChecks?: ProductionBatchRecord['qcChecks']
+        genealogy?: ProductionBatchRecord['genealogy']
+      }
+
+      return {
+        ...batch,
+        workOrder: legacy.workOrder ?? this.createProductionWorkOrder(batch.id, new Date()),
+        qcChecks: legacy.qcChecks ?? this.createProductionQcChecks(batch.id),
+        genealogy: legacy.genealogy ?? {
+          inputLotIds: [],
+          inputMovementIds: [],
+          outputLotId: legacy.outputLot?.id,
+        },
+      }
+    })
+  }
+
+  private updateWorkOrderStep(
+    workOrder: ProductionBatchRecord['workOrder'],
+    label: string,
+    status: ProductionBatchRecord['workOrder']['steps'][number]['status'],
+    evidence: string,
+  ): ProductionBatchRecord['workOrder'] {
+    return {
+      ...workOrder,
+      steps: workOrder.steps.map((step) =>
+        step.label === label
+          ? {
+              ...step,
+              status,
+              evidence,
+            }
+          : step,
+      ),
+    }
+  }
+
+  private releaseProductionOutputLot(batch: ProductionBatchRecord): ProductionBatchRecord {
+    if (batch.outputLot) {
+      return batch
+    }
+
+    const releasedAt = new Date().toISOString()
+    const yieldGrams = Number((batch.consumedGrams * 0.985).toFixed(3))
+    const yieldVariancePercent = Number((((yieldGrams - batch.targetGrams) / batch.targetGrams) * 100).toFixed(2))
+    const outputLot = {
+      id: `FG-${batch.id}`,
+      lotNumber: `FG-${batch.id}`,
+      formulaId: batch.formulaId,
+      quantityGrams: yieldGrams,
+      qualityStatus: 'RELEASED' as const,
+      releasedAt,
+    }
+
+    return {
+      ...batch,
+      yieldGrams,
+      yieldVariancePercent,
+      outputLot,
+      genealogy: {
+        ...batch.genealogy,
+        outputLotId: outputLot.id,
+      },
+      workOrder: this.updateWorkOrderStep(batch.workOrder, 'Filter and bottle', 'DONE', outputLot.id),
     }
   }
 

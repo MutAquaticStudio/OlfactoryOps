@@ -50,7 +50,7 @@ npm run d1:migrate:local
 
 ```toml
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev,https://*.labofscents.pages.dev"
 
 [[routes]]
 pattern = "api.labofscents.org"

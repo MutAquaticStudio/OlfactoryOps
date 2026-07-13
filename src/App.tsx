@@ -375,6 +375,12 @@ type SignupResponse = {
   invariant: string
 }
 
+type MeResponse = {
+  session: AuthSession
+  permissions: string[]
+  securityPolicy: TenantSecurityPolicy
+}
+
 type SaasConsoleResponse = BillingConsoleResponse
 
 type AuditExportResponse = {
@@ -504,6 +510,39 @@ type TenantConsoleResponse = {
   permissionMatrix: RolePermissionMatrix[]
   securityPolicy: TenantSecurityPolicy
   audit: AuditEvent[]
+  invariant: string
+}
+
+type TenantInviteResponse = {
+  membership: MembershipRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type MembershipStatusResponse = {
+  membership: MembershipRecord
+  revokedSessions: AuthSession[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type SessionMutationResponse = {
+  session: AuthSession
+  audit: AuditEvent
+  invariant: string
+}
+
+type SessionRevokeAllResponse = {
+  revokedSessions: AuthSession[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type PermissionMatrixResponse = {
+  rolePolicy: RolePolicy
+  permissionCatalog: PermissionDefinition[]
+  matrix: RolePermissionMatrix[]
+  audit: AuditEvent
   invariant: string
 }
 
@@ -792,9 +831,16 @@ const shellMotion = {
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
 const authStorageKey = 'olfactoryops.auth.v1'
+const authSessionMarkerKey = 'olfactoryops.has_session.v1'
+const authExpiredEvent = 'olfactoryops.auth.expired'
 
 async function requestApi<T>(path: string, init?: RequestInit) {
-  const response = await fetch(`${apiBaseUrl}${path}`, init)
+  const headers = new Headers(init?.headers)
+  const response = await fetch(`${apiBaseUrl}${path}`, { ...init, credentials: 'include', headers })
+  if (response.status === 401) {
+    writeStoredAuthSession(null)
+    window.dispatchEvent(new Event(authExpiredEvent))
+  }
   if (!response.ok) {
     let message = `API request failed with ${response.status}`
     try {
@@ -812,27 +858,21 @@ async function requestApi<T>(path: string, init?: RequestInit) {
 }
 
 function readStoredAuthSession() {
-  try {
-    const raw = window.localStorage.getItem(authStorageKey)
-    if (!raw) {
-      return null
-    }
-    const parsed = JSON.parse(raw) as { version?: number; session?: AuthSession }
-    if (parsed.version !== 1 || !parsed.session?.id || parsed.session.status !== 'ACTIVE') {
-      return null
-    }
-    return parsed.session
-  } catch {
-    return null
-  }
+  window.localStorage.removeItem(authStorageKey)
+  return null
+}
+
+function hasStoredAuthMarker() {
+  return window.localStorage.getItem(authSessionMarkerKey) === '1'
 }
 
 function writeStoredAuthSession(session: AuthSession | null) {
+  window.localStorage.removeItem(authStorageKey)
   if (!session) {
-    window.localStorage.removeItem(authStorageKey)
+    window.localStorage.removeItem(authSessionMarkerKey)
     return
   }
-  window.localStorage.setItem(authStorageKey, JSON.stringify({ version: 1, session }))
+  window.localStorage.setItem(authSessionMarkerKey, '1')
 }
 
 function tenantDisplayForSession(session: AuthSession) {
@@ -1037,6 +1077,49 @@ function App() {
   }, [labPlan.allocations])
 
   useEffect(() => {
+    function handleAuthExpired() {
+      setCurrentSession(null)
+      setActiveKey('dashboard')
+    }
+
+    window.addEventListener(authExpiredEvent, handleAuthExpired)
+    return () => window.removeEventListener(authExpiredEvent, handleAuthExpired)
+  }, [])
+
+  useEffect(() => {
+    if (!hasStoredAuthMarker()) {
+      return
+    }
+
+    let active = true
+
+    async function restoreSession() {
+      try {
+        const payload = await requestApi<MeResponse>('/me')
+        if (active) {
+          setCurrentSession(payload.session)
+        }
+      } catch {
+        if (active) {
+          setCurrentSession(null)
+        }
+      }
+    }
+
+    void restoreSession()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!currentSession) {
+      setUsageHistory([])
+      setLabUsageStatusMessage('Login to sync Lab Usage API')
+      return
+    }
+
     const controller = new AbortController()
 
     async function loadLabUsageHistory() {
@@ -1054,7 +1137,7 @@ function App() {
     void loadLabUsageHistory()
 
     return () => controller.abort()
-  }, [])
+  }, [currentSession])
 
   useEffect(() => {
     function handleKeys(event: KeyboardEvent) {
@@ -2350,14 +2433,10 @@ function MaterialWorkspace({
   useEffect(() => {
     async function loadMaterials() {
       try {
-        const response = await fetch(`${apiBaseUrl}/materials`)
-        if (!response.ok) {
-          throw new Error('Material catalog API failed')
-        }
-        const payload = (await response.json()) as ApiEnvelope<Material[]>
-        onMaterialsChange(payload.data)
-        if (!payload.data.some((material) => material.id === selectedMaterialId) && payload.data[0]) {
-          onSelectMaterial(payload.data[0].id)
+        const payload = await requestApi<Material[]>('/materials')
+        onMaterialsChange(payload)
+        if (!payload.some((material) => material.id === selectedMaterialId) && payload[0]) {
+          onSelectMaterial(payload[0].id)
         }
         setMaterialStatus('Material catalog synced from API')
       } catch {
@@ -2390,21 +2469,16 @@ function MaterialWorkspace({
 
     async function loadIntelligence() {
       try {
-        const [moleculeResponse, provenanceResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/molecules`),
-          fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/provenance`),
+        const [moleculePayload, provenancePayload] = await Promise.all([
+          requestApi<MaterialMoleculesResponse>(`/materials/${encodeURIComponent(selected.id)}/molecules`),
+          requestApi<MaterialProvenanceResponse>(`/materials/${encodeURIComponent(selected.id)}/provenance`),
         ])
-        if (!moleculeResponse.ok || !provenanceResponse.ok) {
-          throw new Error('Material intelligence API failed')
-        }
-        const moleculePayload = (await moleculeResponse.json()) as ApiEnvelope<MaterialMoleculesResponse>
-        const provenancePayload = (await provenanceResponse.json()) as ApiEnvelope<MaterialProvenanceResponse>
         if (!active) {
           return
         }
-        setMoleculeRows(moleculePayload.data.molecules)
-        setProvenanceRows(provenancePayload.data.provenance)
-        setLinkedDocuments(provenancePayload.data.documents)
+        setMoleculeRows(moleculePayload.molecules)
+        setProvenanceRows(provenancePayload.provenance)
+        setLinkedDocuments(provenancePayload.documents)
       } catch {
         if (active) {
           setMaterialStatus('Using local molecule/provenance seed until API is reachable')
@@ -2431,15 +2505,11 @@ function MaterialWorkspace({
 
   async function checkCasDuplicate() {
     try {
-      const response = await fetch(`${apiBaseUrl}/materials/dedupe?cas=${encodeURIComponent(createCas)}`)
-      if (!response.ok) {
-        throw new Error('Dedupe check failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<MaterialDedupeResponse>
+      const payload = await requestApi<MaterialDedupeResponse>(`/materials/dedupe?cas=${encodeURIComponent(createCas)}`)
       setMaterialStatus(
-        payload.data.duplicate
-          ? `${payload.data.matches.length} duplicate candidate found for ${payload.data.cas}`
-          : `No CAS duplicate found for ${payload.data.cas}`,
+        payload.duplicate
+          ? `${payload.matches.length} duplicate candidate found for ${payload.cas}`
+          : `No CAS duplicate found for ${payload.cas}`,
       )
     } catch {
       setMaterialStatus('CAS duplicate check unavailable')
@@ -2448,7 +2518,7 @@ function MaterialWorkspace({
 
   async function createMaterialRecord() {
     try {
-      const response = await fetch(`${apiBaseUrl}/materials`, {
+      const payload = await requestApi<MaterialMutationResponse>('/materials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2468,13 +2538,9 @@ function MaterialWorkspace({
           version: 'v1',
         }),
       })
-      if (!response.ok) {
-        throw new Error('Material create failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<MaterialMutationResponse>
-      upsertMaterial(payload.data.material)
+      upsertMaterial(payload.material)
       setCreateName('')
-      setMaterialStatus(`${payload.data.material.name} created without stock movement`)
+      setMaterialStatus(`${payload.material.name} created without stock movement`)
     } catch {
       setMaterialStatus('Material create blocked; check required fields or duplicate CAS')
     }
@@ -2482,7 +2548,7 @@ function MaterialWorkspace({
 
   async function saveMaterialUpdate() {
     try {
-      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}`, {
+      const payload = await requestApi<MaterialMutationResponse>(`/materials/${encodeURIComponent(selected.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2497,12 +2563,8 @@ function MaterialWorkspace({
           version: 'manual-ui',
         }),
       })
-      if (!response.ok) {
-        throw new Error('Material update failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<MaterialMutationResponse>
-      upsertMaterial(payload.data.material)
-      setMaterialStatus(`${payload.data.material.name} metadata saved with provenance`)
+      upsertMaterial(payload.material)
+      setMaterialStatus(`${payload.material.name} metadata saved with provenance`)
     } catch {
       setMaterialStatus('Material update blocked by validation or permission')
     }
@@ -2510,7 +2572,7 @@ function MaterialWorkspace({
 
   async function approveIngestion() {
     try {
-      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/ingest`, {
+      const payload = await requestApi<MaterialIngestionResponse>(`/materials/${encodeURIComponent(selected.id)}/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2525,12 +2587,8 @@ function MaterialWorkspace({
           odor: editDraft.odor.split(',').map((tag) => tag.trim()).filter(Boolean),
         }),
       })
-      if (!response.ok) {
-        throw new Error('Material ingest failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<MaterialIngestionResponse>
-      upsertMaterial(payload.data.material)
-      setMaterialStatus(`${payload.data.ingestion.source} approved and written to material provenance`)
+      upsertMaterial(payload.material)
+      setMaterialStatus(`${payload.ingestion.source} approved and written to material provenance`)
     } catch {
       setMaterialStatus('SDS/CoA ingest blocked; review extracted fields')
     }
@@ -2538,16 +2596,12 @@ function MaterialWorkspace({
 
   async function fillFromPubChem() {
     try {
-      const response = await fetch(`${apiBaseUrl}/materials/${encodeURIComponent(selected.id)}/pubchem-fill`, {
+      const payload = await requestApi<PubChemFillResponse>(`/materials/${encodeURIComponent(selected.id)}/pubchem-fill`, {
         method: 'POST',
       })
-      if (!response.ok) {
-        throw new Error('PubChem fill failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<PubChemFillResponse>
-      upsertMaterial(payload.data.material)
-      setMoleculeRows(payload.data.molecules)
-      setMaterialStatus(`${payload.data.material.name} enriched from curated PubChem profile`)
+      upsertMaterial(payload.material)
+      setMoleculeRows(payload.molecules)
+      setMaterialStatus(`${payload.material.name} enriched from curated PubChem profile`)
     } catch {
       setMaterialStatus('PubChem fill unavailable for this material')
     }
@@ -4032,23 +4086,15 @@ function DocumentsWorkspace() {
 
     async function loadDocuments() {
       try {
-        const [documentsResponse, auditResponse, dashboardResponse] = await Promise.all([
-          fetch(`${apiBaseUrl}/documents`, { signal: controller.signal }),
-          fetch(`${apiBaseUrl}/documents/download-audit`, { signal: controller.signal }),
-          fetch(`${apiBaseUrl}/documents/compliance-dashboard`, { signal: controller.signal }),
+        const [documentsPayload, auditPayload, dashboardPayload] = await Promise.all([
+          requestApi<DocumentRecord[]>('/documents', { signal: controller.signal }),
+          requestApi<AuditEvent[]>('/documents/download-audit', { signal: controller.signal }),
+          requestApi<DocumentComplianceDashboard>('/documents/compliance-dashboard', { signal: controller.signal }),
         ])
 
-        if (!documentsResponse.ok || !auditResponse.ok || !dashboardResponse.ok) {
-          throw new Error('Documents API returned a non-OK response')
-        }
-
-        const documentsPayload = (await documentsResponse.json()) as ApiEnvelope<DocumentRecord[]>
-        const auditPayload = (await auditResponse.json()) as ApiEnvelope<AuditEvent[]>
-        const dashboardPayload = (await dashboardResponse.json()) as ApiEnvelope<DocumentComplianceDashboard>
-
-        setDocumentRows(documentsPayload.data)
-        setDownloadAudits(auditPayload.data)
-        setDashboard(dashboardPayload.data)
+        setDocumentRows(documentsPayload)
+        setDownloadAudits(auditPayload)
+        setDashboard(dashboardPayload)
         setStatusMessage('Synced from live Documents API')
       } catch {
         if (!controller.signal.aborted) {
@@ -4067,17 +4113,14 @@ function DocumentsWorkspace() {
     setStatusMessage('Checking permission before signing URL')
 
     try {
-      const response = await fetch(`${apiBaseUrl}/documents/${documentId}/signed-url`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error('Signed URL request was blocked')
-      }
-
-      const payload = (await response.json()) as ApiEnvelope<DocumentDownloadResponse>
+      const payload = await requestApi<DocumentDownloadResponse>(`/documents/${encodeURIComponent(documentId)}/signed-url`, {
+        method: 'POST',
+      })
       setDocumentRows((current) =>
-        current.map((document) => (document.id === documentId ? payload.data.document : document)),
+        current.map((document) => (document.id === documentId ? payload.document : document)),
       )
-      setDownloadAudits((current) => [payload.data.audit, ...current.filter((event) => event.id !== payload.data.audit.id)])
-      setDownloadResult(payload.data)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setDownloadResult(payload)
       setStatusMessage('Signed URL issued and download audit recorded')
     } catch {
       setStatusMessage('Could not sign URL from API; permission gate or server unavailable')
@@ -4528,7 +4571,55 @@ function ProductionWorkspace() {
             <Metric label="Status" value={activeBatch.status} />
             <Metric label="QC" value={activeBatch.qcStatus} />
             <Metric label="Cost basis" value={formatCurrency(batchCostBasis(activeBatch))} />
+            <Metric label="Output lot" value={activeBatch.outputLot?.lotNumber ?? 'Pending release'} />
+            <Metric
+              label="Yield"
+              value={activeBatch.yieldGrams ? `${formatGrams(activeBatch.yieldGrams)} / ${activeBatch.yieldVariancePercent}%` : 'Pending'}
+            />
           </div>
+        )}
+      </Panel>
+
+      <Panel title="Work Order & QC Protocol" icon={ClipboardCheck}>
+        {activeBatch ? (
+          <div className="document-list compact-list">
+            <div className="document-row">
+              <div>
+                <strong>{activeBatch.workOrder.id}</strong>
+                <span>{activeBatch.workOrder.equipment}</span>
+                <span>Due {new Date(activeBatch.workOrder.dueAt).toLocaleDateString()}</span>
+              </div>
+              <StatusBadge status="active" label="WORK ORDER" />
+            </div>
+            {activeBatch.workOrder.steps.map((step) => (
+              <div className="document-row" key={step.id}>
+                <div>
+                  <strong>{step.label}</strong>
+                  <span>{step.equipment} / {step.plannedMinutes} min</span>
+                  {step.evidence ? <span>Evidence: {step.evidence}</span> : null}
+                </div>
+                <StatusBadge
+                  status={step.status === 'DONE' ? 'stable' : step.status === 'READY' ? 'active' : step.status === 'BLOCKED' ? 'alert' : 'draft'}
+                  label={step.status}
+                />
+              </div>
+            ))}
+            {activeBatch.qcChecks.map((check) => (
+              <div className="document-row" key={check.id}>
+                <div>
+                  <strong>{check.label}</strong>
+                  <span>{check.note ?? 'Awaiting QC evidence'}</span>
+                  {check.recordedAt ? <span>{new Date(check.recordedAt).toLocaleString()}</span> : null}
+                </div>
+                <StatusBadge
+                  status={check.result === 'PASSED' ? 'stable' : check.result === 'FAILED' ? 'alert' : 'review'}
+                  label={check.result}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Create a batch to generate a work order and QC protocol.</div>
         )}
       </Panel>
 
@@ -4540,6 +4631,9 @@ function ProductionWorkspace() {
                 <strong>{batch.id} / {batch.formulaCode}</strong>
                 <span>{formatGrams(batch.targetGrams)} target / {formatGrams(batch.consumedGrams)} consumed / {batch.owner}</span>
                 <span>Cost basis {formatCurrency(batchCostBasis(batch))}</span>
+                {batch.outputLot ? (
+                  <span>Output {batch.outputLot.lotNumber} / {formatGrams(batch.outputLot.quantityGrams)}</span>
+                ) : null}
               </div>
               <StatusBadge status={productionStatusTone[batch.status]} label={batch.status} />
               <div className="document-actions">
@@ -4618,8 +4712,12 @@ function ProductionWorkspace() {
       <Panel title="Phase 9 Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>Release is blocked until inventory is consumed and QC passes.</li>
+          <li>Release creates a finished output-lot record linked back to input lots and movement IDs.</li>
           <li>Failed QC moves the batch to HOLD for deviation review.</li>
           <li>Batch records are append/audit-oriented and not hard-deleted.</li>
+          {activeBatch?.genealogy.inputLotIds.length ? (
+            <li>Inputs: {activeBatch.genealogy.inputLotIds.join(', ')} / Output: {activeBatch.genealogy.outputLotId ?? 'pending'}</li>
+          ) : null}
         </ul>
       </Panel>
     </div>
@@ -6680,12 +6778,8 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
 
     async function loadSaasConsole() {
       try {
-        const response = await fetch(`${apiBaseUrl}/billing/console`, { signal: controller.signal })
-        if (!response.ok) {
-          throw new Error('SaaS readiness API failed')
-        }
-        const payload = (await response.json()) as ApiEnvelope<SaasConsoleResponse>
-        setSaasData(payload.data)
+        const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
+        setSaasData(payload)
         setStatusMessage('Commercial console synced from live API')
       } catch {
         if (!controller.signal.aborted) {
@@ -7078,12 +7172,8 @@ function CustomizationWorkspace() {
 
   const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization console synced from API') => {
     try {
-      const response = await fetch(`${apiBaseUrl}/customization-console`)
-      if (!response.ok) {
-        throw new Error('Customization console API failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<CustomizationConsoleResponse>
-      syncCustomizationData(payload.data, nextStatus)
+      const payload = await requestApi<CustomizationConsoleResponse>('/customization-console')
+      syncCustomizationData(payload, nextStatus)
     } catch {
       setCustomizationStatus('Using local customization seed until API is reachable')
     }
@@ -7109,7 +7199,7 @@ function CustomizationWorkspace() {
 
   async function saveSettings() {
     try {
-      const response = await fetch(`${apiBaseUrl}/settings`, {
+      const payload = await requestApi<SettingsUpdateResponse>('/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -7117,16 +7207,12 @@ function CustomizationWorkspace() {
           defaultDilutionPercent: Number(settingsDraft.defaultDilutionPercent),
         }),
       })
-      if (!response.ok) {
-        throw new Error('Settings update failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<SettingsUpdateResponse>
       setCustomizationData((current) => ({
         ...current,
-        settings: payload.data.settings,
-        audit: addAudit(current.audit, payload.data.audit),
+        settings: payload.settings,
+        audit: addAudit(current.audit, payload.audit),
       }))
-      setSettingsDraft(payload.data.settings)
+      setSettingsDraft(payload.settings)
       setCustomizationStatus('Tenant settings saved with audit evidence')
     } catch {
       setCustomizationStatus('Settings update blocked by customization policy')
@@ -7139,23 +7225,19 @@ function CustomizationWorkspace() {
       featureFlags: current.featureFlags.map((item) => (item.key === flag.key ? { ...item, enabled } : item)),
     }))
     try {
-      const response = await fetch(`${apiBaseUrl}/feature-flags/${encodeURIComponent(flag.key)}`, {
+      const payload = await requestApi<FeatureFlagUpdateResponse>(`/feature-flags/${encodeURIComponent(flag.key)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
       })
-      if (!response.ok) {
-        throw new Error('Feature flag update failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<FeatureFlagUpdateResponse>
       setCustomizationData((current) => ({
         ...current,
         featureFlags: current.featureFlags.map((item) =>
-          item.key === payload.data.featureFlag.key ? payload.data.featureFlag : item,
+          item.key === payload.featureFlag.key ? payload.featureFlag : item,
         ),
-        audit: addAudit(current.audit, payload.data.audit),
+        audit: addAudit(current.audit, payload.audit),
       }))
-      setCustomizationStatus(`${payload.data.featureFlag.label} is now ${enabled ? 'enabled' : 'disabled'}`)
+      setCustomizationStatus(`${payload.featureFlag.label} is now ${enabled ? 'enabled' : 'disabled'}`)
     } catch {
       setCustomizationData((current) => ({
         ...current,
@@ -7167,13 +7249,11 @@ function CustomizationWorkspace() {
 
   async function previewSequence() {
     try {
-      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/preview`)
-      if (!response.ok) {
-        throw new Error('Numbering preview failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<NumberingPreviewResponse>
-      setSequencePreview(payload.data.value)
-      setCustomizationStatus(`Preview generated without incrementing ${payload.data.key}`)
+      const payload = await requestApi<NumberingPreviewResponse>(
+        `/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/preview`,
+      )
+      setSequencePreview(payload.value)
+      setCustomizationStatus(`Preview generated without incrementing ${payload.key}`)
     } catch {
       setCustomizationStatus('Number preview unavailable')
     }
@@ -7181,28 +7261,27 @@ function CustomizationWorkspace() {
 
   async function saveSequence() {
     try {
-      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pattern: sequenceDraft.pattern,
-          nextValue: Number(sequenceDraft.nextValue),
-          scope: sequenceDraft.scope,
-        }),
-      })
-      if (!response.ok) {
-        throw new Error('Numbering update failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<NumberingUpdateResponse>
+      const payload = await requestApi<NumberingUpdateResponse>(
+        `/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pattern: sequenceDraft.pattern,
+            nextValue: Number(sequenceDraft.nextValue),
+            scope: sequenceDraft.scope,
+          }),
+        },
+      )
       setCustomizationData((current) => ({
         ...current,
         numberingSequences: current.numberingSequences.map((sequence) =>
-          sequence.key === payload.data.sequence.key ? payload.data.sequence : sequence,
+          sequence.key === payload.sequence.key ? payload.sequence : sequence,
         ),
-        audit: addAudit(current.audit, payload.data.audit),
+        audit: addAudit(current.audit, payload.audit),
       }))
-      setSequenceDraft(payload.data.sequence)
-      setSequencePreview(payload.data.preview)
+      setSequenceDraft(payload.sequence)
+      setSequencePreview(payload.preview)
       setCustomizationStatus('Numbering sequence saved with monotonic guard')
     } catch {
       setCustomizationStatus('Numbering update blocked; check pattern and next value')
@@ -7211,15 +7290,12 @@ function CustomizationWorkspace() {
 
   async function issueNextNumber() {
     try {
-      const response = await fetch(`${apiBaseUrl}/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/next`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        throw new Error('Number issue failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<{ key: string; value: string; invariant: string }>
-      await refreshCustomizationConsole(`Issued ${payload.data.value} through the sequence service`)
-      setSequencePreview(`Issued ${payload.data.value}`)
+      const payload = await requestApi<{ key: string; value: string; invariant: string }>(
+        `/numbering-sequences/${encodeURIComponent(selectedSequenceKey)}/next`,
+        { method: 'POST' },
+      )
+      await refreshCustomizationConsole(`Issued ${payload.value} through the sequence service`)
+      setSequencePreview(`Issued ${payload.value}`)
     } catch {
       setCustomizationStatus('Numbering issue blocked by sequence service')
     }
@@ -7227,7 +7303,7 @@ function CustomizationWorkspace() {
 
   async function createField() {
     try {
-      const response = await fetch(`${apiBaseUrl}/custom-fields`, {
+      const payload = await requestApi<CustomFieldCreateResponse>('/custom-fields', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -7242,18 +7318,14 @@ function CustomizationWorkspace() {
             .filter(Boolean),
         }),
       })
-      if (!response.ok) {
-        throw new Error('Custom field create failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<CustomFieldCreateResponse>
       setCustomizationData((current) => ({
         ...current,
-        customFields: [payload.data.customField, ...current.customFields],
-        audit: addAudit(current.audit, payload.data.audit),
+        customFields: [payload.customField, ...current.customFields],
+        audit: addAudit(current.audit, payload.audit),
       }))
       setFieldLabel('')
       setFieldKey('')
-      setCustomizationStatus(`${payload.data.customField.label} custom field created`)
+      setCustomizationStatus(`${payload.customField.label} custom field created`)
     } catch {
       setCustomizationStatus('Custom field create blocked; check entity and duplicate key')
     }
@@ -7261,21 +7333,17 @@ function CustomizationWorkspace() {
 
   async function saveBranding() {
     try {
-      const response = await fetch(`${apiBaseUrl}/branding`, {
+      const payload = await requestApi<BrandingUpdateResponse>('/branding', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(brandingDraft),
       })
-      if (!response.ok) {
-        throw new Error('Branding update failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<BrandingUpdateResponse>
       setCustomizationData((current) => ({
         ...current,
-        branding: payload.data.branding,
-        audit: addAudit(current.audit, payload.data.audit),
+        branding: payload.branding,
+        audit: addAudit(current.audit, payload.audit),
       }))
-      setBrandingDraft(payload.data.branding)
+      setBrandingDraft(payload.branding)
       setCustomizationStatus('Export branding saved as tenant configuration')
     } catch {
       setCustomizationStatus('Branding update blocked; accent color must be hex')
@@ -7718,12 +7786,8 @@ function IdentityWorkspace() {
 
   async function refreshTenantConsole(nextStatus = 'Tenant console synced from API') {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/tenant-console`)
-      if (!response.ok) {
-        throw new Error('Tenant console API failed')
-      }
-      const payload = (await response.json()) as ApiEnvelope<TenantConsoleResponse>
-      setTenantData(payload.data)
+      const payload = await requestApi<TenantConsoleResponse>('/security/tenant-console')
+      setTenantData(payload)
       setTenantStatus(nextStatus)
     } catch {
       setTenantStatus('Using local tenant seed until API is reachable')
@@ -7736,7 +7800,7 @@ function IdentityWorkspace() {
 
   async function inviteTenantMember() {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/members/invite`, {
+      await requestApi<TenantInviteResponse>('/security/members/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -7745,9 +7809,6 @@ function IdentityWorkspace() {
           brandIds: [tenantData.brands[0]?.id ?? 'brand-client-fallback'],
         }),
       })
-      if (!response.ok) {
-        throw new Error('Invite failed')
-      }
       setInviteEmail('')
       await refreshTenantConsole('Invite created; credential remains invite-only')
     } catch {
@@ -7757,14 +7818,11 @@ function IdentityWorkspace() {
 
   async function updateMemberStatus(memberId: string, status: MembershipRecord['status']) {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/members/${memberId}/status`, {
+      await requestApi<MembershipStatusResponse>(`/security/members/${encodeURIComponent(memberId)}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
       })
-      if (!response.ok) {
-        throw new Error('Membership status update failed')
-      }
       await refreshTenantConsole(status === 'DEACTIVATED' ? 'Member deactivated and sessions revoked' : 'Member activated')
     } catch {
       setTenantStatus('Membership status update blocked by tenant policy')
@@ -7773,10 +7831,9 @@ function IdentityWorkspace() {
 
   async function revokeTenantSession(sessionId: string) {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/sessions/${sessionId}/revoke`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error('Session revoke failed')
-      }
+      await requestApi<SessionMutationResponse>(`/security/sessions/${encodeURIComponent(sessionId)}/revoke`, {
+        method: 'POST',
+      })
       await refreshTenantConsole('Session revoked and audit event recorded')
     } catch {
       setTenantStatus('Session revoke blocked by tenant policy')
@@ -7785,14 +7842,11 @@ function IdentityWorkspace() {
 
   async function revokeAllTenantSessions(email: string) {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/sessions/revoke-all`, {
+      await requestApi<SessionRevokeAllResponse>('/security/sessions/revoke-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, keepCurrent: true }),
       })
-      if (!response.ok) {
-        throw new Error('Session revoke-all failed')
-      }
       await refreshTenantConsole(`All active sessions revoked for ${email}`)
     } catch {
       setTenantStatus('Revoke-all blocked by tenant policy')
@@ -7801,10 +7855,9 @@ function IdentityWorkspace() {
 
   async function touchTenantSession(sessionId: string) {
     try {
-      const response = await fetch(`${apiBaseUrl}/security/sessions/${sessionId}/touch`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error('Session touch failed')
-      }
+      await requestApi<SessionMutationResponse>(`/security/sessions/${encodeURIComponent(sessionId)}/touch`, {
+        method: 'POST',
+      })
       await refreshTenantConsole('Session idle timeout extended')
     } catch {
       setTenantStatus('Session touch blocked by lifecycle policy')
@@ -7813,11 +7866,9 @@ function IdentityWorkspace() {
 
   async function logoutCurrentSession() {
     try {
-      const response = await fetch(`${apiBaseUrl}/auth/logout`, { method: 'POST' })
-      if (!response.ok) {
-        throw new Error('Logout failed')
-      }
-      await refreshTenantConsole('Current session logged out; demo created a fresh owner session')
+      await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
+      writeStoredAuthSession(null)
+      setTenantStatus('Current session logged out; sign in again to load tenant console')
     } catch {
       setTenantStatus('Logout blocked by session lifecycle policy')
     }
@@ -7825,12 +7876,9 @@ function IdentityWorkspace() {
 
   async function runTenantProbe(organizationId: string) {
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/security/tenant-probe?organizationId=${encodeURIComponent(organizationId)}`,
+      await requestApi<SecurityProbeResult>(
+        `/security/tenant-probe?organizationId=${encodeURIComponent(organizationId)}`,
       )
-      if (!response.ok) {
-        throw new Error('Tenant probe blocked')
-      }
       setProbeResult({
         status: 'allowed',
         title: 'Tenant probe allowed',
@@ -7849,12 +7897,9 @@ function IdentityWorkspace() {
 
   async function runPermissionProbe() {
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/security/permission-probe?role=${encodeURIComponent(permissionRole)}&permission=${encodeURIComponent(permissionName)}`,
+      await requestApi<SecurityProbeResult>(
+        `/security/permission-probe?role=${encodeURIComponent(permissionRole)}&permission=${encodeURIComponent(permissionName)}`,
       )
-      if (!response.ok) {
-        throw new Error('Permission probe blocked')
-      }
       setProbeResult({
         status: 'allowed',
         title: 'Permission allowed',
@@ -7879,17 +7924,14 @@ function IdentityWorkspace() {
       ? Array.from(new Set([...selectedRolePolicy.permissions, permissionKey]))
       : selectedRolePolicy.permissions.filter((permission) => permission !== permissionKey)
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/security/roles/${encodeURIComponent(selectedRolePolicy.role)}/permissions`,
+      await requestApi<PermissionMatrixResponse>(
+        `/security/roles/${encodeURIComponent(selectedRolePolicy.role)}/permissions`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ permissions: nextPermissions }),
         },
       )
-      if (!response.ok) {
-        throw new Error('Role permission update failed')
-      }
       await refreshTenantConsole(`${selectedRolePolicy.role} permission matrix updated`)
       setProbeResult({
         status: 'allowed',

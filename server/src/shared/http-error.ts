@@ -28,6 +28,12 @@ export class ForbiddenException extends AppHttpError {
   }
 }
 
+export class UnauthorizedException extends AppHttpError {
+  constructor(payload: ErrorPayload = 'Authentication required') {
+    super(401, payload, 'Unauthorized')
+  }
+}
+
 export class NotFoundException extends AppHttpError {
   constructor(payload: ErrorPayload = 'Not found') {
     super(404, payload, 'Not Found')

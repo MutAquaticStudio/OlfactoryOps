@@ -15,6 +15,8 @@ type RouteContext = {
 type Route = {
   method: string
   pattern: string
+  public?: boolean
+  sessionCookie?: 'set' | 'clear'
   mutates?: boolean
   limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
   writeGate?: boolean
@@ -105,9 +107,9 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
 ]
 
 const routes: Route[] = [
-  { method: 'GET', pattern: '/health', handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
-  { method: 'GET', pattern: '/version', handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', handler: () => ({ data: { adapter: 'cloudflare-d1-snapshot', keys: SNAPSHOT_KEYS.length, table: 'northstar_snapshots' } }) },
+  { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
+  { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-snapshot', keys: SNAPSHOT_KEYS.length, table: 'northstar_snapshots' } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -146,9 +148,9 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/inventory/receipts', mutates: true, limitKey: 'lots', handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
   { method: 'POST', pattern: '/inventory/adjustments', mutates: true, handler: ({ service, body }) => service.adjustInventory(body) },
   { method: 'POST', pattern: '/inventory/transfers', mutates: true, handler: ({ service, body }) => service.transferInventory(body) },
-  { method: 'POST', pattern: '/auth/login', mutates: true, writeGate: false, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
-  { method: 'POST', pattern: '/auth/signup', mutates: true, writeGate: false, handler: ({ service, body }) => service.signup(body) },
-  { method: 'POST', pattern: '/auth/logout', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
+  { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
+  { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, handler: ({ service, body }) => service.signup(body) },
+  { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
@@ -270,6 +272,9 @@ export default {
       await ensureSnapshotTable(env.DB)
       const service = new NorthStarService()
       await hydrateSnapshots(env.DB, service)
+      if (!match.route.public) {
+        service.authenticateSession(readSessionId(request.headers))
+      }
       const body = await readJsonBody(request)
       if (match.route.mutates && match.route.writeGate !== false) {
         service.assertCommercialWriteAllowed(`${request.method} ${match.route.pattern}`)
@@ -283,7 +288,7 @@ export default {
         await persistSnapshots(env.DB, service)
       }
 
-      return json(result, 200, corsHeaders)
+      return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
     } catch (error) {
       return errorJson(error, corsHeaders)
     }
@@ -382,6 +387,29 @@ function readPurchaseOrderStatus(value: unknown) {
   return 'SENT'
 }
 
+function readBearerSessionId(authorization: string | null) {
+  const [scheme, token] = authorization?.trim().split(/\s+/, 2) ?? []
+  if (scheme?.toLowerCase() !== 'bearer' || !token) {
+    return undefined
+  }
+  return token
+}
+
+function readSessionId(headers: Headers) {
+  return readCookie(headers.get('Cookie'), 'oo_session') ?? readBearerSessionId(headers.get('Authorization'))
+}
+
+function readCookie(cookieHeader: string | null, name: string) {
+  const cookies = cookieHeader?.split(';') ?? []
+  for (const cookie of cookies) {
+    const [rawKey, ...rawValue] = cookie.trim().split('=')
+    if (rawKey === name) {
+      return decodeURIComponent(rawValue.join('='))
+    }
+  }
+  return undefined
+}
+
 async function ensureSnapshotTable(db: D1Database) {
   await db
     .prepare(
@@ -426,13 +454,70 @@ async function persistSnapshots(db: D1Database, service: NorthStarService) {
 function buildCorsHeaders(origin: string | null, configuredOrigins: string | undefined) {
   const allowedOrigins = parseCsv(configuredOrigins)
   const effectiveOrigins = allowedOrigins.length > 0 ? allowedOrigins : LOCAL_CORS_ORIGINS
-  const allowedOrigin = origin && effectiveOrigins.includes(origin) ? origin : effectiveOrigins[0]
+  const allowedOrigin = origin && isAllowedCorsOrigin(origin, effectiveOrigins) ? origin : effectiveOrigins[0]
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Credentials': 'true',
     Vary: 'Origin',
+  }
+}
+
+function buildResponseHeaders(headers: HeadersInit, route: Route, result: unknown) {
+  const responseHeaders = { ...(headers as Record<string, string>) }
+  if (route.sessionCookie === 'set') {
+    const sessionId = readResultSessionId(result)
+    if (sessionId) {
+      responseHeaders['Set-Cookie'] = buildSessionCookie(sessionId, tenantSessionCookieMaxAgeSeconds)
+    }
+  }
+  if (route.sessionCookie === 'clear') {
+    responseHeaders['Set-Cookie'] = buildSessionCookie('', 0)
+  }
+  return responseHeaders
+}
+
+const tenantSessionCookieMaxAgeSeconds = 8 * 60 * 60
+
+function readResultSessionId(result: unknown) {
+  if (!isRecord(result) || !isRecord(result.data) || !isRecord(result.data.session)) {
+    return undefined
+  }
+  return typeof result.data.session.id === 'string' ? result.data.session.id : undefined
+}
+
+function buildSessionCookie(value: string, maxAgeSeconds: number) {
+  return `oo_session=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=None`
+}
+
+function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]) {
+  return allowedOrigins.some((allowedOrigin) => {
+    if (allowedOrigin === origin) {
+      return true
+    }
+    if (!allowedOrigin.includes('*')) {
+      return false
+    }
+    return wildcardOriginMatches(origin, allowedOrigin)
+  })
+}
+
+function wildcardOriginMatches(origin: string, allowedOrigin: string) {
+  try {
+    const parsedOrigin = new URL(origin)
+    const parsedAllowed = new URL(allowedOrigin.replace('*.', 'wildcard.'))
+    const allowedHost = parsedAllowed.hostname.replace(/^wildcard\./, '')
+
+    return (
+      parsedOrigin.protocol === parsedAllowed.protocol &&
+      parsedOrigin.hostname.endsWith(`.${allowedHost}`) &&
+      !parsedOrigin.username &&
+      !parsedOrigin.password &&
+      parsedOrigin.port === parsedAllowed.port
+    )
+  } catch {
+    return false
   }
 }
 

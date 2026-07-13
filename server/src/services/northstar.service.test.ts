@@ -1,10 +1,35 @@
-import { describe, expect, it } from 'vitest'
-import { ForbiddenException, UnprocessableEntityException } from '../shared/http-error'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
 
+const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
+
+function createAuthenticatedService(email = 'owner@example.test') {
+  const service = new NorthStarService()
+  service.login(email)
+  return service
+}
+
 describe('NorthStarService', () => {
-  it('commits lab usage through OUT movements and reverses by compensation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(fixedSessionFixtureNow)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('requires an authenticated session before protected tenant operations', () => {
     const service = new NorthStarService()
+
+    expect(() => service.tenantConsole()).toThrow(UnauthorizedException)
+    expect(() => service.requestDocumentSignedUrl('DOC-118')).toThrow(UnauthorizedException)
+    expect(() => service.authenticateSession(undefined)).toThrow(UnauthorizedException)
+  })
+
+  it('commits lab usage through OUT movements and reverses by compensation', () => {
+    const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-0421', 12.5).data
 
     expect(commit.usage.status).toBe('COMMITTED')
@@ -21,7 +46,7 @@ describe('NorthStarService', () => {
   })
 
   it('exposes lab usage history, detail, and reverse-by-id evidence', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-0421', 12.5, {
       purpose: 'sample',
       projectCode: 'NXL-RD-0421',
@@ -49,7 +74,7 @@ describe('NorthStarService', () => {
   })
 
   it('records lab weighing sessions without creating inventory movements', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const plan = service.labUsagePlan('frm-0421', 12.5).data
     const actuals = plan.allocations.map((allocation, index) => ({
@@ -72,7 +97,7 @@ describe('NorthStarService', () => {
   })
 
   it('commits lab usage with actual weighed quantities', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const plan = service.labUsagePlan('frm-0421', 12.5).data
     const firstAllocation = plan.allocations[0]!
     const actualGrams = Number((firstAllocation.allocatedGrams * 0.99).toFixed(4))
@@ -96,7 +121,7 @@ describe('NorthStarService', () => {
   })
 
   it('blocks out-of-tolerance lab weighing commits before inventory changes', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const plan = service.labUsagePlan('frm-0421', 12.5).data
     const firstAllocation = plan.allocations[0]!
@@ -118,13 +143,14 @@ describe('NorthStarService', () => {
   })
 
   it('issues short-lived document URLs only after permission check and logs access', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const before = service.documents().data.find((document) => document.id === 'DOC-118')
     expect(before).toBeDefined()
 
     const result = service.requestDocumentSignedUrl('DOC-118').data
 
     expect(result.signedUrl.url).toContain('expires=')
+    expect(result.signedUrl.url).toContain('nonce=')
     expect(result.signedUrl.ttlSeconds).toBe(300)
     expect(result.document.downloads).toBe(before!.downloads + 1)
     expect(result.audit.action).toBe('document.download')
@@ -133,9 +159,9 @@ describe('NorthStarService', () => {
   })
 
   it('blocks highly confidential document downloads without sensitive permission and keeps audit evidence', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
-    expect(() => service.requestDocumentSignedUrl('DOC-121')).toThrow(ForbiddenException)
+    expect(service.requestDocumentSignedUrl('DOC-121').data.audit.outcome).toBe('allowed')
     expect(() =>
       service.requestDocumentSignedUrl('DOC-121', {
         actor: 'api:viewer',
@@ -149,7 +175,7 @@ describe('NorthStarService', () => {
   })
 
   it('reports compliance coverage and generates review-gated documents', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const before = service.documentComplianceDashboard().data
     expect(before.missingCount).toBeGreaterThan(0)
     expect(before.expiringDocuments.some((document) => document.id === 'DOC-118')).toBe(true)
@@ -171,7 +197,7 @@ describe('NorthStarService', () => {
   })
 
   it('approves generated documents before external sharing', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const generated = service.generateDocument({ type: 'CoA', linkedTo: 'lot-iso-001' }).data.document
 
     expect(() => service.shareDocument(generated.id, { recipient: 'client@example.com' })).toThrow(
@@ -194,7 +220,7 @@ describe('NorthStarService', () => {
   })
 
   it('blocks cross-tenant and missing-permission probes', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     expect(service.tenantProbe('org-nxl').data.allowed).toBe(true)
     expect(() => service.tenantProbe('org-other')).toThrow(ForbiddenException)
@@ -203,7 +229,7 @@ describe('NorthStarService', () => {
   })
 
   it('returns a server-side permission matrix for organization roles', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.permissionMatrix().data
     const viewer = result.matrix.find((row) => row.role === 'Viewer')
 
@@ -215,7 +241,7 @@ describe('NorthStarService', () => {
   })
 
   it('updates role permissions and applies the new permission decision', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const viewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
     const updated = service.setRolePermissions('Viewer', [
       ...(viewer?.allowedPermissions ?? []),
@@ -228,7 +254,7 @@ describe('NorthStarService', () => {
   })
 
   it('blocks unknown permissions and unsafe Owner permission removal', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const owner = service.permissionMatrix().data.matrix.find((row) => row.role === 'Owner')
 
     expect(() => service.setRolePermissions('Viewer', ['inventory.view', 'tenant.escape'])).toThrow(
@@ -243,7 +269,7 @@ describe('NorthStarService', () => {
   })
 
   it('scopes the tenant console to the active organization', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.tenantConsole().data
 
     expect(result.organization.id).toBe('org-nxl')
@@ -256,7 +282,7 @@ describe('NorthStarService', () => {
   })
 
   it('invites tenant members without creating a usable credential', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.inviteMember({
       email: 'new.viewer@example.test',
       name: 'New Viewer',
@@ -272,7 +298,7 @@ describe('NorthStarService', () => {
   })
 
   it('blocks cross-tenant brand grants during member invite', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     expect(() =>
       service.inviteMember({
@@ -284,7 +310,7 @@ describe('NorthStarService', () => {
   })
 
   it('deactivates members by revoking their active sessions', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.setMembershipStatus('MBR-LAB', 'DEACTIVATED').data
     const consoleState = service.tenantConsole().data
 
@@ -296,7 +322,7 @@ describe('NorthStarService', () => {
   })
 
   it('prevents deactivating the last active Owner and audits session revocation', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     expect(() => service.setMembershipStatus('MBR-OWNER', 'DEACTIVATED')).toThrow(UnprocessableEntityException)
 
@@ -307,7 +333,7 @@ describe('NorthStarService', () => {
   })
 
   it('creates bounded login sessions and clamps concurrent sessions', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const firstLogin = service.login('owner@example.test').data
     const secondLogin = service.login('owner@example.test').data
     const consoleState = service.tenantConsole().data
@@ -323,7 +349,7 @@ describe('NorthStarService', () => {
   })
 
   it('signs up a new tenant with an owner session', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.signup({
       organizationName: 'Atelier Smoke Test',
       workspaceSlug: 'atelier-smoke',
@@ -341,7 +367,7 @@ describe('NorthStarService', () => {
   })
 
   it('touches active sessions without changing absolute expiry', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const before = service.tenantConsole().data.sessions.find((session) => session.id === 'SES-0002')
     const touched = service.touchSession('SES-0002').data
 
@@ -352,7 +378,7 @@ describe('NorthStarService', () => {
   })
 
   it('revokes all active sessions for a tenant member while keeping current admin session', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const revoked = service.revokeAllSessions({ email: 'lab@example.test' }).data
     const consoleState = service.tenantConsole().data
     const activeLabSessions = consoleState.sessions.filter(
@@ -366,7 +392,7 @@ describe('NorthStarService', () => {
   })
 
   it('logs out the current session with audit evidence', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const result = service.logout().data
 
     expect(result.session.status).toBe('REVOKED')
@@ -376,7 +402,7 @@ describe('NorthStarService', () => {
   })
 
   it('updates customization settings and increments numbering through the sequence service', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     const settings = service.updateSettings({ currency: 'EUR', defaultDilutionPercent: 12 }).data
     const first = service.nextNumber('formula').data
@@ -390,7 +416,7 @@ describe('NorthStarService', () => {
   })
 
   it('manages customization console flags, fields, sequences, and branding with audit evidence', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     const consoleState = service.customizationConsole().data
     const flag = service.updateFeatureFlag('formulaCostVisibility', false).data
@@ -420,7 +446,7 @@ describe('NorthStarService', () => {
   })
 
   it('blocks unsafe customization changes', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
 
     expect(() => service.updateNumberingSequence('formula', { pattern: 'FRM-YY', nextValue: 430 })).toThrow(
       UnprocessableEntityException,
@@ -433,7 +459,7 @@ describe('NorthStarService', () => {
   })
 
   it('creates materials with CAS duplicate guard and no stock side effect', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeStockRows = service.inventorySummary().data.length
     const result = service.createMaterial({
       name: 'Vetiveryl Acetate',
@@ -459,7 +485,7 @@ describe('NorthStarService', () => {
   })
 
   it('stages SDS extraction for review and only writes approved provenance fields', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const review = service.ingestMaterialDocument('mat-iso', {
       source: 'Iso E Super SDS v4',
       version: 'v4',
@@ -485,7 +511,7 @@ describe('NorthStarService', () => {
   })
 
   it('fills curated PubChem data and returns molecule split for a material', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const filled = service.pubchemFill('mat-iso').data
     const molecules = service.materialMolecules('mat-iso').data
 
@@ -497,7 +523,7 @@ describe('NorthStarService', () => {
   })
 
   it('creates formula drafts without consuming inventory', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const result = service.createFormulaDraft({ name: 'Midnight Vetiver', targetGrams: 50 }).data
 
@@ -509,7 +535,7 @@ describe('NorthStarService', () => {
   })
 
   it('adds formula ingredient lines and resolves draft cost without consuming inventory', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const formula = service.createFormulaDraft({ name: 'Line Test Accord', targetGrams: 80 }).data.formula
     const beforeMovements = service.inventoryMovements().data.length
     const result = service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 16 }).data
@@ -525,7 +551,7 @@ describe('NorthStarService', () => {
   })
 
   it('edits, reorders, and deletes formula lines without consuming inventory', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const formula = service.createFormulaDraft({ name: 'Editable Accord', targetGrams: 50 }).data.formula
     const firstLine = service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 12 }).data.line
     const secondLine = service.addFormulaLine(formula.id, { materialId: 'mat-iso', grams: 8 }).data.line
@@ -545,7 +571,7 @@ describe('NorthStarService', () => {
   })
 
   it('resolves nested child formulas and blocks formula cycles', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const parent = service.createFormulaDraft({ name: 'Nested Citrus Trial', targetGrams: 100 }).data.formula
     const nested = service.addFormulaLine(parent.id, {
       childFormulaId: 'frm-accord-citrus',
@@ -563,7 +589,7 @@ describe('NorthStarService', () => {
   })
 
   it('snapshots, approves, and exports formula versions with audit but no stock movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const snapshot = service.createFormulaVersion('frm-0421', { note: 'Bench QA snapshot' }).data
     const approval = service.approveFormula('frm-0421').data
@@ -583,7 +609,7 @@ describe('NorthStarService', () => {
   })
 
   it('receives direct inventory receipts through lot and IN movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const receipt = service.receiveInventoryReceipt({
       materialId: 'mat-iso',
@@ -600,7 +626,7 @@ describe('NorthStarService', () => {
   })
 
   it('adjusts stock only through immutable adjustment movements and blocks negative availability', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const adjustment = service.adjustInventory({
       lotId: 'lot-hed-001',
@@ -627,7 +653,7 @@ describe('NorthStarService', () => {
   })
 
   it('transfers lots between storage locations without changing stock quantity', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-ambroxan')
     const transfer = service.transferInventory({
       lotId: 'lot-amb-001',
@@ -645,7 +671,7 @@ describe('NorthStarService', () => {
   })
 
   it('changes lot quality eligibility without creating a stock movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const beforeSummary = service.inventorySummary().data.find((item) => item.material.id === 'mat-hedione')
     const quality = service.changeLotQuality('lot-hed-001', {
@@ -662,7 +688,7 @@ describe('NorthStarService', () => {
   })
 
   it('reconciles stock take variance through immutable adjustment movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const stockTake = service.performStockTake({
       lotId: 'lot-hed-001',
@@ -689,7 +715,7 @@ describe('NorthStarService', () => {
   })
 
   it('records matched stock take without moving inventory', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const stockTake = service.performStockTake({
       lotId: 'lot-amb-001',
@@ -704,7 +730,7 @@ describe('NorthStarService', () => {
   })
 
   it('generates lot labels, genealogy, locations, and shopping list without stock movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const location = service.createStorageLocation({
       name: 'Retest Bin 1',
@@ -726,18 +752,22 @@ describe('NorthStarService', () => {
   })
 
   it('runs production consumption separately from lab usage', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const batch = service.createProductionBatch('frm-0421', 25).data
     const result = service.consumeProductionBatch(batch.id).data
 
+    expect(batch.workOrder.steps.some((step) => step.label === 'Weigh raw materials')).toBe(true)
     expect(result.batchId).toBe(batch.id)
     expect(result.movements.length).toBeGreaterThan(0)
     expect(result.movements.every((movement) => movement.type === 'PRODUCTION_CONSUMPTION')).toBe(true)
+    expect(service.productionBatches().data.find((item) => item.id === batch.id)?.genealogy.inputMovementIds).toEqual(
+      result.movements.map((movement) => movement.id),
+    )
     expect(result.invariant).toContain('separate from lab usage')
   })
 
   it('gates production batches by approved formula, consumption, QC, and release state', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const draft = service.createFormulaDraft({ name: 'Unapproved production test' }).data.formula
 
     expect(() => service.createProductionBatch(draft.id, 25)).toThrow(/must be approved/)
@@ -754,14 +784,18 @@ describe('NorthStarService', () => {
 
     const passed = service.qcProductionBatch(batch.id, 'PASSED').data
     expect(passed.status).toBe('BOTTLING')
+    expect(passed.qcChecks.every((check) => check.result === 'PASSED')).toBe(true)
 
     const released = service.updateProductionBatchStatus(batch.id, 'RELEASED').data
     expect(released.batch.status).toBe('RELEASED')
+    expect(released.batch.outputLot?.id).toBe(`FG-${batch.id}`)
+    expect(released.batch.genealogy.outputLotId).toBe(released.batch.outputLot?.id)
+    expect(released.batch.yieldVariancePercent).toBeLessThan(0)
     expect(released.invariant).toContain('audited and gated')
   })
 
   it('receives purchase orders into inventory through lot and IN movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const receipt = service.receivePurchaseOrder('PO-2026-014').data
 
     expect(receipt.lot.materialId).toBe('mat-bergamot')
@@ -771,7 +805,7 @@ describe('NorthStarService', () => {
   })
 
   it('runs procurement supplier, PO state, partial receipt, and price history workflow', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const supplier = service.createSupplier({
       name: 'North Aroma Cooperative',
@@ -813,7 +847,7 @@ describe('NorthStarService', () => {
   })
 
   it('runs commerce SKU, price list, quote, and sample workflow without stock movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
 
     const skuCreate = service.createCatalogSku({
@@ -857,7 +891,7 @@ describe('NorthStarService', () => {
   })
 
   it('runs order lifecycle through reserve, pack, ship, and fulfillment trace', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const order = service.createOrder({
       skuId: 'SKU-ISO-050',
@@ -889,7 +923,7 @@ describe('NorthStarService', () => {
   })
 
   it('cancels reserved orders by releasing reservation without movement', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const order = service.createOrder({
       skuId: 'SKU-ISO-050',
       customerId: 'CUS-DEMO',
@@ -906,7 +940,7 @@ describe('NorthStarService', () => {
   })
 
   it('builds costing read models from formula, batch, SKU margin, valuation, and COGS', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const overview = service.costingOverview().data
     const formula = service.costingFormula('frm-0421').data
@@ -929,7 +963,7 @@ describe('NorthStarService', () => {
   })
 
   it('serves analytics read models and report runs without mutating the movement ledger', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const dashboard = service.analyticsDashboard().data
     const burnRate = service.analyticsBurnRate().data
@@ -954,7 +988,7 @@ describe('NorthStarService', () => {
   })
 
   it('queues enterprise audit export as a tenant-scoped control', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const exportJob = service.auditExport().data
 
     expect(exportJob.status).toBe('QUEUED')
@@ -963,7 +997,7 @@ describe('NorthStarService', () => {
   })
 
   it('enforces commercial subscription freeze and plan capacity before writes', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const consoleState = service.billingConsole().data
 
     expect(consoleState.invariant).toContain('server-side')
@@ -980,7 +1014,7 @@ describe('NorthStarService', () => {
   })
 
   it('serves billing actions and webhook retry evidence for sell-ready operations', () => {
-    const service = new NorthStarService()
+    const service = createAuthenticatedService()
     const checkout = service.startBillingCheckout({ mode: 'manual_sales' }).data
     const portal = service.openBillingPortal().data
     const retry = service.retryWebhookDelivery('WHD-0002').data
@@ -994,3 +1028,4 @@ describe('NorthStarService', () => {
     expect(consoleState.webhookDeliveries.find((delivery) => delivery.id === 'WHD-0002')?.attempts).toBe(3)
   })
 })
+
