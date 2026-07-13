@@ -48,6 +48,47 @@ describe('NorthStarService', () => {
     expect(tenantConsole.sessions.every((session) => !('csrfToken' in session))).toBe(true)
   })
 
+  it('stores user settings for the active user without changing tenant-wide settings', () => {
+    const service = createAuthenticatedService()
+    const initial = service.me().data.userSettings
+
+    expect(initial.displayName).toBe('Thuan Le Minh')
+    expect(initial.organizationId).toBe('org-nxl')
+
+    const updated = service.updateUserSettings({
+      displayName: 'Maison Owner',
+      preferredLanding: 'inventory',
+      uiDensity: 'compact',
+      reduceMotion: true,
+      emailDigest: 'daily',
+      organizationId: 'org-other',
+    }).data
+    const tenantSettings = service.customizationConsole().data.settings
+    const membership = service.tenantConsole().data.memberships.find((item) => item.userId === updated.settings.userId)
+
+    expect(updated.settings.displayName).toBe('Maison Owner')
+    expect(updated.settings.preferredLanding).toBe('inventory')
+    expect(updated.settings.uiDensity).toBe('compact')
+    expect(updated.settings.reduceMotion).toBe(true)
+    expect(updated.settings.emailDigest).toBe('daily')
+    expect(updated.settings.organizationId).toBe('org-nxl')
+    expect(updated.audit.action).toBe('user.settings.update')
+    expect(updated.invariant).toContain('scoped to the authenticated user')
+    expect(service.userSettings().data.displayName).toBe('Maison Owner')
+    expect(membership?.name).toBe('Maison Owner')
+    expect(tenantSettings.organizationId).toBe('org-nxl')
+
+    const invalid = service.updateUserSettings({
+      preferredLanding: 'tenant-escape',
+      uiDensity: 'spacious',
+      emailDigest: 'hourly',
+    }).data.settings
+
+    expect(invalid.preferredLanding).toBe('inventory')
+    expect(invalid.uiDensity).toBe('compact')
+    expect(invalid.emailDigest).toBe('daily')
+  })
+
   it('commits lab usage through OUT movements and reverses by compensation', () => {
     const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-0421', 12.5).data
@@ -392,6 +433,13 @@ describe('NorthStarService', () => {
     expect(result.subscription.organizationId).toBe(result.organization.id)
     expect(result.subscription.planId).toBe('PLAN-APPRENTICE')
     expect(result.audit.action).toBe('auth.signup')
+    expect(service.me().data.userSettings).toMatchObject({
+      userId: result.session.userId,
+      organizationId: result.organization.id,
+      email: 'owner@atelier-smoke.test',
+      displayName: 'Atelier Owner',
+      preferredLanding: 'dashboard',
+    })
     expect(consoleState.organization.id).toBe(result.organization.id)
     expect(consoleState.brands).toEqual([result.brand])
     expect(consoleState.memberships.some((membership) => membership.email === result.membership.email)).toBe(true)

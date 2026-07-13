@@ -397,6 +397,18 @@ export interface AuthSession {
   revokedReason?: string
 }
 
+export interface UserSettingsRecord {
+  userId: string
+  organizationId: string
+  email: string
+  displayName: string
+  preferredLanding: DomainKey
+  uiDensity: 'comfortable' | 'compact'
+  reduceMotion: boolean
+  emailDigest: 'off' | 'daily' | 'weekly'
+  updatedAt: string
+}
+
 export interface TenantSettingsRecord {
   organizationId: string
   locale: string
@@ -2229,6 +2241,31 @@ export const authSessions: AuthSession[] = [
     userAgent: 'Windows Lab Terminal',
     deviceId: 'dev-lab-terminal',
     location: 'Bangkok Lab',
+  },
+]
+
+export const userSettings: UserSettingsRecord[] = [
+  {
+    userId: 'usr-owner',
+    organizationId: 'org-nxl',
+    email: 'owner@example.test',
+    displayName: 'Thuan Le Minh',
+    preferredLanding: 'dashboard',
+    uiDensity: 'comfortable',
+    reduceMotion: false,
+    emailDigest: 'weekly',
+    updatedAt: '2026-07-10T00:00:00.000Z',
+  },
+  {
+    userId: 'usr-lab',
+    organizationId: 'org-nxl',
+    email: 'lab@example.test',
+    displayName: 'Lab Manager',
+    preferredLanding: 'labUsage',
+    uiDensity: 'compact',
+    reduceMotion: false,
+    emailDigest: 'daily',
+    updatedAt: '2026-07-10T00:00:00.000Z',
   },
 ]
 

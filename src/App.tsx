@@ -137,6 +137,7 @@ import {
   type SupplierRecord,
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
+  type UserSettingsRecord,
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
@@ -150,6 +151,7 @@ type ModalKind =
   | 'receiveStock'
   | 'inventoryAdjustment'
   | 'inventoryTransfer'
+  | 'userSettings'
   | null
 
 type ApiEnvelope<T> = {
@@ -184,6 +186,18 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
   newDeviceAlertEnabled: true,
   ipAllowlist: [],
   passwordPolicy: 'server-managed',
+}
+
+const clientFallbackUserSettings: UserSettingsRecord = {
+  userId: 'client-fallback',
+  organizationId: clientFallbackOrganization.id,
+  email: clientFallbackOrganization.primaryContact,
+  displayName: 'Workspace Owner',
+  preferredLanding: 'dashboard',
+  uiDensity: 'comfortable',
+  reduceMotion: false,
+  emailDigest: 'weekly',
+  updatedAt: 'client-fallback',
 }
 
 const clientFallbackDocumentDashboard: DocumentComplianceDashboard = {
@@ -384,9 +398,16 @@ type MeResponse = {
   csrfToken: string
   permissions: string[]
   securityPolicy: TenantSecurityPolicy
+  userSettings: UserSettingsRecord
 }
 
 type SaasConsoleResponse = BillingConsoleResponse
+
+type UserSettingsUpdateResponse = {
+  settings: UserSettingsRecord
+  audit: AuditEvent
+  invariant: string
+}
 
 type AuditExportResponse = {
   id: string
@@ -834,6 +855,12 @@ const shellMotion = {
   transition: { duration: 0.35 },
 }
 
+const reducedShellMotion = {
+  initial: { opacity: 1, y: 0 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0 },
+}
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
 const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
@@ -900,6 +927,19 @@ function tenantDisplayForSession(session: AuthSession) {
   return {
     scope: session.organizationId,
     label: `${session.organizationId.toUpperCase()} / ${fallbackName}`,
+  }
+}
+
+function userSettingsForSession(session: AuthSession | null): UserSettingsRecord {
+  if (!session) {
+    return clientFallbackUserSettings
+  }
+  return {
+    ...clientFallbackUserSettings,
+    userId: session.userId,
+    organizationId: session.organizationId,
+    email: session.email,
+    displayName: session.email.split('@')[0] || clientFallbackUserSettings.displayName,
   }
 }
 
@@ -1009,6 +1049,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
   const [billingOnboarding, setBillingOnboarding] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [modal, setModal] = useState<ModalKind>(null)
@@ -1045,6 +1086,8 @@ function App() {
   const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
   const [transferLotId, setTransferLotId] = useState(initialLots[0]?.id ?? '')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
+  const activeUserSettings = userSettingsRecord ?? userSettingsForSession(currentSession)
+  const shellMotionPreset = activeUserSettings.reduceMotion ? reducedShellMotion : shellMotion
 
   const selectedDomain = domains.find((domain) => domain.key === activeKey)
   const selectedFormula = useMemo(() => {
@@ -1099,6 +1142,7 @@ function App() {
   useEffect(() => {
     function handleAuthExpired() {
       setCurrentSession(null)
+      setUserSettingsRecord(null)
       setActiveKey('dashboard')
     }
 
@@ -1119,11 +1163,14 @@ function App() {
         if (active) {
           acceptCsrfToken(payload.csrfToken)
           setCurrentSession(payload.session)
+          setUserSettingsRecord(payload.userSettings ?? userSettingsForSession(payload.session))
+          setActiveKey((payload.userSettings ?? userSettingsForSession(payload.session)).preferredLanding)
         }
       } catch {
         if (active) {
           acceptCsrfToken()
           setCurrentSession(null)
+          setUserSettingsRecord(null)
         }
       }
     }
@@ -1406,6 +1453,18 @@ function App() {
     setActiveKey('dashboard')
   }
 
+  async function syncUserSettings(session: AuthSession) {
+    try {
+      const settings = await requestApi<UserSettingsRecord>('/user/settings')
+      setUserSettingsRecord(settings)
+      return settings
+    } catch {
+      const fallback = userSettingsForSession(session)
+      setUserSettingsRecord(fallback)
+      return fallback
+    }
+  }
+
   async function loginToWorkspace(email: string) {
     const payload = await requestApi<LoginResponse>('/auth/login', {
       method: 'POST',
@@ -1413,6 +1472,8 @@ function App() {
       body: JSON.stringify({ email }),
     })
     acceptAuthSession(payload.session, payload.csrfToken)
+    const settings = await syncUserSettings(payload.session)
+    setActiveKey(settings.preferredLanding)
     return payload
   }
 
@@ -1433,6 +1494,7 @@ function App() {
       }),
     })
     acceptAuthSession(payload.session, payload.csrfToken)
+    void syncUserSettings(payload.session)
     setBillingOnboarding(true)
     return payload
   }
@@ -1444,6 +1506,7 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
+      setUserSettingsRecord(null)
       setBillingOnboarding(false)
       acceptCsrfToken()
       writeStoredAuthSession(null)
@@ -1467,7 +1530,7 @@ function App() {
         session={currentSession}
         onComplete={() => {
           setBillingOnboarding(false)
-          setActiveKey('dashboard')
+          setActiveKey((userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding)
         }}
       />
     )
@@ -1476,7 +1539,11 @@ function App() {
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
-      <div className={`app-shell ${sidebarCollapsed ? 'is-rail' : ''} ${mobileNavOpen ? 'is-mobile-nav-open' : ''}`}>
+      <div
+        className={`app-shell density-${activeUserSettings.uiDensity} ${activeUserSettings.reduceMotion ? 'is-reduced-motion' : ''} ${
+          sidebarCollapsed ? 'is-rail' : ''
+        } ${mobileNavOpen ? 'is-mobile-nav-open' : ''}`}
+      >
         <Sidebar
           activeKey={activeKey}
           collapsed={sidebarCollapsed && !mobileNavOpen}
@@ -1495,13 +1562,15 @@ function App() {
           <Topbar
             activeDomain={selectedDomain}
             session={currentSession}
+            userSettings={activeUserSettings}
             onCommand={() => setCommandOpen(true)}
             onLogout={() => void logoutWorkspace()}
             onMenu={() => setMobileNavOpen((value) => !value)}
+            onOpenUserSettings={() => setModal('userSettings')}
           />
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" initial={!activeUserSettings.reduceMotion}>
             {activeKey === 'dashboard' ? (
-              <motion.div key="dashboard" {...shellMotion}>
+              <motion.div key="dashboard" {...shellMotionPreset}>
                 <Dashboard
                   stats={stats}
                   movements={movements}
@@ -1511,7 +1580,7 @@ function App() {
                 />
               </motion.div>
             ) : selectedDomain ? (
-              <motion.div key={activeKey} {...shellMotion}>
+              <motion.div key={activeKey} {...shellMotionPreset}>
                 <DomainWorkspace
                   domain={selectedDomain}
                   session={currentSession}
@@ -1580,6 +1649,25 @@ function App() {
         onNavigate={navigateToDomain}
         onCommit={() => setModal('commit')}
       />
+
+      <BlackPopup
+        open={modal === 'userSettings'}
+        title="User Settings"
+        description="Personal preferences for this signed-in user. Tenant branding, roles, and workspace policy stay separate."
+        actionLabel="Close"
+        onClose={() => setModal(null)}
+        onAction={() => setModal(null)}
+      >
+        <UserSettingsForm
+          settings={activeUserSettings}
+          session={currentSession}
+          onSaved={(settings) => {
+            setUserSettingsRecord(settings)
+            setActiveKey(settings.preferredLanding)
+            setModal(null)
+          }}
+        />
+      </BlackPopup>
 
       <BlackPopup
         open={modal === 'commit'}
@@ -1947,15 +2035,19 @@ function Sidebar({
 function Topbar({
   activeDomain,
   session,
+  userSettings,
   onCommand,
   onLogout,
   onMenu,
+  onOpenUserSettings,
 }: {
   activeDomain?: DomainModule
   session: AuthSession
+  userSettings: UserSettingsRecord
   onCommand: () => void
   onLogout: () => void
   onMenu: () => void
+  onOpenUserSettings: () => void
 }) {
   const tenantDisplay = tenantDisplayForSession(session)
 
@@ -1964,7 +2056,7 @@ function Topbar({
       <button className="icon-button mobile-menu" type="button" onClick={onMenu} aria-label="Open navigation">
         <Menu size={18} />
       </button>
-      <div>
+      <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
         <h1>{activeDomain ? activeDomain.name : 'North Star Console'}</h1>
       </div>
@@ -1975,7 +2067,18 @@ function Topbar({
       </button>
       <div className="topbar-actions">
         <DataTag icon={ShieldCheck} label="Tenant guard" value="On" tone="green" />
-        <DataTag icon={UsersRound} label={session.role} value={session.email} tone="blue" />
+        <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label="Open user settings">
+          <span className="user-avatar">{userSettings.displayName.slice(0, 1).toUpperCase()}</span>
+          <span>
+            <strong>{userSettings.displayName}</strong>
+            <small>
+              {session.role} / {session.email}
+            </small>
+          </span>
+        </button>
+        <button className="icon-button" type="button" aria-label="User settings" onClick={onOpenUserSettings}>
+          <Settings size={18} />
+        </button>
         <button className="icon-button" type="button" aria-label="Notifications">
           <Bell size={18} />
         </button>
@@ -1984,6 +2087,144 @@ function Topbar({
         </button>
       </div>
     </header>
+  )
+}
+
+function UserSettingsForm({
+  settings,
+  session,
+  onSaved,
+}: {
+  settings: UserSettingsRecord
+  session: AuthSession
+  onSaved: (settings: UserSettingsRecord) => void
+}) {
+  const [draft, setDraft] = useState<UserSettingsRecord>(settings)
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('Changes apply to your account only.')
+
+  useEffect(() => {
+    setDraft(settings)
+    setStatus('Changes apply to your account only.')
+  }, [settings])
+
+  async function saveSettings() {
+    setBusy(true)
+    setStatus('Saving preferences...')
+    try {
+      const payload = await requestApi<UserSettingsUpdateResponse>('/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName: draft.displayName,
+          preferredLanding: draft.preferredLanding,
+          uiDensity: draft.uiDensity,
+          reduceMotion: draft.reduceMotion,
+          emailDigest: draft.emailDigest,
+        }),
+      })
+      setStatus('Preferences saved.')
+      onSaved(payload.settings)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not save user settings')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="user-settings-form">
+      <div className="settings-identity-card">
+        <span className="user-avatar large">{draft.displayName.slice(0, 1).toUpperCase()}</span>
+        <div>
+          <strong>{session.email}</strong>
+          <span>
+            {session.role} / {session.organizationId}
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-form-grid">
+        <label className="field-row">
+          <span>Display name</span>
+          <input
+            aria-label="Display name"
+            value={draft.displayName}
+            onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
+          />
+        </label>
+        <label className="field-row">
+          <span>Preferred landing</span>
+          <select
+            aria-label="Preferred landing"
+            value={draft.preferredLanding}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
+            }
+          >
+            <option value="dashboard">North Star Console</option>
+            {domains.map((domain) => (
+              <option key={domain.key} value={domain.key}>
+                {domain.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field-row">
+          <span>Layout density</span>
+          <select
+            aria-label="Layout density"
+            value={draft.uiDensity}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                uiDensity: event.target.value === 'compact' ? 'compact' : 'comfortable',
+              }))
+            }
+          >
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+          </select>
+        </label>
+        <label className="field-row">
+          <span>Email digest</span>
+          <select
+            aria-label="Email digest"
+            value={draft.emailDigest}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                emailDigest:
+                  event.target.value === 'off' || event.target.value === 'daily' ? event.target.value : 'weekly',
+              }))
+            }
+          >
+            <option value="off">Off</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+          </select>
+        </label>
+      </div>
+
+      <label className="toggle-row">
+        <input
+          checked={draft.reduceMotion}
+          type="checkbox"
+          onChange={(event) => setDraft((current) => ({ ...current, reduceMotion: event.target.checked }))}
+        />
+        <span>
+          <strong>Reduce motion</strong>
+          <small>Minimize page transitions and decorative motion.</small>
+        </span>
+      </label>
+
+      <div className="settings-save-row">
+        <span className="mono-small">{status}</span>
+        <button className="primary-button" type="button" onClick={() => void saveSettings()} disabled={busy || !draft.displayName.trim()}>
+          {busy ? 'Saving...' : 'Save Settings'}
+        </button>
+      </div>
+    </div>
   )
 }
 

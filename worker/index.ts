@@ -34,6 +34,7 @@ import type {
   StorageLocation,
   SupplierRecord,
   TenantSettingsRecord,
+  UserSettingsRecord,
   WebhookDeliveryRecord,
   CustomerRecord,
   DomainStatus,
@@ -90,6 +91,7 @@ type SnapshotKey =
   | 'brandRecords'
   | 'membershipRecords'
   | 'sessions'
+  | 'userSettingsRecords'
   | 'rolePolicyRecords'
   | 'settingsRecord'
   | 'flagRecords'
@@ -116,6 +118,7 @@ type SnapshotKey =
 
 type ServiceState = Record<SnapshotKey, unknown> & {
   sessions: AuthSession[]
+  userSettingsRecords: UserSettingsRecord[]
   auditEvents: AuditEvent[]
   organizationRecords: OrganizationRecord[]
   brandRecords: BrandRecord[]
@@ -157,6 +160,7 @@ const API_PREFIX = '/api/v1'
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
 const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'sessions',
+  'userSettingsRecords',
   'auditEvents',
   'auditCounter',
   'organizationRecords',
@@ -209,6 +213,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'brandRecords',
   'membershipRecords',
   'sessions',
+  'userSettingsRecords',
   'rolePolicyRecords',
   'settingsRecord',
   'flagRecords',
@@ -236,6 +241,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
 const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
 const NORMALIZED_TABLES = [
   'auth_sessions',
+  'user_settings',
   'audit_events',
   'security_rate_limits',
   'tenant_organizations',
@@ -319,6 +325,8 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', limit: 4, windowSeconds: 60 * 60 }, handler: ({ service, body }) => service.signup(body) },
   { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
+  { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
+  { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, handler: ({ service, body }) => service.updateUserSettings(body) },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
@@ -657,6 +665,7 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureSnapshotTable(db)
   await ensureRateLimitTable(db)
   await ensureAuthSessionTable(db)
+  await ensureUserSettingsTable(db)
   await ensureAuditEventTable(db)
   await ensureTenantOrganizationTable(db)
   await ensureTenantBrandTable(db)
@@ -748,6 +757,26 @@ async function ensureAuthSessionTable(db: D1Database) {
     .run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_org_status ON auth_sessions(organization_id, status)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_email_status ON auth_sessions(email, status)').run()
+}
+
+async function ensureUserSettingsTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS user_settings (
+        user_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        preferred_landing TEXT NOT NULL,
+        ui_density TEXT NOT NULL,
+        reduce_motion INTEGER NOT NULL DEFAULT 0,
+        email_digest TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, organization_id)
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_user_settings_org_email ON user_settings(organization_id, email)').run()
 }
 
 async function ensureAuditEventTable(db: D1Database) {
@@ -1505,6 +1534,18 @@ type AuthSessionRow = {
   revoked_reason: string | null
 }
 
+type UserSettingsRow = {
+  user_id: string
+  organization_id: string
+  email: string
+  display_name: string
+  preferred_landing: string
+  ui_density: string
+  reduce_motion: number
+  email_digest: string
+  updated_at: string
+}
+
 type AuditEventRow = {
   id: string
   at: string
@@ -1917,6 +1958,21 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
     await persistAuthSessions(db, serviceState.sessions, new Date().toISOString())
   }
 
+  const userSettingsRows = await db
+    .prepare(
+      `SELECT user_id, organization_id, email, display_name, preferred_landing, ui_density,
+        reduce_motion, email_digest, updated_at
+       FROM user_settings
+       ORDER BY organization_id ASC, email ASC`,
+    )
+    .all<UserSettingsRow>()
+  const userSettingsRecords = (userSettingsRows.results ?? []).map(userSettingsFromRow)
+  if (userSettingsRecords.length > 0) {
+    serviceState.userSettingsRecords = userSettingsRecords
+  } else if (Array.isArray(serviceState.userSettingsRecords) && serviceState.userSettingsRecords.length > 0) {
+    await persistUserSettings(db, serviceState.userSettingsRecords, new Date().toISOString())
+  }
+
   const auditRows = await db
     .prepare(
       `SELECT id, at, actor, action, entity, request_id, outcome
@@ -1948,6 +2004,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
+  await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
@@ -2021,6 +2078,44 @@ async function persistAuthSessions(db: D1Database, sessions: AuthSession[], upda
           session.csrfToken ?? null,
           session.revokedAt ?? null,
           session.revokedReason ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[], updatedAt: string) {
+  if (!Array.isArray(settings) || settings.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    settings.map((record) =>
+      db
+        .prepare(
+          `INSERT INTO user_settings (
+            user_id, organization_id, email, display_name, preferred_landing,
+            ui_density, reduce_motion, email_digest, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          ON CONFLICT(user_id, organization_id) DO UPDATE SET
+            email = excluded.email,
+            display_name = excluded.display_name,
+            preferred_landing = excluded.preferred_landing,
+            ui_density = excluded.ui_density,
+            reduce_motion = excluded.reduce_motion,
+            email_digest = excluded.email_digest,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          record.userId,
+          record.organizationId,
+          record.email,
+          record.displayName,
+          record.preferredLanding,
+          record.uiDensity,
+          record.reduceMotion ? 1 : 0,
+          record.emailDigest,
           updatedAt,
         ),
     ),
@@ -3874,6 +3969,20 @@ function authSessionFromRow(row: AuthSessionRow): AuthSession {
   }
 }
 
+function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
+  return {
+    userId: row.user_id,
+    organizationId: row.organization_id,
+    email: row.email,
+    displayName: row.display_name,
+    preferredLanding: readPreferredLanding(row.preferred_landing),
+    uiDensity: row.ui_density === 'compact' ? 'compact' : 'comfortable',
+    reduceMotion: row.reduce_motion === 1,
+    emailDigest: readEmailDigest(row.email_digest),
+    updatedAt: row.updated_at,
+  }
+}
+
 function auditEventFromRow(row: AuditEventRow): AuditEvent {
   return {
     id: row.id,
@@ -4350,6 +4459,37 @@ function readSessionStatus(value: string): AuthSession['status'] {
     return value
   }
   return 'EXPIRED'
+}
+
+function readPreferredLanding(value: string): UserSettingsRecord['preferredLanding'] {
+  if (
+    value === 'dashboard' ||
+    value === 'platform' ||
+    value === 'identity' ||
+    value === 'customization' ||
+    value === 'materials' ||
+    value === 'formulas' ||
+    value === 'inventory' ||
+    value === 'labUsage' ||
+    value === 'documents' ||
+    value === 'production' ||
+    value === 'procurement' ||
+    value === 'commerce' ||
+    value === 'orders' ||
+    value === 'costing' ||
+    value === 'analytics' ||
+    value === 'saas'
+  ) {
+    return value
+  }
+  return 'dashboard'
+}
+
+function readEmailDigest(value: string): UserSettingsRecord['emailDigest'] {
+  if (value === 'off' || value === 'daily' || value === 'weekly') {
+    return value
+  }
+  return 'weekly'
 }
 
 function readAuditOutcome(value: string): AuditEvent['outcome'] {

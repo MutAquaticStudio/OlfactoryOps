@@ -402,6 +402,16 @@ export class NorthStarController {
     return this.northStar.me()
   }
 
+  @Get('user/settings')
+  userSettings() {
+    return this.northStar.userSettings()
+  }
+
+  @Patch('user/settings')
+  updateUserSettings(@Body() body: Record<string, unknown>) {
+    return this.northStar.updateUserSettings(body)
+  }
+
   @Get('audit-logs')
   auditLogs() {
     return this.northStar.auditLogs()

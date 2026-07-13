@@ -45,7 +45,7 @@ async function bootstrap() {
     origin: corsOrigins.length > 0 ? corsOrigins : LOCAL_CORS_ORIGINS,
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
   })
   app.useGlobalFilters(new AppHttpErrorFilter())
   app.setGlobalPrefix('api/v1')

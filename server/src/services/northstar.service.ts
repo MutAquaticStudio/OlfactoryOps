@@ -75,6 +75,7 @@ import {
   tenantScopeAllows,
   tenantSecurityPolicy,
   tenantSettings,
+  userSettings,
   webhooks,
   webhookDeliveries,
   type Allocation,
@@ -130,6 +131,7 @@ import {
   type StorageLocation,
   type SupplierRecord,
   type TenantSettingsRecord,
+  type UserSettingsRecord,
   type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
 
@@ -320,6 +322,7 @@ export class NorthStarService {
   private brandRecords: BrandRecord[] = structuredClone(brands)
   private membershipRecords: MembershipRecord[] = structuredClone(memberships)
   private sessions: AuthSession[] = structuredClone(authSessions)
+  private userSettingsRecords: UserSettingsRecord[] = structuredClone(userSettings)
   private rolePolicyRecords: RolePolicy[] = structuredClone(rolePolicies)
   private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
   private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
@@ -1505,6 +1508,7 @@ export class NorthStarService {
     this.organizationRecords = [organization, ...this.organizationRecords]
     this.brandRecords = [brand, ...this.brandRecords]
     this.membershipRecords = [membership, ...this.membershipRecords]
+    this.upsertUserSettings(this.defaultUserSettingsForMembership(membership, createdAt))
     const subscription = this.createSubscriptionRecord(organization.id, 'PLAN-APPRENTICE', createdAt)
     this.upsertSubscription(subscription)
     const loginResult = this.login(email).data
@@ -1534,6 +1538,49 @@ export class NorthStarService {
         csrfToken,
         permissions: this.permissionsForRole(session.role),
         securityPolicy: tenantSecurityPolicy,
+        userSettings: this.settingsForSession(session),
+      },
+    }
+  }
+
+  userSettings() {
+    return { data: this.settingsForSession(this.currentSession()) }
+  }
+
+  updateUserSettings(patch: Record<string, unknown> = {}) {
+    const session = this.currentSession()
+    const current = this.settingsForSession(session)
+    const displayName =
+      typeof patch.displayName === 'string' && patch.displayName.trim()
+        ? patch.displayName.trim().slice(0, 80)
+        : current.displayName
+    const preferredLanding = this.normalizePreferredLanding(patch.preferredLanding, current.preferredLanding)
+    const uiDensity = patch.uiDensity === 'compact' ? 'compact' : patch.uiDensity === 'comfortable' ? 'comfortable' : current.uiDensity
+    const emailDigest =
+      patch.emailDigest === 'off' || patch.emailDigest === 'daily' || patch.emailDigest === 'weekly'
+        ? patch.emailDigest
+        : current.emailDigest
+    const updated: UserSettingsRecord = {
+      ...current,
+      displayName,
+      preferredLanding,
+      uiDensity,
+      reduceMotion: typeof patch.reduceMotion === 'boolean' ? patch.reduceMotion : current.reduceMotion,
+      emailDigest,
+      updatedAt: new Date().toISOString(),
+    }
+    this.upsertUserSettings(updated)
+    this.membershipRecords = this.membershipRecords.map((membership) =>
+      membership.userId === session.userId && membership.organizationId === session.organizationId
+        ? { ...membership, name: displayName }
+        : membership,
+    )
+    const audit = this.recordAudit('user.settings.update', session.userId, session.userId, 'allowed')
+    return {
+      data: {
+        settings: updated,
+        audit,
+        invariant: 'user settings are scoped to the authenticated user and cannot update tenant-wide config',
       },
     }
   }
@@ -3826,6 +3873,71 @@ export class NorthStarService {
         audit,
       },
     }
+  }
+
+  private settingsForSession(session: AuthSession) {
+    const existing = this.userSettingsRecords.find(
+      (settings) => settings.userId === session.userId && settings.organizationId === session.organizationId,
+    )
+    if (existing) {
+      return existing
+    }
+    const membership = this.membershipRecords.find(
+      (item) => item.userId === session.userId && item.organizationId === session.organizationId,
+    )
+    const settings = this.defaultUserSettingsForMembership(
+      membership ?? {
+        id: `MBR-${session.userId}`,
+        userId: session.userId,
+        email: session.email,
+        name: session.email,
+        organizationId: session.organizationId,
+        brandIds: [session.brandId],
+        role: session.role,
+        status: 'ACTIVE',
+        mfaEnabled: session.mfaVerified,
+        lastActiveAt: session.lastSeenAt,
+      },
+      new Date().toISOString(),
+    )
+    this.upsertUserSettings(settings)
+    return settings
+  }
+
+  private defaultUserSettingsForMembership(membership: MembershipRecord, updatedAt: string): UserSettingsRecord {
+    return {
+      userId: membership.userId,
+      organizationId: membership.organizationId,
+      email: membership.email,
+      displayName: membership.name || membership.email,
+      preferredLanding: membership.role === 'Lab Manager' ? 'labUsage' : 'dashboard',
+      uiDensity: membership.role === 'Lab Manager' ? 'compact' : 'comfortable',
+      reduceMotion: false,
+      emailDigest: membership.role === 'Owner' ? 'weekly' : 'daily',
+      updatedAt,
+    }
+  }
+
+  private upsertUserSettings(settings: UserSettingsRecord) {
+    this.userSettingsRecords = [
+      settings,
+      ...this.userSettingsRecords.filter(
+        (item) => !(item.userId === settings.userId && item.organizationId === settings.organizationId),
+      ),
+    ]
+  }
+
+  private normalizePreferredLanding(
+    value: unknown,
+    fallback: UserSettingsRecord['preferredLanding'],
+  ): UserSettingsRecord['preferredLanding'] {
+    if (value === 'dashboard') {
+      return value
+    }
+    if (typeof value === 'string' && domains.some((domain) => domain.key === value)) {
+      return value as UserSettingsRecord['preferredLanding']
+    }
+    return fallback
   }
 
   private currentSubscription() {
