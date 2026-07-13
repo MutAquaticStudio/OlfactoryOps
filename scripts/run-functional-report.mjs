@@ -39,7 +39,7 @@ const testCases = [
     ],
     assertions: [
       '/health returns 200 and service identity.',
-      'Persistence status reports hybrid D1 with normalized tenant, auth, audit, document, inventory, and lab usage tables.',
+      'Persistence status reports hybrid D1 with normalized tenant, auth, audit, document, production, order, inventory, and lab usage tables.',
       'Tenant console returns 401 without a session.',
       'API keys return 401 without a session.',
     ],
@@ -59,13 +59,17 @@ const testCases = [
         'tenant_memberships',
         'role_policies',
         'document_records',
+        'production_batches',
+        'sales_orders',
+        'order_shipments',
+        'order_documents',
         'inventory_lots',
         'inventory_movements',
         'lab_usage_records',
       ]
       assert(
         requiredTables.every((table) => persistence.json.data.normalizedTables.includes(table)),
-        'persistence status should report normalized auth, audit, inventory, and lab usage tables',
+        'persistence status should report normalized commercial operations tables',
       )
 
       const tenant = await apiFetch('/security/tenant-console', {}, { useCookie: false })

@@ -9,8 +9,12 @@ import type {
   InventoryMovement,
   LabUsageRecord,
   MembershipRecord,
+  OrderDocumentRecord,
   OrganizationRecord,
+  ProductionBatchRecord,
   RolePolicy,
+  SalesOrderRecord,
+  ShipmentRecord,
 } from '../src/data/northStar.js'
 
 type Env = {
@@ -96,6 +100,10 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   membershipRecords: MembershipRecord[]
   rolePolicyRecords: RolePolicy[]
   documentRecords: DocumentRecord[]
+  productionBatchRecords: ProductionBatchRecord[]
+  salesOrderRecords: SalesOrderRecord[]
+  shipmentRecords: ShipmentRecord[]
+  orderDocumentRecords: OrderDocumentRecord[]
   lots: InventoryLot[]
   movements: InventoryMovement[]
   usageHistory: LabUsageRecord[]
@@ -113,6 +121,10 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'membershipRecords',
   'rolePolicyRecords',
   'documentRecords',
+  'productionBatchRecords',
+  'salesOrderRecords',
+  'shipmentRecords',
+  'orderDocumentRecords',
   'lots',
   'movements',
   'usageHistory',
@@ -158,11 +170,28 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'auditCounter',
 ]
 const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
+const NORMALIZED_TABLES = [
+  'auth_sessions',
+  'audit_events',
+  'security_rate_limits',
+  'tenant_organizations',
+  'tenant_brands',
+  'tenant_memberships',
+  'role_policies',
+  'document_records',
+  'production_batches',
+  'sales_orders',
+  'order_shipments',
+  'order_documents',
+  'inventory_lots',
+  'inventory_movements',
+  'lab_usage_records',
+]
 
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'tenant_organizations', 'tenant_brands', 'tenant_memberships', 'role_policies', 'document_records', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: NORMALIZED_TABLES } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -547,6 +576,10 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureTenantMembershipTable(db)
   await ensureRolePolicyTable(db)
   await ensureDocumentRecordTable(db)
+  await ensureProductionBatchTable(db)
+  await ensureSalesOrderTable(db)
+  await ensureOrderShipmentTable(db)
+  await ensureOrderDocumentTable(db)
   await ensureInventoryLotTable(db)
   await ensureInventoryMovementTable(db)
   await ensureLabUsageRecordTable(db)
@@ -729,6 +762,103 @@ async function ensureDocumentRecordTable(db: D1Database) {
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_linked_type ON document_records(linked_to, type)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_status ON document_records(status)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_expiry ON document_records(expires_at)').run()
+}
+
+async function ensureProductionBatchTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS production_batches (
+        id TEXT PRIMARY KEY,
+        formula_id TEXT NOT NULL,
+        formula_code TEXT NOT NULL,
+        status TEXT NOT NULL,
+        target_grams REAL NOT NULL,
+        consumed_grams REAL NOT NULL,
+        qc_status TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        work_order_json TEXT NOT NULL,
+        qc_checks_json TEXT NOT NULL,
+        yield_grams REAL,
+        yield_variance_percent REAL,
+        output_lot_json TEXT,
+        genealogy_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_formula_status ON production_batches(formula_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_status ON production_batches(status)').run()
+}
+
+async function ensureSalesOrderTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS sales_orders (
+        id TEXT PRIMARY KEY,
+        sku_id TEXT NOT NULL,
+        customer_id TEXT NOT NULL,
+        customer TEXT NOT NULL,
+        quantity INTEGER NOT NULL,
+        unit_price REAL NOT NULL,
+        discount_percent REAL NOT NULL,
+        tax_percent REAL NOT NULL,
+        shipping_cost REAL NOT NULL,
+        total REAL NOT NULL,
+        currency TEXT NOT NULL,
+        reserved_grams REAL NOT NULL,
+        fulfilled_grams REAL NOT NULL,
+        status TEXT NOT NULL,
+        carrier TEXT,
+        tracking_number TEXT,
+        reservation_allocations_json TEXT,
+        shipment_id TEXT,
+        document_ids_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_customer_status ON sales_orders(customer_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders(status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_created_at ON sales_orders(created_at)').run()
+}
+
+async function ensureOrderShipmentTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS order_shipments (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL,
+        carrier TEXT NOT NULL,
+        tracking_number TEXT NOT NULL,
+        status TEXT NOT NULL,
+        shipped_at TEXT,
+        delivered_at TEXT,
+        weight_grams REAL NOT NULL,
+        allocations_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_shipments_order_status ON order_shipments(order_id, status)').run()
+}
+
+async function ensureOrderDocumentTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS order_documents (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        url TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_order_type ON order_documents(order_id, type)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_status ON order_documents(status)').run()
 }
 
 async function ensureInventoryLotTable(db: D1Database) {
@@ -936,6 +1066,67 @@ type DocumentRecordRow = {
   generated_from: string | null
 }
 
+type ProductionBatchRow = {
+  id: string
+  formula_id: string
+  formula_code: string
+  status: string
+  target_grams: number
+  consumed_grams: number
+  qc_status: string
+  owner: string
+  work_order_json: string
+  qc_checks_json: string
+  yield_grams: number | null
+  yield_variance_percent: number | null
+  output_lot_json: string | null
+  genealogy_json: string
+}
+
+type SalesOrderRow = {
+  id: string
+  sku_id: string
+  customer_id: string
+  customer: string
+  quantity: number
+  unit_price: number
+  discount_percent: number
+  tax_percent: number
+  shipping_cost: number
+  total: number
+  currency: string
+  reserved_grams: number
+  fulfilled_grams: number
+  status: string
+  carrier: string | null
+  tracking_number: string | null
+  reservation_allocations_json: string | null
+  shipment_id: string | null
+  document_ids_json: string | null
+  created_at: string
+}
+
+type ShipmentRow = {
+  id: string
+  order_id: string
+  carrier: string
+  tracking_number: string
+  status: string
+  shipped_at: string | null
+  delivered_at: string | null
+  weight_grams: number
+  allocations_json: string
+}
+
+type OrderDocumentRow = {
+  id: string
+  order_id: string
+  type: string
+  status: string
+  url: string
+  created_at: string
+}
+
 type InventoryLotRow = {
   id: string
   material_id: string
@@ -1022,6 +1213,8 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
   await hydrateTenantCoreState(db, serviceState)
   await hydrateDocumentState(db, serviceState)
+  await hydrateProductionState(db, serviceState)
+  await hydrateOrderState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
 }
@@ -1031,6 +1224,8 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
   await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
+  await persistProductionBatches(db, serviceState.productionBatchRecords, updatedAt)
+  await persistOrderState(db, serviceState, updatedAt)
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
@@ -1390,6 +1585,259 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
   )
 }
 
+async function hydrateProductionState(db: D1Database, serviceState: ServiceState) {
+  const rows = await db
+    .prepare(
+      `SELECT id, formula_id, formula_code, status, target_grams, consumed_grams, qc_status,
+        owner, work_order_json, qc_checks_json, yield_grams, yield_variance_percent,
+        output_lot_json, genealogy_json
+       FROM production_batches
+       ORDER BY id DESC`,
+    )
+    .all<ProductionBatchRow>()
+  const batches = (rows.results ?? []).map(productionBatchFromRow)
+  if (batches.length > 0) {
+    serviceState.productionBatchRecords = batches
+  } else if (Array.isArray(serviceState.productionBatchRecords) && serviceState.productionBatchRecords.length > 0) {
+    await persistProductionBatches(db, serviceState.productionBatchRecords, new Date().toISOString())
+  }
+}
+
+async function persistProductionBatches(db: D1Database, batches: ProductionBatchRecord[], updatedAt: string) {
+  if (!Array.isArray(batches) || batches.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    batches.map((batch) =>
+      db
+        .prepare(
+          `INSERT INTO production_batches (
+            id, formula_id, formula_code, status, target_grams, consumed_grams, qc_status,
+            owner, work_order_json, qc_checks_json, yield_grams, yield_variance_percent,
+            output_lot_json, genealogy_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+          ON CONFLICT(id) DO UPDATE SET
+            formula_id = excluded.formula_id,
+            formula_code = excluded.formula_code,
+            status = excluded.status,
+            target_grams = excluded.target_grams,
+            consumed_grams = excluded.consumed_grams,
+            qc_status = excluded.qc_status,
+            owner = excluded.owner,
+            work_order_json = excluded.work_order_json,
+            qc_checks_json = excluded.qc_checks_json,
+            yield_grams = excluded.yield_grams,
+            yield_variance_percent = excluded.yield_variance_percent,
+            output_lot_json = excluded.output_lot_json,
+            genealogy_json = excluded.genealogy_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          batch.id,
+          batch.formulaId,
+          batch.formulaCode,
+          batch.status,
+          batch.targetGrams,
+          batch.consumedGrams,
+          batch.qcStatus,
+          batch.owner,
+          JSON.stringify(batch.workOrder),
+          JSON.stringify(batch.qcChecks),
+          batch.yieldGrams ?? null,
+          batch.yieldVariancePercent ?? null,
+          batch.outputLot ? JSON.stringify(batch.outputLot) : null,
+          JSON.stringify(batch.genealogy),
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
+  const orderRows = await db
+    .prepare(
+      `SELECT id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
+        tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
+        carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, created_at
+       FROM sales_orders
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<SalesOrderRow>()
+  const orders = (orderRows.results ?? []).map(salesOrderFromRow)
+  if (orders.length > 0) {
+    serviceState.salesOrderRecords = orders
+  } else if (Array.isArray(serviceState.salesOrderRecords) && serviceState.salesOrderRecords.length > 0) {
+    await persistSalesOrders(db, serviceState.salesOrderRecords, new Date().toISOString())
+  }
+
+  const shipmentRows = await db
+    .prepare(
+      `SELECT id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
+        weight_grams, allocations_json
+       FROM order_shipments
+       ORDER BY id DESC`,
+    )
+    .all<ShipmentRow>()
+  const shipments = (shipmentRows.results ?? []).map(shipmentFromRow)
+  if (shipments.length > 0) {
+    serviceState.shipmentRecords = shipments
+  } else if (Array.isArray(serviceState.shipmentRecords) && serviceState.shipmentRecords.length > 0) {
+    await persistShipments(db, serviceState.shipmentRecords, new Date().toISOString())
+  }
+
+  const documentRows = await db
+    .prepare(
+      `SELECT id, order_id, type, status, url, created_at
+       FROM order_documents
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<OrderDocumentRow>()
+  const documents = (documentRows.results ?? []).map(orderDocumentFromRow)
+  if (documents.length > 0) {
+    serviceState.orderDocumentRecords = documents
+  } else if (Array.isArray(serviceState.orderDocumentRecords) && serviceState.orderDocumentRecords.length > 0) {
+    await persistOrderDocuments(db, serviceState.orderDocumentRecords, new Date().toISOString())
+  }
+}
+
+async function persistOrderState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistSalesOrders(db, serviceState.salesOrderRecords, updatedAt)
+  await persistShipments(db, serviceState.shipmentRecords, updatedAt)
+  await persistOrderDocuments(db, serviceState.orderDocumentRecords, updatedAt)
+}
+
+async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], updatedAt: string) {
+  if (!Array.isArray(orders) || orders.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    orders.map((order) =>
+      db
+        .prepare(
+          `INSERT INTO sales_orders (
+            id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
+            tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
+            carrier, tracking_number, reservation_allocations_json, shipment_id,
+            document_ids_json, created_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+          ON CONFLICT(id) DO UPDATE SET
+            sku_id = excluded.sku_id,
+            customer_id = excluded.customer_id,
+            customer = excluded.customer,
+            quantity = excluded.quantity,
+            unit_price = excluded.unit_price,
+            discount_percent = excluded.discount_percent,
+            tax_percent = excluded.tax_percent,
+            shipping_cost = excluded.shipping_cost,
+            total = excluded.total,
+            currency = excluded.currency,
+            reserved_grams = excluded.reserved_grams,
+            fulfilled_grams = excluded.fulfilled_grams,
+            status = excluded.status,
+            carrier = excluded.carrier,
+            tracking_number = excluded.tracking_number,
+            reservation_allocations_json = excluded.reservation_allocations_json,
+            shipment_id = excluded.shipment_id,
+            document_ids_json = excluded.document_ids_json,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          order.id,
+          order.skuId,
+          order.customerId,
+          order.customer,
+          order.quantity,
+          order.unitPrice,
+          order.discountPercent,
+          order.taxPercent,
+          order.shippingCost,
+          order.total,
+          order.currency,
+          order.reservedGrams,
+          order.fulfilledGrams,
+          order.status,
+          order.carrier ?? null,
+          order.trackingNumber ?? null,
+          order.reservationAllocations ? JSON.stringify(order.reservationAllocations) : null,
+          order.shipmentId ?? null,
+          order.documentIds ? JSON.stringify(order.documentIds) : null,
+          order.createdAt,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistShipments(db: D1Database, shipments: ShipmentRecord[], updatedAt: string) {
+  if (!Array.isArray(shipments) || shipments.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    shipments.map((shipment) =>
+      db
+        .prepare(
+          `INSERT INTO order_shipments (
+            id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
+            weight_grams, allocations_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(id) DO UPDATE SET
+            order_id = excluded.order_id,
+            carrier = excluded.carrier,
+            tracking_number = excluded.tracking_number,
+            status = excluded.status,
+            shipped_at = excluded.shipped_at,
+            delivered_at = excluded.delivered_at,
+            weight_grams = excluded.weight_grams,
+            allocations_json = excluded.allocations_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          shipment.id,
+          shipment.orderId,
+          shipment.carrier,
+          shipment.trackingNumber,
+          shipment.status,
+          shipment.shippedAt ?? null,
+          shipment.deliveredAt ?? null,
+          shipment.weightGrams,
+          JSON.stringify(shipment.allocations),
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistOrderDocuments(db: D1Database, documents: OrderDocumentRecord[], updatedAt: string) {
+  if (!Array.isArray(documents) || documents.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    documents.map((document) =>
+      db
+        .prepare(
+          `INSERT INTO order_documents (id, order_id, type, status, url, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(id) DO UPDATE SET
+             order_id = excluded.order_id,
+             type = excluded.type,
+             status = excluded.status,
+             url = excluded.url,
+             created_at = excluded.created_at,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(document.id, document.orderId, document.type, document.status, document.url, document.createdAt, updatedAt),
+    ),
+  )
+}
+
 async function hydrateInventoryState(db: D1Database, serviceState: ServiceState) {
   const lotRows = await db
     .prepare(
@@ -1703,6 +2151,88 @@ function documentFromRow(row: DocumentRecordRow): DocumentRecord {
   }
 }
 
+function productionBatchFromRow(row: ProductionBatchRow): ProductionBatchRecord {
+  return {
+    id: row.id,
+    formulaId: row.formula_id,
+    formulaCode: row.formula_code,
+    status: readProductionBatchRecordStatus(row.status),
+    targetGrams: Number(row.target_grams),
+    consumedGrams: Number(row.consumed_grams),
+    qcStatus: readProductionQcStatus(row.qc_status),
+    owner: row.owner,
+    workOrder: parseJson<ProductionBatchRecord['workOrder']>(row.work_order_json, {
+      id: `${row.id}-WO`,
+      scheduledStartAt: '',
+      dueAt: '',
+      equipment: '',
+      steps: [],
+    }),
+    qcChecks: parseJson<ProductionBatchRecord['qcChecks']>(row.qc_checks_json, []),
+    yieldGrams: row.yield_grams ?? undefined,
+    yieldVariancePercent: row.yield_variance_percent ?? undefined,
+    outputLot: row.output_lot_json
+      ? parseJson<ProductionBatchRecord['outputLot']>(row.output_lot_json, undefined)
+      : undefined,
+    genealogy: parseJson<ProductionBatchRecord['genealogy']>(row.genealogy_json, {
+      inputLotIds: [],
+      inputMovementIds: [],
+    }),
+  }
+}
+
+function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
+  return {
+    id: row.id,
+    skuId: row.sku_id,
+    customerId: row.customer_id,
+    customer: row.customer,
+    quantity: Number(row.quantity),
+    unitPrice: Number(row.unit_price),
+    discountPercent: Number(row.discount_percent),
+    taxPercent: Number(row.tax_percent),
+    shippingCost: Number(row.shipping_cost),
+    total: Number(row.total),
+    currency: row.currency,
+    reservedGrams: Number(row.reserved_grams),
+    fulfilledGrams: Number(row.fulfilled_grams),
+    status: readSalesOrderStatus(row.status),
+    carrier: row.carrier ? readShipmentCarrier(row.carrier) : undefined,
+    trackingNumber: row.tracking_number ?? undefined,
+    reservationAllocations: row.reservation_allocations_json
+      ? parseJson<NonNullable<SalesOrderRecord['reservationAllocations']>>(row.reservation_allocations_json, [])
+      : undefined,
+    shipmentId: row.shipment_id ?? undefined,
+    documentIds: row.document_ids_json ? parseJson<string[]>(row.document_ids_json, []) : undefined,
+    createdAt: row.created_at,
+  }
+}
+
+function shipmentFromRow(row: ShipmentRow): ShipmentRecord {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    carrier: readShipmentCarrier(row.carrier),
+    trackingNumber: row.tracking_number,
+    status: readShipmentStatus(row.status),
+    shippedAt: row.shipped_at ?? undefined,
+    deliveredAt: row.delivered_at ?? undefined,
+    weightGrams: Number(row.weight_grams),
+    allocations: parseJson<ShipmentRecord['allocations']>(row.allocations_json, []),
+  }
+}
+
+function orderDocumentFromRow(row: OrderDocumentRow): OrderDocumentRecord {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    type: readOrderDocumentType(row.type),
+    status: readOrderDocumentStatus(row.status),
+    url: row.url,
+    createdAt: row.created_at,
+  }
+}
+
 function inventoryLotFromRow(row: InventoryLotRow): InventoryLot {
   return {
     id: row.id,
@@ -1847,6 +2377,78 @@ function readDocumentStatus(value: string): DocumentRecord['status'] {
     return value
   }
   return 'REVIEW_REQUIRED'
+}
+
+function readProductionBatchRecordStatus(value: string): ProductionBatchRecord['status'] {
+  if (
+    value === 'PLANNED' ||
+    value === 'WEIGHING' ||
+    value === 'MACERATION' ||
+    value === 'FILTRATION' ||
+    value === 'QC' ||
+    value === 'BOTTLING' ||
+    value === 'RELEASED' ||
+    value === 'HOLD'
+  ) {
+    return value
+  }
+  return 'HOLD'
+}
+
+function readProductionQcStatus(value: string): ProductionBatchRecord['qcStatus'] {
+  if (value === 'PENDING' || value === 'PASSED' || value === 'FAILED') {
+    return value
+  }
+  return 'PENDING'
+}
+
+function readSalesOrderStatus(value: string): SalesOrderRecord['status'] {
+  if (
+    value === 'DRAFT' ||
+    value === 'CONFIRMED' ||
+    value === 'RESERVED' ||
+    value === 'BACKORDER' ||
+    value === 'PICKING' ||
+    value === 'PACKED' ||
+    value === 'SHIPPED' ||
+    value === 'FULFILLED' ||
+    value === 'DELIVERED' ||
+    value === 'INVOICED' ||
+    value === 'CLOSED' ||
+    value === 'CANCELLED' ||
+    value === 'HOLD'
+  ) {
+    return value
+  }
+  return 'HOLD'
+}
+
+function readShipmentCarrier(value: string): ShipmentRecord['carrier'] {
+  if (value === 'DHL' || value === 'FedEx' || value === 'UPS' || value === 'Pickup') {
+    return value
+  }
+  return 'DHL'
+}
+
+function readShipmentStatus(value: string): ShipmentRecord['status'] {
+  if (value === 'PICKING' || value === 'PACKED' || value === 'SHIPPED' || value === 'DELIVERED') {
+    return value
+  }
+  return 'PICKING'
+}
+
+function readOrderDocumentType(value: string): OrderDocumentRecord['type'] {
+  if (value === 'PICK_LIST' || value === 'PACKING_SLIP' || value === 'INVOICE' || value === 'COA') {
+    return value
+  }
+  return 'PICK_LIST'
+}
+
+function readOrderDocumentStatus(value: string): OrderDocumentRecord['status'] {
+  if (value === 'DRAFT' || value === 'READY' || value === 'SENT') {
+    return value
+  }
+  return 'DRAFT'
 }
 
 function readLotQualityStatus(value: string): InventoryLot['qualityStatus'] {
