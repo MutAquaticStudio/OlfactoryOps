@@ -7,7 +7,7 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Persistent commercial state: Cloudflare D1.
 - Future document binaries: Cloudflare R2.
 
-The Worker reuses the existing North Star domain service and stores a D1-backed state snapshot in `northstar_snapshots`. The commercial pass adds server-side subscription gates, usage limits, invoices, audit export, webhook retry evidence, CSRF enforcement for cookie-authenticated writes, and D1-backed auth rate limits. A later hardening phase can normalize the D1 schema table-by-table.
+The Worker reuses the existing North Star domain service and stores most domain state in the D1-backed `northstar_snapshots` table. The commercial hardening pass has moved auth sessions, audit events, and auth rate limits into normalized D1 tables so security operations can be queried and persisted independently. A later hardening phase can continue normalizing inventory movements, lab usage, documents, and orders table-by-table.
 
 ## 1. Create D1
 
@@ -127,12 +127,12 @@ For live functional smoke testing and a Markdown report:
 npm run test:functional:report
 ```
 
-The functional report verifies cookie auth, CSRF rejection on missing write token, tenant permission probes, core read models, signed document URLs, and the Production phase evidence UI.
+The functional report verifies cookie auth, hybrid D1 persistence status, CSRF rejection on missing write token, tenant permission probes, core read models, signed document URLs, and the Production phase evidence UI.
 
 ## Notes
 
-- D1 is SQLite-compatible, not Postgres. The current Worker persistence layer stores North Star state snapshots for fast commercial launch while the product moves toward normalized D1 tables.
-- Auth rate-limit state lives in `security_rate_limits`; apply D1 migrations before deploying Worker code that depends on new tables.
+- D1 is SQLite-compatible, not Postgres. The current Worker persistence layer is hybrid: core domain state still uses snapshots, while `auth_sessions`, `audit_events`, and `security_rate_limits` are normalized D1 tables.
+- Apply D1 migrations before deploying Worker code that depends on new normalized tables.
 - Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only.
 - Keep documents and generated PDFs out of D1. Store document files in R2 and keep only metadata/signed URL evidence in D1.
 - For high-volume production, normalize high-write modules first: inventory movements, lab usage, orders, audit logs, documents, and auth sessions.

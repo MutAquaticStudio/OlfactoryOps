@@ -33,11 +33,13 @@ const testCases = [
     objective: 'Verify the production Worker is reachable while tenant and secret-bearing routes require authentication.',
     steps: [
       'Call GET /health without cookies.',
+      'Call GET /persistence/status without cookies.',
       'Call GET /security/tenant-console without cookies.',
       'Call GET /api-keys without cookies.',
     ],
     assertions: [
       '/health returns 200 and service identity.',
+      'Persistence status reports hybrid D1 with normalized auth/audit tables.',
       'Tenant console returns 401 without a session.',
       'API keys return 401 without a session.',
     ],
@@ -45,6 +47,15 @@ const testCases = [
       const health = await apiFetch('/health', {}, { useCookie: false })
       assertStatus(health, 200, 'health should be public')
       assert(Boolean(health.json?.ok), 'health payload should include ok=true')
+
+      const persistence = await apiFetch('/persistence/status', {}, { useCookie: false })
+      assertStatus(persistence, 200, 'persistence status should be public')
+      assert(persistence.json?.data?.adapter === 'cloudflare-d1-hybrid', 'persistence adapter should be hybrid D1')
+      assert(
+        persistence.json.data.normalizedTables.includes('auth_sessions') &&
+          persistence.json.data.normalizedTables.includes('audit_events'),
+        'persistence status should report normalized auth/audit tables',
+      )
 
       const tenant = await apiFetch('/security/tenant-console', {}, { useCookie: false })
       assertStatus(tenant, 401, 'tenant console should reject anonymous access')
@@ -54,6 +65,7 @@ const testCases = [
 
       return [
         `Health service: ${health.json.service ?? 'unknown'}`,
+        `Persistence: ${persistence.json.data.adapter} / ${persistence.json.data.normalizedTables.join(', ')}`,
         `Anonymous tenant status: ${tenant.status}`,
         `Anonymous api-key status: ${apiKeys.status}`,
       ]

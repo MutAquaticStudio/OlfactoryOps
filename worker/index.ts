@@ -1,5 +1,6 @@
 import { NorthStarService } from '../server/src/services/northstar.service.js'
 import { TooManyRequestsException } from '../server/src/shared/http-error.js'
+import type { AuditEvent, AuthSession } from '../src/data/northStar.js'
 
 type Env = {
   DB: D1Database
@@ -76,8 +77,15 @@ type SnapshotKey =
   | 'webhookDeliveryRecords'
   | 'auditCounter'
 
+type ServiceState = Record<SnapshotKey, unknown> & {
+  sessions: AuthSession[]
+  auditEvents: AuditEvent[]
+  auditCounter: number
+}
+
 const API_PREFIX = '/api/v1'
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
+const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>(['sessions', 'auditEvents', 'auditCounter'])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
   'moleculeRecords',
@@ -118,11 +126,12 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'webhookDeliveryRecords',
   'auditCounter',
 ]
+const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
 
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-snapshot', keys: SNAPSHOT_KEYS.length, table: 'northstar_snapshots' } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits'] } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -265,6 +274,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get('Origin')
     const corsHeaders = buildCorsHeaders(origin, env.CORS_ORIGINS)
+    let service: NorthStarService | undefined
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders })
@@ -283,7 +293,7 @@ export default {
       }
 
       await ensurePersistenceTables(env.DB)
-      const service = new NorthStarService()
+      service = new NorthStarService()
       await hydrateSnapshots(env.DB, service)
       const body = await readJsonBody(request)
       if (match.route.rateLimit) {
@@ -311,6 +321,9 @@ export default {
 
       return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
     } catch (error) {
+      if (service) {
+        await persistSecurityState(env.DB, service).catch((persistError) => console.error(persistError))
+      }
       return errorJson(error, corsHeaders)
     }
   },
@@ -496,6 +509,8 @@ function readCookie(cookieHeader: string | null, name: string) {
 async function ensurePersistenceTables(db: D1Database) {
   await ensureSnapshotTable(db)
   await ensureRateLimitTable(db)
+  await ensureAuthSessionTable(db)
+  await ensureAuditEventTable(db)
 }
 
 async function ensureSnapshotTable(db: D1Database) {
@@ -524,11 +539,61 @@ async function ensureRateLimitTable(db: D1Database) {
     .run()
 }
 
+async function ensureAuthSessionTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS auth_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        brand_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        idle_expires_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        mfa_verified INTEGER NOT NULL DEFAULT 0,
+        ip_address TEXT NOT NULL DEFAULT '',
+        user_agent TEXT NOT NULL DEFAULT '',
+        device_id TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        csrf_token TEXT,
+        revoked_at TEXT,
+        revoked_reason TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_org_status ON auth_sessions(organization_id, status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_email_status ON auth_sessions(email, status)').run()
+}
+
+async function ensureAuditEventTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        at TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        action TEXT NOT NULL,
+        entity TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)').run()
+}
+
 async function hydrateSnapshots(db: D1Database, service: NorthStarService) {
   const snapshotRows = await db
     .prepare('SELECT key, value FROM northstar_snapshots')
     .all<{ key: SnapshotKey; value: string }>()
-  const serviceState = service as unknown as Record<SnapshotKey, unknown>
+  const serviceState = service as unknown as ServiceState
 
   for (const row of snapshotRows.results ?? []) {
     if (!SNAPSHOT_KEYS.includes(row.key)) {
@@ -536,12 +601,14 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService) {
     }
     serviceState[row.key] = JSON.parse(row.value)
   }
+  await hydrateNormalizedState(db, serviceState)
 }
 
 async function persistSnapshots(db: D1Database, service: NorthStarService) {
-  const serviceState = service as unknown as Record<SnapshotKey, unknown>
+  const serviceState = service as unknown as ServiceState
   const updatedAt = new Date().toISOString()
-  const statements = SNAPSHOT_KEYS.map((key) =>
+  await persistNormalizedState(db, serviceState, updatedAt)
+  const statements = SNAPSHOT_PERSIST_KEYS.map((key) =>
     db
       .prepare(
         `INSERT INTO northstar_snapshots (key, value, updated_at)
@@ -551,6 +618,229 @@ async function persistSnapshots(db: D1Database, service: NorthStarService) {
       .bind(key, JSON.stringify(serviceState[key]), updatedAt),
   )
   await db.batch(statements)
+}
+
+async function persistSecurityState(db: D1Database, service: NorthStarService) {
+  await persistNormalizedState(db, service as unknown as ServiceState, new Date().toISOString())
+}
+
+type AuthSessionRow = {
+  id: string
+  user_id: string
+  email: string
+  organization_id: string
+  brand_id: string
+  role: string
+  issued_at: string
+  last_seen_at: string
+  idle_expires_at: string
+  expires_at: string
+  status: string
+  mfa_verified: number
+  ip_address: string
+  user_agent: string
+  device_id: string
+  location: string
+  csrf_token: string | null
+  revoked_at: string | null
+  revoked_reason: string | null
+}
+
+type AuditEventRow = {
+  id: string
+  at: string
+  actor: string
+  action: string
+  entity: string
+  request_id: string
+  outcome: string
+}
+
+async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState) {
+  const sessionRows = await db
+    .prepare(
+      `SELECT id, user_id, email, organization_id, brand_id, role, issued_at, last_seen_at,
+        idle_expires_at, expires_at, status, mfa_verified, ip_address, user_agent, device_id,
+        location, csrf_token, revoked_at, revoked_reason
+       FROM auth_sessions
+       ORDER BY issued_at DESC`,
+    )
+    .all<AuthSessionRow>()
+  const sessions = (sessionRows.results ?? []).map(authSessionFromRow)
+  if (sessions.length > 0) {
+    serviceState.sessions = sessions
+  } else if (Array.isArray(serviceState.sessions) && serviceState.sessions.length > 0) {
+    await persistAuthSessions(db, serviceState.sessions, new Date().toISOString())
+  }
+
+  const auditRows = await db
+    .prepare(
+      `SELECT id, at, actor, action, entity, request_id, outcome
+       FROM audit_events
+       ORDER BY at DESC`,
+    )
+    .all<AuditEventRow>()
+  const events = (auditRows.results ?? []).map(auditEventFromRow)
+  if (events.length > 0) {
+    serviceState.auditEvents = events
+  } else if (Array.isArray(serviceState.auditEvents) && serviceState.auditEvents.length > 0) {
+    await persistAuditEvents(db, serviceState.auditEvents, new Date().toISOString())
+  }
+
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistAuthSessions(db, serviceState.sessions, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+async function persistAuthSessions(db: D1Database, sessions: AuthSession[], updatedAt: string) {
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    return
+  }
+  await db.batch(
+    sessions.map((session) =>
+      db
+        .prepare(
+          `INSERT INTO auth_sessions (
+            id, user_id, email, organization_id, brand_id, role, issued_at, last_seen_at,
+            idle_expires_at, expires_at, status, mfa_verified, ip_address, user_agent, device_id,
+            location, csrf_token, revoked_at, revoked_reason, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+          ON CONFLICT(id) DO UPDATE SET
+            user_id = excluded.user_id,
+            email = excluded.email,
+            organization_id = excluded.organization_id,
+            brand_id = excluded.brand_id,
+            role = excluded.role,
+            issued_at = excluded.issued_at,
+            last_seen_at = excluded.last_seen_at,
+            idle_expires_at = excluded.idle_expires_at,
+            expires_at = excluded.expires_at,
+            status = excluded.status,
+            mfa_verified = excluded.mfa_verified,
+            ip_address = excluded.ip_address,
+            user_agent = excluded.user_agent,
+            device_id = excluded.device_id,
+            location = excluded.location,
+            csrf_token = excluded.csrf_token,
+            revoked_at = excluded.revoked_at,
+            revoked_reason = excluded.revoked_reason,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          session.id,
+          session.userId,
+          session.email,
+          session.organizationId,
+          session.brandId,
+          session.role,
+          session.issuedAt,
+          session.lastSeenAt,
+          session.idleExpiresAt,
+          session.expiresAt,
+          session.status,
+          session.mfaVerified ? 1 : 0,
+          session.ipAddress,
+          session.userAgent,
+          session.deviceId,
+          session.location,
+          session.csrfToken ?? null,
+          session.revokedAt ?? null,
+          session.revokedReason ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedAt: string) {
+  if (!Array.isArray(events) || events.length === 0) {
+    return
+  }
+  await db.batch(
+    events.map((event) =>
+      db
+        .prepare(
+          `INSERT INTO audit_events (id, at, actor, action, entity, request_id, outcome, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+           ON CONFLICT(id) DO UPDATE SET
+             at = excluded.at,
+             actor = excluded.actor,
+             action = excluded.action,
+             entity = excluded.entity,
+             request_id = excluded.request_id,
+             outcome = excluded.outcome,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
+    ),
+  )
+}
+
+function authSessionFromRow(row: AuthSessionRow): AuthSession {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    email: row.email,
+    organizationId: row.organization_id,
+    brandId: row.brand_id,
+    role: row.role,
+    issuedAt: row.issued_at,
+    lastSeenAt: row.last_seen_at,
+    idleExpiresAt: row.idle_expires_at,
+    expiresAt: row.expires_at,
+    status: readSessionStatus(row.status),
+    mfaVerified: row.mfa_verified === 1,
+    ipAddress: row.ip_address,
+    userAgent: row.user_agent,
+    deviceId: row.device_id,
+    location: row.location,
+    csrfToken: row.csrf_token ?? undefined,
+    revokedAt: row.revoked_at ?? undefined,
+    revokedReason: row.revoked_reason ?? undefined,
+  }
+}
+
+function auditEventFromRow(row: AuditEventRow): AuditEvent {
+  return {
+    id: row.id,
+    at: row.at,
+    actor: row.actor,
+    action: row.action,
+    entity: row.entity,
+    requestId: row.request_id,
+    outcome: readAuditOutcome(row.outcome),
+  }
+}
+
+function readSessionStatus(value: string): AuthSession['status'] {
+  if (value === 'ACTIVE' || value === 'REVOKED' || value === 'EXPIRED') {
+    return value
+  }
+  return 'EXPIRED'
+}
+
+function readAuditOutcome(value: string): AuditEvent['outcome'] {
+  if (value === 'allowed' || value === 'blocked' || value === 'review') {
+    return value
+  }
+  return 'review'
+}
+
+function maxAuditCounter(events: AuditEvent[]) {
+  if (!Array.isArray(events)) {
+    return 0
+  }
+  return events.reduce((max, event) => Math.max(max, trailingNumber(event.id), trailingNumber(event.requestId)), 0)
+}
+
+function trailingNumber(value: string) {
+  const match = value.match(/(\d+)$/)
+  return match ? Number(match[1]) : 0
 }
 
 function buildCorsHeaders(origin: string | null, configuredOrigins: string | undefined) {
