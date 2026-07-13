@@ -379,11 +379,19 @@ describe('NorthStarService', () => {
     const consoleState = service.tenantConsole().data
 
     expect(result.organization.slug).toBe('atelier-smoke')
+    expect(result.brand.organizationId).toBe(result.organization.id)
     expect(result.membership.role).toBe('Owner')
+    expect(result.membership.status).toBe('ACTIVE')
+    expect(result.membership.organizationId).toBe(result.organization.id)
+    expect(result.membership.brandIds).toContain(result.brand.id)
     expect(result.session.email).toBe('owner@atelier-smoke.test')
+    expect(result.session.organizationId).toBe(result.organization.id)
+    expect(result.session.brandId).toBe(result.brand.id)
     expect(result.audit.action).toBe('auth.signup')
     expect(consoleState.organization.id).toBe(result.organization.id)
+    expect(consoleState.brands).toEqual([result.brand])
     expect(consoleState.memberships.some((membership) => membership.email === result.membership.email)).toBe(true)
+    expect(() => service.tenantProbe('org-nxl')).toThrow(ForbiddenException)
   })
 
   it('touches active sessions without changing absolute expiry', () => {
