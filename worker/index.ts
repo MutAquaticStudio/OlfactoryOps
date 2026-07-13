@@ -61,6 +61,7 @@ type Route = {
   rateLimit?: RateLimitPolicy
   limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
   writeGate?: boolean
+  persistScope?: 'userSettings'
   handler: (context: RouteContext) => unknown
 }
 
@@ -326,7 +327,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
   { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
-  { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, handler: ({ service, body }) => service.updateUserSettings(body) },
+  { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, persistScope: 'userSettings', handler: ({ service, body }) => service.updateUserSettings(body) },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
@@ -471,7 +472,11 @@ export default {
       const result = await match.route.handler({ service, params: match.params, query: url.searchParams, body })
 
       if (match.route.mutates || service.hasSecurityStateChanges()) {
-        await persistSnapshots(env.DB, service)
+        if (match.route.persistScope === 'userSettings') {
+          await persistUserSettingsMutation(env.DB, service)
+        } else {
+          await persistSnapshots(env.DB, service)
+        }
       }
 
       return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
@@ -769,8 +774,10 @@ async function ensureUserSettingsTable(db: D1Database) {
         display_name TEXT NOT NULL,
         preferred_landing TEXT NOT NULL,
         ui_density TEXT NOT NULL,
+        sidebar_mode TEXT NOT NULL DEFAULT 'expanded',
         reduce_motion INTEGER NOT NULL DEFAULT 0,
         email_digest TEXT NOT NULL,
+        accent_color TEXT NOT NULL DEFAULT '#4d9bff',
         updated_at TEXT NOT NULL,
         PRIMARY KEY (user_id, organization_id)
       )`,
@@ -1508,6 +1515,15 @@ async function persistSnapshots(db: D1Database, service: NorthStarService) {
   await db.batch(statements)
 }
 
+async function persistUserSettingsMutation(db: D1Database, service: NorthStarService) {
+  const serviceState = service as unknown as ServiceState
+  const updatedAt = new Date().toISOString()
+  await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
+  await persistMemberships(db, serviceState.membershipRecords, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
 async function persistSecurityState(db: D1Database, service: NorthStarService) {
   await persistNormalizedState(db, service as unknown as ServiceState, new Date().toISOString())
 }
@@ -1541,8 +1557,10 @@ type UserSettingsRow = {
   display_name: string
   preferred_landing: string
   ui_density: string
+  sidebar_mode: string
   reduce_motion: number
   email_digest: string
+  accent_color: string
   updated_at: string
 }
 
@@ -1961,7 +1979,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   const userSettingsRows = await db
     .prepare(
       `SELECT user_id, organization_id, email, display_name, preferred_landing, ui_density,
-        reduce_motion, email_digest, updated_at
+        sidebar_mode, reduce_motion, email_digest, accent_color, updated_at
        FROM user_settings
        ORDER BY organization_id ASC, email ASC`,
     )
@@ -2095,16 +2113,18 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
         .prepare(
           `INSERT INTO user_settings (
             user_id, organization_id, email, display_name, preferred_landing,
-            ui_density, reduce_motion, email_digest, updated_at
+            ui_density, sidebar_mode, reduce_motion, email_digest, accent_color, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
           ON CONFLICT(user_id, organization_id) DO UPDATE SET
             email = excluded.email,
             display_name = excluded.display_name,
             preferred_landing = excluded.preferred_landing,
             ui_density = excluded.ui_density,
+            sidebar_mode = excluded.sidebar_mode,
             reduce_motion = excluded.reduce_motion,
             email_digest = excluded.email_digest,
+            accent_color = excluded.accent_color,
             updated_at = excluded.updated_at`,
         )
         .bind(
@@ -2114,8 +2134,10 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
           record.displayName,
           record.preferredLanding,
           record.uiDensity,
+          record.sidebarMode === 'rail' ? 'rail' : 'expanded',
           record.reduceMotion ? 1 : 0,
           record.emailDigest,
+          readAccentColor(record.accentColor),
           updatedAt,
         ),
     ),
@@ -3977,8 +3999,10 @@ function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
     displayName: row.display_name,
     preferredLanding: readPreferredLanding(row.preferred_landing),
     uiDensity: row.ui_density === 'compact' ? 'compact' : 'comfortable',
+    sidebarMode: row.sidebar_mode === 'rail' ? 'rail' : 'expanded',
     reduceMotion: row.reduce_motion === 1,
     emailDigest: readEmailDigest(row.email_digest),
+    accentColor: readAccentColor(row.accent_color),
     updatedAt: row.updated_at,
   }
 }
@@ -4490,6 +4514,21 @@ function readEmailDigest(value: string): UserSettingsRecord['emailDigest'] {
     return value
   }
   return 'weekly'
+}
+
+function readAccentColor(value: string | null | undefined) {
+  if (typeof value !== 'string') {
+    return '#4d9bff'
+  }
+  const trimmed = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return trimmed.toLowerCase()
+  }
+  const shortMatch = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(trimmed)
+  if (shortMatch) {
+    return `#${shortMatch[1]}${shortMatch[1]}${shortMatch[2]}${shortMatch[2]}${shortMatch[3]}${shortMatch[3]}`.toLowerCase()
+  }
+  return '#4d9bff'
 }
 
 function readAuditOutcome(value: string): AuditEvent['outcome'] {

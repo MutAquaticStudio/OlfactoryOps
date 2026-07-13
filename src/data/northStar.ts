@@ -404,8 +404,10 @@ export interface UserSettingsRecord {
   displayName: string
   preferredLanding: DomainKey
   uiDensity: 'comfortable' | 'compact'
+  sidebarMode: 'expanded' | 'rail'
   reduceMotion: boolean
   emailDigest: 'off' | 'daily' | 'weekly'
+  accentColor: string
   updatedAt: string
 }
 
@@ -2252,8 +2254,10 @@ export const userSettings: UserSettingsRecord[] = [
     displayName: 'Thuan Le Minh',
     preferredLanding: 'dashboard',
     uiDensity: 'comfortable',
+    sidebarMode: 'expanded',
     reduceMotion: false,
     emailDigest: 'weekly',
+    accentColor: '#4d9bff',
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2263,8 +2267,10 @@ export const userSettings: UserSettingsRecord[] = [
     displayName: 'Lab Manager',
     preferredLanding: 'labUsage',
     uiDensity: 'compact',
+    sidebarMode: 'rail',
     reduceMotion: false,
     emailDigest: 'daily',
+    accentColor: '#37d6a0',
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
 ]

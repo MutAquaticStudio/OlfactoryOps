@@ -16,6 +16,7 @@
   --blue: #4d9bff;
   --blue-bright: #74b2ff;
   --blue-deep: #2f6dff;
+  --accent-rgb: 77 155 255;
   --gold: #c4a86a;
   --green: #37d6a0;
   --amber: #f5b04c;
@@ -89,7 +90,7 @@ strong {
 }
 
 ::selection {
-  background: rgba(77, 155, 255, 0.28);
+  background: rgb(var(--accent-rgb) / 0.28);
 }
 
 .lab-backdrop {
@@ -99,9 +100,9 @@ strong {
   overflow: hidden;
   pointer-events: none;
   background:
-    radial-gradient(circle at 18% 18%, rgba(77, 155, 255, 0.13), transparent 29%),
-    radial-gradient(circle at 78% 12%, rgba(77, 155, 255, 0.09), transparent 24%),
-    radial-gradient(circle at 52% 82%, rgba(47, 109, 255, 0.12), transparent 34%),
+    radial-gradient(circle at 18% 18%, rgb(var(--accent-rgb) / 0.13), transparent 29%),
+    radial-gradient(circle at 78% 12%, rgb(var(--accent-rgb) / 0.09), transparent 24%),
+    radial-gradient(circle at 52% 82%, rgb(var(--accent-rgb) / 0.12), transparent 34%),
     #050507;
 }
 
@@ -112,7 +113,7 @@ strong {
   min-width: 320px;
   min-height: 320px;
   border-radius: 999px;
-  background: rgba(77, 155, 255, 0.12);
+  background: rgb(var(--accent-rgb) / 0.12);
   filter: blur(52px);
   animation: drift 18s ease-in-out infinite alternate;
 }
@@ -141,8 +142,8 @@ strong {
   inset: 0;
   opacity: 0.22;
   background-image:
-    linear-gradient(rgba(77, 155, 255, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(77, 155, 255, 0.1) 1px, transparent 1px),
+    linear-gradient(rgb(var(--accent-rgb) / 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--accent-rgb) / 0.1) 1px, transparent 1px),
     linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
   background-size: 44px 44px, 44px 44px, 220px 220px, 220px 220px;
@@ -165,8 +166,8 @@ strong {
 }
 
 .molecule-linework circle {
-  fill: rgba(77, 155, 255, 0.12);
-  stroke: rgba(77, 155, 255, 0.24);
+  fill: rgb(var(--accent-rgb) / 0.12);
+  stroke: rgb(var(--accent-rgb) / 0.24);
 }
 
 .molecule-linework .gold-node {
@@ -186,7 +187,7 @@ strong {
   inset-inline: 0;
   height: 34vh;
   top: -40vh;
-  background: linear-gradient(180deg, transparent, rgba(77, 155, 255, 0.08), transparent);
+  background: linear-gradient(180deg, transparent, rgb(var(--accent-rgb) / 0.08), transparent);
   animation: scan 7s linear infinite;
 }
 
@@ -203,7 +204,7 @@ strong {
     inset 0 0 0 1px rgba(255, 255, 255, 0.015),
     inset 0 -26px 52px -38px rgba(0, 0, 0, 0.75),
     0 32px 64px -30px rgba(0, 0, 0, 0.92),
-    0 0 48px -26px rgba(77, 155, 255, 0.32);
+    0 0 48px -26px rgb(var(--accent-rgb) / 0.32);
   backdrop-filter: blur(28px) saturate(150%);
   -webkit-backdrop-filter: blur(28px) saturate(150%);
   transition: border-color 0.35s, box-shadow 0.35s, transform 0.35s, background 0.35s;
@@ -218,7 +219,7 @@ strong {
   content: '';
   background:
     linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 30%),
-    radial-gradient(130% 90% at 0% 0%, rgba(77, 155, 255, 0.08), transparent 56%);
+    radial-gradient(130% 90% at 0% 0%, rgb(var(--accent-rgb) / 0.08), transparent 56%);
 }
 
 .glass::after {
@@ -239,14 +240,14 @@ strong {
 }
 
 .glass-hover:hover {
-  border-color: rgba(77, 155, 255, 0.3);
+  border-color: rgb(var(--accent-rgb) / 0.3);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.17),
-    inset 0 0 0 1px rgba(77, 155, 255, 0.06),
+    inset 0 0 0 1px rgb(var(--accent-rgb) / 0.06),
     inset 0 -26px 52px -38px rgba(0, 0, 0, 0.7),
-    0 0 0 1px rgba(77, 155, 255, 0.12),
+    0 0 0 1px rgb(var(--accent-rgb) / 0.12),
     0 38px 76px -32px rgba(0, 0, 0, 0.95),
-    0 0 58px -16px rgba(77, 155, 255, 0.3);
+    0 0 58px -16px rgb(var(--accent-rgb) / 0.3);
   transform: translateY(-2px);
 }
 
@@ -316,9 +317,9 @@ strong {
   flex: 0 0 auto;
   color: var(--blue-bright);
   background:
-    linear-gradient(180deg, rgba(77, 155, 255, 0.2), rgba(77, 155, 255, 0.04)),
+    linear-gradient(180deg, rgb(var(--accent-rgb) / 0.2), rgb(var(--accent-rgb) / 0.04)),
     rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(77, 155, 255, 0.18);
+  border: 1px solid rgb(var(--accent-rgb) / 0.18);
   border-radius: 12px;
 }
 
@@ -414,8 +415,8 @@ strong {
 .nav-item:hover,
 .nav-item.is-active {
   color: var(--text);
-  background: rgba(77, 155, 255, 0.08);
-  border-color: rgba(77, 155, 255, 0.14);
+  background: rgb(var(--accent-rgb) / 0.08);
+  border-color: rgb(var(--accent-rgb) / 0.14);
 }
 
 .sidebar-footer {
@@ -510,10 +511,10 @@ kbd {
   min-height: 40px;
   padding: 5px 10px 5px 6px;
   color: var(--text);
-  border: 1px solid rgba(77, 155, 255, 0.16);
+  border: 1px solid rgb(var(--accent-rgb) / 0.16);
   border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(77, 155, 255, 0.09), rgba(255, 255, 255, 0.025)),
+    linear-gradient(180deg, rgb(var(--accent-rgb) / 0.09), rgba(255, 255, 255, 0.025)),
     rgba(255, 255, 255, 0.035);
   cursor: pointer;
   text-align: left;
@@ -521,8 +522,8 @@ kbd {
 }
 
 .user-chip:hover {
-  border-color: rgba(77, 155, 255, 0.32);
-  background: rgba(77, 155, 255, 0.09);
+  border-color: rgb(var(--accent-rgb) / 0.32);
+  background: rgb(var(--accent-rgb) / 0.09);
   transform: translateY(-1px);
 }
 
@@ -582,8 +583,8 @@ kbd {
 
 .icon-button:hover {
   color: var(--text);
-  border-color: rgba(77, 155, 255, 0.28);
-  background: rgba(77, 155, 255, 0.08);
+  border-color: rgb(var(--accent-rgb) / 0.28);
+  background: rgb(var(--accent-rgb) / 0.08);
 }
 
 .dashboard-grid,
@@ -753,10 +754,75 @@ kbd {
   outline: none;
 }
 
+.field-row input[readonly] {
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.035);
+  cursor: default;
+}
+
 .field-row input:focus,
 .field-row select:focus {
-  border-color: rgba(77, 155, 255, 0.46);
-  box-shadow: 0 0 0 3px rgba(77, 155, 255, 0.12);
+  border-color: rgb(var(--accent-rgb) / 0.46);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.12);
+}
+
+.color-field {
+  grid-column: span 2;
+}
+
+.color-control {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+}
+
+.color-control input[type='color'] {
+  min-height: 40px;
+  padding: 4px;
+  border-color: rgb(var(--accent-rgb) / 0.32);
+  cursor: pointer;
+}
+
+.color-control input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-control input[type='color']::-webkit-color-swatch {
+  border: 0;
+  border-radius: 8px;
+}
+
+.accent-swatch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.accent-swatch {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+}
+
+.accent-swatch.is-active {
+  border-color: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.26),
+    0 0 0 3px rgb(var(--accent-rgb) / 0.2);
+}
+
+.field-hint {
+  color: var(--text-3);
+  font-size: 0.72rem;
+}
+
+.field-hint.is-danger {
+  color: var(--red);
 }
 
 .primary-button,
@@ -774,9 +840,9 @@ kbd {
 
 .primary-button {
   color: #06101c;
-  border: 1px solid rgba(116, 178, 255, 0.5);
+  border: 1px solid rgb(var(--accent-rgb) / 0.5);
   background: linear-gradient(180deg, var(--blue-bright), var(--blue));
-  box-shadow: 0 10px 28px -16px rgba(77, 155, 255, 0.9);
+  box-shadow: 0 10px 28px -16px rgb(var(--accent-rgb) / 0.9);
 }
 
 .ghost-button {
@@ -822,14 +888,38 @@ kbd {
   gap: 14px;
 }
 
+.settings-section {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.settings-section-heading strong {
+  font-size: 0.86rem;
+}
+
+.settings-section-heading span {
+  color: var(--text-2);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .settings-identity-card {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px;
-  border: 1px solid rgba(77, 155, 255, 0.16);
+  border: 1px solid rgb(var(--accent-rgb) / 0.16);
   border-radius: 14px;
-  background: rgba(77, 155, 255, 0.055);
+  background: rgb(var(--accent-rgb) / 0.055);
 }
 
 .settings-identity-card > div {
@@ -2670,6 +2760,10 @@ input[type='range'] {
     .inspector-grid,
     .settings-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .color-field {
+    grid-column: auto;
   }
 
   .domain-matrix {

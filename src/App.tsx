@@ -36,7 +36,16 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from 'react'
 import {
   Area,
   AreaChart,
@@ -188,6 +197,10 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
   passwordPolicy: 'server-managed',
 }
 
+const defaultAccentColor = '#4d9bff'
+
+const accentColorPresets = ['#4d9bff', '#37d6a0', '#c4a86a', '#f5b04c', '#f2585f', '#8b5cf6']
+
 const clientFallbackUserSettings: UserSettingsRecord = {
   userId: 'client-fallback',
   organizationId: clientFallbackOrganization.id,
@@ -195,8 +208,10 @@ const clientFallbackUserSettings: UserSettingsRecord = {
   displayName: 'Workspace Owner',
   preferredLanding: 'dashboard',
   uiDensity: 'comfortable',
+  sidebarMode: 'expanded',
   reduceMotion: false,
   emailDigest: 'weekly',
+  accentColor: defaultAccentColor,
   updatedAt: 'client-fallback',
 }
 
@@ -943,6 +958,51 @@ function userSettingsForSession(session: AuthSession | null): UserSettingsRecord
   }
 }
 
+function normalizeHexColor(value: string | undefined | null) {
+  if (!value) {
+    return null
+  }
+  const trimmed = value.trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return trimmed.toLowerCase()
+  }
+  const shortMatch = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(trimmed)
+  if (shortMatch) {
+    return `#${shortMatch[1]}${shortMatch[1]}${shortMatch[2]}${shortMatch[2]}${shortMatch[3]}${shortMatch[3]}`.toLowerCase()
+  }
+  return null
+}
+
+function hexToRgb(hexColor: string) {
+  const normalized = normalizeHexColor(hexColor) ?? defaultAccentColor
+  return {
+    r: Number.parseInt(normalized.slice(1, 3), 16),
+    g: Number.parseInt(normalized.slice(3, 5), 16),
+    b: Number.parseInt(normalized.slice(5, 7), 16),
+  }
+}
+
+function mixHexColor(hexColor: string, targetHexColor: string, weight: number) {
+  const source = hexToRgb(hexColor)
+  const target = hexToRgb(targetHexColor)
+  const mixChannel = (sourceValue: number, targetValue: number) =>
+    Math.round(sourceValue + (targetValue - sourceValue) * weight)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${mixChannel(source.r, target.r)}${mixChannel(source.g, target.g)}${mixChannel(source.b, target.b)}`
+}
+
+function accentStyleForColor(value: string | undefined | null): CSSProperties {
+  const accentColor = normalizeHexColor(value) ?? defaultAccentColor
+  const { r, g, b } = hexToRgb(accentColor)
+  return {
+    '--blue': accentColor,
+    '--blue-bright': mixHexColor(accentColor, '#ffffff', 0.24),
+    '--blue-deep': mixHexColor(accentColor, '#000000', 0.24),
+    '--accent-rgb': `${r} ${g} ${b}`,
+  } as CSSProperties
+}
+
 function mergeMovements(newMovements: InventoryMovement[], currentMovements: InventoryMovement[]) {
   const incomingIds = new Set(newMovements.map((movement) => movement.id))
   return [...newMovements, ...currentMovements.filter((movement) => !incomingIds.has(movement.id))]
@@ -1087,6 +1147,10 @@ function App() {
   const [transferLotId, setTransferLotId] = useState(initialLots[0]?.id ?? '')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
   const activeUserSettings = userSettingsRecord ?? userSettingsForSession(currentSession)
+  const shellAccentStyle = useMemo(
+    () => accentStyleForColor(activeUserSettings.accentColor),
+    [activeUserSettings.accentColor],
+  )
   const shellMotionPreset = activeUserSettings.reduceMotion ? reducedShellMotion : shellMotion
 
   const selectedDomain = domains.find((domain) => domain.key === activeKey)
@@ -1130,6 +1194,12 @@ function App() {
     setActiveKey(key)
     setMobileNavOpen(false)
   }, [])
+  const applyUserSettings = useCallback((settings: UserSettingsRecord | null) => {
+    setUserSettingsRecord(settings)
+    if (settings) {
+      setSidebarCollapsed(settings.sidebarMode === 'rail')
+    }
+  }, [])
 
   useEffect(() => {
     const nextWeights: Record<string, number> = {}
@@ -1142,13 +1212,14 @@ function App() {
   useEffect(() => {
     function handleAuthExpired() {
       setCurrentSession(null)
-      setUserSettingsRecord(null)
+      applyUserSettings(null)
+      setSidebarCollapsed(false)
       setActiveKey('dashboard')
     }
 
     window.addEventListener(authExpiredEvent, handleAuthExpired)
     return () => window.removeEventListener(authExpiredEvent, handleAuthExpired)
-  }, [])
+  }, [applyUserSettings])
 
   useEffect(() => {
     if (!hasStoredAuthMarker()) {
@@ -1163,14 +1234,16 @@ function App() {
         if (active) {
           acceptCsrfToken(payload.csrfToken)
           setCurrentSession(payload.session)
-          setUserSettingsRecord(payload.userSettings ?? userSettingsForSession(payload.session))
-          setActiveKey((payload.userSettings ?? userSettingsForSession(payload.session)).preferredLanding)
+          const settings = payload.userSettings ?? userSettingsForSession(payload.session)
+          applyUserSettings(settings)
+          setActiveKey(settings.preferredLanding)
         }
       } catch {
         if (active) {
           acceptCsrfToken()
           setCurrentSession(null)
-          setUserSettingsRecord(null)
+          applyUserSettings(null)
+          setSidebarCollapsed(false)
         }
       }
     }
@@ -1180,7 +1253,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [])
+  }, [applyUserSettings])
 
   useEffect(() => {
     if (!currentSession) {
@@ -1456,11 +1529,11 @@ function App() {
   async function syncUserSettings(session: AuthSession) {
     try {
       const settings = await requestApi<UserSettingsRecord>('/user/settings')
-      setUserSettingsRecord(settings)
+      applyUserSettings(settings)
       return settings
     } catch {
       const fallback = userSettingsForSession(session)
-      setUserSettingsRecord(fallback)
+      applyUserSettings(fallback)
       return fallback
     }
   }
@@ -1506,7 +1579,8 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
-      setUserSettingsRecord(null)
+      applyUserSettings(null)
+      setSidebarCollapsed(false)
       setBillingOnboarding(false)
       acceptCsrfToken()
       writeStoredAuthSession(null)
@@ -1537,7 +1611,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-lab-bg text-[var(--text)]">
+    <div className="min-h-screen bg-lab-bg text-[var(--text)]" style={shellAccentStyle}>
       <LabBackdrop />
       <div
         className={`app-shell density-${activeUserSettings.uiDensity} ${activeUserSettings.reduceMotion ? 'is-reduced-motion' : ''} ${
@@ -1662,7 +1736,7 @@ function App() {
           settings={activeUserSettings}
           session={currentSession}
           onSaved={(settings) => {
-            setUserSettingsRecord(settings)
+            applyUserSettings(settings)
             setActiveKey(settings.preferredLanding)
             setModal(null)
           }}
@@ -2102,6 +2176,9 @@ function UserSettingsForm({
   const [draft, setDraft] = useState<UserSettingsRecord>(settings)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Changes apply to your account only.')
+  const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
+  const safeDraftAccentColor = normalizedDraftAccentColor ?? defaultAccentColor
+  const accentPreviewStyle = useMemo(() => accentStyleForColor(safeDraftAccentColor), [safeDraftAccentColor])
 
   useEffect(() => {
     setDraft(settings)
@@ -2119,8 +2196,10 @@ function UserSettingsForm({
           displayName: draft.displayName,
           preferredLanding: draft.preferredLanding,
           uiDensity: draft.uiDensity,
+          sidebarMode: draft.sidebarMode,
           reduceMotion: draft.reduceMotion,
           emailDigest: draft.emailDigest,
+          accentColor: safeDraftAccentColor,
         }),
       })
       setStatus('Preferences saved.')
@@ -2134,7 +2213,7 @@ function UserSettingsForm({
 
   return (
     <div className="user-settings-form">
-      <div className="settings-identity-card">
+      <div className="settings-identity-card" style={accentPreviewStyle}>
         <span className="user-avatar large">{draft.displayName.slice(0, 1).toUpperCase()}</span>
         <div>
           <strong>{session.email}</strong>
@@ -2144,83 +2223,167 @@ function UserSettingsForm({
         </div>
       </div>
 
-      <div className="settings-form-grid">
-        <label className="field-row">
-          <span>Display name</span>
-          <input
-            aria-label="Display name"
-            value={draft.displayName}
-            onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
-          />
-        </label>
-        <label className="field-row">
-          <span>Preferred landing</span>
-          <select
-            aria-label="Preferred landing"
-            value={draft.preferredLanding}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
-            }
-          >
-            <option value="dashboard">North Star Console</option>
-            {domains.map((domain) => (
-              <option key={domain.key} value={domain.key}>
-                {domain.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field-row">
-          <span>Layout density</span>
-          <select
-            aria-label="Layout density"
-            value={draft.uiDensity}
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                uiDensity: event.target.value === 'compact' ? 'compact' : 'comfortable',
-              }))
-            }
-          >
-            <option value="comfortable">Comfortable</option>
-            <option value="compact">Compact</option>
-          </select>
-        </label>
-        <label className="field-row">
-          <span>Email digest</span>
-          <select
-            aria-label="Email digest"
-            value={draft.emailDigest}
-            onChange={(event) =>
-              setDraft((current) => ({
-                ...current,
-                emailDigest:
-                  event.target.value === 'off' || event.target.value === 'daily' ? event.target.value : 'weekly',
-              }))
-            }
-          >
-            <option value="off">Off</option>
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-          </select>
-        </label>
-      </div>
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Profile</strong>
+          <span>Personal identity shown in the workspace.</span>
+        </div>
+        <div className="settings-form-grid">
+          <label className="field-row">
+            <span>Display name</span>
+            <input
+              aria-label="Display name"
+              value={draft.displayName}
+              onChange={(event) => setDraft((current) => ({ ...current, displayName: event.target.value }))}
+            />
+          </label>
+          <label className="field-row">
+            <span>Email</span>
+            <input aria-label="User email" readOnly value={session.email} />
+          </label>
+        </div>
+      </section>
 
-      <label className="toggle-row">
-        <input
-          checked={draft.reduceMotion}
-          type="checkbox"
-          onChange={(event) => setDraft((current) => ({ ...current, reduceMotion: event.target.checked }))}
-        />
-        <span>
-          <strong>Reduce motion</strong>
-          <small>Minimize page transitions and decorative motion.</small>
-        </span>
-      </label>
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Appearance</strong>
+          <span>Color, density, and motion preferences for this account.</span>
+        </div>
+        <div className="settings-form-grid">
+          <div className="field-row color-field">
+            <span>Interface color</span>
+            <div className="color-control">
+              <input
+                aria-label="Interface color picker"
+                type="color"
+                value={safeDraftAccentColor}
+                onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
+              />
+              <input
+                aria-label="Interface color hex"
+                value={draft.accentColor ?? ''}
+                onBlur={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    accentColor: normalizeHexColor(current.accentColor) ?? current.accentColor,
+                  }))
+                }
+                onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
+              />
+            </div>
+            <div className="accent-swatch-row" aria-label="Accent color presets">
+              {accentColorPresets.map((color) => (
+                <button
+                  aria-label={`Use ${color} interface color`}
+                  className={`accent-swatch ${safeDraftAccentColor === color ? 'is-active' : ''}`}
+                  key={color}
+                  style={{ background: color }}
+                  title={color}
+                  type="button"
+                  onClick={() => setDraft((current) => ({ ...current, accentColor: color }))}
+                />
+              ))}
+            </div>
+            {!normalizedDraftAccentColor ? <small className="field-hint is-danger">Use #RRGGBB or #RGB.</small> : null}
+          </div>
+          <label className="field-row">
+            <span>Layout density</span>
+            <select
+              aria-label="Layout density"
+              value={draft.uiDensity}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  uiDensity: event.target.value === 'compact' ? 'compact' : 'comfortable',
+                }))
+              }
+            >
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Default sidebar</span>
+            <select
+              aria-label="Default sidebar"
+              value={draft.sidebarMode}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  sidebarMode: event.target.value === 'rail' ? 'rail' : 'expanded',
+                }))
+              }
+            >
+              <option value="expanded">Expanded navigation</option>
+              <option value="rail">Compact rail</option>
+            </select>
+          </label>
+        </div>
+        <label className="toggle-row">
+          <input
+            checked={draft.reduceMotion}
+            type="checkbox"
+            onChange={(event) => setDraft((current) => ({ ...current, reduceMotion: event.target.checked }))}
+          />
+          <span>
+            <strong>Reduce motion</strong>
+            <small>Minimize page transitions and decorative motion.</small>
+          </span>
+        </label>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Workspace Defaults</strong>
+          <span>Where this user lands and how often they receive summaries.</span>
+        </div>
+        <div className="settings-form-grid">
+          <label className="field-row">
+            <span>Preferred landing</span>
+            <select
+              aria-label="Preferred landing"
+              value={draft.preferredLanding}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
+              }
+            >
+              <option value="dashboard">North Star Console</option>
+              {domains.map((domain) => (
+                <option key={domain.key} value={domain.key}>
+                  {domain.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Email digest</span>
+            <select
+              aria-label="Email digest"
+              value={draft.emailDigest}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  emailDigest:
+                    event.target.value === 'off' || event.target.value === 'daily' ? event.target.value : 'weekly',
+                }))
+              }
+            >
+              <option value="off">Off</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </label>
+        </div>
+      </section>
 
       <div className="settings-save-row">
         <span className="mono-small">{status}</span>
-        <button className="primary-button" type="button" onClick={() => void saveSettings()} disabled={busy || !draft.displayName.trim()}>
+        <button
+          className="primary-button"
+          type="button"
+          onClick={() => void saveSettings()}
+          disabled={busy || !draft.displayName.trim() || !normalizedDraftAccentColor}
+        >
           {busy ? 'Saving...' : 'Save Settings'}
         </button>
       </div>

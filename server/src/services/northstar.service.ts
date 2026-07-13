@@ -1556,17 +1556,21 @@ export class NorthStarService {
         : current.displayName
     const preferredLanding = this.normalizePreferredLanding(patch.preferredLanding, current.preferredLanding)
     const uiDensity = patch.uiDensity === 'compact' ? 'compact' : patch.uiDensity === 'comfortable' ? 'comfortable' : current.uiDensity
+    const sidebarMode = patch.sidebarMode === 'rail' ? 'rail' : patch.sidebarMode === 'expanded' ? 'expanded' : current.sidebarMode
     const emailDigest =
       patch.emailDigest === 'off' || patch.emailDigest === 'daily' || patch.emailDigest === 'weekly'
         ? patch.emailDigest
         : current.emailDigest
+    const accentColor = this.normalizeAccentColor(patch.accentColor, current.accentColor)
     const updated: UserSettingsRecord = {
       ...current,
       displayName,
       preferredLanding,
       uiDensity,
+      sidebarMode,
       reduceMotion: typeof patch.reduceMotion === 'boolean' ? patch.reduceMotion : current.reduceMotion,
       emailDigest,
+      accentColor,
       updatedAt: new Date().toISOString(),
     }
     this.upsertUserSettings(updated)
@@ -3912,8 +3916,10 @@ export class NorthStarService {
       displayName: membership.name || membership.email,
       preferredLanding: membership.role === 'Lab Manager' ? 'labUsage' : 'dashboard',
       uiDensity: membership.role === 'Lab Manager' ? 'compact' : 'comfortable',
+      sidebarMode: membership.role === 'Lab Manager' ? 'rail' : 'expanded',
       reduceMotion: false,
       emailDigest: membership.role === 'Owner' ? 'weekly' : 'daily',
+      accentColor: membership.role === 'Lab Manager' ? '#37d6a0' : '#4d9bff',
       updatedAt,
     }
   }
@@ -3936,6 +3942,21 @@ export class NorthStarService {
     }
     if (typeof value === 'string' && domains.some((domain) => domain.key === value)) {
       return value as UserSettingsRecord['preferredLanding']
+    }
+    return fallback
+  }
+
+  private normalizeAccentColor(value: unknown, fallback: string) {
+    if (typeof value !== 'string') {
+      return fallback
+    }
+    const trimmed = value.trim()
+    if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) {
+      return trimmed.toLowerCase()
+    }
+    const shortMatch = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(trimmed)
+    if (shortMatch) {
+      return `#${shortMatch[1]}${shortMatch[1]}${shortMatch[2]}${shortMatch[2]}${shortMatch[3]}${shortMatch[3]}`.toLowerCase()
     }
     return fallback
   }

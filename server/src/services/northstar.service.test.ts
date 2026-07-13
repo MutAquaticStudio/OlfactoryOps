@@ -54,13 +54,17 @@ describe('NorthStarService', () => {
 
     expect(initial.displayName).toBe('Thuan Le Minh')
     expect(initial.organizationId).toBe('org-nxl')
+    expect(initial.sidebarMode).toBe('expanded')
+    expect(initial.accentColor).toBe('#4d9bff')
 
     const updated = service.updateUserSettings({
       displayName: 'Maison Owner',
       preferredLanding: 'inventory',
       uiDensity: 'compact',
+      sidebarMode: 'rail',
       reduceMotion: true,
       emailDigest: 'daily',
+      accentColor: '#F5B04C',
       organizationId: 'org-other',
     }).data
     const tenantSettings = service.customizationConsole().data.settings
@@ -69,8 +73,10 @@ describe('NorthStarService', () => {
     expect(updated.settings.displayName).toBe('Maison Owner')
     expect(updated.settings.preferredLanding).toBe('inventory')
     expect(updated.settings.uiDensity).toBe('compact')
+    expect(updated.settings.sidebarMode).toBe('rail')
     expect(updated.settings.reduceMotion).toBe(true)
     expect(updated.settings.emailDigest).toBe('daily')
+    expect(updated.settings.accentColor).toBe('#f5b04c')
     expect(updated.settings.organizationId).toBe('org-nxl')
     expect(updated.audit.action).toBe('user.settings.update')
     expect(updated.invariant).toContain('scoped to the authenticated user')
@@ -81,12 +87,16 @@ describe('NorthStarService', () => {
     const invalid = service.updateUserSettings({
       preferredLanding: 'tenant-escape',
       uiDensity: 'spacious',
+      sidebarMode: 'floating',
       emailDigest: 'hourly',
+      accentColor: 'url(javascript:alert(1))',
     }).data.settings
 
     expect(invalid.preferredLanding).toBe('inventory')
     expect(invalid.uiDensity).toBe('compact')
+    expect(invalid.sidebarMode).toBe('rail')
     expect(invalid.emailDigest).toBe('daily')
+    expect(invalid.accentColor).toBe('#f5b04c')
   })
 
   it('commits lab usage through OUT movements and reverses by compensation', () => {
