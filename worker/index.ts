@@ -1,6 +1,6 @@
 import { NorthStarService } from '../server/src/services/northstar.service.js'
 import { TooManyRequestsException } from '../server/src/shared/http-error.js'
-import type { AuditEvent, AuthSession, InventoryLot, InventoryMovement, LabUsageRecord } from '../src/data/northStar.js'
+import type { AuditEvent, AuthSession, DocumentRecord, InventoryLot, InventoryMovement, LabUsageRecord } from '../src/data/northStar.js'
 
 type Env = {
   DB: D1Database
@@ -80,6 +80,7 @@ type SnapshotKey =
 type ServiceState = Record<SnapshotKey, unknown> & {
   sessions: AuthSession[]
   auditEvents: AuditEvent[]
+  documentRecords: DocumentRecord[]
   lots: InventoryLot[]
   movements: InventoryMovement[]
   usageHistory: LabUsageRecord[]
@@ -88,7 +89,15 @@ type ServiceState = Record<SnapshotKey, unknown> & {
 
 const API_PREFIX = '/api/v1'
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
-const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>(['sessions', 'auditEvents', 'auditCounter', 'lots', 'movements', 'usageHistory'])
+const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
+  'sessions',
+  'auditEvents',
+  'auditCounter',
+  'documentRecords',
+  'lots',
+  'movements',
+  'usageHistory',
+])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
   'moleculeRecords',
@@ -134,7 +143,7 @@ const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KE
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
+  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: ['auth_sessions', 'audit_events', 'security_rate_limits', 'document_records', 'inventory_lots', 'inventory_movements', 'lab_usage_records'] } }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -514,6 +523,7 @@ async function ensurePersistenceTables(db: D1Database) {
   await ensureRateLimitTable(db)
   await ensureAuthSessionTable(db)
   await ensureAuditEventTable(db)
+  await ensureDocumentRecordTable(db)
   await ensureInventoryLotTable(db)
   await ensureInventoryMovementTable(db)
   await ensureLabUsageRecordTable(db)
@@ -593,6 +603,36 @@ async function ensureAuditEventTable(db: D1Database) {
     .run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at)').run()
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)').run()
+}
+
+async function ensureDocumentRecordTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS document_records (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        linked_to TEXT NOT NULL,
+        version TEXT NOT NULL,
+        sensitivity TEXT NOT NULL,
+        status TEXT NOT NULL,
+        issue_date TEXT,
+        expires_at TEXT,
+        last_accessed TEXT NOT NULL,
+        downloads INTEGER NOT NULL,
+        storage_key TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size_kb REAL NOT NULL,
+        checksum TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        generated_from TEXT,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_linked_type ON document_records(linked_to, type)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_status ON document_records(status)').run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_expiry ON document_records(expires_at)').run()
 }
 
 async function ensureInventoryLotTable(db: D1Database) {
@@ -741,6 +781,26 @@ type AuditEventRow = {
   outcome: string
 }
 
+type DocumentRecordRow = {
+  id: string
+  type: string
+  title: string
+  linked_to: string
+  version: string
+  sensitivity: string
+  status: string
+  issue_date: string | null
+  expires_at: string | null
+  last_accessed: string
+  downloads: number
+  storage_key: string
+  mime_type: string
+  size_kb: number
+  checksum: string
+  owner: string
+  generated_from: string | null
+}
+
 type InventoryLotRow = {
   id: string
   material_id: string
@@ -825,6 +885,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   }
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+  await hydrateDocumentState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
 }
@@ -832,6 +893,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
@@ -921,6 +983,81 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
              updated_at = excluded.updated_at`,
         )
         .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
+    ),
+  )
+}
+
+async function hydrateDocumentState(db: D1Database, serviceState: ServiceState) {
+  const documentRows = await db
+    .prepare(
+      `SELECT id, type, title, linked_to, version, sensitivity, status, issue_date, expires_at,
+        last_accessed, downloads, storage_key, mime_type, size_kb, checksum, owner, generated_from
+       FROM document_records
+       ORDER BY last_accessed DESC, id DESC`,
+    )
+    .all<DocumentRecordRow>()
+  const documentRecords = (documentRows.results ?? []).map(documentFromRow)
+  if (documentRecords.length > 0) {
+    serviceState.documentRecords = documentRecords
+  } else if (Array.isArray(serviceState.documentRecords) && serviceState.documentRecords.length > 0) {
+    await persistDocumentRecords(db, serviceState.documentRecords, new Date().toISOString())
+  }
+}
+
+async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[], updatedAt: string) {
+  if (!Array.isArray(documents) || documents.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    documents.map((document) =>
+      db
+        .prepare(
+          `INSERT INTO document_records (
+            id, type, title, linked_to, version, sensitivity, status, issue_date, expires_at,
+            last_accessed, downloads, storage_key, mime_type, size_kb, checksum, owner,
+            generated_from, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+          ON CONFLICT(id) DO UPDATE SET
+            type = excluded.type,
+            title = excluded.title,
+            linked_to = excluded.linked_to,
+            version = excluded.version,
+            sensitivity = excluded.sensitivity,
+            status = excluded.status,
+            issue_date = excluded.issue_date,
+            expires_at = excluded.expires_at,
+            last_accessed = excluded.last_accessed,
+            downloads = excluded.downloads,
+            storage_key = excluded.storage_key,
+            mime_type = excluded.mime_type,
+            size_kb = excluded.size_kb,
+            checksum = excluded.checksum,
+            owner = excluded.owner,
+            generated_from = excluded.generated_from,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          document.id,
+          document.type,
+          document.title,
+          document.linkedTo,
+          document.version,
+          document.sensitivity,
+          document.status,
+          document.issueDate ?? null,
+          document.expiresAt ?? null,
+          document.lastAccessed,
+          document.downloads,
+          document.storageKey,
+          document.mimeType,
+          document.sizeKb,
+          document.checksum,
+          document.owner,
+          document.generatedFrom ?? null,
+          updatedAt,
+        ),
     ),
   )
 }
@@ -1167,6 +1304,28 @@ function auditEventFromRow(row: AuditEventRow): AuditEvent {
   }
 }
 
+function documentFromRow(row: DocumentRecordRow): DocumentRecord {
+  return {
+    id: row.id,
+    type: readDocumentType(row.type),
+    title: row.title,
+    linkedTo: row.linked_to,
+    version: row.version,
+    sensitivity: readDocumentSensitivity(row.sensitivity),
+    status: readDocumentStatus(row.status),
+    issueDate: row.issue_date ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
+    lastAccessed: row.last_accessed,
+    downloads: Number(row.downloads),
+    storageKey: row.storage_key,
+    mimeType: row.mime_type,
+    sizeKb: Number(row.size_kb),
+    checksum: row.checksum,
+    owner: row.owner,
+    generatedFrom: row.generated_from ?? undefined,
+  }
+}
+
 function inventoryLotFromRow(row: InventoryLotRow): InventoryLot {
   return {
     id: row.id,
@@ -1244,6 +1403,38 @@ function readAuditOutcome(value: string): AuditEvent['outcome'] {
     return value
   }
   return 'review'
+}
+
+function readDocumentType(value: string): DocumentRecord['type'] {
+  if (
+    value === 'SDS' ||
+    value === 'CoA' ||
+    value === 'IFRA' ||
+    value === 'Invoice' ||
+    value === 'Formula Export' ||
+    value === 'Batch Record' ||
+    value === 'Allergen Declaration' ||
+    value === 'GHS Label' ||
+    value === 'Formula Spec Sheet' ||
+    value === 'Finished Product SDS'
+  ) {
+    return value
+  }
+  return 'SDS'
+}
+
+function readDocumentSensitivity(value: string): DocumentRecord['sensitivity'] {
+  if (value === 'Internal' || value === 'Confidential' || value === 'Highly Confidential') {
+    return value
+  }
+  return 'Confidential'
+}
+
+function readDocumentStatus(value: string): DocumentRecord['status'] {
+  if (value === 'APPROVED' || value === 'REVIEW_REQUIRED' || value === 'EXPIRING' || value === 'EXPIRED' || value === 'SHARED') {
+    return value
+  }
+  return 'REVIEW_REQUIRED'
 }
 
 function readLotQualityStatus(value: string): InventoryLot['qualityStatus'] {

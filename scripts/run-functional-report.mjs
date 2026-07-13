@@ -39,7 +39,7 @@ const testCases = [
     ],
     assertions: [
       '/health returns 200 and service identity.',
-      'Persistence status reports hybrid D1 with normalized auth/audit tables.',
+      'Persistence status reports hybrid D1 with normalized auth, audit, document, inventory, and lab usage tables.',
       'Tenant console returns 401 without a session.',
       'API keys return 401 without a session.',
     ],
@@ -51,7 +51,14 @@ const testCases = [
       const persistence = await apiFetch('/persistence/status', {}, { useCookie: false })
       assertStatus(persistence, 200, 'persistence status should be public')
       assert(persistence.json?.data?.adapter === 'cloudflare-d1-hybrid', 'persistence adapter should be hybrid D1')
-      const requiredTables = ['auth_sessions', 'audit_events', 'inventory_lots', 'inventory_movements', 'lab_usage_records']
+      const requiredTables = [
+        'auth_sessions',
+        'audit_events',
+        'document_records',
+        'inventory_lots',
+        'inventory_movements',
+        'lab_usage_records',
+      ]
       assert(
         requiredTables.every((table) => persistence.json.data.normalizedTables.includes(table)),
         'persistence status should report normalized auth, audit, inventory, and lab usage tables',
