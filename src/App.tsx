@@ -360,6 +360,7 @@ type DocumentShareResponse = {
 
 type LoginResponse = {
   session: AuthSession
+  csrfToken: string
   revokedForLimit: AuthSession[]
   newDeviceAlert: boolean
   securityPolicy: TenantSecurityPolicy
@@ -371,12 +372,14 @@ type SignupResponse = {
   brand: BrandRecord
   membership: MembershipRecord
   session: AuthSession
+  csrfToken: string
   audit: AuditEvent
   invariant: string
 }
 
 type MeResponse = {
   session: AuthSession
+  csrfToken: string
   permissions: string[]
   securityPolicy: TenantSecurityPolicy
 }
@@ -833,9 +836,13 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/a
 const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
 const authExpiredEvent = 'olfactoryops.auth.expired'
+let csrfToken: string | null = null
 
 async function requestApi<T>(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
+  if (csrfToken && isMutatingRequest(init)) {
+    headers.set('X-CSRF-Token', csrfToken)
+  }
   const response = await fetch(`${apiBaseUrl}${path}`, { ...init, credentials: 'include', headers })
   if (response.status === 401) {
     writeStoredAuthSession(null)
@@ -857,6 +864,11 @@ async function requestApi<T>(path: string, init?: RequestInit) {
   return payload.data
 }
 
+function isMutatingRequest(init?: RequestInit) {
+  const method = init?.method?.toUpperCase() ?? 'GET'
+  return method !== 'GET' && method !== 'HEAD'
+}
+
 function readStoredAuthSession() {
   window.localStorage.removeItem(authStorageKey)
   return null
@@ -869,10 +881,15 @@ function hasStoredAuthMarker() {
 function writeStoredAuthSession(session: AuthSession | null) {
   window.localStorage.removeItem(authStorageKey)
   if (!session) {
+    csrfToken = null
     window.localStorage.removeItem(authSessionMarkerKey)
     return
   }
   window.localStorage.setItem(authSessionMarkerKey, '1')
+}
+
+function acceptCsrfToken(token?: string) {
+  csrfToken = token?.trim() || null
 }
 
 function tenantDisplayForSession(session: AuthSession) {
@@ -1097,10 +1114,12 @@ function App() {
       try {
         const payload = await requestApi<MeResponse>('/me')
         if (active) {
+          acceptCsrfToken(payload.csrfToken)
           setCurrentSession(payload.session)
         }
       } catch {
         if (active) {
+          acceptCsrfToken()
           setCurrentSession(null)
         }
       }
@@ -1377,7 +1396,8 @@ function App() {
     }
   }
 
-  function acceptAuthSession(session: AuthSession) {
+  function acceptAuthSession(session: AuthSession, token: string) {
+    acceptCsrfToken(token)
     setCurrentSession(session)
     writeStoredAuthSession(session)
     setActiveKey('dashboard')
@@ -1389,7 +1409,7 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     })
-    acceptAuthSession(payload.session)
+    acceptAuthSession(payload.session, payload.csrfToken)
     return payload
   }
 
@@ -1404,7 +1424,7 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    acceptAuthSession(payload.session)
+    acceptAuthSession(payload.session, payload.csrfToken)
     return payload
   }
 
@@ -1415,6 +1435,7 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
+      acceptCsrfToken()
       writeStoredAuthSession(null)
       setCommandOpen(false)
       setModal(null)

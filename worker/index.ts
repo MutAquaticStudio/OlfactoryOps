@@ -1,4 +1,5 @@
 import { NorthStarService } from '../server/src/services/northstar.service.js'
+import { TooManyRequestsException } from '../server/src/shared/http-error.js'
 
 type Env = {
   DB: D1Database
@@ -18,9 +19,21 @@ type Route = {
   public?: boolean
   sessionCookie?: 'set' | 'clear'
   mutates?: boolean
+  rateLimit?: RateLimitPolicy
   limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
   writeGate?: boolean
   handler: (context: RouteContext) => unknown
+}
+
+type AuthCredential = {
+  sessionId?: string
+  source: 'cookie' | 'bearer' | 'none'
+}
+
+type RateLimitPolicy = {
+  key: 'auth-login' | 'auth-signup'
+  limit: number
+  windowSeconds: number
 }
 
 type SnapshotKey =
@@ -148,8 +161,8 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/inventory/receipts', mutates: true, limitKey: 'lots', handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
   { method: 'POST', pattern: '/inventory/adjustments', mutates: true, handler: ({ service, body }) => service.adjustInventory(body) },
   { method: 'POST', pattern: '/inventory/transfers', mutates: true, handler: ({ service, body }) => service.transferInventory(body) },
-  { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
-  { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, handler: ({ service, body }) => service.signup(body) },
+  { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-login', limit: 8, windowSeconds: 10 * 60 }, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
+  { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', limit: 4, windowSeconds: 60 * 60 }, handler: ({ service, body }) => service.signup(body) },
   { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
@@ -269,13 +282,21 @@ export default {
         return json({ message: `Route ${request.method} ${path} was not found` }, 404, corsHeaders)
       }
 
-      await ensureSnapshotTable(env.DB)
+      await ensurePersistenceTables(env.DB)
       const service = new NorthStarService()
       await hydrateSnapshots(env.DB, service)
-      if (!match.route.public) {
-        service.authenticateSession(readSessionId(request.headers))
-      }
       const body = await readJsonBody(request)
+      if (match.route.rateLimit) {
+        await assertRateLimit(env.DB, match.route.rateLimit, request, body)
+      }
+      let credential: AuthCredential = { source: 'none' }
+      if (!match.route.public) {
+        credential = readSessionCredential(request.headers)
+        service.authenticateSession(credential.sessionId)
+      }
+      if (match.route.mutates && !match.route.public && credential.source === 'cookie') {
+        service.assertValidCsrfToken(request.headers.get('X-CSRF-Token'))
+      }
       if (match.route.mutates && match.route.writeGate !== false) {
         service.assertCommercialWriteAllowed(`${request.method} ${match.route.pattern}`)
       }
@@ -284,7 +305,7 @@ export default {
       }
       const result = await match.route.handler({ service, params: match.params, query: url.searchParams, body })
 
-      if (match.route.mutates) {
+      if (match.route.mutates || service.hasSecurityStateChanges()) {
         await persistSnapshots(env.DB, service)
       }
 
@@ -364,6 +385,60 @@ function readNumber(value: unknown, fallback: number) {
   return Number.isFinite(next) ? next : fallback
 }
 
+async function assertRateLimit(
+  db: D1Database,
+  policy: RateLimitPolicy,
+  request: Request,
+  body: Record<string, unknown>,
+) {
+  const now = new Date()
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : 'unknown'
+  const clientKey = `${policy.key}:${readClientAddress(request.headers)}:${email}`
+  const row = await db
+    .prepare('SELECT count, window_start, expires_at FROM security_rate_limits WHERE key = ?1')
+    .bind(clientKey)
+    .first<{ count: number; window_start: string; expires_at: string }>()
+
+  const expiresAt = row ? new Date(row.expires_at) : null
+  if (!row || !expiresAt || expiresAt.getTime() <= now.getTime()) {
+    const nextExpiresAt = new Date(now.getTime() + policy.windowSeconds * 1000).toISOString()
+    await db
+      .prepare(
+        `INSERT INTO security_rate_limits (key, count, window_start, expires_at, updated_at)
+         VALUES (?1, 1, ?2, ?3, ?2)
+         ON CONFLICT(key) DO UPDATE SET count = 1, window_start = excluded.window_start, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+      )
+      .bind(clientKey, now.toISOString(), nextExpiresAt)
+      .run()
+    await db.prepare('DELETE FROM security_rate_limits WHERE expires_at <= ?1').bind(now.toISOString()).run()
+    return
+  }
+
+  if (row.count >= policy.limit) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 1000))
+    throw new TooManyRequestsException({
+      message: 'Authentication rate limit exceeded',
+      limitKey: policy.key,
+      limit: policy.limit,
+      windowSeconds: policy.windowSeconds,
+      retryAfterSeconds,
+    })
+  }
+
+  await db
+    .prepare('UPDATE security_rate_limits SET count = count + 1, updated_at = ?2 WHERE key = ?1')
+    .bind(clientKey, now.toISOString())
+    .run()
+}
+
+function readClientAddress(headers: Headers) {
+  const cfIp = headers.get('CF-Connecting-IP')?.trim()
+  if (cfIp) {
+    return cfIp
+  }
+  return headers.get('X-Forwarded-For')?.split(',')[0]?.trim() || 'unknown'
+}
+
 function readProductionStatus(value: unknown) {
   if (
     value === 'PLANNED' ||
@@ -395,8 +470,16 @@ function readBearerSessionId(authorization: string | null) {
   return token
 }
 
-function readSessionId(headers: Headers) {
-  return readCookie(headers.get('Cookie'), 'oo_session') ?? readBearerSessionId(headers.get('Authorization'))
+function readSessionCredential(headers: Headers): AuthCredential {
+  const cookieSessionId = readCookie(headers.get('Cookie'), 'oo_session')
+  if (cookieSessionId) {
+    return { sessionId: cookieSessionId, source: 'cookie' }
+  }
+  const bearerSessionId = readBearerSessionId(headers.get('Authorization'))
+  if (bearerSessionId) {
+    return { sessionId: bearerSessionId, source: 'bearer' }
+  }
+  return { source: 'none' }
 }
 
 function readCookie(cookieHeader: string | null, name: string) {
@@ -410,12 +493,31 @@ function readCookie(cookieHeader: string | null, name: string) {
   return undefined
 }
 
+async function ensurePersistenceTables(db: D1Database) {
+  await ensureSnapshotTable(db)
+  await ensureRateLimitTable(db)
+}
+
 async function ensureSnapshotTable(db: D1Database) {
   await db
     .prepare(
       `CREATE TABLE IF NOT EXISTS northstar_snapshots (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+    )
+    .run()
+}
+
+async function ensureRateLimitTable(db: D1Database) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS security_rate_limits (
+        key TEXT PRIMARY KEY,
+        count INTEGER NOT NULL,
+        window_start TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )`,
     )
@@ -458,7 +560,7 @@ function buildCorsHeaders(origin: string | null, configuredOrigins: string | und
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-CSRF-Token',
     'Access-Control-Allow-Credentials': 'true',
     Vary: 'Origin',
   }

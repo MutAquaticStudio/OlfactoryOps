@@ -392,6 +392,7 @@ export interface AuthSession {
   userAgent: string
   deviceId: string
   location: string
+  csrfToken?: string
   revokedAt?: string
   revokedReason?: string
 }

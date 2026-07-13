@@ -343,6 +343,7 @@ export class NorthStarService {
   private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditCounter = auditEvents.length
   private activeSessionId: string | null = null
+  private securityStateDirty = false
 
   phases() {
     return { data: phases }
@@ -1408,6 +1409,7 @@ export class NorthStarService {
       userAgent: 'API Client',
       deviceId,
       location: 'Bangkok, TH',
+      csrfToken: this.createCsrfToken(),
     }
     this.sessions = [session, ...this.sessions]
     this.activeSessionId = session.id
@@ -1422,8 +1424,9 @@ export class NorthStarService {
         : null
     return {
       data: {
-        session,
-        revokedForLimit,
+        session: this.exposeSession(session),
+        csrfToken: this.requireSessionCsrfToken(session),
+        revokedForLimit: this.exposeSessions(revokedForLimit),
         newDeviceAlert: Boolean(newDeviceAudit),
         securityPolicy: tenantSecurityPolicy,
         invariant: 'login creates bounded idle and absolute session windows',
@@ -1445,7 +1448,8 @@ export class NorthStarService {
     }
 
     this.activeSessionId = session.id
-    return session
+    this.ensureSessionCsrfToken(session.id)
+    return this.currentSession()
   }
 
   signup(body: SignupBody = {}) {
@@ -1500,7 +1504,8 @@ export class NorthStarService {
     this.organizationRecords = [organization, ...this.organizationRecords]
     this.brandRecords = [brand, ...this.brandRecords]
     this.membershipRecords = [membership, ...this.membershipRecords]
-    const session = this.login(email).data.session
+    const loginResult = this.login(email).data
+    const session = loginResult.session
     const audit = this.recordAudit('auth.signup', organization.id, session.userId, 'allowed')
 
     return {
@@ -1509,6 +1514,7 @@ export class NorthStarService {
         brand,
         membership,
         session,
+        csrfToken: loginResult.csrfToken,
         audit,
         invariant: 'signup provisions an isolated tenant and owner session before app access',
       },
@@ -1517,13 +1523,29 @@ export class NorthStarService {
 
   me() {
     const session = this.currentSession()
+    const csrfToken = this.requireSessionCsrfToken(session)
     return {
       data: {
-        session,
+        session: this.exposeSession(session),
+        csrfToken,
         permissions: this.permissionsForRole(session.role),
         securityPolicy: tenantSecurityPolicy,
       },
     }
+  }
+
+  assertValidCsrfToken(token: string | null | undefined) {
+    const session = this.currentSession()
+    const expected = this.requireSessionCsrfToken(session)
+    if (!token || token !== expected) {
+      this.recordAudit('auth.csrf', session.userId, 'api:auth', 'blocked')
+      throw new ForbiddenException('CSRF token is required for cookie-authenticated writes')
+    }
+    return { data: { invariant: 'cookie-authenticated writes require a session-bound CSRF token' } }
+  }
+
+  hasSecurityStateChanges() {
+    return this.securityStateDirty
   }
 
   auditLogs() {
@@ -1546,7 +1568,7 @@ export class NorthStarService {
         organization,
         brands: this.brandRecords.filter((item) => item.organizationId === session.organizationId),
         memberships: this.membershipRecords.filter((item) => item.organizationId === session.organizationId),
-        sessions: this.sessions.filter((item) => item.organizationId === session.organizationId),
+        sessions: this.exposeSessions(this.sessions.filter((item) => item.organizationId === session.organizationId)),
         rolePolicies: this.organizationRolePolicies(),
         permissionCatalog: this.organizationPermissionCatalog(),
         permissionMatrix: this.buildPermissionMatrix(this.organizationRolePolicies()),
@@ -1659,7 +1681,7 @@ export class NorthStarService {
     return {
       data: {
         membership: updatedMembership,
-        revokedSessions,
+        revokedSessions: this.exposeSessions(revokedSessions),
         audit,
         invariant: 'deactivated memberships revoke active sessions inside the same tenant',
       },
@@ -1678,7 +1700,7 @@ export class NorthStarService {
 
     return {
       data: {
-        session: revoked,
+        session: this.exposeSession(revoked),
         audit,
         invariant: 'session revocation is tenant-scoped and audited',
       },
@@ -1711,7 +1733,7 @@ export class NorthStarService {
     const audit = this.recordAudit('session.revokeAll', email, session.userId, 'allowed')
     return {
       data: {
-        revokedSessions,
+        revokedSessions: this.exposeSessions(revokedSessions),
         audit,
         invariant: 'revoke-all is tenant-scoped and can keep the current admin session active',
       },
@@ -1741,7 +1763,7 @@ export class NorthStarService {
     const audit = this.recordAudit('session.touch', target.userId, session.userId, 'allowed')
     return {
       data: {
-        session: touched,
+        session: this.exposeSession(touched),
         audit,
         invariant: 'session activity only extends idle timeout, never absolute expiry',
       },
@@ -1754,7 +1776,7 @@ export class NorthStarService {
     const audit = this.recordAudit('auth.logout', session.userId, 'api:auth', 'allowed')
     return {
       data: {
-        session: revoked,
+        session: this.exposeSession(revoked),
         audit,
         invariant: 'logout revokes the current active session',
       },
@@ -3885,10 +3907,51 @@ export class NorthStarService {
       throw new UnauthorizedException('Authentication required')
     }
     const activeSession = this.sessions.find((item) => item.id === this.activeSessionId && item.status === 'ACTIVE')
-    if (activeSession) {
-      return activeSession
+    if (!activeSession) {
+      throw new UnauthorizedException('Invalid or expired session')
     }
-    throw new UnauthorizedException('Invalid or expired session')
+    this.ensureSessionCsrfToken(activeSession.id)
+    const securedSession = this.sessions.find((item) => item.id === activeSession.id && item.status === 'ACTIVE')
+    if (!securedSession) {
+      throw new UnauthorizedException('Invalid or expired session')
+    }
+    return securedSession
+  }
+
+  private exposeSession(session: AuthSession) {
+    const { csrfToken: _csrfToken, ...safeSession } = session
+    return safeSession
+  }
+
+  private exposeSessions(sessions: AuthSession[]) {
+    return sessions.map((session) => this.exposeSession(session))
+  }
+
+  private requireSessionCsrfToken(session: AuthSession) {
+    const csrfToken = this.ensureSessionCsrfToken(session.id)
+    if (!csrfToken) {
+      throw new UnauthorizedException('Session security token is unavailable')
+    }
+    return csrfToken
+  }
+
+  private ensureSessionCsrfToken(sessionId: string) {
+    const session = this.sessions.find((item) => item.id === sessionId)
+    if (!session) {
+      return undefined
+    }
+    if (session.csrfToken) {
+      return session.csrfToken
+    }
+    const csrfToken = this.createCsrfToken()
+    this.sessions = this.sessions.map((item) => (item.id === sessionId ? { ...item, csrfToken } : item))
+    this.securityStateDirty = true
+    return csrfToken
+  }
+
+  private createCsrfToken() {
+    const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    return `csrf_${randomId.replace(/[^a-zA-Z0-9-]/g, '')}`
   }
 
   private requirePermission(role: string, permission: string) {

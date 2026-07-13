@@ -20,6 +20,7 @@ const runStamp = stampForFile(runStartedAt)
 const evidenceRoot = path.join(reportRoot, 'evidence', runStamp)
 const cookieJar = new Map()
 const results = []
+let csrfToken = null
 
 await mkdir(evidenceRoot, { recursive: true })
 
@@ -99,10 +100,13 @@ const testCases = [
       assert(session?.email === loginEmail, 'login session should match requested email')
       assert(session?.organizationId === 'org-nxl', 'owner demo should be scoped to org-nxl')
       assert(session?.role === 'Owner', 'owner demo should have Owner role')
+      csrfToken = login.json?.data?.csrfToken ?? null
+      assert(csrfToken && csrfToken.startsWith('csrf_'), 'login should return a session-bound CSRF token')
 
       const meByCookie = await apiFetch('/me')
       assertStatus(meByCookie, 200, '/me should accept cookie auth')
       assert(meByCookie.json?.data?.session?.id === sessionId, '/me should resolve the same cookie session')
+      assert(meByCookie.json?.data?.csrfToken === csrfToken, '/me should return the same CSRF token for the session')
 
       const meByBearer = await apiFetch('/me', { headers: { Authorization: `Bearer ${sessionId}` } }, { useCookie: false })
       assertStatus(meByBearer, 200, '/me should keep bearer fallback for test tooling')
@@ -222,11 +226,15 @@ const testCases = [
       'Inspect the returned signed URL metadata.',
     ],
     assertions: [
+      'Cookie-authenticated mutation without CSRF returns 403.',
       'Response returns document, signedUrl, and audit data.',
       'Signed URL includes expires and nonce query parameters.',
       'Audit outcome is allowed.',
     ],
     execute: async () => {
+      const missingCsrf = await apiFetch(`/documents/${documentId}/signed-url`, { method: 'POST' }, { useCsrf: false })
+      assertStatus(missingCsrf, 403, 'signed document URL without CSRF should be blocked')
+
       const signed = await apiFetch(`/documents/${documentId}/signed-url`, { method: 'POST' })
       assertStatus(signed, 200, 'signed document URL should be created for owner')
       const data = signed.json?.data
@@ -237,6 +245,7 @@ const testCases = [
       assert(data?.audit?.outcome === 'allowed', 'signed URL audit should be allowed')
 
       return [
+        `Missing CSRF status: ${missingCsrf.status}`,
         `Document: ${data.document.id}`,
         `Signed URL expires: ${data.signedUrl.expiresAt}`,
         `Audit: ${data.audit.outcome}`,
@@ -468,6 +477,9 @@ async function runUiFunctionalCase() {
 async function apiFetch(pathname, init = {}, options = {}) {
   const headers = new Headers(init.headers ?? {})
   headers.set('Origin', appUrl)
+  if (csrfToken && options.useCsrf !== false && isMutatingRequest(init)) {
+    headers.set('X-CSRF-Token', csrfToken)
+  }
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
@@ -499,6 +511,11 @@ async function apiFetch(pathname, init = {}, options = {}) {
     json,
     text,
   }
+}
+
+function isMutatingRequest(init = {}) {
+  const method = init.method?.toUpperCase() ?? 'GET'
+  return method !== 'GET' && method !== 'HEAD'
 }
 
 function captureCookies(headers) {

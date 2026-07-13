@@ -28,6 +28,26 @@ describe('NorthStarService', () => {
     expect(() => service.authenticateSession(undefined)).toThrow(UnauthorizedException)
   })
 
+  it('issues session-bound CSRF tokens without exposing them through session lists', () => {
+    const service = new NorthStarService()
+    const login = service.login('owner@example.test').data
+
+    expect(login.csrfToken).toMatch(/^csrf_/)
+    expect(login.session).not.toHaveProperty('csrfToken')
+    expect(login.revokedForLimit.every((session) => !('csrfToken' in session))).toBe(true)
+
+    const me = service.me().data
+    expect(me.csrfToken).toBe(login.csrfToken)
+    expect(me.session).not.toHaveProperty('csrfToken')
+
+    expect(() => service.assertValidCsrfToken('wrong-token')).toThrow(ForbiddenException)
+    expect(() => service.assertValidCsrfToken(login.csrfToken)).not.toThrow()
+
+    const tenantConsole = service.tenantConsole().data
+    expect(tenantConsole.sessions.length).toBeGreaterThan(0)
+    expect(tenantConsole.sessions.every((session) => !('csrfToken' in session))).toBe(true)
+  })
+
   it('commits lab usage through OUT movements and reverses by compensation', () => {
     const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-0421', 12.5).data
