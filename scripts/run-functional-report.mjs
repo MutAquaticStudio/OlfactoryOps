@@ -220,7 +220,7 @@ const testCases = [
     module: 'Core Read Models',
     priority: 'P1',
     title: 'Primary SaaS modules return authenticated read models',
-    objective: 'Verify the main North Star modules still hydrate from the production Worker and D1 snapshot.',
+    objective: 'Verify the main OlfactoryOps modules still hydrate from the production Worker and D1 snapshot.',
     steps: [
       'Call GET /materials.',
       'Call GET /formulas.',

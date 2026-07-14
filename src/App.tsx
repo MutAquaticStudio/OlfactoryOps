@@ -2058,7 +2058,7 @@ function Sidebar({
         {!collapsed && (
           <div>
             <div className="wordmark">OlfactoryOps</div>
-            <div className="mono-small">North Star OS</div>
+            <div className="mono-small">OlfactoryOps OS</div>
           </div>
         )}
         <button className="icon-button sidebar-toggle" type="button" onClick={onToggle} aria-label="Toggle sidebar">
@@ -2073,7 +2073,7 @@ function Sidebar({
             {group.keys.map((key) => {
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? 'North Star Console' : domain?.shortName ?? key
+              const label = key === 'dashboard' ? 'OlfactoryOps Console' : domain?.shortName ?? key
               const isActive = activeKey === key
               return (
                 <button
@@ -2132,7 +2132,7 @@ function Topbar({
       </button>
       <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
-        <h1>{activeDomain ? activeDomain.name : 'North Star Console'}</h1>
+        <h1>{activeDomain ? activeDomain.name : 'OlfactoryOps Console'}</h1>
       </div>
       <button className="command-button" type="button" onClick={onCommand}>
         <Search size={17} />
@@ -2347,7 +2347,7 @@ function UserSettingsForm({
                 setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
               }
             >
-              <option value="dashboard">North Star Console</option>
+              <option value="dashboard">OlfactoryOps Console</option>
               {domains.map((domain) => (
                 <option key={domain.key} value={domain.key}>
                   {domain.name}
@@ -2646,7 +2646,7 @@ function AuthGateway({
               </div>
               <div>
                 <div className="wordmark">OlfactoryOps</div>
-                <div className="mono-small">North Star OS</div>
+                <div className="mono-small">OlfactoryOps OS</div>
               </div>
             </div>
             <h1>{mode === 'login' ? 'Login to your lab tenant' : 'Create a tenant workspace'}</h1>
@@ -2739,7 +2739,7 @@ function Dashboard({
 }) {
   return (
     <div className="dashboard-grid">
-      <Panel className="hero-panel" title="North Star Console" icon={Gauge} right={<StatusBadge status="active" />}>
+      <Panel className="hero-panel" title="OlfactoryOps Console" icon={Gauge} right={<StatusBadge status="active" />}>
         <div className="hero-content">
           <div>
             <p className="lead">
@@ -6494,11 +6494,11 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
   const [customerDraft, setCustomerDraft] = useState({
-    name: 'North Star Studio',
+    name: 'OlfactoryOps Studio',
     group: 'Studio' as CustomerRecord['group'],
     creditLimit: 300,
     paymentTerms: 'NET_15' as CustomerRecord['paymentTerms'],
-    contactEmail: 'orders@north-star-studio.example',
+    contactEmail: 'orders@olfactoryops-studio.example',
     city: 'Los Angeles',
     country: 'US',
   })
@@ -9114,7 +9114,7 @@ function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const commands = useMemo(
     () => [
-      { label: 'Open North Star Console', detail: 'Dashboard', action: () => onNavigate('dashboard') },
+      { label: 'Open OlfactoryOps Console', detail: 'Dashboard', action: () => onNavigate('dashboard') },
       ...domains.map((domain) => ({
         label: `Open ${domain.name}`,
         detail: `Phase ${domain.phase}`,

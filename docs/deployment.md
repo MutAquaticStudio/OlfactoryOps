@@ -7,7 +7,7 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Persistent commercial state: Cloudflare D1.
 - Future document binaries: Cloudflare R2.
 
-The Worker reuses the existing North Star domain service and stores Formula-specific R&D state in the D1-backed `northstar_snapshots` table until the Formula module redesign is guided. The commercial hardening pass has moved tenant, auth, audit, material master, inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state into normalized D1 tables so sell-ready operations can be queried and persisted independently.
+The Worker reuses the existing OlfactoryOps domain service and stores Formula-specific R&D state in the D1-backed `northstar_snapshots` table until the Formula module redesign is guided. The commercial hardening pass has moved tenant, auth, audit, material master, inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state into normalized D1 tables so sell-ready operations can be queried and persisted independently.
 
 ## 1. Create D1
 

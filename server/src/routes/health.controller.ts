@@ -7,7 +7,7 @@ export class HealthController {
     return {
       ok: true,
       service: 'olfactoryops-api',
-      version: '0.1.0-north-star',
+      version: '0.1.0-olfactoryops',
       timestamp: new Date().toISOString(),
     }
   }
@@ -15,7 +15,7 @@ export class HealthController {
   @Get('version')
   version() {
     return {
-      name: 'OlfactoryOps North Star API',
+      name: 'OlfactoryOps API',
       stack: ['NestJS', 'Fastify', 'TypeScript'],
       api: '/api/v1',
     }

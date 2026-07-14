@@ -1991,7 +1991,7 @@ export const memberships: MembershipRecord[] = [
 ]
 
 export const permissionCatalog: PermissionDefinition[] = [
-  { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the tenant-scoped North Star console.' },
+  { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the tenant-scoped OlfactoryOps console.' },
   { key: 'audit.view', label: 'View audit trail', category: 'Audit', scope: 'organization', risk: 'medium', description: 'Read tenant audit events and security evidence.' },
   { key: 'audit.export', label: 'Export audit evidence', category: 'Audit', scope: 'organization', risk: 'high', description: 'Export regulated tenant audit data.' },
   { key: 'security.manageUsers', label: 'Manage members', category: 'Security', scope: 'organization', risk: 'critical', description: 'Invite, activate, deactivate, and assign tenant roles.' },

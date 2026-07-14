@@ -13,7 +13,7 @@ import {
   stockSummary,
 } from './northStar'
 
-describe('North Star domain invariants', () => {
+describe('OlfactoryOps domain invariants', () => {
   it('resolves nested accord leaves before cost and physical models', () => {
     const leaves = resolveFormula('frm-0421')
     const hedione = leaves.find((leaf) => leaf.materialName === 'Hedione')

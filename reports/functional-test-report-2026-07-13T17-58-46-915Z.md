@@ -25,7 +25,7 @@ Production mutation mode: disabled
 | TC-004 | Core Read Models | P1 | PASS | 7.68s | Materials: 8 |
 | TC-005 | Documents | P1 | PASS | 4.36s | Missing CSRF status: 403 |
 | TC-006 | Production Phase 9 | P0 | PASS | 1.57s | Batches: 2 |
-| TC-007 | Frontend Auth / Production UI | P0 | PASS | 12.64s | Title: OlfactoryOps North Star |
+| TC-007 | Frontend Auth / Production UI | P0 | PASS | 12.64s | Title: OlfactoryOps |
 
 ## Detailed Test Cases
 
@@ -120,7 +120,7 @@ Result: PASS
 Duration: 7.68s
 
 Objective:
-Verify the main North Star modules still hydrate from the production Worker and D1 snapshot.
+Verify the main OlfactoryOps modules still hydrate from the production Worker and D1 snapshot.
 
 Steps:
 1. Call GET /materials.
@@ -220,7 +220,7 @@ Assertions:
 - No relevant console errors, page errors, or failed requests are emitted.
 
 Evidence:
-- Title: OlfactoryOps North Star
+- Title: OlfactoryOps
 - localStorage keys: olfactoryops.has_session.v1
 - oo_session cookie: HttpOnly=true, Secure=true, SameSite=None
 - Auth screenshot: evidence/2026-07-13T17-58-46-915Z/ui-authenticated-dashboard.png
