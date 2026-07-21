@@ -1,48 +1,66 @@
-import { NorthStarService } from '../server/src/services/northstar.service.js'
-import { TooManyRequestsException } from '../server/src/shared/http-error.js'
-import type {
-  AuditEvent,
-  AuthSession,
-  BillingInvoiceRecord,
-  BillingSubscriptionRecord,
-  BrandRecord,
-  BrandingConfig,
-  CommercialSkuRecord,
-  CustomFieldDefinition,
-  DocumentRecord,
-  FeatureFlagRecord,
-  InventoryLot,
-  InventoryMovement,
-  LabUsageRecord,
-  MembershipRecord,
-  Material,
-  MoleculeComponent,
-  NumberingSequenceRecord,
-  OrderDocumentRecord,
-  OrganizationRecord,
-  PriceHistoryRecord,
-  PriceListRecord,
-  ProductionBatchRecord,
-  PurchaseOrderRecord,
-  QuoteRecord,
-  RolePolicy,
-  SampleRequestRecord,
-  SalesOrderRecord,
-  ScheduledReportRecord,
-  ShipmentRecord,
-  StockTakeRecord,
-  StorageLocation,
-  SupplierRecord,
-  TenantSettingsRecord,
-  UserSettingsRecord,
-  WebhookDeliveryRecord,
-  CustomerRecord,
-  DomainStatus,
+import { NorthStarService, type MfaEnrollmentRecord } from '../server/src/services/northstar.service.js'
+import {
+  PayloadTooLargeException,
+  ForbiddenException,
+  TooManyRequestsException,
+  UnprocessableEntityException,
+  UnauthorizedException,
+} from '../server/src/shared/http-error.js'
+import {
+  memberships as seedMemberships,
+  organizations as seedOrganizations,
+  rolePolicies as seedRolePolicies,
+  userSettings as seedUserSettings,
+  type ApiKeyRecord,
+  type AuditEvent,
+  type AuditExportJobRecord,
+  type AuthSession,
+  type BillingInvoiceRecord,
+  type BillingSubscriptionRecord,
+  type BrandRecord,
+  type BrandingConfig,
+  type CommercialSkuRecord,
+  type CustomFieldDefinition,
+  type DocumentRecord,
+  type FeatureFlagRecord,
+  type Formula,
+  type FormulaVersionRecord,
+  type InventoryLot,
+  type InventoryMovement,
+  type LabUsageRecord,
+  type MembershipRecord,
+  type Material,
+  type MoleculeComponent,
+  type NumberingSequenceRecord,
+  type OrderDocumentRecord,
+  type OrganizationRecord,
+  type PriceHistoryRecord,
+  type PriceListRecord,
+  type ProductionBatchRecord,
+  type PurchaseOrderRecord,
+  type QuoteRecord,
+  type RolePolicy,
+  type SampleRequestRecord,
+  type SalesOrderRecord,
+  type ScheduledReportRecord,
+  type ShipmentRecord,
+  type SsoConfigRecord,
+  type StockTakeRecord,
+  type StorageLocation,
+  type SupplierRecord,
+  type TenantSettingsRecord,
+  type UserSettingsRecord,
+  type WebhookRecord,
+  type WebhookDeliveryRecord,
+  type CustomerRecord,
+  type DomainStatus,
 } from '../src/data/northStar.js'
 
 type Env = {
   DB: D1Database
   CORS_ORIGINS?: string
+  SEEDED_ADMIN_PASSWORD_HASH?: string
+  MFA_ENCRYPTION_KEY?: string
 }
 
 type RouteContext = {
@@ -56,12 +74,13 @@ type Route = {
   method: string
   pattern: string
   public?: boolean
+  hydrateState?: boolean
   sessionCookie?: 'set' | 'clear'
   mutates?: boolean
   rateLimit?: RateLimitPolicy
   limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
   writeGate?: boolean
-  persistScope?: 'userSettings'
+  persistScope?: 'userSettings' | 'mfaVerification'
   handler: (context: RouteContext) => unknown
 }
 
@@ -71,9 +90,11 @@ type AuthCredential = {
 }
 
 type RateLimitPolicy = {
-  key: 'auth-login' | 'auth-signup'
+  key: 'auth-login' | 'auth-signup' | 'authenticated-mutation' | 'sensitive-mutation'
+  scope: 'client-email' | 'client' | 'session'
   limit: number
   windowSeconds: number
+  message: string
 }
 
 type SnapshotKey =
@@ -91,6 +112,8 @@ type SnapshotKey =
   | 'organizationRecords'
   | 'brandRecords'
   | 'membershipRecords'
+  | 'authCredentialRecords'
+  | 'mfaEnrollmentRecords'
   | 'sessions'
   | 'userSettingsRecords'
   | 'rolePolicyRecords'
@@ -114,7 +137,13 @@ type SnapshotKey =
   | 'scheduledReportRecords'
   | 'subscriptionRecords'
   | 'invoiceRecords'
+  | 'ssoConfigRecords'
+  | 'apiKeyRecords'
+  | 'webhookRecords'
   | 'webhookDeliveryRecords'
+  | 'auditExportRecords'
+  | 'inventoryApprovalRequestRecords'
+  | 'operationApprovalRequestRecords'
   | 'auditCounter'
 
 type ServiceState = Record<SnapshotKey, unknown> & {
@@ -124,11 +153,15 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   organizationRecords: OrganizationRecord[]
   brandRecords: BrandRecord[]
   membershipRecords: MembershipRecord[]
+  authCredentialRecords: Array<Record<string, unknown>>
+  mfaEnrollmentRecords: MfaEnrollmentRecord[]
   rolePolicyRecords: RolePolicy[]
   materialRecords: Material[]
   moleculeRecords: MoleculeComponent[]
   locationRecords: StorageLocation[]
   stockTakeRecords: StockTakeRecord[]
+  formulaRecords: Formula[]
+  formulaVersionRecords: FormulaVersionRecord[]
   settingsRecord: TenantSettingsRecord
   flagRecords: FeatureFlagRecord[]
   sequences: NumberingSequenceRecord[]
@@ -150,7 +183,13 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   scheduledReportRecords: ScheduledReportRecord[]
   subscriptionRecords: BillingSubscriptionRecord[]
   invoiceRecords: BillingInvoiceRecord[]
+  ssoConfigRecords: SsoConfigRecord[]
+  apiKeyRecords: ApiKeyRecord[]
+  webhookRecords: WebhookRecord[]
   webhookDeliveryRecords: WebhookDeliveryRecord[]
+  auditExportRecords: AuditExportJobRecord[]
+  inventoryApprovalRequestRecords: Array<Record<string, unknown>>
+  operationApprovalRequestRecords: Array<Record<string, unknown>>
   lots: InventoryLot[]
   movements: InventoryMovement[]
   usageHistory: LabUsageRecord[]
@@ -158,9 +197,36 @@ type ServiceState = Record<SnapshotKey, unknown> & {
 }
 
 const API_PREFIX = '/api/v1'
+const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+const authenticatedMutationRateLimit: RateLimitPolicy = {
+  key: 'authenticated-mutation',
+  scope: 'session',
+  limit: 90,
+  windowSeconds: 60,
+  message: 'Request rate limit exceeded',
+}
+const sensitiveMutationRateLimit: RateLimitPolicy = {
+  key: 'sensitive-mutation',
+  scope: 'session',
+  limit: 12,
+  windowSeconds: 15 * 60,
+  message: 'Sensitive operation rate limit exceeded',
+}
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
+const SNAPSHOT_CACHE_TTL_MS = 2_000
+let persistenceReadyPromise: Promise<void> | undefined
+let snapshotCacheFlight: Promise<CachedSnapshotState> | null = null
+let snapshotCache: CachedSnapshotState | null = null
+
+type CachedSnapshotState = {
+  loadedAt: number
+  updatedAt: string
+  state: ServiceState
+}
+
 const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'sessions',
+  'mfaEnrollmentRecords',
   'userSettingsRecords',
   'auditEvents',
   'auditCounter',
@@ -172,6 +238,8 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'moleculeRecords',
   'locationRecords',
   'stockTakeRecords',
+  'formulaRecords',
+  'formulaVersionRecords',
   'settingsRecord',
   'flagRecords',
   'sequences',
@@ -193,7 +261,11 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'scheduledReportRecords',
   'subscriptionRecords',
   'invoiceRecords',
+  'ssoConfigRecords',
+  'apiKeyRecords',
+  'webhookRecords',
   'webhookDeliveryRecords',
+  'auditExportRecords',
   'lots',
   'movements',
   'usageHistory',
@@ -213,6 +285,8 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'organizationRecords',
   'brandRecords',
   'membershipRecords',
+  'authCredentialRecords',
+  'mfaEnrollmentRecords',
   'sessions',
   'userSettingsRecords',
   'rolePolicyRecords',
@@ -236,12 +310,24 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'scheduledReportRecords',
   'subscriptionRecords',
   'invoiceRecords',
+  'ssoConfigRecords',
+  'apiKeyRecords',
+  'webhookRecords',
   'webhookDeliveryRecords',
+  'auditExportRecords',
+  'inventoryApprovalRequestRecords',
+  'operationApprovalRequestRecords',
   'auditCounter',
 ]
+const SNAPSHOT_KEY_SET = new Set<SnapshotKey>(SNAPSHOT_KEYS)
 const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
+const SEEDED_ADMIN_EMAIL = 'admin@labofscents.org'
+const SEEDED_ADMIN_ORGANIZATION_ID = 'org-nxl'
+const SEEDED_ADMIN_ROLE = 'Admin'
+const SEEDED_ADMIN_PASSWORD_SET_AT = '2026-07-16T00:00:00.000Z'
 const NORMALIZED_TABLES = [
   'auth_sessions',
+  'mfa_enrollments',
   'user_settings',
   'audit_events',
   'security_rate_limits',
@@ -258,6 +344,8 @@ const NORMALIZED_TABLES = [
   'numbering_sequences',
   'custom_fields',
   'tenant_branding',
+  'formula_records',
+  'formula_version_records',
   'document_records',
   'production_batches',
   'suppliers',
@@ -274,16 +362,20 @@ const NORMALIZED_TABLES = [
   'scheduled_reports',
   'billing_subscriptions',
   'billing_invoices',
+  'sso_configs',
+  'api_keys',
+  'webhooks',
   'webhook_deliveries',
+  'audit_export_jobs',
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
 ]
 
 const routes: Route[] = [
-  { method: 'GET', pattern: '/health', public: true, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
-  { method: 'GET', pattern: '/version', public: true, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', public: true, handler: () => ({ data: { adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: NORMALIZED_TABLES } }) },
+  { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
+  { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
+  { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: NORMALIZED_TABLES }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -298,14 +390,24 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials/:id/price-history', handler: ({ service, params }) => service.materialPriceHistory(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
+  { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
+  { method: 'POST', pattern: '/formulas/:id/fork', mutates: true, limitKey: 'formulas', handler: ({ service, params, body }) => service.forkFormula(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/lines', mutates: true, handler: ({ service, params, body }) => service.addFormulaLine(params.id, body) },
   { method: 'PATCH', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params, body }) => service.updateFormulaLine(params.id, params.lineId, body) },
   { method: 'DELETE', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params }) => service.deleteFormulaLine(params.id, params.lineId) },
   { method: 'POST', pattern: '/formulas/:id/lines/:lineId/move', mutates: true, handler: ({ service, params, body }) => service.moveFormulaLine(params.id, params.lineId, body) },
+  { method: 'POST', pattern: '/formulas/:id/scale/apply', mutates: true, handler: ({ service, params, body }) => service.applyFormulaScale(params.id, body) },
   { method: 'GET', pattern: '/formulas/:id/resolve', handler: ({ service, params }) => service.resolveFormula(params.id) },
   { method: 'GET', pattern: '/formulas/:id/cost', handler: ({ service, params }) => service.formulaCost(params.id) },
+  { method: 'GET', pattern: '/formulas/:id/ifra-check', handler: ({ service, params }) => service.formulaIfra(params.id) },
+  { method: 'GET', pattern: '/formulas/:id/evaporation', handler: ({ service, params }) => service.formulaEvaporation(params.id) },
+  { method: 'POST', pattern: '/formulas/:id/scale', handler: ({ service, params, body }) => service.formulaScale(params.id, body) },
   { method: 'GET', pattern: '/formulas/:id/versions', handler: ({ service, params }) => service.formulaVersions(params.id) },
   { method: 'POST', pattern: '/formulas/:id/versions', mutates: true, handler: ({ service, params, body }) => service.createFormulaVersion(params.id, body) },
+  { method: 'GET', pattern: '/formulas/:id/versions/diff', handler: ({ service, params, query }) => service.formulaVersionDiff(params.id, query.get('from') ?? undefined, query.get('to') ?? undefined) },
+  { method: 'POST', pattern: '/formulas/:id/versions/:version/evaluations', mutates: true, handler: ({ service, params, body }) => service.addFormulaEvaluation(params.id, params.version, body) },
+  { method: 'POST', pattern: '/formulas/:id/review', mutates: true, handler: ({ service, params, body }) => service.submitFormulaForReview(params.id, body) },
+  { method: 'POST', pattern: '/formulas/:id/reject', mutates: true, handler: ({ service, params, body }) => service.rejectFormula(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveFormula(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/export', mutates: true, handler: ({ service, params, body }) => service.exportFormula(params.id, body) },
   { method: 'GET', pattern: '/lots', handler: ({ service }) => service.lotsList() },
@@ -322,8 +424,19 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/inventory/receipts', mutates: true, limitKey: 'lots', handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
   { method: 'POST', pattern: '/inventory/adjustments', mutates: true, handler: ({ service, body }) => service.adjustInventory(body) },
   { method: 'POST', pattern: '/inventory/transfers', mutates: true, handler: ({ service, body }) => service.transferInventory(body) },
-  { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-login', limit: 8, windowSeconds: 10 * 60 }, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined) },
-  { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', limit: 4, windowSeconds: 60 * 60 }, handler: ({ service, body }) => service.signup(body) },
+  { method: 'GET', pattern: '/inventory/approval-requests', handler: ({ service }) => service.inventoryApprovalRequests() },
+  { method: 'POST', pattern: '/inventory/approval-requests', mutates: true, writeGate: false, handler: ({ service, body }) => service.requestInventoryApproval(body) },
+  { method: 'POST', pattern: '/inventory/approval-requests/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveInventoryApprovalRequest(params.id, body) },
+  { method: 'POST', pattern: '/inventory/approval-requests/:id/reject', mutates: true, handler: ({ service, params, body }) => service.rejectInventoryApprovalRequest(params.id, body) },
+  { method: 'GET', pattern: '/approval-requests', handler: ({ service }) => service.operationApprovalRequests() },
+  { method: 'POST', pattern: '/approval-requests', mutates: true, writeGate: false, handler: ({ service, body }) => service.requestOperationApproval(body) },
+  { method: 'POST', pattern: '/approval-requests/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveOperationApprovalRequest(params.id, body) },
+  { method: 'POST', pattern: '/approval-requests/:id/reject', mutates: true, handler: ({ service, params, body }) => service.rejectOperationApprovalRequest(params.id, body) },
+  { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-login', scope: 'client-email', limit: 8, windowSeconds: 10 * 60, message: 'Authentication rate limit exceeded' }, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined, typeof body.password === 'string' ? body.password : undefined) },
+  { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', scope: 'client', limit: 4, windowSeconds: 60 * 60, message: 'Signup rate limit exceeded' }, handler: ({ service, body }) => service.signup(body) },
+  { method: 'GET', pattern: '/auth/mfa/status', writeGate: false, handler: ({ service }) => service.mfaStatus() },
+  { method: 'POST', pattern: '/auth/mfa/enroll', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.beginMfaEnrollment(body) },
+  { method: 'POST', pattern: '/auth/mfa/verify', mutates: true, writeGate: false, persistScope: 'mfaVerification', rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.verifyMfa(body) },
   { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
   { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
@@ -331,13 +444,13 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
-  { method: 'POST', pattern: '/security/members/invite', mutates: true, limitKey: 'seats', handler: ({ service, body }) => service.inviteMember(body) },
-  { method: 'PATCH', pattern: '/security/members/:id/status', mutates: true, handler: ({ service, params, body }) => service.setMembershipStatus(params.id, body.status === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED') },
-  { method: 'POST', pattern: '/security/sessions/:id/revoke', mutates: true, handler: ({ service, params }) => service.revokeSession(params.id) },
-  { method: 'POST', pattern: '/security/sessions/revoke-all', mutates: true, handler: ({ service, body }) => service.revokeAllSessions(body) },
+  { method: 'POST', pattern: '/security/members/invite', mutates: true, rateLimit: sensitiveMutationRateLimit, limitKey: 'seats', handler: ({ service, body }) => service.inviteMember(body) },
+  { method: 'PATCH', pattern: '/security/members/:id/status', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params, body }) => service.setMembershipStatus(params.id, body.status === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED') },
+  { method: 'POST', pattern: '/security/sessions/:id/revoke', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.revokeSession(params.id) },
+  { method: 'POST', pattern: '/security/sessions/revoke-all', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.revokeAllSessions(body) },
   { method: 'POST', pattern: '/security/sessions/:id/touch', mutates: true, handler: ({ service, params }) => service.touchSession(params.id) },
   { method: 'GET', pattern: '/security/permissions', handler: ({ service }) => service.permissionMatrix() },
-  { method: 'PATCH', pattern: '/security/roles/:role/permissions', mutates: true, handler: ({ service, params, body }) => service.setRolePermissions(params.role, Array.isArray(body.permissions) ? body.permissions.filter((permission): permission is string => typeof permission === 'string') : []) },
+  { method: 'PATCH', pattern: '/security/roles/:role/permissions', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params, body }) => service.setRolePermissions(params.role, Array.isArray(body.permissions) ? body.permissions.filter((permission): permission is string => typeof permission === 'string') : []) },
   { method: 'GET', pattern: '/security/tenant-probe', handler: ({ service, query }) => service.tenantProbe(query.get('organizationId') ?? 'org-nxl') },
   { method: 'GET', pattern: '/security/permission-probe', handler: ({ service, query }) => service.permissionProbe(query.get('permission') ?? 'inventory.adjust', query.get('role') ?? 'Viewer') },
   { method: 'GET', pattern: '/settings', handler: ({ service }) => service.settings() },
@@ -414,16 +527,26 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/billing/subscription', handler: ({ service }) => service.billingSubscription() },
   { method: 'GET', pattern: '/billing/usage', handler: ({ service }) => service.billingUsage() },
   { method: 'GET', pattern: '/billing/invoices', handler: ({ service }) => service.billingInvoices() },
-  { method: 'POST', pattern: '/billing/checkout', mutates: true, writeGate: false, handler: ({ service, body }) => service.startBillingCheckout(body) },
-  { method: 'POST', pattern: '/billing/subscription/select-plan', mutates: true, writeGate: false, handler: ({ service, body }) => service.selectBillingPlan(body) },
-  { method: 'POST', pattern: '/billing/portal', mutates: true, writeGate: false, handler: ({ service }) => service.openBillingPortal() },
-  { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
-  { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
+  { method: 'POST', pattern: '/billing/checkout', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.startBillingCheckout(body) },
+  { method: 'POST', pattern: '/billing/subscription/select-plan', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.selectBillingPlan(body) },
+  { method: 'POST', pattern: '/billing/portal', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.openBillingPortal() },
+  { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
+  { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
   { method: 'GET', pattern: '/sso-config', handler: ({ service }) => service.ssoConfig() },
+  { method: 'PATCH', pattern: '/sso-config', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.updateSsoConfig(body) },
+  { method: 'POST', pattern: '/sso-config/scim-token/rotate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.rotateScimToken() },
   { method: 'GET', pattern: '/api-keys', handler: ({ service }) => service.apiKeys() },
+  { method: 'POST', pattern: '/api-keys', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.createApiKey(body) },
+  { method: 'POST', pattern: '/api-keys/:id/rotate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params }) => service.rotateApiKey(params.id) },
+  { method: 'POST', pattern: '/api-keys/:id/revoke', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params }) => service.revokeApiKey(params.id) },
   { method: 'GET', pattern: '/webhooks', handler: ({ service }) => service.webhooks() },
-  { method: 'POST', pattern: '/webhooks/deliveries/:id/retry', mutates: true, writeGate: false, handler: ({ service, params }) => service.retryWebhookDelivery(params.id) },
-  { method: 'POST', pattern: '/audit/export', mutates: true, writeGate: false, handler: ({ service }) => service.auditExport() },
+  { method: 'POST', pattern: '/webhooks', mutates: true, rateLimit: sensitiveMutationRateLimit, limitKey: 'webhooks', writeGate: false, handler: ({ service, body }) => service.createWebhook(body) },
+  { method: 'PATCH', pattern: '/webhooks/:id', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params, body }) => service.updateWebhook(params.id, body) },
+  { method: 'POST', pattern: '/webhooks/:id/rotate-secret', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params }) => service.rotateWebhookSecret(params.id) },
+  { method: 'DELETE', pattern: '/webhooks/:id', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params }) => service.deleteWebhook(params.id) },
+  { method: 'POST', pattern: '/webhooks/deliveries/:id/retry', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params }) => service.retryWebhookDelivery(params.id) },
+  { method: 'GET', pattern: '/audit/exports', handler: ({ service }) => service.auditExports() },
+  { method: 'POST', pattern: '/audit/export', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.auditExport(body) },
 ]
 
 export default {
@@ -431,9 +554,11 @@ export default {
     const origin = request.headers.get('Origin')
     const corsHeaders = buildCorsHeaders(origin, env.CORS_ORIGINS)
     let service: NorthStarService | undefined
+    let skipSecurityPersistence = false
+    let mfaVerificationRequest = false
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders })
+      return new Response(null, { status: 204, headers: buildApiSecurityHeaders(corsHeaders) })
     }
 
     try {
@@ -447,21 +572,37 @@ export default {
       if (!match) {
         return json({ message: `Route ${request.method} ${path} was not found` }, 404, corsHeaders)
       }
+      mfaVerificationRequest = match.route.persistScope === 'mfaVerification'
 
-      await ensurePersistenceTables(env.DB)
-      service = new NorthStarService()
-      await hydrateSnapshots(env.DB, service)
       const body = await readJsonBody(request)
-      if (match.route.rateLimit) {
-        await assertRateLimit(env.DB, match.route.rateLimit, request, body)
+      if (match.route.hydrateState !== false) {
+        await assertPersistenceReady(env.DB)
       }
       let credential: AuthCredential = { source: 'none' }
       if (!match.route.public) {
         credential = readSessionCredential(request.headers)
+        await assertSessionCredentialActive(env.DB, credential.sessionId)
+      }
+      if (match.route.public && match.route.rateLimit) {
+        await assertRateLimit(env.DB, match.route.rateLimit, request, body, credential)
+      }
+
+      service = new NorthStarService({
+        authCredentials: seededAdminCredentialsForEnv(env),
+        mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+      })
+      if (match.route.hydrateState !== false) {
+        await hydrateSnapshots(env.DB, service, env)
+      }
+      if (!match.route.public) {
         service.authenticateSession(credential.sessionId)
       }
       if (match.route.mutates && !match.route.public && credential.source === 'cookie') {
         service.assertValidCsrfToken(request.headers.get('X-CSRF-Token'))
+      }
+      const rateLimit = resolveRateLimitPolicy(match.route)
+      if (!match.route.public && rateLimit) {
+        await assertRateLimit(env.DB, rateLimit, request, body, credential)
       }
       if (match.route.mutates && match.route.writeGate !== false) {
         service.assertCommercialWriteAllowed(`${request.method} ${match.route.pattern}`)
@@ -469,24 +610,64 @@ export default {
       if (match.route.limitKey) {
         service.assertPlanCapacity(match.route.limitKey)
       }
+      const previousMfaEnrollments =
+        match.route.persistScope === 'mfaVerification'
+          ? structuredClone((service as unknown as ServiceState).mfaEnrollmentRecords)
+          : undefined
       const result = await match.route.handler({ service, params: match.params, query: url.searchParams, body })
+      let refreshSnapshotCache = false
 
       if (match.route.mutates || service.hasSecurityStateChanges()) {
         if (match.route.persistScope === 'userSettings') {
           await persistUserSettingsMutation(env.DB, service)
+          refreshSnapshotCache = true
+        } else if (match.route.persistScope === 'mfaVerification' && previousMfaEnrollments) {
+          try {
+            await persistMfaVerificationMutation(env.DB, service, previousMfaEnrollments, credential.sessionId, result)
+            refreshSnapshotCache = true
+          } catch (error) {
+            skipSecurityPersistence = true
+            throw error
+          }
         } else {
           await persistSnapshots(env.DB, service)
+          refreshSnapshotCache = true
         }
+      }
+      if (refreshSnapshotCache) {
+        refreshCachedSnapshotState(service)
       }
 
       return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
     } catch (error) {
-      if (service) {
-        await persistSecurityState(env.DB, service).catch((persistError) => console.error(persistError))
+      const candidate = error as {
+        getStatus?: () => number
+        status?: number
+        statusCode?: number
+      }
+      const status = candidate.getStatus?.() ?? candidate.status ?? candidate.statusCode ?? 500
+      if (status >= 500) {
+        console.error('Unhandled Worker API error', error)
+      }
+      if (service && !skipSecurityPersistence) {
+        const persistFailureState = mfaVerificationRequest
+          ? persistMfaVerificationFailureState(env.DB, service)
+          : persistSecurityState(env.DB, service)
+        await persistFailureState.catch((persistError) => console.error(persistError))
       }
       return errorJson(error, corsHeaders)
     }
   },
+}
+
+function resolveRateLimitPolicy(route: Route) {
+  if (route.rateLimit) {
+    return route.rateLimit
+  }
+  if (route.mutates && !route.public && route.sessionCookie !== 'clear') {
+    return authenticatedMutationRateLimit
+  }
+  return undefined
 }
 
 function normalizeApiPath(pathname: string) {
@@ -541,16 +722,52 @@ async function readJsonBody(request: Request) {
   if (request.method === 'GET' || request.method === 'HEAD') {
     return {}
   }
+  const declaredLength = Number(request.headers.get('Content-Length'))
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BODY_BYTES) {
+    throw new PayloadTooLargeException({
+      message: 'Request body is too large',
+      maxBytes: MAX_JSON_BODY_BYTES,
+    })
+  }
   const text = await request.text()
+  const bodyBytes = new TextEncoder().encode(text).byteLength
+  if (bodyBytes > MAX_JSON_BODY_BYTES) {
+    throw new PayloadTooLargeException({
+      message: 'Request body is too large',
+      maxBytes: MAX_JSON_BODY_BYTES,
+    })
+  }
   if (!text.trim()) {
     return {}
   }
-  const parsed = JSON.parse(text)
-  return isRecord(parsed) ? parsed : {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new UnprocessableEntityException('Request body must contain valid JSON')
+  }
+  if (!isRecord(parsed)) {
+    throw new UnprocessableEntityException('Request body must be a JSON object')
+  }
+  return parsed
 }
 
 function readString(value: unknown, fallback: string) {
   return typeof value === 'string' && value.trim() ? value : fallback
+}
+
+function seededAdminCredentialsForEnv(env: Env) {
+  const passwordHash = readConfiguredSeededAdminPasswordHash(env.SEEDED_ADMIN_PASSWORD_HASH)
+  if (!passwordHash) {
+    return []
+  }
+  return [
+    {
+      email: SEEDED_ADMIN_EMAIL,
+      passwordHash,
+      passwordSetAt: SEEDED_ADMIN_PASSWORD_SET_AT,
+    },
+  ]
 }
 
 function readNumber(value: unknown, fallback: number) {
@@ -563,45 +780,62 @@ async function assertRateLimit(
   policy: RateLimitPolicy,
   request: Request,
   body: Record<string, unknown>,
+  credential: AuthCredential,
 ) {
   const now = new Date()
-  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : 'unknown'
-  const clientKey = `${policy.key}:${readClientAddress(request.headers)}:${email}`
+  const nowIso = now.toISOString()
+  const nextExpiresAt = new Date(now.getTime() + policy.windowSeconds * 1000).toISOString()
+  const subject = await rateLimitSubject(policy, request, body, credential)
+  const clientKey = `${policy.key}:${subject}`
   const row = await db
-    .prepare('SELECT count, window_start, expires_at FROM security_rate_limits WHERE key = ?1')
-    .bind(clientKey)
-    .first<{ count: number; window_start: string; expires_at: string }>()
+    .prepare(
+      `INSERT INTO security_rate_limits (key, count, window_start, expires_at, updated_at)
+       VALUES (?1, 1, ?2, ?3, ?2)
+       ON CONFLICT(key) DO UPDATE SET
+         count = CASE WHEN security_rate_limits.expires_at <= ?2 THEN 1 ELSE security_rate_limits.count + 1 END,
+         window_start = CASE WHEN security_rate_limits.expires_at <= ?2 THEN excluded.window_start ELSE security_rate_limits.window_start END,
+         expires_at = CASE WHEN security_rate_limits.expires_at <= ?2 THEN excluded.expires_at ELSE security_rate_limits.expires_at END,
+         updated_at = excluded.updated_at
+       RETURNING count, expires_at`,
+    )
+    .bind(clientKey, nowIso, nextExpiresAt)
+    .first<{ count: number; expires_at: string }>()
 
-  const expiresAt = row ? new Date(row.expires_at) : null
-  if (!row || !expiresAt || expiresAt.getTime() <= now.getTime()) {
-    const nextExpiresAt = new Date(now.getTime() + policy.windowSeconds * 1000).toISOString()
-    await db
-      .prepare(
-        `INSERT INTO security_rate_limits (key, count, window_start, expires_at, updated_at)
-         VALUES (?1, 1, ?2, ?3, ?2)
-         ON CONFLICT(key) DO UPDATE SET count = 1, window_start = excluded.window_start, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
-      )
-      .bind(clientKey, now.toISOString(), nextExpiresAt)
-      .run()
-    await db.prepare('DELETE FROM security_rate_limits WHERE expires_at <= ?1').bind(now.toISOString()).run()
-    return
+  if (!row) {
+    throw new Error('Rate limit state was not returned')
   }
-
-  if (row.count >= policy.limit) {
+  if (row.count === 1) {
+    await db.prepare('DELETE FROM security_rate_limits WHERE expires_at <= ?1').bind(nowIso).run()
+  }
+  const expiresAt = new Date(row.expires_at)
+  if (row.count > policy.limit) {
     const retryAfterSeconds = Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 1000))
     throw new TooManyRequestsException({
-      message: 'Authentication rate limit exceeded',
+      message: policy.message,
       limitKey: policy.key,
       limit: policy.limit,
       windowSeconds: policy.windowSeconds,
       retryAfterSeconds,
     })
   }
+}
 
-  await db
-    .prepare('UPDATE security_rate_limits SET count = count + 1, updated_at = ?2 WHERE key = ?1')
-    .bind(clientKey, now.toISOString())
-    .run()
+async function rateLimitSubject(
+  policy: RateLimitPolicy,
+  request: Request,
+  body: Record<string, unknown>,
+  credential: AuthCredential,
+) {
+  const clientAddress = readClientAddress(request.headers)
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : 'unknown'
+  const rawSubject =
+    policy.scope === 'session'
+      ? `session:${credential.sessionId ?? clientAddress}`
+      : policy.scope === 'client-email'
+        ? `client:${clientAddress}:email:${email}`
+        : `client:${clientAddress}`
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawSubject))
+  return Array.from(new Uint8Array(digest).slice(0, 16), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function readClientAddress(headers: Headers) {
@@ -655,6 +889,34 @@ function readSessionCredential(headers: Headers): AuthCredential {
   return { source: 'none' }
 }
 
+async function assertSessionCredentialActive(db: D1Database, sessionId: string | undefined) {
+  if (!sessionId) {
+    throw new UnauthorizedException('Authentication required')
+  }
+  const row = await db
+    .prepare(
+      `SELECT status, idle_expires_at, expires_at
+       FROM auth_sessions
+       WHERE id = ?1
+       LIMIT 1`,
+    )
+    .bind(sessionId)
+    .first<{ status: string; idle_expires_at: string; expires_at: string }>()
+  const now = Date.now()
+  const idleExpiresAt = row ? Date.parse(row.idle_expires_at) : Number.NaN
+  const expiresAt = row ? Date.parse(row.expires_at) : Number.NaN
+  if (
+    !row ||
+    row.status !== 'ACTIVE' ||
+    !Number.isFinite(idleExpiresAt) ||
+    !Number.isFinite(expiresAt) ||
+    idleExpiresAt <= now ||
+    expiresAt <= now
+  ) {
+    throw new UnauthorizedException('Authentication required')
+  }
+}
+
 function readCookie(cookieHeader: string | null, name: string) {
   const cookies = cookieHeader?.split(';') ?? []
   for (const cookie of cookies) {
@@ -666,837 +928,88 @@ function readCookie(cookieHeader: string | null, name: string) {
   return undefined
 }
 
-async function ensurePersistenceTables(db: D1Database) {
-  await ensureSnapshotTable(db)
-  await ensureRateLimitTable(db)
-  await ensureAuthSessionTable(db)
-  await ensureUserSettingsTable(db)
-  await ensureAuditEventTable(db)
-  await ensureTenantOrganizationTable(db)
-  await ensureTenantBrandTable(db)
-  await ensureTenantMembershipTable(db)
-  await ensureRolePolicyTable(db)
-  await ensureMaterialRecordTable(db)
-  await ensureMoleculeComponentTable(db)
-  await ensureStorageLocationTable(db)
-  await ensureStockTakeRecordTable(db)
-  await ensureTenantSettingsTable(db)
-  await ensureFeatureFlagTable(db)
-  await ensureNumberingSequenceTable(db)
-  await ensureCustomFieldTable(db)
-  await ensureTenantBrandingTable(db)
-  await ensureDocumentRecordTable(db)
-  await ensureProductionBatchTable(db)
-  await ensureSupplierTable(db)
-  await ensurePurchaseOrderTable(db)
-  await ensurePriceHistoryTable(db)
-  await ensureCommercialSkuTable(db)
-  await ensurePriceListTable(db)
-  await ensureQuoteTable(db)
-  await ensureSampleRequestTable(db)
-  await ensureCustomerTable(db)
-  await ensureSalesOrderTable(db)
-  await ensureOrderShipmentTable(db)
-  await ensureOrderDocumentTable(db)
-  await ensureScheduledReportTable(db)
-  await ensureBillingSubscriptionTable(db)
-  await ensureBillingInvoiceTable(db)
-  await ensureWebhookDeliveryTable(db)
-  await ensureInventoryLotTable(db)
-  await ensureInventoryMovementTable(db)
-  await ensureLabUsageRecordTable(db)
+async function assertPersistenceReady(db: D1Database) {
+  if (!persistenceReadyPromise) {
+    persistenceReadyPromise = db
+      .prepare('SELECT key FROM northstar_snapshots LIMIT 1')
+      .first()
+      .then(() => undefined)
+  }
+  try {
+    await persistenceReadyPromise
+  } catch {
+    persistenceReadyPromise = undefined
+    throw new Error('Service persistence is not ready; apply D1 migrations before deployment')
+  }
 }
 
-async function ensureSnapshotTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS northstar_snapshots (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-}
-
-async function ensureRateLimitTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS security_rate_limits (
-        key TEXT PRIMARY KEY,
-        count INTEGER NOT NULL,
-        window_start TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-}
-
-async function ensureAuthSessionTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS auth_sessions (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        email TEXT NOT NULL,
-        organization_id TEXT NOT NULL,
-        brand_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        issued_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        idle_expires_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        status TEXT NOT NULL,
-        mfa_verified INTEGER NOT NULL DEFAULT 0,
-        ip_address TEXT NOT NULL DEFAULT '',
-        user_agent TEXT NOT NULL DEFAULT '',
-        device_id TEXT NOT NULL DEFAULT '',
-        location TEXT NOT NULL DEFAULT '',
-        csrf_token TEXT,
-        revoked_at TEXT,
-        revoked_reason TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_org_status ON auth_sessions(organization_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_auth_sessions_email_status ON auth_sessions(email, status)').run()
-}
-
-async function ensureUserSettingsTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS user_settings (
-        user_id TEXT NOT NULL,
-        organization_id TEXT NOT NULL,
-        email TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        preferred_landing TEXT NOT NULL,
-        ui_density TEXT NOT NULL,
-        sidebar_mode TEXT NOT NULL DEFAULT 'expanded',
-        reduce_motion INTEGER NOT NULL DEFAULT 0,
-        email_digest TEXT NOT NULL,
-        accent_color TEXT NOT NULL DEFAULT '#4d9bff',
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (user_id, organization_id)
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_user_settings_org_email ON user_settings(organization_id, email)').run()
-}
-
-async function ensureAuditEventTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS audit_events (
-        id TEXT PRIMARY KEY,
-        at TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        action TEXT NOT NULL,
-        entity TEXT NOT NULL,
-        request_id TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_at ON audit_events(at)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action)').run()
-}
-
-async function ensureTenantOrganizationTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS tenant_organizations (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        slug TEXT NOT NULL UNIQUE,
-        plan TEXT NOT NULL,
-        status TEXT NOT NULL,
-        primary_contact TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_organizations_status ON tenant_organizations(status)').run()
-}
-
-async function ensureTenantBrandTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS tenant_brands (
-        id TEXT PRIMARY KEY,
-        organization_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        default_currency TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_brands_org_status ON tenant_brands(organization_id, status)').run()
-}
-
-async function ensureTenantMembershipTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS tenant_memberships (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        email TEXT NOT NULL,
-        name TEXT NOT NULL,
-        organization_id TEXT NOT NULL,
-        brand_ids_json TEXT NOT NULL,
-        role TEXT NOT NULL,
-        status TEXT NOT NULL,
-        mfa_enabled INTEGER NOT NULL DEFAULT 0,
-        last_active_at TEXT NOT NULL,
-        invited_at TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_memberships_org_status ON tenant_memberships(organization_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_tenant_memberships_email ON tenant_memberships(email)').run()
-}
-
-async function ensureRolePolicyTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS role_policies (
-        role TEXT NOT NULL,
-        scope TEXT NOT NULL,
-        mfa_required INTEGER NOT NULL DEFAULT 0,
-        permissions_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (role, scope)
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_role_policies_scope ON role_policies(scope)').run()
-}
-
-async function ensureMaterialRecordTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS material_records (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        cas TEXT NOT NULL,
-        family TEXT NOT NULL,
-        tier TEXT NOT NULL,
-        record_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_material_records_cas ON material_records(cas)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_material_records_family ON material_records(family)').run()
-}
-
-async function ensureMoleculeComponentTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS molecule_components (
-        id TEXT PRIMARY KEY,
-        material_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        cas TEXT NOT NULL,
-        status TEXT NOT NULL,
-        record_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_molecule_components_material_status ON molecule_components(material_id, status)').run()
-}
-
-async function ensureStorageLocationTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS storage_locations (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        zone TEXT NOT NULL,
-        status TEXT NOT NULL,
-        record_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_storage_locations_zone_status ON storage_locations(zone, status)').run()
-}
-
-async function ensureStockTakeRecordTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS stock_take_records (
-        id TEXT PRIMARY KEY,
-        at TEXT NOT NULL,
-        lot_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        record_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_stock_take_records_lot_at ON stock_take_records(lot_id, at)').run()
-}
-
-async function ensureTenantSettingsTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS tenant_settings (
-        organization_id TEXT PRIMARY KEY,
-        locale TEXT NOT NULL,
-        timezone TEXT NOT NULL,
-        currency TEXT NOT NULL,
-        default_unit TEXT NOT NULL,
-        default_dilution_percent REAL NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-}
-
-async function ensureFeatureFlagTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS feature_flags (
-        flag_key TEXT PRIMARY KEY,
-        label TEXT NOT NULL,
-        enabled INTEGER NOT NULL DEFAULT 0,
-        phase INTEGER NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_feature_flags_phase ON feature_flags(phase)').run()
-}
-
-async function ensureNumberingSequenceTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS numbering_sequences (
-        sequence_key TEXT PRIMARY KEY,
-        pattern TEXT NOT NULL,
-        next_value INTEGER NOT NULL,
-        scope TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_numbering_sequences_scope ON numbering_sequences(scope)').run()
-}
-
-async function ensureCustomFieldTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS custom_fields (
-        id TEXT PRIMARY KEY,
-        entity TEXT NOT NULL,
-        field_key TEXT NOT NULL,
-        label TEXT NOT NULL,
-        field_type TEXT NOT NULL,
-        required INTEGER NOT NULL DEFAULT 0,
-        options_json TEXT NOT NULL,
-        status TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_custom_fields_entity_status ON custom_fields(entity, status)').run()
-}
-
-async function ensureTenantBrandingTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS tenant_branding (
-        organization_id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL,
-        accent_color TEXT NOT NULL,
-        document_footer TEXT NOT NULL,
-        label_template TEXT NOT NULL,
-        logo_mode TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-}
-
-async function ensureDocumentRecordTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS document_records (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        title TEXT NOT NULL,
-        linked_to TEXT NOT NULL,
-        version TEXT NOT NULL,
-        sensitivity TEXT NOT NULL,
-        status TEXT NOT NULL,
-        issue_date TEXT,
-        expires_at TEXT,
-        last_accessed TEXT NOT NULL,
-        downloads INTEGER NOT NULL,
-        storage_key TEXT NOT NULL,
-        mime_type TEXT NOT NULL,
-        size_kb REAL NOT NULL,
-        checksum TEXT NOT NULL,
-        owner TEXT NOT NULL,
-        generated_from TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_linked_type ON document_records(linked_to, type)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_status ON document_records(status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_document_records_expiry ON document_records(expires_at)').run()
-}
-
-async function ensureProductionBatchTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS production_batches (
-        id TEXT PRIMARY KEY,
-        formula_id TEXT NOT NULL,
-        formula_code TEXT NOT NULL,
-        status TEXT NOT NULL,
-        target_grams REAL NOT NULL,
-        consumed_grams REAL NOT NULL,
-        qc_status TEXT NOT NULL,
-        owner TEXT NOT NULL,
-        work_order_json TEXT NOT NULL,
-        qc_checks_json TEXT NOT NULL,
-        yield_grams REAL,
-        yield_variance_percent REAL,
-        output_lot_json TEXT,
-        genealogy_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_formula_status ON production_batches(formula_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_production_batches_status ON production_batches(status)').run()
-}
-
-async function ensureSupplierTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS suppliers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        country TEXT NOT NULL,
-        lead_time_days INTEGER NOT NULL,
-        contact_email TEXT NOT NULL,
-        payment_terms TEXT NOT NULL,
-        preferred_material_ids_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_suppliers_status_country ON suppliers(status, country)').run()
-}
-
-async function ensurePurchaseOrderTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS purchase_orders (
-        id TEXT PRIMARY KEY,
-        supplier_id TEXT NOT NULL,
-        material_id TEXT NOT NULL,
-        quantity_grams REAL NOT NULL,
-        received_grams REAL NOT NULL,
-        status TEXT NOT NULL,
-        expected_date TEXT NOT NULL,
-        unit_cost REAL NOT NULL,
-        currency TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier_status ON purchase_orders(supplier_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_purchase_orders_material_status ON purchase_orders(material_id, status)').run()
-}
-
-async function ensurePriceHistoryTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS price_history (
-        id TEXT PRIMARY KEY,
-        material_id TEXT NOT NULL,
-        supplier_id TEXT NOT NULL,
-        purchase_order_id TEXT NOT NULL,
-        unit_cost REAL NOT NULL,
-        currency TEXT NOT NULL,
-        quantity_grams REAL NOT NULL,
-        captured_at TEXT NOT NULL,
-        source TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_price_history_material_captured ON price_history(material_id, captured_at)').run()
-}
-
-async function ensureCommercialSkuTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS commercial_skus (
-        id TEXT PRIMARY KEY,
-        material_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL,
-        pack_size_grams REAL NOT NULL,
-        price REAL NOT NULL,
-        currency TEXT NOT NULL,
-        tier TEXT NOT NULL,
-        status TEXT NOT NULL,
-        moq_packs INTEGER NOT NULL,
-        label_template TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_commercial_skus_material_status ON commercial_skus(material_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_commercial_skus_tier_status ON commercial_skus(tier, status)').run()
-}
-
-async function ensurePriceListTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS price_lists (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        customer_group TEXT NOT NULL,
-        currency TEXT NOT NULL,
-        multiplier REAL NOT NULL,
-        sample_eligible INTEGER NOT NULL DEFAULT 0,
-        status TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_price_lists_group_status ON price_lists(customer_group, status)').run()
-}
-
-async function ensureQuoteTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS quotes (
-        id TEXT PRIMARY KEY,
-        sku_id TEXT NOT NULL,
-        customer TEXT NOT NULL,
-        customer_group TEXT NOT NULL,
-        quantity_packs INTEGER NOT NULL,
-        unit_price REAL NOT NULL,
-        total REAL NOT NULL,
-        currency TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_quotes_sku_status ON quotes(sku_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_quotes_created_at ON quotes(created_at)').run()
-}
-
-async function ensureSampleRequestTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS sample_requests (
-        id TEXT PRIMARY KEY,
-        sku_id TEXT NOT NULL,
-        customer TEXT NOT NULL,
-        packs INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sample_requests_sku_status ON sample_requests(sku_id, status)').run()
-}
-
-async function ensureCustomerTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS customers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        customer_group TEXT NOT NULL,
-        credit_limit REAL NOT NULL,
-        payment_terms TEXT NOT NULL,
-        contact_email TEXT NOT NULL,
-        billing_address_json TEXT NOT NULL,
-        shipping_address_json TEXT NOT NULL,
-        status TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_customers_group_status ON customers(customer_group, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_customers_contact_email ON customers(contact_email)').run()
-}
-
-async function ensureSalesOrderTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS sales_orders (
-        id TEXT PRIMARY KEY,
-        sku_id TEXT NOT NULL,
-        customer_id TEXT NOT NULL,
-        customer TEXT NOT NULL,
-        quantity INTEGER NOT NULL,
-        unit_price REAL NOT NULL,
-        discount_percent REAL NOT NULL,
-        tax_percent REAL NOT NULL,
-        shipping_cost REAL NOT NULL,
-        total REAL NOT NULL,
-        currency TEXT NOT NULL,
-        reserved_grams REAL NOT NULL,
-        fulfilled_grams REAL NOT NULL,
-        status TEXT NOT NULL,
-        carrier TEXT,
-        tracking_number TEXT,
-        reservation_allocations_json TEXT,
-        shipment_id TEXT,
-        document_ids_json TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_customer_status ON sales_orders(customer_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders(status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_sales_orders_created_at ON sales_orders(created_at)').run()
-}
-
-async function ensureOrderShipmentTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS order_shipments (
-        id TEXT PRIMARY KEY,
-        order_id TEXT NOT NULL,
-        carrier TEXT NOT NULL,
-        tracking_number TEXT NOT NULL,
-        status TEXT NOT NULL,
-        shipped_at TEXT,
-        delivered_at TEXT,
-        weight_grams REAL NOT NULL,
-        allocations_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_shipments_order_status ON order_shipments(order_id, status)').run()
-}
-
-async function ensureOrderDocumentTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS order_documents (
-        id TEXT PRIMARY KEY,
-        order_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        url TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_order_type ON order_documents(order_id, type)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_order_documents_status ON order_documents(status)').run()
-}
-
-async function ensureScheduledReportTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS scheduled_reports (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        cadence TEXT NOT NULL,
-        audience TEXT NOT NULL,
-        format TEXT NOT NULL,
-        status TEXT NOT NULL,
-        last_run_at TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_scheduled_reports_status_cadence ON scheduled_reports(status, cadence)').run()
-}
-
-async function ensureBillingSubscriptionTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS billing_subscriptions (
-        id TEXT PRIMARY KEY,
-        organization_id TEXT NOT NULL,
-        plan_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        collection_mode TEXT NOT NULL,
-        status TEXT NOT NULL,
-        current_period_start TEXT NOT NULL,
-        current_period_end TEXT NOT NULL,
-        trial_ends_at TEXT,
-        grace_ends_at TEXT,
-        freeze_reason TEXT,
-        provider_customer_id TEXT,
-        provider_subscription_id TEXT,
-        can_write INTEGER NOT NULL DEFAULT 0,
-        can_export INTEGER NOT NULL DEFAULT 0,
-        next_invoice_at TEXT NOT NULL,
-        subscription_updated_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_subscriptions_org_status ON billing_subscriptions(organization_id, status)').run()
-}
-
-async function ensureBillingInvoiceTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS billing_invoices (
-        id TEXT PRIMARY KEY,
-        subscription_id TEXT NOT NULL,
-        number TEXT NOT NULL,
-        status TEXT NOT NULL,
-        amount_due REAL NOT NULL,
-        currency TEXT NOT NULL,
-        due_at TEXT NOT NULL,
-        paid_at TEXT,
-        hosted_invoice_url TEXT NOT NULL,
-        document_id TEXT,
-        provider_invoice_id TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_invoices_subscription_status ON billing_invoices(subscription_id, status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_billing_invoices_due_at ON billing_invoices(due_at)').run()
-}
-
-async function ensureWebhookDeliveryTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS webhook_deliveries (
-        id TEXT PRIMARY KEY,
-        webhook_id TEXT NOT NULL,
-        event TEXT NOT NULL,
-        status TEXT NOT NULL,
-        attempts INTEGER NOT NULL,
-        last_attempt_at TEXT NOT NULL,
-        next_retry_at TEXT,
-        response_code INTEGER,
-        idempotency_key TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status_retry ON webhook_deliveries(status, next_retry_at)').run()
-  await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_idempotency ON webhook_deliveries(idempotency_key)').run()
-}
-
-async function ensureInventoryLotTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS inventory_lots (
-        id TEXT PRIMARY KEY,
-        material_id TEXT NOT NULL,
-        lot_number TEXT NOT NULL,
-        quantity_grams REAL NOT NULL,
-        reserved_grams REAL NOT NULL,
-        received_date TEXT NOT NULL,
-        expiry_date TEXT NOT NULL,
-        quality_status TEXT NOT NULL,
-        location TEXT NOT NULL,
-        unit_cost REAL NOT NULL,
-        supplier_lot_ref TEXT,
-        currency TEXT,
-        retest_date TEXT,
-        opened_date TEXT,
-        shelf_life_after_opening_days INTEGER,
-        container TEXT,
-        packaging TEXT,
-        coa_document_id TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_lots_material_quality ON inventory_lots(material_id, quality_status)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_lots_expiry ON inventory_lots(expiry_date)').run()
-}
-
-async function ensureInventoryMovementTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS inventory_movements (
-        id TEXT PRIMARY KEY,
-        at TEXT NOT NULL,
-        type TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        material_id TEXT NOT NULL,
-        lot_id TEXT NOT NULL,
-        quantity_grams REAL NOT NULL,
-        balance_after REAL NOT NULL,
-        ref TEXT NOT NULL,
-        actor TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_movements_lot_at ON inventory_movements(lot_id, at)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_inventory_movements_ref ON inventory_movements(ref)').run()
-}
-
-async function ensureLabUsageRecordTable(db: D1Database) {
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS lab_usage_records (
-        id TEXT PRIMARY KEY,
-        formula_id TEXT NOT NULL,
-        formula_code TEXT NOT NULL,
-        grams REAL NOT NULL,
-        batch_grams REAL NOT NULL,
-        status TEXT NOT NULL,
-        purpose TEXT NOT NULL,
-        project_code TEXT,
-        sample_code TEXT,
-        qc_link TEXT,
-        allocations_json TEXT NOT NULL,
-        weighing_session_json TEXT,
-        created_at TEXT NOT NULL,
-        reversed_at TEXT,
-        reversal_movements_json TEXT,
-        updated_at TEXT NOT NULL
-      )`,
-    )
-    .run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_lab_usage_records_formula_created ON lab_usage_records(formula_id, created_at)').run()
-  await db.prepare('CREATE INDEX IF NOT EXISTS idx_lab_usage_records_status ON lab_usage_records(status)').run()
-}
-
-async function hydrateSnapshots(db: D1Database, service: NorthStarService) {
-  const snapshotRows = await db
-    .prepare('SELECT key, value FROM northstar_snapshots')
-    .all<{ key: SnapshotKey; value: string }>()
+async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: Env) {
+  const { state: cachedState } = await loadCachedSnapshotState(db, env)
   const serviceState = service as unknown as ServiceState
+  const currentState = cachedState as unknown as Partial<Record<SnapshotKey, ServiceState[SnapshotKey]>>
 
+  for (const key of SNAPSHOT_KEYS) {
+    const cachedValue = currentState[key]
+    if (cachedValue === undefined) {
+      continue
+    }
+    ;(serviceState as Record<SnapshotKey, ServiceState[SnapshotKey]>)[key] = structuredClone(cachedValue)
+  }
+  return
+}
+
+function isSnapshotCacheFresh(state: CachedSnapshotState | null): state is CachedSnapshotState {
+  return Boolean(state && Date.now() - state.loadedAt <= SNAPSHOT_CACHE_TTL_MS)
+}
+
+async function loadCachedSnapshotState(db: D1Database, env: Env): Promise<CachedSnapshotState> {
+  if (isSnapshotCacheFresh(snapshotCache)) {
+    return snapshotCache
+  }
+  if (snapshotCacheFlight) {
+    return snapshotCacheFlight
+  }
+  snapshotCacheFlight = hydrateSnapshotStateFromDatabase(db, env)
+  try {
+    snapshotCache = await snapshotCacheFlight
+    return snapshotCache
+  } finally {
+    snapshotCacheFlight = null
+  }
+}
+
+async function hydrateSnapshotStateFromDatabase(db: D1Database, env: Env): Promise<CachedSnapshotState> {
+  const service = new NorthStarService({
+    authCredentials: seededAdminCredentialsForEnv(env),
+    mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+  })
+  const serviceState = service as unknown as ServiceState
+  const snapshotRows = await db.prepare('SELECT key, value, updated_at FROM northstar_snapshots').all<{
+    key: SnapshotKey
+    value: string
+    updated_at: string | null
+  }>()
+
+  let updatedAt = ''
   for (const row of snapshotRows.results ?? []) {
-    if (!SNAPSHOT_KEYS.includes(row.key)) {
+    if (!SNAPSHOT_KEY_SET.has(row.key)) {
       continue
     }
     serviceState[row.key] = JSON.parse(row.value)
+    if (row.updated_at && row.updated_at > updatedAt) {
+      updatedAt = row.updated_at
+    }
   }
-  await hydrateNormalizedState(db, serviceState)
+  await hydrateNormalizedState(db, serviceState, env)
+  return { loadedAt: Date.now(), updatedAt, state: structuredClone(serviceState) }
+}
+
+function refreshCachedSnapshotState(service: NorthStarService) {
+  snapshotCache = {
+    loadedAt: Date.now(),
+    updatedAt: new Date().toISOString(),
+    state: structuredClone(service as unknown as ServiceState),
+  }
 }
 
 async function persistSnapshots(db: D1Database, service: NorthStarService) {
@@ -1520,6 +1033,90 @@ async function persistUserSettingsMutation(db: D1Database, service: NorthStarSer
   const updatedAt = new Date().toISOString()
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistMemberships(db, serviceState.membershipRecords, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+export function isSingleRecoveryCodeConsumption(previousHashes: string[], nextHashes: string[]) {
+  if (previousHashes.length !== nextHashes.length + 1) {
+    return false
+  }
+  const previousSet = new Set(previousHashes)
+  const nextSet = new Set(nextHashes)
+  if (previousSet.size !== previousHashes.length || nextSet.size !== nextHashes.length) {
+    return false
+  }
+  return nextHashes.every((hash) => previousSet.has(hash))
+}
+
+async function persistMfaVerificationMutation(
+  db: D1Database,
+  service: NorthStarService,
+  previousEnrollments: MfaEnrollmentRecord[],
+  sessionId: string | undefined,
+  result: unknown,
+) {
+  const serviceState = service as unknown as ServiceState
+  const session = serviceState.sessions.find((item) => item.id === sessionId)
+  if (!session) {
+    throw new UnauthorizedException('Authentication required')
+  }
+  const enrollment = serviceState.mfaEnrollmentRecords.find(
+    (item) => item.userId === session.userId && item.organizationId === session.organizationId,
+  )
+  const previousEnrollment = previousEnrollments.find(
+    (item) => item.userId === session.userId && item.organizationId === session.organizationId,
+  )
+  if (!enrollment || !previousEnrollment) {
+    throw new UnprocessableEntityException('MFA enrollment is unavailable')
+  }
+
+  const resultData = isRecord(result) && isRecord(result.data) ? result.data : {}
+  const method = resultData.method
+  const updatedAt = new Date().toISOString()
+  if (method === 'recovery') {
+    if (!isSingleRecoveryCodeConsumption(previousEnrollment.recoveryCodeHashes, enrollment.recoveryCodeHashes)) {
+      throw new ForbiddenException('MFA code is invalid or expired')
+    }
+    const mutation = await db
+      .prepare(
+        `UPDATE mfa_enrollments
+         SET encrypted_secret = ?1, recovery_code_hashes_json = ?2, created_at = ?3,
+             verified_at = ?4, updated_at = ?5
+         WHERE organization_id = ?6 AND user_id = ?7
+           AND verified_at IS NOT NULL
+           AND recovery_code_hashes_json = ?8`,
+      )
+      .bind(
+        enrollment.encryptedSecret,
+        JSON.stringify(enrollment.recoveryCodeHashes),
+        enrollment.createdAt,
+        enrollment.verifiedAt ?? null,
+        enrollment.updatedAt || updatedAt,
+        enrollment.organizationId,
+        enrollment.userId,
+        JSON.stringify(previousEnrollment.recoveryCodeHashes),
+      )
+      .run()
+    if ((mutation.meta.changes ?? 0) !== 1) {
+      throw new ForbiddenException('MFA code is invalid or expired')
+    }
+  } else if (method === 'totp') {
+    await persistMfaEnrollments(db, [enrollment], updatedAt)
+  } else {
+    throw new UnprocessableEntityException('MFA verification result is invalid')
+  }
+
+  await persistAuthSessions(db, serviceState.sessions, updatedAt)
+  await persistMemberships(db, serviceState.membershipRecords, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+async function persistMfaVerificationFailureState(db: D1Database, service: NorthStarService) {
+  const serviceState = service as unknown as ServiceState
+  const updatedAt = new Date().toISOString()
+  await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
@@ -1550,6 +1147,16 @@ type AuthSessionRow = {
   revoked_reason: string | null
 }
 
+type MfaEnrollmentRow = {
+  user_id: string
+  organization_id: string
+  encrypted_secret: string
+  recovery_code_hashes_json: string
+  created_at: string
+  verified_at: string | null
+  updated_at: string
+}
+
 type UserSettingsRow = {
   user_id: string
   organization_id: string
@@ -1578,6 +1185,7 @@ type OrganizationRow = {
   id: string
   name: string
   slug: string
+  custom_domain: string | null
   plan: string
   status: string
   primary_contact: string
@@ -1674,6 +1282,35 @@ type BrandingRow = {
   document_footer: string
   label_template: string
   logo_mode: string
+}
+
+type FormulaRecordRow = {
+  organization_id: string
+  id: string
+  brand_id: string
+  code: string
+  name: string
+  formula_type: string
+  workflow_status: string
+  status: string
+  version: string
+  draft_revision: number
+  record_json: string
+  updated_at: string
+}
+
+type FormulaVersionRecordRow = {
+  organization_id: string
+  id: string
+  formula_id: string
+  formula_code: string
+  version: string
+  status: string
+  created_at: string
+  created_by: string
+  checksum: string
+  record_json: string
+  updated_at: string
 }
 
 type DocumentRecordRow = {
@@ -1874,6 +1511,55 @@ type BillingInvoiceRow = {
   provider_invoice_id: string | null
 }
 
+type SsoConfigRow = {
+  id: string
+  organization_id: string
+  provider: string
+  domain: string
+  status: string
+  issuer_url: string
+  metadata_url: string | null
+  client_id: string | null
+  acs_url: string
+  entity_id: string
+  domain_verified_at: string | null
+  jit_provisioning: number
+  enforce_sso: number
+  scim_json: string
+  role_mapping_json: string
+  config_updated_at: string
+}
+
+type ApiKeyRow = {
+  id: string
+  organization_id: string
+  label: string
+  prefix: string
+  last_four: string
+  scopes_json: string
+  created_at: string
+  created_by: string
+  rotated_at: string
+  last_used_at: string | null
+  expires_at: string | null
+  status: string
+  secret_hash: string | null
+}
+
+type WebhookRow = {
+  id: string
+  organization_id: string
+  url: string
+  events_json: string
+  status: string
+  last_delivery: string
+  created_at: string
+  owner: string
+  signing_secret_last_four: string
+  signing_secret_rotated_at: string
+  failure_count: number
+}
+
 type WebhookDeliveryRow = {
   id: string
   webhook_id: string
@@ -1884,6 +1570,22 @@ type WebhookDeliveryRow = {
   next_retry_at: string | null
   response_code: number | null
   idempotency_key: string
+}
+
+type AuditExportJobRow = {
+  id: string
+  organization_id: string
+  requested_by: string
+  format: string
+  scope: string
+  status: string
+  event_count: number
+  checksum: string
+  download_url: string | null
+  created_at: string
+  completed_at: string | null
+  expires_at: string
+  audit_event_id: string
 }
 
 type ShipmentRow = {
@@ -1909,6 +1611,7 @@ type OrderDocumentRow = {
 
 type InventoryLotRow = {
   id: string
+  organization_id: string
   material_id: string
   lot_number: string
   quantity_grams: number
@@ -1959,7 +1662,7 @@ type LabUsageRecordRow = {
   reversal_movements_json: string | null
 }
 
-async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState) {
+async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState, env: Env) {
   const sessionRows = await db
     .prepare(
       `SELECT id, user_id, email, organization_id, brand_id, role, issued_at, last_seen_at,
@@ -1975,6 +1678,16 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   } else if (Array.isArray(serviceState.sessions) && serviceState.sessions.length > 0) {
     await persistAuthSessions(db, serviceState.sessions, new Date().toISOString())
   }
+  const mfaRows = await db
+    .prepare(
+      `SELECT user_id, organization_id, encrypted_secret, recovery_code_hashes_json,
+        created_at, verified_at, updated_at
+       FROM mfa_enrollments
+       ORDER BY organization_id ASC, user_id ASC`,
+    )
+    .all<MfaEnrollmentRow>()
+  serviceState.mfaEnrollmentRecords = (mfaRows.results ?? []).map(mfaEnrollmentFromRow)
+
 
   const userSettingsRows = await db
     .prepare(
@@ -2007,7 +1720,9 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
   await hydrateTenantCoreState(db, serviceState)
+  await ensureSeededAdminBootstrap(db, serviceState, env.SEEDED_ADMIN_PASSWORD_HASH)
   await hydrateMaterialState(db, serviceState)
+  await hydrateFormulaState(db, serviceState)
   await hydrateCustomizationState(db, serviceState)
   await hydrateDocumentState(db, serviceState)
   await hydrateProcurementState(db, serviceState)
@@ -2022,10 +1737,12 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
 
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
+  await persistMfaEnrollments(db, serviceState.mfaEnrollmentRecords, updatedAt)
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
+  await persistFormulaState(db, serviceState, updatedAt)
   await persistCustomizationState(db, serviceState, updatedAt)
   await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
   await persistProcurementState(db, serviceState, updatedAt)
@@ -2102,6 +1819,44 @@ async function persistAuthSessions(db: D1Database, sessions: AuthSession[], upda
   )
 }
 
+async function persistMfaEnrollments(
+  db: D1Database,
+  enrollments: MfaEnrollmentRecord[],
+  updatedAt: string,
+) {
+  if (!Array.isArray(enrollments) || enrollments.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    enrollments.map((enrollment) =>
+      db
+        .prepare(
+          `INSERT INTO mfa_enrollments (
+            user_id, organization_id, encrypted_secret, recovery_code_hashes_json,
+            created_at, verified_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          ON CONFLICT(organization_id, user_id) DO UPDATE SET
+            encrypted_secret = excluded.encrypted_secret,
+            recovery_code_hashes_json = excluded.recovery_code_hashes_json,
+            created_at = excluded.created_at,
+            verified_at = excluded.verified_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          enrollment.userId,
+          enrollment.organizationId,
+          enrollment.encryptedSecret,
+          JSON.stringify(enrollment.recoveryCodeHashes),
+          enrollment.createdAt,
+          enrollment.verifiedAt ?? null,
+          enrollment.updatedAt || updatedAt,
+        ),
+    ),
+  )
+}
+
 async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[], updatedAt: string) {
   if (!Array.isArray(settings) || settings.length === 0) {
     return
@@ -2169,10 +1924,171 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
   )
 }
 
+async function ensureSeededAdminBootstrap(
+  db: D1Database,
+  serviceState: ServiceState,
+  configuredAdminPasswordHash?: string,
+) {
+  const seedOrganization = seedOrganizations.find((organization) => organization.id === SEEDED_ADMIN_ORGANIZATION_ID)
+  const seedMembership = seedMemberships.find(
+    (membership) => membership.email.toLowerCase() === SEEDED_ADMIN_EMAIL,
+  )
+  const seedUserSetting = seedUserSettings.find(
+    (settings) =>
+      settings.email.toLowerCase() === SEEDED_ADMIN_EMAIL &&
+      settings.organizationId === SEEDED_ADMIN_ORGANIZATION_ID,
+  )
+  const seedAdminPolicy = seedRolePolicies.find(
+    (policy) => policy.role === SEEDED_ADMIN_ROLE && policy.scope === 'organization',
+  )
+  const updatedAt = new Date().toISOString()
+
+  if (seedOrganization) {
+    const existingOrganization = serviceState.organizationRecords.find((organization) => organization.id === seedOrganization.id)
+    const nextOrganization = existingOrganization
+      ? { ...existingOrganization, primaryContact: seedOrganization.primaryContact }
+      : seedOrganization
+    if (!existingOrganization || existingOrganization.primaryContact !== nextOrganization.primaryContact) {
+      serviceState.organizationRecords = [
+        nextOrganization,
+        ...serviceState.organizationRecords.filter((organization) => organization.id !== nextOrganization.id),
+      ]
+      await persistOrganizations(db, [nextOrganization], updatedAt)
+    }
+  }
+
+  if (seedMembership) {
+    const existingMembership = serviceState.membershipRecords.find(
+      (membership) => membership.id === seedMembership.id || membership.email.toLowerCase() === SEEDED_ADMIN_EMAIL,
+    )
+    const nextMembership = {
+      ...seedMembership,
+      lastActiveAt: existingMembership?.lastActiveAt ?? seedMembership.lastActiveAt,
+    }
+    if (!existingMembership || JSON.stringify(existingMembership) !== JSON.stringify(nextMembership)) {
+      serviceState.membershipRecords = [
+        nextMembership,
+        ...serviceState.membershipRecords.filter(
+          (membership) => membership.id !== nextMembership.id && membership.email.toLowerCase() !== SEEDED_ADMIN_EMAIL,
+        ),
+      ]
+      await persistMemberships(db, [nextMembership], updatedAt)
+    }
+  }
+
+  if (seedUserSetting) {
+    const existingUserSetting = serviceState.userSettingsRecords.find(
+      (settings) => settings.userId === seedUserSetting.userId && settings.organizationId === seedUserSetting.organizationId,
+    )
+    if (!existingUserSetting) {
+      serviceState.userSettingsRecords = [seedUserSetting, ...serviceState.userSettingsRecords]
+      await persistUserSettings(db, [seedUserSetting], updatedAt)
+    }
+  }
+
+  if (seedAdminPolicy) {
+    const existingAdminPolicy = serviceState.rolePolicyRecords.find(
+      (policy) => policy.role === seedAdminPolicy.role && policy.scope === seedAdminPolicy.scope,
+    )
+    if (!existingAdminPolicy || JSON.stringify(existingAdminPolicy) !== JSON.stringify(seedAdminPolicy)) {
+      serviceState.rolePolicyRecords = [
+        seedAdminPolicy,
+        ...serviceState.rolePolicyRecords.filter(
+          (policy) => !(policy.role === seedAdminPolicy.role && policy.scope === seedAdminPolicy.scope),
+        ),
+      ]
+      await persistRolePolicies(db, [seedAdminPolicy], updatedAt)
+    }
+  }
+
+  const seedOwnerPolicy = seedRolePolicies.find(
+    (policy) => policy.role === 'Owner' && policy.scope === 'organization',
+  )
+  if (seedOwnerPolicy) {
+    const existingOwnerPolicy = serviceState.rolePolicyRecords.find(
+      (policy) => policy.role === seedOwnerPolicy.role && policy.scope === seedOwnerPolicy.scope,
+    )
+    if (!existingOwnerPolicy || JSON.stringify(existingOwnerPolicy) !== JSON.stringify(seedOwnerPolicy)) {
+      serviceState.rolePolicyRecords = [
+        seedOwnerPolicy,
+        ...serviceState.rolePolicyRecords.filter(
+          (policy) => !(policy.role === seedOwnerPolicy.role && policy.scope === seedOwnerPolicy.scope),
+        ),
+      ]
+      await persistRolePolicies(db, [seedOwnerPolicy], updatedAt)
+    }
+  }
+
+  const existingAdminCredential = serviceState.authCredentialRecords.find(
+    (credential) => String(credential.email ?? '').toLowerCase() === SEEDED_ADMIN_EMAIL,
+  )
+
+  const seededAdminPasswordHash = readConfiguredSeededAdminPasswordHash(configuredAdminPasswordHash)
+
+  if (seededAdminPasswordHash && (!existingAdminCredential || existingAdminCredential.passwordHash !== seededAdminPasswordHash)) {
+    const credentialWasRotated = Boolean(existingAdminCredential)
+    const seededAdminCredential = {
+      email: SEEDED_ADMIN_EMAIL,
+      passwordHash: seededAdminPasswordHash,
+      passwordSetAt: updatedAt,
+    }
+    serviceState.authCredentialRecords = [
+      seededAdminCredential,
+      ...serviceState.authCredentialRecords.filter(
+        (credential) => String(credential.email ?? '').toLowerCase() !== SEEDED_ADMIN_EMAIL,
+      ),
+    ]
+    await db
+      .prepare(
+        `INSERT INTO northstar_snapshots (key, value, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .bind('authCredentialRecords', JSON.stringify(serviceState.authCredentialRecords), updatedAt)
+      .run()
+
+    const revokedAdminSessions = serviceState.sessions
+      .filter((session) => session.email.toLowerCase() === SEEDED_ADMIN_EMAIL && session.status === 'ACTIVE')
+      .map((session) => ({
+        ...session,
+        status: 'REVOKED' as const,
+        revokedAt: updatedAt,
+        revokedReason: 'admin_credential_rotated',
+      }))
+    if (revokedAdminSessions.length > 0) {
+      const revokedById = new Map(revokedAdminSessions.map((session) => [session.id, session]))
+      serviceState.sessions = serviceState.sessions.map((session) => revokedById.get(session.id) ?? session)
+      await persistAuthSessions(db, revokedAdminSessions, updatedAt)
+    }
+
+    const nextAuditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
+    const auditEvent: AuditEvent = {
+      id: `AUD-${nextAuditCounter}`,
+      at: updatedAt,
+      actor: 'system:worker',
+      action: credentialWasRotated ? 'security.adminCredential.rotate' : 'security.adminCredential.bootstrap',
+      entity: SEEDED_ADMIN_EMAIL,
+      requestId: `req_admin_credential_${nextAuditCounter}`,
+      outcome: 'allowed',
+    }
+    serviceState.auditCounter = nextAuditCounter
+    serviceState.auditEvents = [auditEvent, ...serviceState.auditEvents]
+    await persistAuditEvents(db, [auditEvent], updatedAt)
+  }
+}
+
+function readConfiguredSeededAdminPasswordHash(configuredAdminPasswordHash: string | undefined) {
+  const candidate = configuredAdminPasswordHash?.trim()
+  if (candidate && /^pbkdf2:v1:sha256:100000:[A-Za-z0-9_-]{22}:[A-Za-z0-9_-]{43}$/.test(candidate)) {
+    return candidate
+  }
+  return undefined
+}
+
 async function hydrateTenantCoreState(db: D1Database, serviceState: ServiceState) {
   const organizationRows = await db
     .prepare(
-      `SELECT id, name, slug, plan, status, primary_contact, created_at
+      `SELECT id, name, slug, custom_domain, plan, status, primary_contact, created_at
        FROM tenant_organizations
        ORDER BY created_at DESC, id DESC`,
     )
@@ -2382,6 +2298,242 @@ async function persistStockTakes(db: D1Database, stockTakes: StockTakeRecord[], 
              updated_at = excluded.updated_at`,
         )
         .bind(stockTake.id, stockTake.at, stockTake.lotId, stockTake.status, JSON.stringify(stockTake), updatedAt),
+    ),
+  )
+}
+
+async function hydrateFormulaState(db: D1Database, serviceState: ServiceState) {
+  const formulaRows = await db
+    .prepare(
+      `SELECT organization_id, id, brand_id, code, name, formula_type, workflow_status,
+        status, version, draft_revision, record_json, updated_at
+       FROM formula_records
+       ORDER BY updated_at DESC, organization_id ASC, code ASC`,
+    )
+    .all<FormulaRecordRow>()
+  const formulas = (formulaRows.results ?? []).map(formulaFromRow).filter(isDefined)
+  if (formulas.length > 0) {
+    serviceState.formulaRecords = formulas
+  } else if (Array.isArray(serviceState.formulaRecords) && serviceState.formulaRecords.length > 0) {
+    await persistFormulaRecords(db, serviceState.formulaRecords, new Date().toISOString())
+  }
+
+  const versionRows = await db
+    .prepare(
+      `SELECT organization_id, id, formula_id, formula_code, version, status, created_at,
+        created_by, checksum, record_json, updated_at
+       FROM formula_version_records
+       ORDER BY created_at DESC, organization_id ASC, formula_code ASC`,
+    )
+    .all<FormulaVersionRecordRow>()
+  const versions = (versionRows.results ?? []).map(formulaVersionFromRow).filter(isDefined)
+  if (versions.length > 0) {
+    serviceState.formulaVersionRecords = versions
+  } else if (Array.isArray(serviceState.formulaVersionRecords) && serviceState.formulaVersionRecords.length > 0) {
+    await persistFormulaVersions(db, serviceState.formulaVersionRecords, new Date().toISOString())
+  }
+}
+
+export function normalizeFormulaPersistenceRecord(formula: Formula, updatedAt = new Date().toISOString()): Formula {
+  const id = typeof formula.id === 'string' ? formula.id.trim() : ''
+  const code = typeof formula.code === 'string' ? formula.code.trim() : ''
+  const name = typeof formula.name === 'string' ? formula.name.trim() : ''
+  if (!id || !code || !name) {
+    throw new Error('Formula persistence record is missing identity metadata')
+  }
+
+  const organizationId =
+    typeof formula.organizationId === 'string' && formula.organizationId.trim()
+      ? formula.organizationId.trim()
+      : SEEDED_ADMIN_ORGANIZATION_ID
+  const formulaType = formula.formulaType === 'ACCORD' || code.startsWith('ACC-') ? 'ACCORD' : 'FINE_FRAGRANCE'
+  const status = formula.status || 'draft'
+  const workflowStatus =
+    formula.workflowStatus === 'APPROVED' ||
+    formula.workflowStatus === 'IN_REVIEW' ||
+    formula.workflowStatus === 'CHANGES_REQUESTED' ||
+    formula.workflowStatus === 'ARCHIVED'
+      ? formula.workflowStatus
+      : status === 'stable'
+        ? 'APPROVED'
+        : 'DRAFT'
+
+  return {
+    ...formula,
+    id,
+    code,
+    name,
+    organizationId,
+    brandId:
+      typeof formula.brandId === 'string' && formula.brandId.trim()
+        ? formula.brandId.trim()
+        : organizationId === SEEDED_ADMIN_ORGANIZATION_ID
+          ? 'brand-nxl'
+          : `brand-${organizationId.replace(/^org-/, '')}`,
+    formulaType,
+    concentrationType: formula.concentrationType || (formulaType === 'ACCORD' ? 'OTHER' : 'EDP'),
+    finalProductConcentrationPercent: Number.isFinite(formula.finalProductConcentrationPercent)
+      ? Math.min(100, Math.max(0.01, formula.finalProductConcentrationPercent))
+      : formulaType === 'ACCORD'
+        ? 100
+        : 20,
+    targetMarkets: Array.isArray(formula.targetMarkets) ? formula.targetMarkets : [],
+    brief: formula.brief || '',
+    inspiration: formula.inspiration || '',
+    pyramidSummary: formula.pyramidSummary || '',
+    tags: Array.isArray(formula.tags) ? formula.tags : [],
+    project: formula.project || '',
+    collection: formula.collection || '',
+    density: Number.isFinite(formula.density) && formula.density > 0 ? formula.density : 1,
+    bottleVolumeMl:
+      Number.isFinite(formula.bottleVolumeMl) && formula.bottleVolumeMl > 0 ? formula.bottleVolumeMl : 50,
+    bottleCount:
+      Number.isFinite(formula.bottleCount) && formula.bottleCount > 0 ? Math.round(formula.bottleCount) : 1,
+    ifraCategory: formula.ifraCategory || '4',
+    workflowStatus,
+    draftRevision:
+      Number.isFinite(formula.draftRevision) && formula.draftRevision > 0 ? Math.round(formula.draftRevision) : 1,
+    updatedAt: formula.updatedAt || updatedAt,
+    updatedBy: formula.updatedBy || formula.owner || 'system:migration',
+    approvalHistory: Array.isArray(formula.approvalHistory) ? formula.approvalHistory : [],
+    status,
+    version: formula.version || 'v1',
+    targetGrams: Number.isFinite(formula.targetGrams) && formula.targetGrams > 0 ? formula.targetGrams : 100,
+    owner: formula.owner || 'system:migration',
+    lines: Array.isArray(formula.lines) ? formula.lines : [],
+  }
+}
+
+export function normalizeFormulaVersionPersistenceRecord(
+  version: FormulaVersionRecord,
+  updatedAt = new Date().toISOString(),
+): FormulaVersionRecord {
+  const id = typeof version.id === 'string' ? version.id.trim() : ''
+  const formulaId = typeof version.formulaId === 'string' ? version.formulaId.trim() : ''
+  const formulaCode = typeof version.formulaCode === 'string' ? version.formulaCode.trim() : ''
+  const versionValue = typeof version.version === 'string' ? version.version.trim() : ''
+  if (!id || !formulaId || !formulaCode || !versionValue) {
+    throw new Error('Formula version persistence record is missing identity metadata')
+  }
+
+  return {
+    ...version,
+    id,
+    formulaId,
+    formulaCode,
+    version: versionValue,
+    organizationId:
+      typeof version.organizationId === 'string' && version.organizationId.trim()
+        ? version.organizationId.trim()
+        : SEEDED_ADMIN_ORGANIZATION_ID,
+    status: version.status || 'DRAFT',
+    createdAt: version.createdAt || updatedAt,
+    createdBy: version.createdBy || 'system:migration',
+    checksum: version.checksum || formulaVersionPersistenceChecksum(version),
+    evaluations: Array.isArray(version.evaluations) ? version.evaluations : [],
+    resolvedLeaves: Array.isArray(version.resolvedLeaves) ? version.resolvedLeaves : [],
+    evaporation: Array.isArray(version.evaporation) ? version.evaporation : [],
+    lines: Array.isArray(version.lines) ? version.lines : [],
+  }
+}
+
+function formulaVersionPersistenceChecksum(version: FormulaVersionRecord) {
+  const payload = `${version.formulaId || 'legacy'}:${version.version || 'v1'}:${JSON.stringify(version.lines ?? [])}`
+  let hash = 0
+  for (let index = 0; index < payload.length; index += 1) {
+    hash = (hash * 31 + payload.charCodeAt(index)) >>> 0
+  }
+  return `sha256:${hash.toString(16).padStart(8, '0')}`
+}
+async function persistFormulaState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistFormulaRecords(db, serviceState.formulaRecords, updatedAt)
+  await persistFormulaVersions(db, serviceState.formulaVersionRecords, updatedAt)
+}
+
+async function persistFormulaRecords(db: D1Database, formulas: Formula[], updatedAt: string) {
+  if (!Array.isArray(formulas) || formulas.length === 0) {
+    return
+  }
+  const normalizedFormulas = formulas.map((formula) => normalizeFormulaPersistenceRecord(formula, updatedAt))
+  await runStatementBatches(
+    db,
+    normalizedFormulas.map((formula) =>
+      db
+        .prepare(
+          `INSERT INTO formula_records (
+            organization_id, id, brand_id, code, name, formula_type, workflow_status,
+            status, version, draft_revision, record_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          ON CONFLICT(organization_id, id) DO UPDATE SET
+            brand_id = excluded.brand_id,
+            code = excluded.code,
+            name = excluded.name,
+            formula_type = excluded.formula_type,
+            workflow_status = excluded.workflow_status,
+            status = excluded.status,
+            version = excluded.version,
+            draft_revision = excluded.draft_revision,
+            record_json = excluded.record_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          formula.organizationId,
+          formula.id,
+          formula.brandId,
+          formula.code,
+          formula.name,
+          formula.formulaType,
+          formula.workflowStatus,
+          formula.status,
+          formula.version,
+          formula.draftRevision,
+          JSON.stringify(formula),
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistFormulaVersions(db: D1Database, versions: FormulaVersionRecord[], updatedAt: string) {
+  if (!Array.isArray(versions) || versions.length === 0) {
+    return
+  }
+  const normalizedVersions = versions.map((version) => normalizeFormulaVersionPersistenceRecord(version, updatedAt))
+  await runStatementBatches(
+    db,
+    normalizedVersions.map((version) =>
+      db
+        .prepare(
+          `INSERT INTO formula_version_records (
+            organization_id, id, formula_id, formula_code, version, status, created_at,
+            created_by, checksum, record_json, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          ON CONFLICT(organization_id, id) DO UPDATE SET
+            formula_id = excluded.formula_id,
+            formula_code = excluded.formula_code,
+            version = excluded.version,
+            status = excluded.status,
+            created_at = excluded.created_at,
+            created_by = excluded.created_by,
+            checksum = excluded.checksum,
+            record_json = excluded.record_json,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          version.organizationId,
+          version.id,
+          version.formulaId,
+          version.formulaCode,
+          version.version,
+          version.status,
+          version.createdAt,
+          version.createdBy,
+          version.checksum,
+          JSON.stringify(version),
+          updatedAt,
+        ),
     ),
   )
 }
@@ -2610,12 +2762,13 @@ async function persistOrganizations(db: D1Database, organizations: OrganizationR
       db
         .prepare(
           `INSERT INTO tenant_organizations (
-            id, name, slug, plan, status, primary_contact, created_at, updated_at
+            id, name, slug, custom_domain, plan, status, primary_contact, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             slug = excluded.slug,
+            custom_domain = excluded.custom_domain,
             plan = excluded.plan,
             status = excluded.status,
             primary_contact = excluded.primary_contact,
@@ -2626,6 +2779,7 @@ async function persistOrganizations(db: D1Database, organizations: OrganizationR
           organization.id,
           organization.name,
           organization.slug,
+          organization.customDomain ?? null,
           organization.plan,
           organization.status,
           organization.primaryContact,
@@ -3585,6 +3739,52 @@ async function hydrateBillingState(db: D1Database, serviceState: ServiceState) {
     await persistBillingInvoices(db, serviceState.invoiceRecords, new Date().toISOString())
   }
 
+  const ssoRows = await db
+    .prepare(
+      `SELECT id, organization_id, provider, domain, status, issuer_url, metadata_url,
+        client_id, acs_url, entity_id, domain_verified_at, jit_provisioning,
+        enforce_sso, scim_json, role_mapping_json, config_updated_at
+       FROM sso_configs
+       ORDER BY organization_id ASC`,
+    )
+    .all<SsoConfigRow>()
+  const ssoConfigs = (ssoRows.results ?? []).map(ssoConfigFromRow)
+  if (ssoConfigs.length > 0) {
+    serviceState.ssoConfigRecords = ssoConfigs
+  } else if (Array.isArray(serviceState.ssoConfigRecords) && serviceState.ssoConfigRecords.length > 0) {
+    await persistSsoConfigs(db, serviceState.ssoConfigRecords, new Date().toISOString())
+  }
+
+  const apiKeyRows = await db
+    .prepare(
+      `SELECT id, organization_id, label, prefix, last_four, scopes_json, created_at,
+        created_by, rotated_at, last_used_at, expires_at, status, secret_hash
+       FROM api_keys
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<ApiKeyRow>()
+  const keys = (apiKeyRows.results ?? []).map(apiKeyFromRow)
+  if (keys.length > 0) {
+    serviceState.apiKeyRecords = keys
+  } else if (Array.isArray(serviceState.apiKeyRecords) && serviceState.apiKeyRecords.length > 0) {
+    await persistApiKeys(db, serviceState.apiKeyRecords, new Date().toISOString())
+  }
+
+  const webhookRows = await db
+    .prepare(
+      `SELECT id, organization_id, url, events_json, status, last_delivery, created_at,
+        owner, signing_secret_last_four, signing_secret_rotated_at, failure_count
+       FROM webhooks
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<WebhookRow>()
+  const hookRecords = (webhookRows.results ?? []).map(webhookFromRow)
+  if (hookRecords.length > 0) {
+    serviceState.webhookRecords = hookRecords
+  } else if (Array.isArray(serviceState.webhookRecords) && serviceState.webhookRecords.length > 0) {
+    await persistWebhooks(db, serviceState.webhookRecords, new Date().toISOString())
+  }
+
   const deliveryRows = await db
     .prepare(
       `SELECT id, webhook_id, event, status, attempts, last_attempt_at, next_retry_at,
@@ -3599,12 +3799,31 @@ async function hydrateBillingState(db: D1Database, serviceState: ServiceState) {
   } else if (Array.isArray(serviceState.webhookDeliveryRecords) && serviceState.webhookDeliveryRecords.length > 0) {
     await persistWebhookDeliveries(db, serviceState.webhookDeliveryRecords, new Date().toISOString())
   }
+
+  const exportRows = await db
+    .prepare(
+      `SELECT id, organization_id, requested_by, format, scope, status, event_count,
+        checksum, download_url, created_at, completed_at, expires_at, audit_event_id
+       FROM audit_export_jobs
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<AuditExportJobRow>()
+  const exportJobs = (exportRows.results ?? []).map(auditExportJobFromRow)
+  if (exportJobs.length > 0) {
+    serviceState.auditExportRecords = exportJobs
+  } else if (Array.isArray(serviceState.auditExportRecords) && serviceState.auditExportRecords.length > 0) {
+    await persistAuditExportJobs(db, serviceState.auditExportRecords, new Date().toISOString())
+  }
 }
 
 async function persistBillingState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistBillingSubscriptions(db, serviceState.subscriptionRecords, updatedAt)
   await persistBillingInvoices(db, serviceState.invoiceRecords, updatedAt)
+  await persistSsoConfigs(db, serviceState.ssoConfigRecords, updatedAt)
+  await persistApiKeys(db, serviceState.apiKeyRecords, updatedAt)
+  await persistWebhooks(db, serviceState.webhookRecords, updatedAt)
   await persistWebhookDeliveries(db, serviceState.webhookDeliveryRecords, updatedAt)
+  await persistAuditExportJobs(db, serviceState.auditExportRecords, updatedAt)
 }
 
 async function persistBillingSubscriptions(db: D1Database, subscriptions: BillingSubscriptionRecord[], updatedAt: string) {
@@ -3615,13 +3834,6 @@ async function persistBillingSubscriptions(db: D1Database, subscriptions: Billin
     db,
     subscriptions.map((subscription) => prepareBillingSubscriptionStatement(db, subscription, updatedAt)),
   )
-}
-
-async function persistBillingSubscription(db: D1Database, subscription: BillingSubscriptionRecord, updatedAt: string) {
-  if (!subscription) {
-    return
-  }
-  await prepareBillingSubscriptionStatement(db, subscription, updatedAt).run()
 }
 
 function prepareBillingSubscriptionStatement(db: D1Database, subscription: BillingSubscriptionRecord, updatedAt: string) {
@@ -3720,6 +3932,156 @@ async function persistBillingInvoices(db: D1Database, invoices: BillingInvoiceRe
   )
 }
 
+async function persistSsoConfigs(db: D1Database, configs: SsoConfigRecord[], updatedAt: string) {
+  if (!Array.isArray(configs) || configs.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    configs.map((config) =>
+      db
+        .prepare(
+          `INSERT INTO sso_configs (
+            id, organization_id, provider, domain, status, issuer_url, metadata_url,
+            client_id, acs_url, entity_id, domain_verified_at, jit_provisioning,
+            enforce_sso, scim_json, role_mapping_json, config_updated_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+          ON CONFLICT(organization_id) DO UPDATE SET
+            id = excluded.id,
+            provider = excluded.provider,
+            domain = excluded.domain,
+            status = excluded.status,
+            issuer_url = excluded.issuer_url,
+            metadata_url = excluded.metadata_url,
+            client_id = excluded.client_id,
+            acs_url = excluded.acs_url,
+            entity_id = excluded.entity_id,
+            domain_verified_at = excluded.domain_verified_at,
+            jit_provisioning = excluded.jit_provisioning,
+            enforce_sso = excluded.enforce_sso,
+            scim_json = excluded.scim_json,
+            role_mapping_json = excluded.role_mapping_json,
+            config_updated_at = excluded.config_updated_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          config.id,
+          config.organizationId,
+          config.provider,
+          config.domain,
+          config.status,
+          config.issuerUrl,
+          config.metadataUrl ?? null,
+          config.clientId ?? null,
+          config.acsUrl,
+          config.entityId,
+          config.domainVerifiedAt ?? null,
+          config.jitProvisioning ? 1 : 0,
+          config.enforceSso ? 1 : 0,
+          JSON.stringify(config.scim),
+          JSON.stringify(config.roleMapping),
+          config.updatedAt,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistApiKeys(db: D1Database, keys: ApiKeyRecord[], updatedAt: string) {
+  if (!Array.isArray(keys) || keys.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    keys.map((key) =>
+      db
+        .prepare(
+          `INSERT INTO api_keys (
+            id, organization_id, label, prefix, last_four, scopes_json, created_at,
+            created_by, rotated_at, last_used_at, expires_at, status, secret_hash, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+          ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            label = excluded.label,
+            prefix = excluded.prefix,
+            last_four = excluded.last_four,
+            scopes_json = excluded.scopes_json,
+            created_at = excluded.created_at,
+            created_by = excluded.created_by,
+            rotated_at = excluded.rotated_at,
+            last_used_at = excluded.last_used_at,
+            expires_at = excluded.expires_at,
+            status = excluded.status,
+            secret_hash = excluded.secret_hash,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          key.id,
+          key.organizationId,
+          key.label,
+          key.prefix,
+          key.lastFour,
+          JSON.stringify(key.scopes),
+          key.createdAt,
+          key.createdBy,
+          key.rotatedAt,
+          key.lastUsedAt ?? null,
+          key.expiresAt ?? null,
+          key.status,
+          key.secretHash ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistWebhooks(db: D1Database, hooks: WebhookRecord[], updatedAt: string) {
+  if (!Array.isArray(hooks) || hooks.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    hooks.map((hook) =>
+      db
+        .prepare(
+          `INSERT INTO webhooks (
+            id, organization_id, url, events_json, status, last_delivery, created_at,
+            owner, signing_secret_last_four, signing_secret_rotated_at, failure_count, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            url = excluded.url,
+            events_json = excluded.events_json,
+            status = excluded.status,
+            last_delivery = excluded.last_delivery,
+            created_at = excluded.created_at,
+            owner = excluded.owner,
+            signing_secret_last_four = excluded.signing_secret_last_four,
+            signing_secret_rotated_at = excluded.signing_secret_rotated_at,
+            failure_count = excluded.failure_count,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          hook.id,
+          hook.organizationId,
+          hook.url,
+          JSON.stringify(hook.events),
+          hook.status,
+          hook.lastDelivery,
+          hook.createdAt,
+          hook.owner,
+          hook.signingSecretLastFour,
+          hook.signingSecretRotatedAt,
+          hook.failureCount,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
 async function persistWebhookDeliveries(db: D1Database, deliveries: WebhookDeliveryRecord[], updatedAt: string) {
   if (!Array.isArray(deliveries) || deliveries.length === 0) {
     return
@@ -3761,10 +4123,59 @@ async function persistWebhookDeliveries(db: D1Database, deliveries: WebhookDeliv
   )
 }
 
+async function persistAuditExportJobs(db: D1Database, jobs: AuditExportJobRecord[], updatedAt: string) {
+  if (!Array.isArray(jobs) || jobs.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    jobs.map((job) =>
+      db
+        .prepare(
+          `INSERT INTO audit_export_jobs (
+            id, organization_id, requested_by, format, scope, status, event_count,
+            checksum, download_url, created_at, completed_at, expires_at, audit_event_id, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+          ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            requested_by = excluded.requested_by,
+            format = excluded.format,
+            scope = excluded.scope,
+            status = excluded.status,
+            event_count = excluded.event_count,
+            checksum = excluded.checksum,
+            download_url = excluded.download_url,
+            created_at = excluded.created_at,
+            completed_at = excluded.completed_at,
+            expires_at = excluded.expires_at,
+            audit_event_id = excluded.audit_event_id,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          job.id,
+          job.organizationId,
+          job.requestedBy,
+          job.format,
+          job.scope,
+          job.status,
+          job.eventCount,
+          job.checksum,
+          job.downloadUrl ?? null,
+          job.createdAt,
+          job.completedAt ?? null,
+          job.expiresAt,
+          job.auditEventId,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
 async function hydrateInventoryState(db: D1Database, serviceState: ServiceState) {
   const lotRows = await db
     .prepare(
-      `SELECT id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
+      `SELECT id, organization_id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
         quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
         shelf_life_after_opening_days, container, packaging, coa_document_id
        FROM inventory_lots
@@ -3821,12 +4232,13 @@ async function persistInventoryLots(db: D1Database, lots: InventoryLot[], update
       db
         .prepare(
           `INSERT INTO inventory_lots (
-            id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
+            id, organization_id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
             quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
             shelf_life_after_opening_days, container, packaging, coa_document_id, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             material_id = excluded.material_id,
             lot_number = excluded.lot_number,
             quantity_grams = excluded.quantity_grams,
@@ -3848,6 +4260,7 @@ async function persistInventoryLots(db: D1Database, lots: InventoryLot[], update
         )
         .bind(
           lot.id,
+          lot.organizationId ?? 'org-nxl',
           lot.materialId,
           lot.lotNumber,
           lot.quantityGrams,
@@ -3991,6 +4404,20 @@ function authSessionFromRow(row: AuthSessionRow): AuthSession {
   }
 }
 
+function mfaEnrollmentFromRow(row: MfaEnrollmentRow): MfaEnrollmentRecord {
+  return {
+    userId: row.user_id,
+    organizationId: row.organization_id,
+    encryptedSecret: row.encrypted_secret,
+    recoveryCodeHashes: parseJson<string[]>(row.recovery_code_hashes_json, []).filter(
+      (value): value is string => typeof value === 'string',
+    ),
+    createdAt: row.created_at,
+    verifiedAt: row.verified_at ?? undefined,
+    updatedAt: row.updated_at,
+  }
+}
+
 function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
   return {
     userId: row.user_id,
@@ -4024,6 +4451,7 @@ function organizationFromRow(row: OrganizationRow): OrganizationRecord {
     id: row.id,
     name: row.name,
     slug: row.slug,
+    customDomain: row.custom_domain ?? undefined,
     plan: readOrganizationPlan(row.plan),
     status: readOrganizationStatus(row.status),
     primaryContact: row.primary_contact,
@@ -4118,6 +4546,58 @@ function brandingFromRow(row: BrandingRow): BrandingConfig {
     documentFooter: row.document_footer,
     labelTemplate: row.label_template,
     logoMode: row.logo_mode === 'monogram' ? 'monogram' : 'wordmark',
+  }
+}
+
+function formulaFromRow(row: FormulaRecordRow): Formula | undefined {
+  const record = parseJsonOptional<Formula>(row.record_json)
+  if (!record || !Array.isArray(record.lines)) {
+    return undefined
+  }
+  const workflowStatus: Formula['workflowStatus'] =
+    row.workflow_status === 'IN_REVIEW' ||
+    row.workflow_status === 'CHANGES_REQUESTED' ||
+    row.workflow_status === 'APPROVED'
+      ? row.workflow_status
+      : 'DRAFT'
+  return {
+    ...record,
+    organizationId: row.organization_id,
+    id: row.id,
+    brandId: row.brand_id,
+    code: row.code,
+    name: row.name,
+    formulaType: row.formula_type === 'ACCORD' ? 'ACCORD' : 'FINE_FRAGRANCE',
+    workflowStatus,
+    status: readDomainStatus(row.status),
+    version: row.version,
+    draftRevision: Number(row.draft_revision),
+    updatedAt: record.updatedAt || row.updated_at,
+    approvalHistory: Array.isArray(record.approvalHistory) ? record.approvalHistory : [],
+    lines: record.lines,
+  }
+}
+
+function formulaVersionFromRow(row: FormulaVersionRecordRow): FormulaVersionRecord | undefined {
+  const record = parseJsonOptional<FormulaVersionRecord>(row.record_json)
+  if (!record || !Array.isArray(record.lines)) {
+    return undefined
+  }
+  return {
+    ...record,
+    organizationId: row.organization_id,
+    id: row.id,
+    formulaId: row.formula_id,
+    formulaCode: row.formula_code,
+    version: row.version,
+    status: row.status === 'APPROVED' ? 'APPROVED' : 'SNAPSHOT',
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+    checksum: row.checksum,
+    evaluations: Array.isArray(record.evaluations) ? record.evaluations : [],
+    resolvedLeaves: Array.isArray(record.resolvedLeaves) ? record.resolvedLeaves : [],
+    evaporation: Array.isArray(record.evaporation) ? record.evaporation : [],
+    lines: record.lines,
   }
 }
 
@@ -4374,6 +4854,66 @@ function billingInvoiceFromRow(row: BillingInvoiceRow): BillingInvoiceRecord {
   }
 }
 
+function ssoConfigFromRow(row: SsoConfigRow): SsoConfigRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    provider: row.provider === 'SAML' ? 'SAML' : 'OIDC',
+    domain: row.domain,
+    status: row.status === 'enforced' ? 'enforced' : row.status === 'verified' ? 'verified' : 'draft',
+    issuerUrl: row.issuer_url,
+    metadataUrl: row.metadata_url ?? undefined,
+    clientId: row.client_id ?? undefined,
+    acsUrl: row.acs_url,
+    entityId: row.entity_id,
+    domainVerifiedAt: row.domain_verified_at ?? undefined,
+    jitProvisioning: row.jit_provisioning === 1,
+    enforceSso: row.enforce_sso === 1,
+    scim: parseJson<SsoConfigRecord['scim']>(row.scim_json, {
+      enabled: false,
+      baseUrl: '',
+      deprovisionAction: 'revoke_sessions',
+      status: 'disabled',
+    }),
+    roleMapping: parseJson<Record<string, string>>(row.role_mapping_json, {}),
+    updatedAt: row.config_updated_at,
+  }
+}
+
+function apiKeyFromRow(row: ApiKeyRow): ApiKeyRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    label: row.label,
+    prefix: row.prefix,
+    lastFour: row.last_four,
+    scopes: parseJson<string[]>(row.scopes_json, []).filter((scope): scope is string => typeof scope === 'string'),
+    createdAt: row.created_at,
+    createdBy: row.created_by,
+    rotatedAt: row.rotated_at,
+    lastUsedAt: row.last_used_at ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
+    status: row.status === 'revoked' ? 'revoked' : 'active',
+    secretHash: row.secret_hash ?? undefined,
+  }
+}
+
+function webhookFromRow(row: WebhookRow): WebhookRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    url: row.url,
+    events: parseJson<string[]>(row.events_json, []).filter((event): event is string => typeof event === 'string'),
+    status: row.status === 'paused' ? 'paused' : 'active',
+    lastDelivery: row.last_delivery,
+    createdAt: row.created_at,
+    owner: row.owner,
+    signingSecretLastFour: row.signing_secret_last_four,
+    signingSecretRotatedAt: row.signing_secret_rotated_at,
+    failureCount: Number(row.failure_count),
+  }
+}
+
 function webhookDeliveryFromRow(row: WebhookDeliveryRow): WebhookDeliveryRecord {
   return {
     id: row.id,
@@ -4385,6 +4925,31 @@ function webhookDeliveryFromRow(row: WebhookDeliveryRow): WebhookDeliveryRecord 
     nextRetryAt: row.next_retry_at ?? undefined,
     responseCode: row.response_code ?? undefined,
     idempotencyKey: row.idempotency_key,
+  }
+}
+
+function auditExportJobFromRow(row: AuditExportJobRow): AuditExportJobRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    requestedBy: row.requested_by,
+    format: row.format === 'CSV' ? 'CSV' : 'JSON',
+    scope: row.scope,
+    status:
+      row.status === 'PROCESSING'
+        ? 'PROCESSING'
+        : row.status === 'READY'
+          ? 'READY'
+          : row.status === 'FAILED'
+            ? 'FAILED'
+            : 'QUEUED',
+    eventCount: Number(row.event_count),
+    checksum: row.checksum,
+    downloadUrl: row.download_url ?? undefined,
+    createdAt: row.created_at,
+    completedAt: row.completed_at ?? undefined,
+    expiresAt: row.expires_at,
+    auditEventId: row.audit_event_id,
   }
 }
 
@@ -4416,6 +4981,7 @@ function orderDocumentFromRow(row: OrderDocumentRow): OrderDocumentRecord {
 function inventoryLotFromRow(row: InventoryLotRow): InventoryLot {
   return {
     id: row.id,
+    organizationId: row.organization_id,
     materialId: row.material_id,
     lotNumber: row.lot_number,
     quantityGrams: Number(row.quantity_grams),
@@ -4876,26 +5442,28 @@ function trailingNumber(value: string) {
 function buildCorsHeaders(origin: string | null, configuredOrigins: string | undefined) {
   const allowedOrigins = parseCsv(configuredOrigins)
   const effectiveOrigins = allowedOrigins.length > 0 ? allowedOrigins : LOCAL_CORS_ORIGINS
-  const allowedOrigin = origin && isAllowedCorsOrigin(origin, effectiveOrigins) ? origin : effectiveOrigins[0]
-  return {
-    'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Methods': 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-CSRF-Token',
-    'Access-Control-Allow-Credentials': 'true',
-    Vary: 'Origin',
+  const headers: Record<string, string> = { Vary: 'Origin' }
+  if (!origin || !isAllowedCorsOrigin(origin, effectiveOrigins)) {
+    return headers
   }
+  headers['Access-Control-Allow-Origin'] = origin
+  headers['Access-Control-Allow-Methods'] = 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS'
+  headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token'
+  headers['Access-Control-Expose-Headers'] = 'Retry-After'
+  headers['Access-Control-Allow-Credentials'] = 'true'
+  return headers
 }
 
 function buildResponseHeaders(headers: HeadersInit, route: Route, result: unknown) {
-  const responseHeaders = { ...(headers as Record<string, string>) }
+  const responseHeaders = new Headers(headers)
   if (route.sessionCookie === 'set') {
     const sessionId = readResultSessionId(result)
     if (sessionId) {
-      responseHeaders['Set-Cookie'] = buildSessionCookie(sessionId, tenantSessionCookieMaxAgeSeconds)
+      responseHeaders.set('Set-Cookie', buildSessionCookie(sessionId, tenantSessionCookieMaxAgeSeconds))
     }
   }
   if (route.sessionCookie === 'clear') {
-    responseHeaders['Set-Cookie'] = buildSessionCookie('', 0)
+    responseHeaders.set('Set-Cookie', buildSessionCookie('', 0))
   }
   return responseHeaders
 }
@@ -4950,13 +5518,25 @@ function parseCsv(value: string | undefined) {
     .filter(Boolean)
 }
 
+function buildApiSecurityHeaders(headers: HeadersInit = {}) {
+  const responseHeaders = new Headers(headers)
+  responseHeaders.set('Cache-Control', 'no-store, max-age=0')
+  responseHeaders.set('Content-Security-Policy', "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'")
+  responseHeaders.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()')
+  responseHeaders.set('Referrer-Policy', 'no-referrer')
+  responseHeaders.set('Strict-Transport-Security', 'max-age=31536000')
+  responseHeaders.set('X-Content-Type-Options', 'nosniff')
+  responseHeaders.set('X-Frame-Options', 'DENY')
+  responseHeaders.set('X-Permitted-Cross-Domain-Policies', 'none')
+  return responseHeaders
+}
+
 function json(payload: unknown, status = 200, headers: HeadersInit = {}) {
+  const responseHeaders = buildApiSecurityHeaders(headers)
+  responseHeaders.set('Content-Type', 'application/json; charset=utf-8')
   return new Response(JSON.stringify(payload), {
     status,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      ...headers,
-    },
+    headers: responseHeaders,
   })
 }
 
@@ -4976,7 +5556,12 @@ function errorJson(error: unknown, headers: HeadersInit) {
       : isRecord(response)
         ? { statusCode: status, ...response }
         : { message: candidate.message ?? 'Unexpected worker API error', statusCode: status }
-  return json(payload, status, headers)
+  const responseHeaders = new Headers(headers)
+  const retryAfterSeconds = Number((payload as Record<string, unknown>).retryAfterSeconds)
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    responseHeaders.set('Retry-After', String(Math.ceil(retryAfterSeconds)))
+  }
+  return json(payload, status, responseHeaders)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -5,6 +5,11 @@ import { NorthStarService } from '../services/northstar.service.js'
 
 @Module({
   controllers: [HealthController, NorthStarController],
-  providers: [NorthStarService],
+  providers: [
+    {
+      provide: NorthStarService,
+      useFactory: () => new NorthStarService({ mfaEncryptionKey: process.env.MFA_ENCRYPTION_KEY }),
+    },
+  ],
 })
 export class AppModule {}

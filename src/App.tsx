@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Atom,
   BadgeDollarSign,
   BarChart3,
@@ -17,21 +19,30 @@ import {
   FlaskConical,
   Gauge,
   Globe2,
+  Library,
   KeyRound,
   Layers3,
   LockKeyhole,
   Menu,
+  NotebookTabs,
   PackageCheck,
   PackageSearch,
   Plus,
   Play,
+  Redo2,
   RotateCcw,
+  Save,
   Search,
   Settings,
+  Share2,
   ShieldCheck,
   ShoppingCart,
+  SlidersHorizontal,
   Sparkles,
+  Tag,
+  Trash2,
   Truck,
+  Undo2,
   UsersRound,
   X,
   type LucideIcon,
@@ -39,7 +50,10 @@ import {
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
+  useRef,
+  memo,
   useState,
   type CSSProperties,
   type Dispatch,
@@ -67,11 +81,10 @@ import {
   formulas,
   formulaVersions,
   initialLots,
-  initialMovements,
+  isLotEligibleForInventory,
   materials,
   moleculeComponents,
   permissionCatalog,
-  phases,
   planLabUsage,
   priceLists,
   priceHistory,
@@ -88,7 +101,9 @@ import {
   stockSummary,
   suppliers,
   type Allocation,
+  type ApiKeyRecord,
   type AuditEvent,
+  type AuditExportJobRecord,
   type AuthSession,
   type AnalyticsDashboardReport,
   type BatchCostReport,
@@ -103,6 +118,10 @@ import {
   type CustomerRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
+  type FormulaEvaluationRecord,
+  type FormulaIfraEvaluation,
+  type FormulaScalePlan,
+  type FormulaVersionDiff,
   type DocumentComplianceDashboard,
   type DocumentShareLink,
   type DocumentType,
@@ -112,6 +131,8 @@ import {
   type FeatureFlagRecord,
   type Formula,
   type FormulaLine,
+  type FormulaPyramidNote,
+  type FormulaType,
   type FormulaVersionRecord,
   type InventoryReorderSuggestion,
   type InventoryLot,
@@ -147,6 +168,7 @@ import {
   type TenantSettingsRecord,
   type TenantSecurityPolicy,
   type UserSettingsRecord,
+  type WebhookRecord,
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
@@ -179,9 +201,10 @@ const clientFallbackOrganization: OrganizationRecord = {
   id: 'org-client-fallback',
   name: 'API-backed tenant',
   slug: 'api-backed-tenant',
+  customDomain: 'api-backed-tenant.labofscents.org',
   plan: 'Enterprise',
   status: 'ACTIVE',
-  primaryContact: 'owner@example.test',
+  primaryContact: 'admin@labofscents.org',
   createdAt: 'client-fallback',
 }
 
@@ -252,10 +275,24 @@ const clientFallbackPlan: BillingPlanRecord = {
 
 const clientFallbackSso: SsoConfigRecord = {
   id: 'SSO-CLIENT-FALLBACK',
+  organizationId: clientFallbackOrganization.id,
   provider: 'OIDC',
   domain: 'example.test',
   status: 'draft',
+  issuerUrl: 'https://idp.example.test/oauth2/default',
+  metadataUrl: 'https://idp.example.test/.well-known/openid-configuration',
+  acsUrl: 'https://api.labofscents.org/api/v1/auth/sso/callback',
+  entityId: `urn:olfactoryops:${clientFallbackOrganization.id}`,
+  jitProvisioning: true,
+  enforceSso: false,
+  scim: {
+    enabled: false,
+    baseUrl: `https://api.labofscents.org/api/v1/scim/v2/${clientFallbackOrganization.id}`,
+    deprovisionAction: 'revoke_sessions',
+    status: 'disabled',
+  },
   roleMapping: {},
+  updatedAt: 'client-fallback',
 }
 
 const clientFallbackTenantSettings: TenantSettingsRecord = {
@@ -391,6 +428,7 @@ type DocumentShareResponse = {
 type LoginResponse = {
   session: AuthSession
   csrfToken: string
+  permissions: string[]
   revokedForLimit: AuthSession[]
   newDeviceAlert: boolean
   securityPolicy: TenantSecurityPolicy
@@ -402,8 +440,10 @@ type SignupResponse = {
   brand: BrandRecord
   membership: MembershipRecord
   subscription: BillingSubscriptionRecord
+  sso: SsoConfigRecord
   session: AuthSession
   csrfToken: string
+  permissions: string[]
   audit: AuditEvent
   invariant: string
 }
@@ -415,8 +455,22 @@ type MeResponse = {
   securityPolicy: TenantSecurityPolicy
   userSettings: UserSettingsRecord
 }
-
 type SaasConsoleResponse = BillingConsoleResponse
+type SaasHealthStatus = BillingConsoleResponse['readiness'][number]['status']
+type SaasHealthFactor = {
+  key: string
+  label: string
+  status: SaasHealthStatus
+  detail: string
+}
+type SaasHealthSummary = {
+  score: number
+  status: SaasHealthStatus
+  factors: SaasHealthFactor[]
+  passCount: number
+  warningCount: number
+  blockedCount: number
+}
 
 type UserSettingsUpdateResponse = {
   settings: UserSettingsRecord
@@ -424,12 +478,30 @@ type UserSettingsUpdateResponse = {
   invariant: string
 }
 
-type AuditExportResponse = {
-  id: string
-  format: string
-  status: string
-  scope: string
+type AuditExportResponse = AuditExportJobRecord & {
   audit: AuditEvent
+  invariant: string
+}
+
+type ApiKeyMutationResponse = {
+  apiKey: ApiKeyRecord
+  secret?: string
+  audit: AuditEvent
+  invariant: string
+}
+
+type WebhookMutationResponse = {
+  webhook: WebhookRecord
+  secret?: string
+  audit: AuditEvent
+  invariant: string
+}
+
+type SsoMutationResponse = {
+  config: SsoConfigRecord
+  secret?: string
+  audit: AuditEvent
+  invariant: string
 }
 
 type ProductionConsumeResponse = {
@@ -647,18 +719,6 @@ type MaterialMutationResponse = {
   invariant: string
 }
 
-type MaterialIngestionResponse = MaterialMutationResponse & {
-  ingestion: {
-    id: string
-    materialId: string
-    documentType: 'SDS' | 'CoA'
-    source: string
-    version: string
-    status: 'REVIEW_REQUIRED' | 'APPROVED'
-    extractedFields: string[]
-  }
-}
-
 type MaterialMoleculesResponse = {
   materialId: string
   molecules: MoleculeComponent[]
@@ -687,6 +747,7 @@ type FormulaMutationResponse = {
   line?: FormulaLine
   leaves?: ResolvedLeaf[]
   totals?: ReturnType<typeof formulaTotals>
+  movements?: InventoryMovement[]
   audit?: AuditEvent
   invariant: string
 }
@@ -711,6 +772,32 @@ type FormulaExportResponse = {
   invariant: string
 }
 
+type FormulaReviewResponse = FormulaVersionResponse & {
+  ifra?: FormulaIfraEvaluation
+}
+
+type FormulaScaleResponse = {
+  formula: Formula
+  plan: FormulaScalePlan
+  invariant: string
+}
+
+type FormulaDiffResponse = {
+  formula: Formula
+  before: FormulaVersionRecord
+  after: FormulaVersionRecord
+  diff: FormulaVersionDiff
+  invariant: string
+}
+
+type FormulaEvaluationResponse = {
+  formula: Formula
+  version: FormulaVersionRecord
+  evaluation: FormulaEvaluationRecord
+  audit: AuditEvent
+  invariant: string
+}
+
 type InventoryReceiptResponse = {
   lot: InventoryLot
   movement: InventoryMovement
@@ -721,6 +808,53 @@ type InventoryReceiptResponse = {
 type InventoryAdjustmentResponse = InventoryReceiptResponse
 
 type InventoryTransferResponse = InventoryReceiptResponse
+
+type InventoryApprovalAction =
+  | 'inventory.adjust'
+  | 'inventory.transfer'
+  | 'inventory.receive'
+  | 'inventory.stockTake'
+  | 'inventory.quality'
+
+type InventoryApprovalRequestRecord = {
+  id: string
+  action: InventoryApprovalAction
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  targetLabel: string
+  reason: string
+  requiredPermission?: string
+}
+
+type InventoryApprovalRequestResponse = {
+  request: InventoryApprovalRequestRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type OperationApprovalRequestRecord = {
+  id: string
+  action: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  targetLabel: string
+  reason: string
+  requiredPermission: string
+}
+
+type OperationApprovalRequestResponse = {
+  request: OperationApprovalRequestRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ApprovalQueueItem = {
+  id: string
+  source: 'inventory' | 'operation'
+  action: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  targetLabel: string
+  reason: string
+  requiredPermission?: string
+}
 
 type InventoryConsoleResponse = {
   lots: InventoryLot[]
@@ -845,9 +979,15 @@ const navGroups: { title: string; keys: DomainKey[] }[] = [
   { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
 ]
 
+const customerNavGroupTitles: Record<string, string> = {
+  Command: 'Home',
+  'R&D Spine': 'Lab',
+  Enterprise: 'Account',
+}
+
 const workflowNodes: { key: DomainKey; label: string; detail: string }[] = [
   { key: 'materials', label: 'Material', detail: 'SDS, CoA, provenance' },
-  { key: 'formulas', label: 'Formula', detail: 'Nested resolve engine' },
+  { key: 'formulas', label: 'Formula', detail: 'Accord resolve engine' },
   { key: 'inventory', label: 'Inventory', detail: 'Lot and movement ledger' },
   { key: 'labUsage', label: 'Lab Usage', detail: 'Commit and reverse' },
   { key: 'production', label: 'Production', detail: 'Batch and QC' },
@@ -876,10 +1016,34 @@ const reducedShellMotion = {
   transition: { duration: 0 },
 }
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:4000/api/v1'
+const apiBaseUrl =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.PROD ? '/api/v1' : 'http://127.0.0.1:4000/api/v1')
 const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
 const authExpiredEvent = 'olfactoryops.auth.expired'
+const operationApprovalRequestedEvent = 'olfactoryops.operation.approval.requested'
+const internalAdminEmails = new Set(['admin@labofscents.org', 'admin@labofscents.com'])
+const internalOnlyDomainKeys = new Set<DomainKey>(['platform', 'identity', 'customization'])
+const sensitiveApprovalFieldNames = new Set([
+  'password',
+  'currentpassword',
+  'secret',
+  'secretkey',
+  'token',
+  'accesstoken',
+  'refreshtoken',
+  'signature',
+  'credential',
+  'credentials',
+  'authorization',
+  'recoverycode',
+  'recoverycodes',
+  'otp',
+  'totp',
+  'mfacode',
+])
+
 let csrfToken: string | null = null
 
 async function requestApi<T>(path: string, init?: RequestInit) {
@@ -894,13 +1058,31 @@ async function requestApi<T>(path: string, init?: RequestInit) {
   }
   if (!response.ok) {
     let message = `API request failed with ${response.status}`
+    const retryAfterHeader = response.headers.get('Retry-After')
+    let retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN
     try {
-      const payload = (await response.json()) as { message?: unknown }
+      const payload = (await response.json()) as { message?: unknown; retryAfterSeconds?: unknown }
       if (typeof payload.message === 'string') {
         message = payload.message
       }
+      if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+        retryAfterSeconds = Number(payload.retryAfterSeconds)
+      }
     } catch {
       // Keep the status-based message when the response is not JSON.
+    }
+    if (response.status === 429 && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      const waitLabel = retryAfterSeconds >= 60
+        ? `${Math.ceil(retryAfterSeconds / 60)} minute${Math.ceil(retryAfterSeconds / 60) === 1 ? '' : 's'}`
+        : `${Math.ceil(retryAfterSeconds)} seconds`
+      message = `${message}. Try again in ${waitLabel}.`
+    }
+    if (response.status === 403 && isMutatingRequest(init) && isOperationPermissionDenial(message) && shouldRequestOperationApproval(path)) {
+      const approval = await tryRequestOperationApproval(path, init, message)
+      if (approval) {
+        window.dispatchEvent(new CustomEvent(operationApprovalRequestedEvent, { detail: approval.request }))
+        throw new Error(`${approval.request.id} is pending approval for ${approval.request.targetLabel}.`)
+      }
     }
     throw new Error(message)
   }
@@ -912,6 +1094,81 @@ function isMutatingRequest(init?: RequestInit) {
   const method = init?.method?.toUpperCase() ?? 'GET'
   return method !== 'GET' && method !== 'HEAD'
 }
+
+function shouldRequestOperationApproval(path: string) {
+  return (
+    !path.startsWith('/auth/') &&
+    !path.startsWith('/approval-requests') &&
+    !path.startsWith('/inventory/approval-requests') &&
+    !path.startsWith('/user/settings') &&
+    !/^\/formulas\/[^/]+\/approve$/.test(path)
+  )
+}
+
+async function tryRequestOperationApproval(path: string, init: RequestInit | undefined, reason: string) {
+  try {
+    const payload = requestPayloadObject(init)
+    if (!payload) {
+      return null
+    }
+    const headers = new Headers({ 'Content-Type': 'application/json' })
+    if (csrfToken) {
+      headers.set('X-CSRF-Token', csrfToken)
+    }
+    const response = await fetch(`${apiBaseUrl}/approval-requests`, {
+      method: 'POST',
+      credentials: 'include',
+      headers,
+      body: JSON.stringify({
+        method: init?.method?.toUpperCase() ?? 'GET',
+        path,
+        payload,
+        reason,
+      }),
+    })
+    if (!response.ok) {
+      return null
+    }
+    const envelope = (await response.json()) as ApiEnvelope<OperationApprovalRequestResponse>
+    return envelope.data
+  } catch {
+    return null
+  }
+}
+
+function requestPayloadObject(init?: RequestInit): Record<string, unknown> | null {
+  const body = init?.body
+  if (typeof body !== 'string' || body.trim() === '') {
+    return {}
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown
+    const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+    return containsSensitiveApprovalField(payload) ? null : payload
+  } catch {
+    return {}
+  }
+}
+
+function isOperationPermissionDenial(message: string) {
+  return /^Role .+ cannot perform [A-Za-z0-9._:-]+$/.test(message.trim())
+}
+
+function containsSensitiveApprovalField(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(containsSensitiveApprovalField)
+  }
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  return Object.entries(value as Record<string, unknown>).some(([key, nestedValue]) => {
+    const normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
+    return sensitiveApprovalFieldNames.has(normalizedKey) || containsSensitiveApprovalField(nestedValue)
+  })
+}
+
 
 function readStoredAuthSession() {
   window.localStorage.removeItem(authStorageKey)
@@ -936,13 +1193,173 @@ function acceptCsrfToken(token?: string) {
   csrfToken = token?.trim() || null
 }
 
-function tenantDisplayForSession(session: AuthSession) {
-  const fallbackName = session.email.split('@')[1] ?? 'Tenant workspace'
+function tenantDisplayForSession(session: AuthSession, tenantDomain?: string) {
+  const fallbackName = tenantDomain || session.email.split('@')[1] || 'Lab workspace'
 
   return {
     scope: session.organizationId,
     label: `${session.organizationId.toUpperCase()} / ${fallbackName}`,
   }
+}
+
+function isInternalAdminSession(session?: Pick<AuthSession, 'email' | 'role'> | null) {
+  return Boolean(
+    session &&
+      (session.role === 'Platform Admin' || internalAdminEmails.has(session.email.trim().toLowerCase())),
+  )
+}
+
+function permissionsForSession(session: AuthSession) {
+  const sessionPermissions = (session as AuthSession & { permissions?: string[] }).permissions
+  if (Array.isArray(sessionPermissions)) {
+    return sessionPermissions
+  }
+  return rolePolicies.find((policy) => policy.role === session.role)?.permissions ?? []
+}
+
+function withSessionPermissions(session: AuthSession, permissions?: string[]) {
+  return {
+    ...session,
+    permissions: permissions ?? permissionsForSession(session),
+  }
+}
+
+function sessionHasPermission(session: AuthSession, permission: string) {
+  return permissionsForSession(session).includes(permission)
+}
+
+function isFormulaApproverRole(role: string) {
+  return role === 'Admin' || role === 'Lab Manager' || role === 'Manager'
+}
+
+function sessionHasAnyPermission(session: AuthSession, permissions: string[]) {
+  return permissions.some((permission) => sessionHasPermission(session, permission))
+}
+
+function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
+  if (domain.key !== 'saas' || isInternalAdminSession(session)) {
+    return domain
+  }
+
+  return {
+    ...domain,
+    name: 'Billing & Trust',
+    shortName: 'Billing',
+    responsibility: 'Plans, invoices, usage limits, SSO/SCIM, API keys, webhooks, and audit exports for this workspace',
+    risk: 'Plan limits, invoices, credentials, signed webhooks, and workspace-scoped audit exports are active',
+    owner: 'Billing',
+    screens: ['Billing', 'Plan usage', 'API keys', 'Webhooks', 'Audit exports'],
+    activity:
+      'Billing console enforces plan limits, queues invoices/actions, rotates credentials, retries webhooks, and exports workspace-scoped evidence',
+  }
+}
+
+function domainVisibleForSession(key: DomainKey, session: AuthSession) {
+  if (key === 'dashboard') {
+    return true
+  }
+
+  const domain = domains.find((item) => item.key === key)
+  if (!domain) {
+    return false
+  }
+
+  const internalAdminView = isInternalAdminSession(session)
+  if (internalOnlyDomainKeys.has(key) && !internalAdminView) {
+    return false
+  }
+
+  if (key === 'platform') {
+    return (
+      internalAdminView &&
+      (sessionHasAnyPermission(session, domain.permissions) ||
+        sessionHasAnyPermission(session, [
+          'platform.tenants.manage',
+          'platform.flags.manage',
+          'platform.impersonation.audit',
+        ]))
+    )
+  }
+
+  return sessionHasAnyPermission(session, domain.permissions)
+}
+
+function visibleDomainsForSession(session: AuthSession) {
+  return domains.filter((domain) => domainVisibleForSession(domain.key, session))
+}
+
+function visibleNavGroupsForSession(session: AuthSession) {
+  const internalAdminView = isInternalAdminSession(session)
+
+  return navGroups
+    .map((group) => ({
+      ...group,
+      title: internalAdminView ? group.title : (customerNavGroupTitles[group.title] ?? group.title),
+      keys: group.keys.filter((key) => domainVisibleForSession(key, session)),
+    }))
+    .filter((group) => group.keys.length > 0)
+}
+
+function safeLandingForSession(key: DomainKey, session: AuthSession) {
+  return domainVisibleForSession(key, session) ? key : 'dashboard'
+}
+
+function visibleWorkflowNodesForSession(session: AuthSession) {
+  return workflowNodes.filter((node) => domainVisibleForSession(node.key, session))
+}
+
+const formulaTypeMeta: Record<FormulaType, { label: string; shortLabel: string; defaultName: string; tone: 'green' | 'blue' }> = {
+  ACCORD: {
+    label: 'Accord',
+    shortLabel: 'ACC',
+    defaultName: 'Untitled Accord',
+    tone: 'green',
+  },
+  FINE_FRAGRANCE: {
+    label: 'Fine Fragrance',
+    shortLabel: 'FRM',
+    defaultName: 'Untitled Fine Fragrance',
+    tone: 'blue',
+  },
+}
+
+const emptyFormulaPlaceholder: Formula = {
+  id: '__empty-formula__',
+  code: 'NEW',
+  name: 'No formula selected',
+  formulaType: 'FINE_FRAGRANCE',
+  organizationId: '',
+  brandId: '',
+  concentrationType: 'EDP',
+  finalProductConcentrationPercent: 20,
+  targetMarkets: [],
+  brief: '',
+  inspiration: '',
+  pyramidSummary: '',
+  tags: [],
+  project: '',
+  collection: '',
+  density: 1,
+  bottleVolumeMl: 50,
+  bottleCount: 1,
+  ifraCategory: '4',
+  workflowStatus: 'DRAFT',
+  draftRevision: 1,
+  updatedAt: '',
+  updatedBy: '',
+  approvalHistory: [],
+  version: 'v0',
+  status: 'draft',
+  targetGrams: 100,
+  owner: '',
+  lines: [],
+}
+
+function formulaTypeForFormula(formula: Pick<Formula, 'code' | 'formulaType'>): FormulaType {
+  if (formula.formulaType === 'ACCORD' || formula.formulaType === 'FINE_FRAGRANCE') {
+    return formula.formulaType
+  }
+  return formula.code.startsWith('ACC-') ? 'ACCORD' : 'FINE_FRAGRANCE'
 }
 
 function userSettingsForSession(session: AuthSession | null): UserSettingsRecord {
@@ -1109,29 +1526,37 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const currentSessionId = currentSession?.id
+  const currentOrganizationId = currentSession?.organizationId
+  const [authNotice, setAuthNotice] = useState<string | null>(null)
+  const [resumeKey, setResumeKey] = useState<DomainKey | null>(null)
   const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
+  const [tenantDomains, setTenantDomains] = useState<Record<string, string>>({})
   const [billingOnboarding, setBillingOnboarding] = useState(false)
+  const [approvalNotice, setApprovalNotice] = useState<string | null>(null)
   const [commandOpen, setCommandOpen] = useState(false)
   const [modal, setModal] = useState<ModalKind>(null)
+  const [auditExporting, setAuditExporting] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [selectedMaterialId, setSelectedMaterialId] = useState('mat-iso')
   const [materialRecords, setMaterialRecords] = useState<Material[]>(() => structuredClone(materials))
-  const [formulaRecords, setFormulaRecords] = useState<Formula[]>(() => structuredClone(formulas))
-  const [activeFormulaId, setActiveFormulaId] = useState('frm-0421')
-  const [lots, setLots] = useState<InventoryLot[]>(initialLots)
-  const [movements, setMovements] = useState<InventoryMovement[]>(initialMovements)
+  const [formulaRecords, setFormulaRecords] = useState<Formula[]>([])
+  const [activeFormulaId, setActiveFormulaId] = useState('')
+  const [lots, setLots] = useState<InventoryLot[]>([])
+  const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [storageLocationRecords, setStorageLocationRecords] = useState<StorageLocation[]>(storageLocations)
   const [usageHistory, setUsageHistory] = useState<UsageRecord[]>([])
   const [batchGrams, setBatchGrams] = useState(12.5)
   const [actualWeights, setActualWeights] = useState<Record<string, number>>({})
   const [weighingTolerancePercent, setWeighingTolerancePercent] = useState(2)
-  const [weighingOperator, setWeighingOperator] = useState('Thuan Le Minh')
+  const [weighingOperator, setWeighingOperator] = useState('')
   const [labUsagePurpose, setLabUsagePurpose] = useState<LabUsagePurpose>('trial')
-  const [labUsageProjectCode, setLabUsageProjectCode] = useState('NXL-RD-0421')
-  const [labUsageSampleCode, setLabUsageSampleCode] = useState('SMP-0421-A')
+  const [labUsageProjectCode, setLabUsageProjectCode] = useState('RND-PROJECT-001')
+  const [labUsageSampleCode, setLabUsageSampleCode] = useState('SAMPLE-001')
   const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Live API sync pending')
   const [labUsageBusy, setLabUsageBusy] = useState(false)
+  const [newFormulaType, setNewFormulaType] = useState<FormulaType>('ACCORD')
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
   const [newFormulaTargetGrams, setNewFormulaTargetGrams] = useState(100)
   const [newLineMaterialId, setNewLineMaterialId] = useState(materials[0]?.id ?? '')
@@ -1140,11 +1565,11 @@ function App() {
   const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
   const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
   const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
-  const [adjustmentLotId, setAdjustmentLotId] = useState(initialLots[0]?.id ?? '')
+  const [adjustmentLotId, setAdjustmentLotId] = useState('')
   const [adjustmentDirection, setAdjustmentDirection] = useState<'IN' | 'OUT'>('OUT')
   const [adjustmentQuantityGrams, setAdjustmentQuantityGrams] = useState(5)
   const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
-  const [transferLotId, setTransferLotId] = useState(initialLots[0]?.id ?? '')
+  const [transferLotId, setTransferLotId] = useState('')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
   const activeUserSettings = userSettingsRecord ?? userSettingsForSession(currentSession)
   const shellAccentStyle = useMemo(
@@ -1153,14 +1578,29 @@ function App() {
   )
   const shellMotionPreset = activeUserSettings.reduceMotion ? reducedShellMotion : shellMotion
 
-  const selectedDomain = domains.find((domain) => domain.key === activeKey)
+  const visibleDomains = useMemo(
+    () => (currentSession ? visibleDomainsForSession(currentSession) : domains),
+    [currentSession],
+  )
+  const selectedDomain = visibleDomains.find((domain) => domain.key === activeKey)
+  const scopedFormulaRecords = useMemo(
+    () =>
+      currentSession
+        ? formulaRecords.filter((formula) => formula.organizationId === currentSession.organizationId)
+        : [],
+    [currentSession, formulaRecords],
+  )
   const selectedFormula = useMemo(() => {
-    const fallbackFormula = formulas.find((formula) => formula.id === 'frm-0421')!
-    return formulaRecords.find((formula) => formula.id === activeFormulaId) ?? fallbackFormula
-  }, [activeFormulaId, formulaRecords])
+    return scopedFormulaRecords.find((formula) => formula.id === activeFormulaId) ?? scopedFormulaRecords[0] ?? emptyFormulaPlaceholder
+  }, [activeFormulaId, scopedFormulaRecords])
   const resolvedLeaves = useMemo(
-    () => resolveFormulaWithCatalog(selectedFormula.id, formulaRecords, materialRecords),
-    [formulaRecords, materialRecords, selectedFormula.id],
+    () =>
+      resolveFormulaWithCatalog(
+        selectedFormula.id,
+        scopedFormulaRecords.length > 0 ? scopedFormulaRecords : [selectedFormula],
+        materialRecords,
+      ),
+    [materialRecords, scopedFormulaRecords, selectedFormula],
   )
   const totals = useMemo(() => formulaTotals(resolvedLeaves), [resolvedLeaves])
   const curve = useMemo(() => evaporationCurve(resolvedLeaves), [resolvedLeaves])
@@ -1190,16 +1630,52 @@ function App() {
     adjustmentDirection === 'OUT' &&
     selectedAdjustmentLot !== undefined &&
     selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
-  const navigateToDomain = useCallback((key: DomainKey) => {
-    setActiveKey(key)
-    setMobileNavOpen(false)
-  }, [])
+  const canReceiveInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.receive') : false
+  const canAdjustInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.adjust') : false
+  const navigateToDomain = useCallback(
+    (key: DomainKey) => {
+      setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
+      setMobileNavOpen(false)
+    },
+    [currentSession],
+  )
   const applyUserSettings = useCallback((settings: UserSettingsRecord | null) => {
     setUserSettingsRecord(settings)
     if (settings) {
       setSidebarCollapsed(settings.sidebarMode === 'rail')
     }
   }, [])
+  const openCommandPalette = useCallback(() => {
+    setCommandOpen(true)
+  }, [])
+  const closeCommandPalette = useCallback(() => {
+    setCommandOpen(false)
+  }, [])
+  const closeCurrentModal = useCallback(() => {
+    setModal(null)
+  }, [])
+  const openUserSettingsModal = useCallback(() => {
+    setModal('userSettings')
+  }, [])
+  const toggleSidebar = useCallback(() => {
+    if (mobileNavOpen) {
+      setMobileNavOpen(false)
+      return
+    }
+    setSidebarCollapsed((value) => !value)
+  }, [mobileNavOpen])
+  const closeBillingGate = useCallback(() => {
+    if (!currentSession) {
+      return
+    }
+    setBillingOnboarding(false)
+    setActiveKey(
+      safeLandingForSession(
+        (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding,
+        currentSession,
+      ),
+    )
+  }, [currentSession, userSettingsRecord])
 
   useEffect(() => {
     const nextWeights: Record<string, number> = {}
@@ -1210,16 +1686,36 @@ function App() {
   }, [labPlan.allocations])
 
   useEffect(() => {
+    if (currentSession && !domainVisibleForSession(activeKey, currentSession)) {
+      setActiveKey('dashboard')
+    }
+  }, [activeKey, currentSession])
+
+  useEffect(() => {
     function handleAuthExpired() {
+      setResumeKey((current) => current ?? activeKey)
+      setAuthNotice('Your session expired or was revoked. Sign in again to continue where you left off.')
       setCurrentSession(null)
       applyUserSettings(null)
       setSidebarCollapsed(false)
-      setActiveKey('dashboard')
     }
 
     window.addEventListener(authExpiredEvent, handleAuthExpired)
     return () => window.removeEventListener(authExpiredEvent, handleAuthExpired)
-  }, [applyUserSettings])
+  }, [activeKey, applyUserSettings])
+
+  useEffect(() => {
+    function handleOperationApprovalRequested(event: Event) {
+      const request = (event as CustomEvent<OperationApprovalRequestRecord>).detail
+      if (!request?.id) {
+        return
+      }
+      setApprovalNotice(`${request.id} is pending approval for ${request.targetLabel}.`)
+    }
+
+    window.addEventListener(operationApprovalRequestedEvent, handleOperationApprovalRequested)
+    return () => window.removeEventListener(operationApprovalRequestedEvent, handleOperationApprovalRequested)
+  }, [])
 
   useEffect(() => {
     if (!hasStoredAuthMarker()) {
@@ -1233,10 +1729,11 @@ function App() {
         const payload = await requestApi<MeResponse>('/me')
         if (active) {
           acceptCsrfToken(payload.csrfToken)
-          setCurrentSession(payload.session)
+          const session = withSessionPermissions(payload.session, payload.permissions)
+          setCurrentSession(session)
           const settings = payload.userSettings ?? userSettingsForSession(payload.session)
           applyUserSettings(settings)
-          setActiveKey(settings.preferredLanding)
+          setActiveKey(safeLandingForSession(settings.preferredLanding, session))
         }
       } catch {
         if (active) {
@@ -1256,7 +1753,7 @@ function App() {
   }, [applyUserSettings])
 
   useEffect(() => {
-    if (!currentSession) {
+    if (!currentSessionId || !currentOrganizationId) {
       setUsageHistory([])
       setLabUsageStatusMessage('Login to sync Lab Usage API')
       return
@@ -1279,7 +1776,72 @@ function App() {
     void loadLabUsageHistory()
 
     return () => controller.abort()
-  }, [currentSession])
+  }, [currentOrganizationId, currentSessionId])
+
+  useEffect(() => {
+    setWeighingOperator(currentSession?.email ?? '')
+  }, [currentSession?.email])
+
+  useEffect(() => {
+    setFormulaRecords([])
+    setActiveFormulaId('')
+    if (!currentSessionId || !currentOrganizationId) {
+      return
+    }
+
+    const controller = new AbortController()
+
+    async function loadFormulaCatalog() {
+      try {
+        const payload = await requestApi<Formula[]>('/formulas', { signal: controller.signal })
+        setFormulaRecords(payload)
+        setActiveFormulaId((current) => (payload.some((formula) => formula.id === current) ? current : payload[0]?.id ?? ''))
+      } catch {
+        setFormulaRecords([])
+        setActiveFormulaId('')
+      }
+    }
+
+    void loadFormulaCatalog()
+
+    return () => controller.abort()
+  }, [currentOrganizationId, currentSessionId])
+
+  useEffect(() => {
+    setLots([])
+    setMovements([])
+    setStorageLocationRecords([])
+    setAdjustmentLotId('')
+    setTransferLotId('')
+    if (!currentSessionId || !currentOrganizationId) {
+      return
+    }
+
+    const controller = new AbortController()
+
+    async function loadInventoryConsole() {
+      try {
+        const payload = await requestApi<InventoryConsoleResponse>('/inventory/console', {
+          signal: controller.signal,
+        })
+        setLots(payload.lots)
+        setMovements(payload.movements)
+        setStorageLocationRecords(payload.locations)
+        setAdjustmentLotId(payload.lots[0]?.id ?? '')
+        setTransferLotId(payload.lots[0]?.id ?? '')
+      } catch {
+        if (!controller.signal.aborted) {
+          setLots([])
+          setMovements([])
+          setStorageLocationRecords([])
+        }
+      }
+    }
+
+    void loadInventoryConsole()
+
+    return () => controller.abort()
+  }, [currentOrganizationId, currentSessionId])
 
   useEffect(() => {
     function handleKeys(event: KeyboardEvent) {
@@ -1297,32 +1859,39 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeys)
   }, [])
 
-  function setTargetWeights() {
+  const setTargetWeights = useCallback(() => {
     const nextWeights: Record<string, number> = {}
     labPlan.allocations.forEach((allocation) => {
       nextWeights[allocationKey(allocation)] = Number(allocation.allocatedGrams.toFixed(3))
     })
     setActualWeights(nextWeights)
-  }
+  }, [labPlan.allocations])
 
-  async function commitLabUsage() {
+  const commitLabUsage = useCallback(async () => {
     if (!weighingReady || resolvedLeaves.length === 0) {
       return
     }
 
     setLabUsageBusy(true)
     try {
+      const actualsDifferFromTargets = weighingSessionPreview.lines.some(
+        (line) => Math.abs(line.actualGrams - line.targetGrams) > 0.0001,
+      )
       const payload = await requestApi<LabUsageCommitResponse>('/lab-usage/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           formulaId: selectedFormula.id,
           grams: batchGrams,
-          actuals: weighingSessionPreview.lines.map((line) => ({
-            materialId: line.materialId,
-            lotId: line.lotId,
-            actualGrams: line.actualGrams,
-          })),
+          ...(actualsDifferFromTargets
+            ? {
+                actuals: weighingSessionPreview.lines.map((line) => ({
+                  materialId: line.materialId,
+                  lotId: line.lotId,
+                  actualGrams: line.actualGrams,
+                })),
+              }
+            : {}),
           tolerancePercent: weighingTolerancePercent,
           operator: weighingOperator,
           purpose: labUsagePurpose,
@@ -1342,9 +1911,20 @@ function App() {
     } finally {
       setLabUsageBusy(false)
     }
-  }
+  }, [
+    batchGrams,
+    labUsageProjectCode,
+    labUsagePurpose,
+    labUsageSampleCode,
+    resolvedLeaves.length,
+    selectedFormula.id,
+    weighingOperator,
+    weighingSessionPreview.lines,
+    weighingTolerancePercent,
+    weighingReady,
+  ])
 
-  async function reverseLatestUsage() {
+  const reverseLatestUsage = useCallback(async () => {
     const latest = usageHistory.find((usage) => usage.status === 'COMMITTED')
     if (!latest) {
       return
@@ -1370,9 +1950,22 @@ function App() {
     } finally {
       setLabUsageBusy(false)
     }
-  }
+  }, [usageHistory, weighingOperator])
 
-  async function createFormulaDraft() {
+  const selectNewFormulaType = useCallback((type: FormulaType) => {
+    const previousDefault = formulaTypeMeta[newFormulaType].defaultName
+    const nextDefault = formulaTypeMeta[type].defaultName
+    setNewFormulaType(type)
+    setNewFormulaName((current) => {
+      const trimmed = current.trim()
+      if (!trimmed || trimmed === previousDefault || trimmed.startsWith('Untitled ')) {
+        return nextDefault
+      }
+      return current
+    })
+  }, [newFormulaType])
+
+  const createFormulaDraft = useCallback(async () => {
     const targetGrams = Math.max(1, Number(newFormulaTargetGrams) || 100)
     try {
       const payload = await requestApi<FormulaCreateResponse>('/formulas', {
@@ -1380,8 +1973,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: newFormulaName.trim() || 'Untitled Formula',
+          formulaType: newFormulaType,
           targetGrams,
-          owner: 'Thuan Le Minh',
         }),
       })
       setFormulaRecords((current) => [
@@ -1389,16 +1982,20 @@ function App() {
         ...current.filter((formula) => formula.id !== payload.formula.id),
       ])
       setActiveFormulaId(payload.formula.id)
-      setNewFormulaName('Untitled Accord')
+      setNewFormulaName(formulaTypeMeta[newFormulaType].defaultName)
       setNewFormulaTargetGrams(100)
       setActiveKey('formulas')
       setModal(null)
-    } catch {
+    } catch (error) {
+      if (error instanceof Error) {
+        setApprovalNotice(error.message)
+      }
       setActiveKey('formulas')
+      setModal(null)
     }
-  }
+  }, [newFormulaName, newFormulaTargetGrams, newFormulaType])
 
-  async function addFormulaMaterialLine() {
+  const addFormulaMaterialLine = useCallback(async () => {
     const material = materialRecords.find((item) => item.id === newLineMaterialId)
     const formula = formulaRecords.find((item) => item.id === activeFormulaId)
     const grams = Number(newLineGrams)
@@ -1420,12 +2017,36 @@ function App() {
       setNewLineGrams(5)
       setActiveKey('formulas')
       setModal(null)
-    } catch {
+    } catch (error) {
+      if (error instanceof Error) {
+        setApprovalNotice(error.message)
+      }
       setActiveKey('formulas')
+      setModal(null)
     }
-  }
+  }, [activeFormulaId, formulaRecords, materialRecords, newLineGrams, newLineMaterialId])
 
-  async function receiveStockLot() {
+  const isPermissionError = useCallback((error: unknown, permission: string) => {
+    return error instanceof Error && error.message.includes(`cannot perform ${permission}`)
+  }, [])
+
+  const submitInventoryApprovalRequest = useCallback(
+    async (action: InventoryApprovalAction, payload: Record<string, unknown>, reason: string) => {
+      const response = await requestApi<InventoryApprovalRequestResponse>('/inventory/approval-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, payload, reason }),
+      })
+
+      setApprovalNotice(`${response.request.id} is pending admin approval for ${response.request.targetLabel}.`)
+      setActiveKey('inventory')
+      setModal(null)
+      return response
+    },
+    [],
+  )
+
+  const receiveStockLot = useCallback(async () => {
     const material = materialRecords.find((item) => item.id === receiveMaterialId)
     const quantityGrams = Number(receiveQuantityGrams)
 
@@ -1433,33 +2054,64 @@ function App() {
       return
     }
 
+    const receiptPayload = {
+      materialId: material.id,
+      lotNumber: receiveLotNumber.trim() || `L-${material.cas.replaceAll('-', '')}`,
+      quantityGrams,
+      expiryDate: receiveExpiryDate || '2028-12-31',
+      location: 'Receiving Bay',
+      qualityStatus: 'APPROVED',
+      container: 'Receiving container',
+    }
+
     try {
-      const payload = await requestApi<InventoryReceiptResponse>('/inventory/receipts', {
+      if (!canReceiveInventory) {
+        await submitInventoryApprovalRequest(
+          'inventory.receive',
+          receiptPayload,
+          `Receive ${formatGrams(quantityGrams)} of ${material.name}`,
+        )
+        return
+      }
+
+      const response = await requestApi<InventoryReceiptResponse>('/inventory/receipts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          materialId: material.id,
-          lotNumber: receiveLotNumber.trim() || `L-${material.cas.replaceAll('-', '')}`,
-          quantityGrams,
-          expiryDate: receiveExpiryDate || '2028-12-31',
-          location: 'Receiving Bay',
-          qualityStatus: 'APPROVED',
-          container: 'Receiving container',
-        }),
+        body: JSON.stringify(receiptPayload),
       })
 
-      setLots((current) => [payload.lot, ...current.filter((lot) => lot.id !== payload.lot.id)])
-      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setLots((current) => [response.lot, ...current.filter((lot) => lot.id !== response.lot.id)])
+      setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
       setReceiveQuantityGrams(25)
       setActiveKey('inventory')
       setModal(null)
-    } catch {
+    } catch (error) {
+      if (isPermissionError(error, 'inventory.receive')) {
+        await submitInventoryApprovalRequest(
+          'inventory.receive',
+          receiptPayload,
+          `Receive ${formatGrams(quantityGrams)} of ${material.name}`,
+        )
+        return
+      }
+      setApprovalNotice(error instanceof Error ? error.message : 'Inventory receipt failed')
       setActiveKey('inventory')
     }
-  }
+  }, [
+    canReceiveInventory,
+    formatGrams,
+    isPermissionError,
+    materialRecords,
+    receiveExpiryDate,
+    receiveLotNumber,
+    receiveMaterialId,
+    receiveQuantityGrams,
+    lots.length,
+    submitInventoryApprovalRequest,
+  ])
 
-  async function adjustInventoryLot() {
+  const adjustInventoryLot = useCallback(async () => {
     const lot = lots.find((item) => item.id === adjustmentLotId)
     const quantityGrams = Number(adjustmentQuantityGrams)
 
@@ -1473,29 +2125,59 @@ function App() {
       return
     }
 
+    const adjustmentPayload = {
+      lotId: lot.id,
+      direction: adjustmentDirection,
+      quantityGrams,
+      reason: adjustmentReason.trim() || 'Cycle count correction',
+    }
+
     try {
-      const payload = await requestApi<InventoryAdjustmentResponse>('/inventory/adjustments', {
+      if (!canAdjustInventory) {
+        await submitInventoryApprovalRequest(
+          'inventory.adjust',
+          adjustmentPayload,
+          `${adjustmentDirection} ${formatGrams(quantityGrams)} for ${lot.lotNumber}`,
+        )
+        return
+      }
+
+      const response = await requestApi<InventoryAdjustmentResponse>('/inventory/adjustments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lotId: lot.id,
-          direction: adjustmentDirection,
-          quantityGrams,
-          reason: adjustmentReason.trim() || 'Cycle count correction',
-        }),
+        body: JSON.stringify(adjustmentPayload),
       })
 
-      setLots((current) => current.map((item) => (item.id === payload.lot.id ? payload.lot : item)))
-      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setLots((current) => current.map((item) => (item.id === response.lot.id ? response.lot : item)))
+      setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setAdjustmentQuantityGrams(5)
       setActiveKey('inventory')
       setModal(null)
-    } catch {
+    } catch (error) {
+      if (isPermissionError(error, 'inventory.adjust')) {
+        await submitInventoryApprovalRequest(
+          'inventory.adjust',
+          adjustmentPayload,
+          `${adjustmentDirection} ${formatGrams(quantityGrams)} for ${lot.lotNumber}`,
+        )
+        return
+      }
+      setApprovalNotice(error instanceof Error ? error.message : 'Inventory adjustment failed')
       setActiveKey('inventory')
     }
-  }
+  }, [
+    adjustmentDirection,
+    adjustmentLotId,
+    adjustmentQuantityGrams,
+    adjustmentReason,
+    canAdjustInventory,
+    formatGrams,
+    isPermissionError,
+    lots,
+    submitInventoryApprovalRequest,
+  ])
 
-  async function transferInventoryLot() {
+  const transferInventoryLot = useCallback(async () => {
     const lot = lots.find((item) => item.id === transferLotId)
     const toLocation = transferLocation.trim()
 
@@ -1503,28 +2185,103 @@ function App() {
       return
     }
 
+    const transferPayload = { lotId: lot.id, toLocation }
+
     try {
-      const payload = await requestApi<InventoryTransferResponse>('/inventory/transfers', {
+      if (!canAdjustInventory) {
+        await submitInventoryApprovalRequest(
+          'inventory.transfer',
+          transferPayload,
+          `Move ${lot.lotNumber} to ${toLocation}`,
+        )
+        return
+      }
+
+      const response = await requestApi<InventoryTransferResponse>('/inventory/transfers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lotId: lot.id, toLocation }),
+        body: JSON.stringify(transferPayload),
       })
 
-      setLots((current) => current.map((item) => (item.id === payload.lot.id ? payload.lot : item)))
-      setMovements((current) => [payload.movement, ...current.filter((movement) => movement.id !== payload.movement.id)])
+      setLots((current) => current.map((item) => (item.id === response.lot.id ? response.lot : item)))
+      setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setActiveKey('inventory')
       setModal(null)
-    } catch {
+    } catch (error) {
+      if (isPermissionError(error, 'inventory.adjust')) {
+        await submitInventoryApprovalRequest(
+          'inventory.transfer',
+          transferPayload,
+          `Move ${lot.lotNumber} to ${toLocation}`,
+        )
+        return
+      }
+      setApprovalNotice(error instanceof Error ? error.message : 'Inventory transfer failed')
       setActiveKey('inventory')
+    }
+  }, [
+    canAdjustInventory,
+    isPermissionError,
+    lots,
+    submitInventoryApprovalRequest,
+    transferLotId,
+    transferLocation,
+  ])
+
+  async function queueTenantAuditExport() {
+    if (!currentSession) {
+      setApprovalNotice('Login is required before queueing audit export.')
+      return
+    }
+
+    setAuditExporting(true)
+    try {
+      const exportJob = await requestApi<AuditExportResponse>('/audit/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: 'JSON', scope: currentSession.organizationId }),
+      })
+      setApprovalNotice(
+        `${exportJob.id} audit export is ready for ${exportJob.scope} with ${exportJob.eventCount} events.`,
+      )
+      setModal(null)
+    } catch (error) {
+      setApprovalNotice(error instanceof Error ? error.message : 'Audit export failed')
+    } finally {
+      setAuditExporting(false)
     }
   }
 
-  function acceptAuthSession(session: AuthSession, token: string) {
+  function prepareAuthSession(session: AuthSession, token: string, permissions?: string[]) {
+    const sessionWithPermissions = withSessionPermissions(session, permissions)
     acceptCsrfToken(token)
-    setCurrentSession(session)
-    writeStoredAuthSession(session)
-    setActiveKey('dashboard')
+
+    writeStoredAuthSession(sessionWithPermissions)
+    return sessionWithPermissions
   }
+
+  function rememberTenantDomain(organizationId: string, domain?: string) {
+    if (!domain?.trim()) {
+      return
+    }
+    setTenantDomains((current) => ({ ...current, [organizationId]: domain.trim() }))
+  }
+
+  async function syncTenantDomain(organizationId: string) {
+    try {
+      const payload = await requestApi<SaasConsoleResponse>('/billing/console')
+      rememberTenantDomain(organizationId, payload.sso.domain)
+    } catch {
+      // Domain display is cosmetic; tenant guards still come from the API session.
+    }
+  }
+
+  useEffect(() => {
+    if (!currentOrganizationId) {
+      return
+    }
+    void syncTenantDomain(currentOrganizationId)
+  }, [currentOrganizationId])
 
   async function syncUserSettings(session: AuthSession) {
     try {
@@ -1538,15 +2295,19 @@ function App() {
     }
   }
 
-  async function loginToWorkspace(email: string) {
+  async function loginToWorkspace(email: string, password?: string) {
     const payload = await requestApi<LoginResponse>('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, password: password || undefined }),
     })
-    acceptAuthSession(payload.session, payload.csrfToken)
-    const settings = await syncUserSettings(payload.session)
-    setActiveKey(settings.preferredLanding)
+    const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
+    const settings = await syncUserSettings(session)
+    void syncTenantDomain(session.organizationId)
+    setActiveKey(safeLandingForSession(resumeKey ?? settings.preferredLanding, session))
+    setResumeKey(null)
+    setAuthNotice(null)
+    setCurrentSession(session)
     return payload
   }
 
@@ -1555,6 +2316,8 @@ function App() {
     workspaceSlug: string
     email: string
     name: string
+    password: string
+    customDomain: string
   }) {
     const payload = await requestApi<SignupResponse>('/auth/signup', {
       method: 'POST',
@@ -1562,12 +2325,18 @@ function App() {
       body: JSON.stringify({
         organizationName: input.organizationName.trim(),
         workspaceSlug: toWorkspaceSlug(input.workspaceSlug),
+        customDomain: input.customDomain,
         email: input.email.trim().toLowerCase(),
         name: input.name.trim(),
+        password: input.password,
       }),
     })
-    acceptAuthSession(payload.session, payload.csrfToken)
-    void syncUserSettings(payload.session)
+    const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
+    setCurrentSession(session)
+    setResumeKey(null)
+    setAuthNotice(null)
+    rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain ?? payload.sso.domain)
+    void syncUserSettings(session)
     setBillingOnboarding(true)
     return payload
   }
@@ -1582,19 +2351,23 @@ function App() {
       applyUserSettings(null)
       setSidebarCollapsed(false)
       setBillingOnboarding(false)
+      setAuthNotice(null)
+      setResumeKey(null)
       acceptCsrfToken()
       writeStoredAuthSession(null)
       setCommandOpen(false)
       setModal(null)
+      setActiveKey('dashboard')
     }
   }
 
   if (!currentSession) {
     return (
-      <AuthGateway
-        onLogin={loginToWorkspace}
-        onSignup={signupWorkspace}
-      />
+        <AuthGateway
+          notice={authNotice}
+          onLogin={loginToWorkspace}
+          onSignup={signupWorkspace}
+        />
     )
   }
 
@@ -1602,10 +2375,7 @@ function App() {
     return (
       <PostSignupBillingGate
         session={currentSession}
-        onComplete={() => {
-          setBillingOnboarding(false)
-          setActiveKey((userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding)
-        }}
+        onComplete={closeBillingGate}
       />
     )
   }
@@ -1624,24 +2394,28 @@ function App() {
           mobileOpen={mobileNavOpen}
           session={currentSession}
           onNavigate={navigateToDomain}
-          onToggle={() => {
-            if (mobileNavOpen) {
-              setMobileNavOpen(false)
-              return
-            }
-            setSidebarCollapsed((value) => !value)
-          }}
+          onToggle={toggleSidebar}
         />
         <main className="workspace">
           <Topbar
             activeDomain={selectedDomain}
             session={currentSession}
+            tenantDomain={tenantDomains[currentSession.organizationId]}
             userSettings={activeUserSettings}
-            onCommand={() => setCommandOpen(true)}
+            onCommand={openCommandPalette}
             onLogout={() => void logoutWorkspace()}
             onMenu={() => setMobileNavOpen((value) => !value)}
-            onOpenUserSettings={() => setModal('userSettings')}
+            onOpenUserSettings={openUserSettingsModal}
           />
+          {approvalNotice ? (
+            <div className="approval-notice glass">
+              <ShieldCheck size={16} />
+              <span>{approvalNotice}</span>
+              <button className="ghost-button small" type="button" onClick={() => setApprovalNotice(null)}>
+                Dismiss
+              </button>
+            </div>
+          ) : null}
           <AnimatePresence mode="wait" initial={!activeUserSettings.reduceMotion}>
             {activeKey === 'dashboard' ? (
               <motion.div key="dashboard" {...shellMotionPreset}>
@@ -1649,16 +2423,17 @@ function App() {
                   stats={stats}
                   movements={movements}
                   activeKey={activeKey}
+                  session={currentSession}
                   onNavigate={navigateToDomain}
                   onOpenModal={setModal}
                 />
               </motion.div>
             ) : selectedDomain ? (
               <motion.div key={activeKey} {...shellMotionPreset}>
-                <DomainWorkspace
-                  domain={selectedDomain}
-                  session={currentSession}
-                  lots={lots}
+        <DomainWorkspace
+          domain={selectedDomain}
+          session={currentSession}
+          lots={lots}
                   movements={movements}
                   storageLocations={storageLocationRecords}
                   stock={stock}
@@ -1667,7 +2442,7 @@ function App() {
                   onMovementsChange={setMovements}
                   onStorageLocationsChange={setStorageLocationRecords}
                   setMaterialRecords={setMaterialRecords}
-                  formulaRecords={formulaRecords}
+                  formulaRecords={scopedFormulaRecords}
                   setFormulaRecords={setFormulaRecords}
                   activeFormulaId={activeFormulaId}
                   setActiveFormulaId={setActiveFormulaId}
@@ -1705,11 +2480,15 @@ function App() {
                   onCommit={() => setModal('commit')}
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
-                  onNewFormula={() => setModal('newFormula')}
+                  onNewFormula={(type = 'ACCORD') => {
+                    selectNewFormulaType(type)
+                    setModal('newFormula')
+                  }}
                   onAddFormulaLine={() => setModal('formulaLine')}
                   onReceiveStock={() => setModal('receiveStock')}
                   onAdjustStock={() => setModal('inventoryAdjustment')}
                   onTransferStock={() => setModal('inventoryTransfer')}
+                  onRequestInventoryApproval={submitInventoryApprovalRequest}
                 />
               </motion.div>
             ) : null}
@@ -1717,27 +2496,28 @@ function App() {
         </main>
       </div>
 
-      <CommandPalette
-        open={commandOpen}
-        onClose={() => setCommandOpen(false)}
-        onNavigate={navigateToDomain}
-        onCommit={() => setModal('commit')}
-      />
+        <CommandPalette
+          open={commandOpen}
+          session={currentSession}
+          onClose={closeCommandPalette}
+          onNavigate={navigateToDomain}
+          onCommit={() => setModal('commit')}
+        />
 
-      <BlackPopup
-        open={modal === 'userSettings'}
-        title="User Settings"
-        description="Personal preferences for this signed-in user. Tenant branding, roles, and workspace policy stay separate."
-        actionLabel="Close"
-        onClose={() => setModal(null)}
-        onAction={() => setModal(null)}
-      >
+        <BlackPopup
+          open={modal === 'userSettings'}
+          title="User Settings"
+          description="Personal preferences for this signed-in user. Company branding, roles, and workspace policy stay separate."
+          actionLabel="Close"
+          onClose={closeCurrentModal}
+          onAction={closeCurrentModal}
+        >
         <UserSettingsForm
           settings={activeUserSettings}
           session={currentSession}
           onSaved={(settings) => {
             applyUserSettings(settings)
-            setActiveKey(settings.preferredLanding)
+            setActiveKey(safeLandingForSession(settings.preferredLanding, currentSession))
             setModal(null)
           }}
         />
@@ -1766,6 +2546,22 @@ function App() {
         actionDisabled={!newFormulaName.trim() || newFormulaTargetGrams <= 0}
       >
         <div className="form-grid">
+          <div className="formula-type-grid" role="group" aria-label="Formula type">
+            {(['ACCORD', 'FINE_FRAGRANCE'] as FormulaType[]).map((type) => {
+              const meta = formulaTypeMeta[type]
+              return (
+                <button
+                  className={`formula-type-option ${newFormulaType === type ? 'is-active' : ''}`}
+                  key={type}
+                  type="button"
+                  onClick={() => selectNewFormulaType(type)}
+                >
+                  <span>{meta.shortLabel}</span>
+                  <strong>{meta.label}</strong>
+                </button>
+              )
+            })}
+          </div>
           <label className="field-row">
             <span>Formula name</span>
             <input
@@ -1833,8 +2629,12 @@ function App() {
       <BlackPopup
         open={modal === 'receiveStock'}
         title="Receive stock / create lot"
-        description="Creates an approved inventory lot and a matching immutable RECEIPT movement."
-        actionLabel="Create Lot"
+        description={
+          canReceiveInventory
+            ? 'Creates an approved inventory lot and a matching immutable RECEIPT movement.'
+            : 'Submits a stock receipt request for an admin to approve before stock changes.'
+        }
+        actionLabel={canReceiveInventory ? 'Create Lot' : 'Request Approval'}
         onClose={() => setModal(null)}
         onAction={receiveStockLot}
         actionDisabled={!receiveMaterialId || receiveQuantityGrams <= 0}
@@ -1888,8 +2688,12 @@ function App() {
       <BlackPopup
         open={modal === 'inventoryAdjustment'}
         title="Adjust stock"
-        description="Creates an immutable ADJUSTMENT movement. Available stock cannot go negative."
-        actionLabel="Create Adjustment"
+        description={
+          canAdjustInventory
+            ? 'Creates an immutable ADJUSTMENT movement. Available stock cannot go negative.'
+            : 'Submits an inventory adjustment request for an admin to approve before stock changes.'
+        }
+        actionLabel={canAdjustInventory ? 'Create Adjustment' : 'Request Approval'}
         onClose={() => setModal(null)}
         onAction={adjustInventoryLot}
         actionDisabled={!adjustmentLotId || adjustmentQuantityGrams <= 0 || adjustmentWouldGoNegative}
@@ -1954,8 +2758,12 @@ function App() {
       <BlackPopup
         open={modal === 'inventoryTransfer'}
         title="Transfer lot"
-        description="Moves a lot between storage locations and records TRANSFER / MOVE evidence without changing stock."
-        actionLabel="Confirm Transfer"
+        description={
+          canAdjustInventory
+            ? 'Moves a lot between storage locations and records TRANSFER / MOVE evidence without changing stock.'
+            : 'Submits a lot transfer request for an admin to approve before the location changes.'
+        }
+        actionLabel={canAdjustInventory ? 'Confirm Transfer' : 'Request Approval'}
         onClose={() => setModal(null)}
         onAction={transferInventoryLot}
         actionDisabled={!transferLotId || !transferLocation.trim() || selectedTransferLot?.location === transferLocation}
@@ -2002,10 +2810,11 @@ function App() {
       <BlackPopup
         open={modal === 'auditExport'}
         title="Audit export"
-        description="Enterprise export is scoped to the current tenant and every download is logged."
-        actionLabel="Queue JSON export"
+        description="Enterprise export is scoped to the current workspace and every download is logged."
+        actionLabel={auditExporting ? 'Queueing export' : 'Queue JSON export'}
         onClose={() => setModal(null)}
-        onAction={() => setModal(null)}
+        onAction={queueTenantAuditExport}
+        actionDisabled={auditExporting}
       >
         <div className="popup-grid">
           <Metric label="Events" value="9,144" />
@@ -2016,8 +2825,8 @@ function App() {
 
       <BlackPopup
         open={modal === 'ssoPolicy'}
-        title="SSO and tenant security"
-        description="Owner/Admin actions require MFA. SSO group mapping never bypasses tenant scope."
+        title="SSO and workspace security"
+        description="Owner/Admin actions require MFA. SSO group mapping never bypasses workspace scope."
         actionLabel="Mark reviewed"
         onClose={() => setModal(null)}
         onAction={() => setModal(null)}
@@ -2047,8 +2856,6 @@ function Sidebar({
   onNavigate: (key: DomainKey) => void
   onToggle: () => void
 }) {
-  const tenantDisplay = tenantDisplayForSession(session)
-
   return (
     <aside className="sidebar glass" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
       <div className="brand-row">
@@ -2067,13 +2874,14 @@ function Sidebar({
       </div>
 
       <nav className="nav-stack" aria-label="Main modules">
-        {navGroups.map((group) => (
+        {visibleNavGroupsForSession(session).map((group) => (
           <div className="nav-group" key={group.title}>
             {!collapsed && <div className="nav-title">{group.title}</div>}
             {group.keys.map((key) => {
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
+              const displayDomain = domain ? domainDisplayForSession(domain, session) : undefined
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? 'OlfactoryOps Console' : domain?.shortName ?? key
+              const label = key === 'dashboard' ? 'OlfactoryOps Console' : displayDomain?.shortName ?? key
               const isActive = activeKey === key
               return (
                 <button
@@ -2085,23 +2893,15 @@ function Sidebar({
                 >
                   <Icon size={18} />
                   {!collapsed && <span>{label}</span>}
-                  {!collapsed && domain && <StatusDot status={domain.status} />}
+                  {!collapsed && displayDomain && isInternalAdminSession(session) && (
+                    <StatusDot status={displayDomain.status} />
+                  )}
                 </button>
               )
             })}
           </div>
         ))}
       </nav>
-
-      {!collapsed && (
-        <div className="sidebar-footer">
-          <div className="mono-small">Tenant isolation</div>
-          <div className="footer-status">
-            <CheckCircle2 size={16} />
-            <span>Session scoped to {tenantDisplay.scope}</span>
-          </div>
-        </div>
-      )}
     </aside>
   )
 }
@@ -2109,6 +2909,7 @@ function Sidebar({
 function Topbar({
   activeDomain,
   session,
+  tenantDomain,
   userSettings,
   onCommand,
   onLogout,
@@ -2117,13 +2918,15 @@ function Topbar({
 }: {
   activeDomain?: DomainModule
   session: AuthSession
+  tenantDomain?: string
   userSettings: UserSettingsRecord
   onCommand: () => void
   onLogout: () => void
   onMenu: () => void
   onOpenUserSettings: () => void
 }) {
-  const tenantDisplay = tenantDisplayForSession(session)
+  const tenantDisplay = tenantDisplayForSession(session, tenantDomain)
+  const displayDomain = activeDomain ? domainDisplayForSession(activeDomain, session) : undefined
 
   return (
     <header className="topbar glass">
@@ -2132,7 +2935,7 @@ function Topbar({
       </button>
       <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
-        <h1>{activeDomain ? activeDomain.name : 'OlfactoryOps Console'}</h1>
+        <h1>{displayDomain ? displayDomain.name : 'OlfactoryOps Console'}</h1>
       </div>
       <button className="command-button" type="button" onClick={onCommand}>
         <Search size={17} />
@@ -2140,7 +2943,9 @@ function Topbar({
         <kbd>Ctrl K</kbd>
       </button>
       <div className="topbar-actions">
-        <DataTag icon={ShieldCheck} label="Tenant guard" value="On" tone="green" />
+        {isInternalAdminSession(session) ? (
+          <DataTag icon={ShieldCheck} label="Workspace guard" value="On" tone="green" />
+        ) : null}
         <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label="Open user settings">
           <span className="user-avatar">{userSettings.displayName.slice(0, 1).toUpperCase()}</span>
           <span>
@@ -2179,11 +2984,13 @@ function UserSettingsForm({
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
   const safeDraftAccentColor = normalizedDraftAccentColor ?? defaultAccentColor
   const accentPreviewStyle = useMemo(() => accentStyleForColor(safeDraftAccentColor), [safeDraftAccentColor])
+  const landingDomains = useMemo(() => visibleDomainsForSession(session), [session])
+  const draftPreferredLanding = safeLandingForSession(draft.preferredLanding, session)
 
   useEffect(() => {
-    setDraft(settings)
+    setDraft({ ...settings, preferredLanding: safeLandingForSession(settings.preferredLanding, session) })
     setStatus('Changes apply to your account only.')
-  }, [settings])
+  }, [settings, session])
 
   async function saveSettings() {
     setBusy(true)
@@ -2194,7 +3001,7 @@ function UserSettingsForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           displayName: draft.displayName,
-          preferredLanding: draft.preferredLanding,
+          preferredLanding: draftPreferredLanding,
           uiDensity: draft.uiDensity,
           sidebarMode: draft.sidebarMode,
           reduceMotion: draft.reduceMotion,
@@ -2342,17 +3149,20 @@ function UserSettingsForm({
             <span>Preferred landing</span>
             <select
               aria-label="Preferred landing"
-              value={draft.preferredLanding}
+              value={draftPreferredLanding}
               onChange={(event) =>
                 setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
               }
             >
               <option value="dashboard">OlfactoryOps Console</option>
-              {domains.map((domain) => (
-                <option key={domain.key} value={domain.key}>
-                  {domain.name}
-                </option>
-              ))}
+              {landingDomains.map((domain) => {
+                const displayDomain = domainDisplayForSession(domain, session)
+                return (
+                  <option key={domain.key} value={domain.key}>
+                    {displayDomain.name}
+                  </option>
+                )
+              })}
             </select>
           </label>
           <label className="field-row">
@@ -2395,6 +3205,10 @@ function toWorkspaceSlug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
 }
 
+function toWorkspaceDomain(slug: string) {
+  return `${toWorkspaceSlug(slug) || 'workspace'}.labofscents.org`
+}
+
 function billingPlanCta(plan: BillingPlanRecord) {
   if (plan.monthlyPrice === 0) return 'Continue Free'
   if (plan.id === 'PLAN-MAISON') return 'Start enterprise trial'
@@ -2406,6 +3220,109 @@ function billingPlanAudience(plan: BillingPlanRecord) {
   if (plan.id === 'PLAN-ARTISAN') return 'Solo founder'
   if (plan.id === 'PLAN-MAISON') return 'Large lab'
   return 'Small brand or lab'
+}
+
+function saasHealthTone(status: SaasHealthStatus): DomainStatus {
+  if (status === 'blocked') return 'alert'
+  if (status === 'warning') return 'review'
+  return 'stable'
+}
+
+function worstSaasHealthStatus(statuses: SaasHealthStatus[], fallback: SaasHealthStatus = 'warning'): SaasHealthStatus {
+  if (statuses.includes('blocked')) return 'blocked'
+  if (statuses.includes('warning')) return 'warning'
+  return statuses.length > 0 ? 'pass' : fallback
+}
+
+function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
+  const activeApiKeys = data.apiKeys.filter((key) => key.status === 'active').length
+  const activeWebhooks = data.webhooks.filter((webhook) => webhook.status === 'active').length
+  const failedDeliveries = data.webhookDeliveries.filter((delivery) => delivery.status === 'failed').length
+  const retryingDeliveries = data.webhookDeliveries.filter((delivery) => delivery.status === 'retrying').length
+  const readyAuditExports = data.auditExports.filter((job) => job.status === 'READY').length
+  const openInvoices = data.invoices.filter((invoice) => invoice.status === 'open' || invoice.status === 'paid').length
+  const limitStatus = worstSaasHealthStatus(data.limitChecks.map((check) => check.status))
+  const readinessStatus = worstSaasHealthStatus(data.readiness.map((check) => check.status))
+  const ssoReady = data.sso.status === 'enforced' || (data.sso.status === 'verified' && data.sso.scim.enabled)
+
+  const factors: SaasHealthFactor[] = [
+    {
+      key: 'subscription-write-gate',
+      label: 'Subscription write gate',
+      status: data.subscription.canWrite ? 'pass' : 'blocked',
+      detail: `${data.subscription.status} subscription; write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'}.`,
+    },
+    {
+      key: 'plan-limits',
+      label: 'Plan limit enforcement',
+      status: limitStatus,
+      detail:
+        data.limitChecks.length > 0
+          ? `${data.limitChecks.filter((check) => check.status === 'pass').length}/${data.limitChecks.length} usage checks are inside limits.`
+          : 'Usage limits are waiting for live API data.',
+    },
+    {
+      key: 'invoice-lifecycle',
+      label: 'Invoice lifecycle',
+      status: openInvoices > 0 || data.subscription.status === 'trialing' ? 'pass' : 'warning',
+      detail: `${data.invoices.length} invoice record(s); ${openInvoices} payable or paid invoice(s).`,
+    },
+    {
+      key: 'sso-scim',
+      label: 'SSO / SCIM readiness',
+      status: ssoReady ? 'pass' : 'warning',
+      detail: `${data.sso.provider} ${data.sso.status}; SCIM ${data.sso.scim.status}.`,
+    },
+    {
+      key: 'api-keys',
+      label: 'API key lifecycle',
+      status: activeApiKeys > 0 ? 'pass' : 'warning',
+      detail: `${activeApiKeys} active key(s); secrets are reveal-once and stored server-side as hashes.`,
+    },
+    {
+      key: 'webhooks',
+      label: 'Webhook endpoints',
+      status: activeWebhooks > 0 ? 'pass' : 'warning',
+      detail: `${activeWebhooks} active signed endpoint(s) out of ${data.plan.limits.webhooks} allowed.`,
+    },
+    {
+      key: 'delivery-retry',
+      label: 'Webhook delivery retry',
+      status: failedDeliveries > 0 ? 'blocked' : retryingDeliveries > 0 ? 'warning' : 'pass',
+      detail: `${failedDeliveries} failed and ${retryingDeliveries} retrying delivery record(s).`,
+    },
+    {
+      key: 'audit-export',
+      label: 'Audit export evidence',
+      status: readyAuditExports > 0 ? 'pass' : 'warning',
+      detail: `${readyAuditExports} ready workspace-scoped export(s) with checksum evidence.`,
+    },
+    {
+      key: 'readiness-gate',
+      label: 'Commercial readiness gate',
+      status: readinessStatus,
+      detail:
+        data.readiness.length > 0
+          ? `${data.readiness.filter((check) => check.status === 'pass').length}/${data.readiness.length} readiness controls pass.`
+          : 'Readiness checks are waiting for live API data.',
+    },
+  ]
+  const passCount = factors.filter((factor) => factor.status === 'pass').length
+  const warningCount = factors.filter((factor) => factor.status === 'warning').length
+  const blockedCount = factors.filter((factor) => factor.status === 'blocked').length
+  const score = Math.round(
+    factors.reduce((sum, factor) => sum + (factor.status === 'pass' ? 100 : factor.status === 'warning' ? 70 : 30), 0) /
+      Math.max(1, factors.length),
+  )
+
+  return {
+    score,
+    status: blockedCount > 0 ? 'blocked' : warningCount > 0 ? 'warning' : 'pass',
+    factors,
+    passCount,
+    warningCount,
+    blockedCount,
+  }
 }
 
 function PostSignupBillingGate({
@@ -2454,12 +3371,13 @@ function PostSignupBillingGate({
     apiKeys: [],
     webhooks: [],
     webhookDeliveries: [],
+    auditExports: [],
     readiness: [],
     invariant: 'client fallback contains no commercial state; API is source of truth',
   }), [session.organizationId])
   const [billingData, setBillingData] = useState<SaasConsoleResponse>(fallback)
   const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
-  const [status, setStatus] = useState('Choose the billing plan for this new tenant.')
+  const [status, setStatus] = useState('Choose the billing plan for this new workspace.')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2517,10 +3435,10 @@ function PostSignupBillingGate({
             </div>
             <h1>Start on Free, or unlock a trial now.</h1>
             <p className="lead">
-              Your tenant is already created. Pick the plan that matches this lab; paid plans begin with a no-card trial and can later connect to Stripe Checkout.
+              Your workspace is ready. Pick the plan that matches this lab; paid plans begin with a no-card trial and can later connect to Stripe Checkout.
             </p>
             <div className="tag-row">
-              <DataTag icon={ShieldCheck} label="Tenant" value="Provisioned" tone="green" />
+              <DataTag icon={ShieldCheck} label="Workspace" value="Ready" tone="green" />
               <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
               <DataTag icon={CheckCircle2} label="Current" value={billingData.plan.name} tone="amber" />
             </div>
@@ -2571,31 +3489,62 @@ function PostSignupBillingGate({
 }
 
 function AuthGateway({
+  notice,
   onLogin,
   onSignup,
 }: {
-  onLogin: (email: string) => Promise<LoginResponse>
-  onSignup: (input: { organizationName: string; workspaceSlug: string; email: string; name: string }) => Promise<SignupResponse>
+  notice?: string | null
+  onLogin: (email: string, password?: string) => Promise<LoginResponse>
+  onSignup: (input: {
+    organizationName: string
+    workspaceSlug: string
+    email: string
+    name: string
+    password: string
+    customDomain: string
+  }) => Promise<SignupResponse>
 }) {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
-  const [email, setEmail] = useState('owner@example.test')
+  const [email, setEmail] = useState('admin@labofscents.org')
   const [name, setName] = useState('Thuan Le Minh')
   const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
   const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
   const [workspaceSlugTouched, setWorkspaceSlugTouched] = useState(false)
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState('Login with an active tenant membership, or sign up a new workspace.')
+  const [status, setStatus] = useState(
+    notice ?? 'Login with an active workspace account, or sign up a new workspace.',
+  )
+  const workspaceDomain = toWorkspaceDomain(workspaceSlug)
+  const signupPasswordReady = password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password)
+  const signupReady = Boolean(
+    organizationName.trim() &&
+      workspaceSlug.trim() &&
+      email.trim() &&
+      name.trim() &&
+      signupPasswordReady &&
+      password === confirmPassword,
+  )
 
   async function submitAuth() {
     setBusy(true)
-    setStatus(mode === 'login' ? 'Checking tenant membership' : 'Provisioning isolated tenant')
+    setStatus(mode === 'login' ? 'Checking workspace account' : 'Creating your lab workspace')
     try {
       if (mode === 'login') {
-        const result = await onLogin(email)
+        const result = await onLogin(email, password)
         setStatus(`${result.session.email} signed in with ${result.session.role} role`)
       } else {
-        const result = await onSignup({ organizationName, workspaceSlug, email, name })
-        setStatus(`${result.organization.name} provisioned with owner access`)
+        if (!signupPasswordReady) {
+          setStatus('Password must be at least 12 characters and include letters and numbers.')
+          return
+        }
+        if (password !== confirmPassword) {
+          setStatus('Passwords must match before creating the workspace.')
+          return
+        }
+        const result = await onSignup({ organizationName, workspaceSlug, email, name, password, customDomain: workspaceDomain })
+        setStatus(`${result.organization.name} provisioned at ${result.organization.customDomain ?? result.sso.domain}`)
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Authentication failed')
@@ -2606,7 +3555,7 @@ function AuthGateway({
 
   function switchMode(nextMode: 'login' | 'signup') {
     setMode(nextMode)
-    setStatus(nextMode === 'login' ? 'Use owner@example.test for the demo tenant.' : 'Create a new tenant workspace and owner session.')
+    setStatus(nextMode === 'login' ? 'Use admin@labofscents.org with the admin test password.' : 'Create a new lab workspace and owner account.')
     setWorkspaceSlugTouched(false)
     if (nextMode === 'signup') {
       const defaultOrganizationName = 'New Fragrance Lab'
@@ -2614,11 +3563,15 @@ function AuthGateway({
       setName('Workspace Owner')
       setOrganizationName(defaultOrganizationName)
       setWorkspaceSlug(toWorkspaceSlug(defaultOrganizationName))
+      setPassword('')
+      setConfirmPassword('')
     } else {
-      setEmail('owner@example.test')
+      setEmail('admin@labofscents.org')
       setName('Thuan Le Minh')
       setOrganizationName('NOXELIS Lab')
       setWorkspaceSlug('noxelis-live')
+      setPassword('')
+      setConfirmPassword('')
     }
   }
 
@@ -2649,9 +3602,9 @@ function AuthGateway({
                 <div className="mono-small">OlfactoryOps OS</div>
               </div>
             </div>
-            <h1>{mode === 'login' ? 'Login to your lab tenant' : 'Create a tenant workspace'}</h1>
+            <h1>{mode === 'login' ? 'Sign in to your lab workspace' : 'Create your lab workspace'}</h1>
             <p className="lead">
-              Tenant access starts here: membership, role, session TTL, MFA policy, and audit evidence are established before the console opens.
+              Secure access starts here. We confirm your account, role, and workspace settings before opening OlfactoryOps.
             </p>
             <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
               <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
@@ -2683,6 +3636,11 @@ function AuthGateway({
                   />
                 </label>
                 <label className="field-row">
+                  <span>Workspace domain</span>
+                  <input aria-label="Signup workspace domain" value={workspaceDomain} readOnly />
+                  <small className="field-hint">Auto-created for this workspace; map a customer-owned domain in Cloudflare later.</small>
+                </label>
+                <label className="field-row">
                   <span>Owner name</span>
                   <input
                     aria-label="Signup owner name"
@@ -2701,22 +3659,45 @@ function AuthGateway({
                 onChange={(event) => setEmail(event.target.value)}
               />
             </label>
+            <label className="field-row">
+              <span>{mode === 'login' ? 'Password' : 'Password'}</span>
+              <input
+                aria-label={mode === 'login' ? 'Login password' : 'Signup password'}
+                type="password"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                value={password}
+                placeholder={mode === 'login' ? 'Required for admin and workspace accounts' : 'At least 12 chars, letters and numbers'}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              {mode === 'login' ? <small className="field-hint">Admin and workspace accounts require a password.</small> : null}
+            </label>
+            {mode === 'signup' && (
+              <label className="field-row">
+                <span>Confirm password</span>
+                <input
+                  aria-label="Confirm signup password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                />
+                {!signupPasswordReady ? <small className="field-hint is-danger">Use at least 12 characters with letters and numbers.</small> : null}
+                {signupPasswordReady && password !== confirmPassword ? (
+                  <small className="field-hint is-danger">Passwords must match.</small>
+                ) : null}
+              </label>
+            )}
             <button
               className="primary-button full"
               type="button"
               onClick={() => void submitAuth()}
-              disabled={busy || !email.trim() || (mode === 'signup' && (!organizationName.trim() || !workspaceSlug.trim()))}
+              disabled={busy || !email.trim() || (mode === 'signup' && !signupReady)}
             >
               {busy ? 'Working' : mode === 'login' ? 'Login' : 'Create workspace'}
             </button>
             <div className="auth-status">
               <ShieldCheck size={16} />
               <span>{status}</span>
-            </div>
-            <div className="policy-list">
-              <li>Demo login: owner@example.test</li>
-              <li>Signup provisions an active owner membership</li>
-              <li>Sessions use idle and absolute expiry windows</li>
             </div>
           </div>
         </section>
@@ -2725,71 +3706,102 @@ function AuthGateway({
   )
 }
 
-function Dashboard({
+const Dashboard = memo(function Dashboard({
   stats,
   movements,
+  session,
   onNavigate,
   onOpenModal,
 }: {
   stats: { done: number; avgCoverage: number; risks: number }
   movements: InventoryMovement[]
   activeKey: DomainKey
+  session: AuthSession
   onNavigate: (key: DomainKey) => void
   onOpenModal: (modal: ModalKind) => void
 }) {
+  const internalAdminView = isInternalAdminSession(session)
+  const visibleDomains = visibleDomainsForSession(session)
+  const visibleModuleCount = visibleDomains.length
+  const primaryDomain = visibleDomains.find((domain) => domain.key === 'formulas') ?? visibleDomains[0]
+  const primaryDomainDisplay = primaryDomain ? domainDisplayForSession(primaryDomain, session) : undefined
+  const canExportAudit = internalAdminView && sessionHasPermission(session, 'audit.export')
+  const canViewAudit = internalAdminView && sessionHasAnyPermission(session, ['audit.view', 'security.viewAuditLog', 'audit.export'])
+  const canViewMovementLedger = domainVisibleForSession('inventory', session)
+  const canViewEnterpriseReadiness = internalAdminView && domainVisibleForSession('saas', session)
+  const visibleWorkflowNodes = visibleWorkflowNodesForSession(session)
+
   return (
     <div className="dashboard-grid">
-      <Panel className="hero-panel" title="OlfactoryOps Console" icon={Gauge} right={<StatusBadge status="active" />}>
+      <Panel
+        className="hero-panel"
+        title="OlfactoryOps Console"
+        icon={Gauge}
+        right={internalAdminView ? <StatusBadge status="active" /> : undefined}
+      >
         <div className="hero-content">
           <div>
             <p className="lead">
-              Full SaaS operating layer across all 15 phases, with the core R&D value stream live inside the
-              broader enterprise product surface.
+              {internalAdminView
+                ? 'Full SaaS operating layer across the operating domains, with the core R&D value stream live inside the broader enterprise product surface.'
+                : 'Full OlfactoryOps operating layer across the operating domains, with the core R&D value stream live inside the broader business product surface.'}
             </p>
             <div className="hero-actions">
-              <button className="primary-button" type="button" onClick={() => onNavigate('formulas')}>
-                Open Formula R&D
-                <ChevronRight size={16} />
-              </button>
-              <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
-                Audit export
-              </button>
+              {primaryDomain ? (
+                <button className="primary-button" type="button" onClick={() => onNavigate(primaryDomain.key)}>
+                  Open {primaryDomainDisplay?.shortName ?? primaryDomain.name}
+                  <ChevronRight size={16} />
+                </button>
+              ) : null}
+              {canExportAudit ? (
+                <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
+                  Audit export
+                </button>
+              ) : null}
             </div>
           </div>
           <div className="hero-metrics">
-            <Metric label="Phases active/stable" value={`${stats.done}/16`} />
-            <Metric label="Avg coverage" value={`${stats.avgCoverage}%`} />
-            <Metric label="Risk flags" value={String(stats.risks)} />
+            {internalAdminView ? (
+              <>
+                <Metric label="Modules live" value={`${stats.done}/16`} />
+                <Metric label="Avg coverage" value={`${stats.avgCoverage}%`} />
+                <Metric label="Risk flags" value={String(stats.risks)} />
+              </>
+            ) : (
+              <Metric label="Modules" value={String(visibleModuleCount)} />
+            )}
           </div>
         </div>
       </Panel>
 
-      <Panel className="phase-panel" title="Phase Roadmap" icon={Layers3}>
-        <PhaseRoadmap onNavigate={onNavigate} />
+      {visibleWorkflowNodes.length > 0 ? (
+        <Panel className="workflow-panel" title="Operating Value Stream" icon={Activity}>
+          <WorkflowGraph nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
+        </Panel>
+      ) : null}
+
+      <Panel className="matrix-panel" title={internalAdminView ? 'Domain Health Matrix' : 'Workspace Modules'} icon={Database}>
+        <DomainMatrix session={session} onNavigate={onNavigate} />
       </Panel>
 
-      <Panel className="workflow-panel" title="Operating Value Stream" icon={Activity}>
-        <WorkflowGraph onNavigate={onNavigate} />
-      </Panel>
+      {canViewEnterpriseReadiness ? <EnterpriseReadiness session={session} onOpenModal={onOpenModal} /> : null}
 
-      <Panel className="matrix-panel" title="Domain Health Matrix" icon={Database}>
-        <DomainMatrix onNavigate={onNavigate} />
-      </Panel>
+      {canViewMovementLedger ? (
+        <Panel className="ledger-panel" title="Movement Ledger" icon={Boxes}>
+          <MovementTable movements={movements.slice(0, 6)} />
+        </Panel>
+      ) : null}
 
-      <EnterpriseReadiness onOpenModal={onOpenModal} />
-
-      <Panel className="ledger-panel" title="Movement Ledger" icon={Boxes}>
-        <MovementTable movements={movements.slice(0, 6)} />
-      </Panel>
-
-      <Panel className="audit-panel" title="Audit Trail" icon={KeyRound}>
-        <AuditList events={auditEvents} />
-      </Panel>
+      {canViewAudit ? (
+        <Panel className="audit-panel" title="Audit Trail" icon={KeyRound}>
+          <AuditList events={auditEvents} />
+        </Panel>
+      ) : null}
     </div>
   )
-}
+})
 
-function DomainWorkspace({
+const DomainWorkspace = memo(function DomainWorkspace({
   domain,
   session,
   lots,
@@ -2839,6 +3851,7 @@ function DomainWorkspace({
   onReceiveStock,
   onAdjustStock,
   onTransferStock,
+  onRequestInventoryApproval,
 }: {
   domain: DomainModule
   session: AuthSession
@@ -2884,15 +3897,22 @@ function DomainWorkspace({
   onCommit: () => void
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
-  onNewFormula: () => void
+  onNewFormula: (type?: FormulaType) => void
   onAddFormulaLine: () => void
   onReceiveStock: () => void
   onAdjustStock: () => void
   onTransferStock: () => void
+  onRequestInventoryApproval: (
+    action: InventoryApprovalAction,
+    payload: Record<string, unknown>,
+    reason: string,
+  ) => Promise<InventoryApprovalRequestResponse>
 }) {
+  const displayDomain = domainDisplayForSession(domain, session)
+
   return (
     <div className="domain-page">
-      <DomainHeader domain={domain} onOpenModal={onOpenModal} />
+      <DomainHeader domain={displayDomain} session={session} onOpenModal={onOpenModal} />
 
       {domain.key === 'materials' && (
         <MaterialWorkspace
@@ -2900,13 +3920,17 @@ function DomainWorkspace({
           onMaterialsChange={setMaterialRecords}
           selectedMaterialId={selectedMaterialId}
           onSelectMaterial={setSelectedMaterialId}
+          session={session}
           stock={stock}
         />
       )}
       {domain.key === 'formulas' && (
         <FormulaWorkspace
+          session={session}
           formulaRecords={formulaRecords}
           materialRecords={materialRecords}
+          lots={lots}
+          stock={stock}
           activeFormulaId={activeFormulaId}
           onSelectFormula={setActiveFormulaId}
           onFormulaRecordsChange={setFormulaRecords}
@@ -2920,6 +3944,7 @@ function DomainWorkspace({
       )}
       {domain.key === 'inventory' && (
         <InventoryWorkspace
+          session={session}
           lots={lots}
           movements={movements}
           storageLocations={storageLocations}
@@ -2931,6 +3956,7 @@ function DomainWorkspace({
           onReceiveStock={onReceiveStock}
           onAdjustStock={onAdjustStock}
           onTransferStock={onTransferStock}
+          onRequestInventoryApproval={onRequestInventoryApproval}
         />
       )}
       {domain.key === 'labUsage' && (
@@ -2993,36 +4019,53 @@ function DomainWorkspace({
         'analytics',
         'saas',
       ].includes(domain.key) && (
-        <GenericDomainWorkspace domain={domain} onOpenModal={onOpenModal} />
+        <GenericDomainWorkspace domain={displayDomain} session={session} onOpenModal={onOpenModal} />
       )}
     </div>
   )
-}
+})
 
-function DomainHeader({ domain, onOpenModal }: { domain: DomainModule; onOpenModal: (modal: ModalKind) => void }) {
+function DomainHeader({
+  domain,
+  session,
+  onOpenModal,
+}: {
+  domain: DomainModule
+  session: AuthSession
+  onOpenModal: (modal: ModalKind) => void
+}) {
   const Icon = domainIcons[domain.key]
+  const internalAdminView = isInternalAdminSession(session)
   return (
-    <Panel className="domain-header" title={domain.name} icon={Icon} right={<StatusBadge status={domain.status} />}>
+    <Panel
+      className="domain-header"
+      title={domain.name}
+      icon={Icon}
+      right={internalAdminView ? <StatusBadge status={domain.status} /> : undefined}
+    >
       <div className="domain-header-grid">
         <div>
           <p className="lead">{domain.responsibility}</p>
-          <div className="tag-row">
-            <DataTag icon={Layers3} label="Phase" value={domain.phase} />
-            <DataTag icon={UsersRound} label="Owner" value={domain.owner} />
-            <DataTag icon={Gauge} label="Health" value={`${domain.health}%`} tone={domain.health > 70 ? 'green' : 'amber'} />
+          {internalAdminView ? (
+            <div className="tag-row">
+              <DataTag icon={UsersRound} label="Owner" value={domain.owner} />
+              <DataTag icon={Gauge} label="Health" value={`${domain.health}%`} tone={domain.health > 70 ? 'green' : 'amber'} />
+            </div>
+          ) : null}
+        </div>
+        {internalAdminView ? (
+          <div className="risk-card">
+            <div className="mono-small">Current gate</div>
+            <strong>{domain.risk}</strong>
+            <button
+              className="ghost-button small"
+              type="button"
+              onClick={() => onOpenModal(domain.key === 'saas' || domain.key === 'identity' ? 'ssoPolicy' : 'auditExport')}
+            >
+              Review controls
+            </button>
           </div>
-        </div>
-        <div className="risk-card">
-          <div className="mono-small">Current gate</div>
-          <strong>{domain.risk}</strong>
-          <button
-            className="ghost-button small"
-            type="button"
-            onClick={() => onOpenModal(domain.key === 'saas' || domain.key === 'identity' ? 'ssoPolicy' : 'auditExport')}
-          >
-            Review controls
-          </button>
-        </div>
+        ) : null}
       </div>
     </Panel>
   )
@@ -3033,18 +4076,24 @@ function MaterialWorkspace({
   onMaterialsChange,
   selectedMaterialId,
   onSelectMaterial,
+  session,
   stock,
 }: {
   materialRecords: Material[]
   onMaterialsChange: (materials: Material[]) => void
   selectedMaterialId: string
   onSelectMaterial: (id: string) => void
+  session: AuthSession
   stock: ReturnType<typeof stockSummary>
 }) {
   const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
+  const [materialSaving, setMaterialSaving] = useState(false)
+  const [pubChemSaving, setPubChemSaving] = useState(false)
+  const canCreateMaterials = sessionHasPermission(session, 'materials.create')
+  const canUpdateMaterials = sessionHasPermission(session, 'materials.update')
   const [createName, setCreateName] = useState('Vetiveryl Acetate')
   const [createCas, setCreateCas] = useState('68917-34-0')
   const [createFamily, setCreateFamily] = useState('Woody vetiver')
@@ -3057,13 +4106,6 @@ function MaterialWorkspace({
     costPerGram: selected.costPerGram,
     ifraLimit: selected.ifraLimit,
     odor: selected.odor.join(', '),
-  })
-  const [ingestDraft, setIngestDraft] = useState({
-    documentType: 'SDS' as 'SDS' | 'CoA',
-    source: `${selected.name} SDS v4`,
-    version: 'v4',
-    density: selected.density,
-    vaporPressure: selected.vaporPressure,
   })
   const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
@@ -3098,12 +4140,6 @@ function MaterialWorkspace({
       ifraLimit: selected.ifraLimit,
       odor: selected.odor.join(', '),
     })
-    setIngestDraft((current) => ({
-      ...current,
-      source: `${selected.name} ${current.documentType} review`,
-      density: selected.density,
-      vaporPressure: selected.vaporPressure,
-    }))
     setMoleculeRows(moleculeComponents.filter((molecule) => molecule.materialId === selected.id))
     setProvenanceRows(selected.provenance)
     setLinkedDocuments([])
@@ -3158,6 +4194,10 @@ function MaterialWorkspace({
   }
 
   async function createMaterialRecord() {
+    if (!canCreateMaterials) {
+      setMaterialStatus('Current role is not authorized to create materials.')
+      return
+    }
     try {
       const payload = await requestApi<MaterialMutationResponse>('/materials', {
         method: 'POST',
@@ -3182,60 +4222,93 @@ function MaterialWorkspace({
       upsertMaterial(payload.material)
       setCreateName('')
       setMaterialStatus(`${payload.material.name} created without stock movement`)
-    } catch {
-      setMaterialStatus('Material create blocked; check required fields or duplicate CAS')
+    } catch (error) {
+      setMaterialStatus(
+        error instanceof Error ? error.message : 'Material create blocked; check required fields or duplicate CAS',
+      )
     }
   }
 
   async function saveMaterialUpdate() {
+    if (!canUpdateMaterials) {
+      setMaterialStatus('Current role is not authorized to edit materials.')
+      return
+    }
+    const materialId = selected.id?.trim()
+    if (!materialId) {
+      setMaterialStatus('No material is currently selected.')
+      return
+    }
+    const parsedDensity = Number(editDraft.density)
+    const parsedVaporPressure = Number(editDraft.vaporPressure)
+    const parsedCostPerGram = Number(editDraft.costPerGram)
+    const parsedIfraLimit = Number(editDraft.ifraLimit)
+    if (
+      !Number.isFinite(parsedDensity) ||
+      !Number.isFinite(parsedVaporPressure) ||
+      !Number.isFinite(parsedCostPerGram) ||
+      !Number.isFinite(parsedIfraLimit)
+    ) {
+      setMaterialStatus('Invalid material values. Please review density, vapor pressure, cost, and IFRA limit.')
+      return
+    }
+    const normalizedDraft = {
+      family: editDraft.family.trim(),
+      tier: editDraft.tier,
+      density: parsedDensity,
+      vaporPressure: parsedVaporPressure,
+      costPerGram: parsedCostPerGram,
+      ifraLimit: parsedIfraLimit,
+      odor: editDraft.odor
+        .split(',')
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    }
+    if (
+      normalizedDraft.family === selected.family &&
+      normalizedDraft.tier === selected.tier &&
+      normalizedDraft.density === selected.density &&
+      normalizedDraft.vaporPressure === selected.vaporPressure &&
+      normalizedDraft.costPerGram === selected.costPerGram &&
+      normalizedDraft.ifraLimit === selected.ifraLimit &&
+      JSON.stringify(normalizedDraft.odor) === JSON.stringify(selected.odor)
+    ) {
+      setMaterialStatus('No material metadata changes to save.')
+      return
+    }
+    setMaterialSaving(true)
+    setMaterialStatus(`Saving metadata for ${selected.name}...`)
     try {
-      const payload = await requestApi<MaterialMutationResponse>(`/materials/${encodeURIComponent(selected.id)}`, {
+      const payload = await requestApi<MaterialMutationResponse>(`/materials/${encodeURIComponent(materialId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          family: editDraft.family,
-          tier: editDraft.tier,
-          density: Number(editDraft.density),
-          vaporPressure: Number(editDraft.vaporPressure),
-          costPerGram: Number(editDraft.costPerGram),
-          ifraLimit: Number(editDraft.ifraLimit),
-          odor: editDraft.odor.split(',').map((tag) => tag.trim()).filter(Boolean),
+          family: normalizedDraft.family,
+          tier: normalizedDraft.tier,
+          density: normalizedDraft.density,
+          vaporPressure: normalizedDraft.vaporPressure,
+          costPerGram: normalizedDraft.costPerGram,
+          ifraLimit: normalizedDraft.ifraLimit,
+          odor: normalizedDraft.odor,
           source: 'Material inspector update',
           version: 'manual-ui',
         }),
       })
       upsertMaterial(payload.material)
       setMaterialStatus(`${payload.material.name} metadata saved with provenance`)
-    } catch {
-      setMaterialStatus('Material update blocked by validation or permission')
-    }
-  }
-
-  async function approveIngestion() {
-    try {
-      const payload = await requestApi<MaterialIngestionResponse>(`/materials/${encodeURIComponent(selected.id)}/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documentType: ingestDraft.documentType,
-          source: ingestDraft.source,
-          version: ingestDraft.version,
-          approved: true,
-          fields: {
-            density: Number(ingestDraft.density),
-            vaporPressure: Number(ingestDraft.vaporPressure),
-          },
-          odor: editDraft.odor.split(',').map((tag) => tag.trim()).filter(Boolean),
-        }),
-      })
-      upsertMaterial(payload.material)
-      setMaterialStatus(`${payload.ingestion.source} approved and written to material provenance`)
-    } catch {
-      setMaterialStatus('SDS/CoA ingest blocked; review extracted fields')
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Material update blocked by validation or permission')
+    } finally {
+      setMaterialSaving(false)
     }
   }
 
   async function fillFromPubChem() {
+    if (!canUpdateMaterials) {
+      setMaterialStatus('Current role is not authorized to enrich data from PubChem.')
+      return
+    }
+    setPubChemSaving(true)
     try {
       const payload = await requestApi<PubChemFillResponse>(`/materials/${encodeURIComponent(selected.id)}/pubchem-fill`, {
         method: 'POST',
@@ -3243,8 +4316,10 @@ function MaterialWorkspace({
       upsertMaterial(payload.material)
       setMoleculeRows(payload.molecules)
       setMaterialStatus(`${payload.material.name} enriched from curated PubChem profile`)
-    } catch {
-      setMaterialStatus('PubChem fill unavailable for this material')
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'PubChem fill unavailable for this material')
+    } finally {
+      setPubChemSaving(false)
     }
   }
 
@@ -3280,10 +4355,15 @@ function MaterialWorkspace({
               <option value="Base">Base</option>
             </select>
           </label>
-          <button className="ghost-button" type="button" onClick={() => void checkCasDuplicate()}>
+          <button className="ghost-button" type="button" onClick={() => void checkCasDuplicate()} disabled={!canCreateMaterials}>
             Check CAS
           </button>
-          <button className="primary-button" type="button" onClick={() => void createMaterialRecord()} disabled={!createName.trim() || !createCas.trim()}>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createMaterialRecord()}
+            disabled={!canCreateMaterials || !createName.trim() || !createCas.trim()}
+          >
             <Plus size={16} />
             Create material
           </button>
@@ -3402,75 +4482,23 @@ function MaterialWorkspace({
               onChange={(event) => setEditDraft((current) => ({ ...current, odor: event.target.value }))}
             />
           </label>
-          <button className="primary-button" type="button" onClick={() => void saveMaterialUpdate()}>
-            Save metadata
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void saveMaterialUpdate()}
+            disabled={!canUpdateMaterials || materialSaving}
+            aria-label="Save material metadata"
+          >
+            {materialSaving ? 'Saving...' : 'Save metadata'}
           </button>
-          <button className="ghost-button" type="button" onClick={() => void fillFromPubChem()}>
-            PubChem fill
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void fillFromPubChem()}
+            disabled={!canUpdateMaterials || pubChemSaving}
+          >
+            {pubChemSaving ? 'Filling...' : 'PubChem fill'}
           </button>
-        </div>
-      </Panel>
-
-      <Panel title="SDS / CoA Review" icon={FileLock2}>
-        <div className="material-form-grid">
-          <label className="field-row">
-            <span>Document type</span>
-            <select
-              aria-label="Material ingest document type"
-              value={ingestDraft.documentType}
-              onChange={(event) =>
-                setIngestDraft((current) => ({ ...current, documentType: event.target.value as 'SDS' | 'CoA' }))
-              }
-            >
-              <option value="SDS">SDS</option>
-              <option value="CoA">CoA</option>
-            </select>
-          </label>
-          <label className="field-row">
-            <span>Version</span>
-            <input
-              aria-label="Material ingest version"
-              value={ingestDraft.version}
-              onChange={(event) => setIngestDraft((current) => ({ ...current, version: event.target.value }))}
-            />
-          </label>
-          <label className="field-row wide-field">
-            <span>Source</span>
-            <input
-              aria-label="Material ingest source"
-              value={ingestDraft.source}
-              onChange={(event) => setIngestDraft((current) => ({ ...current, source: event.target.value }))}
-            />
-          </label>
-          <label className="field-row">
-            <span>Extracted density</span>
-            <input
-              aria-label="Material ingest density"
-              step={0.001}
-              type="number"
-              value={ingestDraft.density}
-              onChange={(event) => setIngestDraft((current) => ({ ...current, density: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="field-row">
-            <span>Extracted vapor pressure</span>
-            <input
-              aria-label="Material ingest vapor pressure"
-              step={0.0001}
-              type="number"
-              value={ingestDraft.vaporPressure}
-              onChange={(event) =>
-                setIngestDraft((current) => ({ ...current, vaporPressure: Number(event.target.value) }))
-              }
-            />
-          </label>
-          <button className="primary-button" type="button" onClick={() => void approveIngestion()}>
-            Approve ingest
-          </button>
-        </div>
-        <div className="empty-state">
-          <strong>Review-first ingestion</strong>
-          <span>Extracted SDS/CoA fields are written only after this explicit approval step.</span>
         </div>
       </Panel>
 
@@ -3528,9 +4556,2262 @@ function MaterialWorkspace({
   )
 }
 
-function FormulaWorkspace({
+type FormulaWorkspaceProps = {
+  session: AuthSession
+  formulaRecords: Formula[]
+  materialRecords: Material[]
+  lots: InventoryLot[]
+  stock: ReturnType<typeof stockSummary>
+  activeFormulaId: string
+  onSelectFormula: (id: string) => void
+  onFormulaRecordsChange: Dispatch<SetStateAction<Formula[]>>
+  resolvedLeaves: ResolvedLeaf[]
+  totals: ReturnType<typeof formulaTotals>
+  curve: ReturnType<typeof evaporationCurve>
+  onSelectMaterial: (id: string) => void
+  onNewFormula: (type?: FormulaType) => void
+  onAddLine: () => void
+}
+
+type FormulaLabTab = 'sketch' | 'material' | 'details'
+type FormulaPickerMode = 'materials' | 'formulas'
+type FormulaPickerSource = 'library' | 'inventory'
+
+type FormulaInventoryOption = {
+  material: Material
+  lot: InventoryLot
+  availableGrams: number
+}
+
+type FormulaIfraRow = {
+  material: Material
+  activePercent: number
+  finalProductPercent: number
+  ifraLimit: number
+  usageOfLimit: number
+  marginPercent: number
+  sourcePath: string
+  status: 'pass' | 'fail'
+}
+
+type FormulaLineDraft = {
+  grams: number
+  concentration: number
+  activeGrams: number
+  pyramidNote: FormulaPyramidNote
+  odorType: string
+  accord: string
+  tags: string
+  notes: string
+}
+
+type FormulaMetadataDraft = {
+  name: string
+  targetGrams: number
+  concentrationType: Formula['concentrationType']
+  finalProductConcentrationPercent: number
+  targetMarkets: string
+  brief: string
+  inspiration: string
+  pyramidSummary: string
+  tags: string
+  project: string
+  collection: string
+  density: number
+  bottleVolumeMl: number
+  bottleCount: number
+  ifraCategory: string
+  assignedReviewer: string
+}
+
+type FormulaWorkflowDialog = 'review' | 'approve' | 'reject' | null
+
+const formulaPyramidNotes: FormulaPyramidNote[] = ['Top', 'Middle', 'Base', 'Solvent']
+
+const formulaNoteMeta: Record<FormulaPyramidNote, { label: string; className: string }> = {
+  Top: { label: 'Top', className: 'note-top' },
+  Middle: { label: 'Middle', className: 'note-middle' },
+  Base: { label: 'Base', className: 'note-base' },
+  Solvent: { label: 'Solvent', className: 'note-solvent' },
+}
+
+function clampPositiveNumber(value: number, fallback: number) {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function inferFormulaPyramidNote(line?: FormulaLine, material?: Material): FormulaPyramidNote {
+  if (line?.pyramidNote) {
+    return line.pyramidNote
+  }
+  const family = material?.family.toLowerCase() ?? ''
+  const name = material?.name.toLowerCase() ?? ''
+  if (family.includes('carrier') || family.includes('solvent') || name.includes('ethanol')) {
+    return 'Solvent'
+  }
+  if (material?.tier === 'Heart') {
+    return 'Middle'
+  }
+  return material?.tier ?? 'Middle'
+}
+
+function inferFormulaOdorType(line?: FormulaLine, material?: Material) {
+  if (line?.odorType) {
+    return line.odorType
+  }
+  if (!material) {
+    return line?.childFormulaId ? 'Accord' : 'Unclassified'
+  }
+  return material.family.split(/\s+/)[0] || material.family || 'Unclassified'
+}
+
+function inferFormulaAccord(line?: FormulaLine, material?: Material) {
+  if (line?.accord) {
+    return line.accord
+  }
+  return material?.odor[0] ?? material?.family.toLowerCase() ?? ''
+}
+
+function parseFormulaTags(value: string) {
+  return value
+    .split(/[,#]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function buildFormulaLineDraft(line: FormulaLine, material?: Material): FormulaLineDraft {
+  const grams = clampPositiveNumber(Number(line.grams), 0.01)
+  const concentration = Math.min(100, Math.max(0.01, Number(line.concentration ?? line.dilution ?? 100)))
+  const tags = line.tags?.length ? line.tags : material?.odor.slice(0, 2) ?? []
+  return {
+    grams,
+    concentration,
+    activeGrams: Number(((grams * concentration) / 100).toFixed(4)),
+    pyramidNote: inferFormulaPyramidNote(line, material),
+    odorType: inferFormulaOdorType(line, material),
+    accord: inferFormulaAccord(line, material),
+    tags: tags.join(', '),
+    notes: line.notes ?? '',
+  }
+}
+
+function formatFormulaPercent(grams: number, targetGrams: number) {
+  if (!Number.isFinite(targetGrams) || targetGrams <= 0) {
+    return '0.00%'
+  }
+  return `${((grams / targetGrams) * 100).toFixed(2)}%`
+}
+
+function availableLotGrams(lot: InventoryLot) {
+  return Math.max(0, lot.quantityGrams - lot.reservedGrams)
+}
+
+function formulaFinalPercent(totalLineGrams: number, targetGrams: number) {
+  if (!Number.isFinite(targetGrams) || targetGrams <= 0) {
+    return 0
+  }
+  return (totalLineGrams / targetGrams) * 100
+}
+
+function formulaIsFinalized(finalPercent: number) {
+  return Math.abs(finalPercent - 100) <= 0.05
+}
+
+function formulaLineConcentrationFraction(line: FormulaLine) {
+  const concentration = Number(line.concentration ?? line.dilution ?? 100)
+  if (!Number.isFinite(concentration)) {
+    return 1
+  }
+  return Math.min(100, Math.max(0, concentration)) / 100
+}
+
+function buildFormulaIfraRows(
+  formula: Formula,
+  formulaById: Map<string, Formula>,
+  materialById: Map<string, Material>,
+) {
+  const rows = new Map<string, FormulaIfraRow>()
+  const rootTargetGrams = formula.targetGrams
+  const finalConcentrationFraction = Math.min(100, Math.max(0, formula.finalProductConcentrationPercent)) / 100
+
+  function upsertMaterial(material: Material, activeGrams: number, sourcePath: string) {
+    const activePercent = rootTargetGrams > 0 ? (activeGrams / rootTargetGrams) * 100 : 0
+    const finalProductPercent = activePercent * finalConcentrationFraction
+    const existing = rows.get(material.id)
+    if (existing) {
+      const nextActivePercent = existing.activePercent + activePercent
+      const nextFinalProductPercent = existing.finalProductPercent + finalProductPercent
+      const marginPercent = material.ifraLimit - nextFinalProductPercent
+      rows.set(material.id, {
+        ...existing,
+        activePercent: nextActivePercent,
+        finalProductPercent: nextFinalProductPercent,
+        usageOfLimit: material.ifraLimit > 0 ? (nextFinalProductPercent / material.ifraLimit) * 100 : 0,
+        marginPercent,
+        sourcePath: `${existing.sourcePath}; ${sourcePath}`,
+        status: marginPercent >= -0.0001 ? 'pass' : 'fail',
+      })
+      return
+    }
+
+    const marginPercent = material.ifraLimit - finalProductPercent
+    rows.set(material.id, {
+      material,
+      activePercent,
+      ifraLimit: material.ifraLimit,
+      finalProductPercent,
+      usageOfLimit: material.ifraLimit > 0 ? (finalProductPercent / material.ifraLimit) * 100 : 0,
+      marginPercent,
+      sourcePath,
+      status: marginPercent >= -0.0001 ? 'pass' : 'fail',
+    })
+  }
+
+  function walk(currentFormula: Formula, scale: number, path: string[], trail: Set<string>) {
+    if (trail.has(currentFormula.id)) {
+      return
+    }
+    const nextTrail = new Set(trail).add(currentFormula.id)
+
+    currentFormula.lines.forEach((line) => {
+      const lineGrams = line.grams * scale
+      const activeLineGrams = lineGrams * formulaLineConcentrationFraction(line)
+      const linePath = [...path, line.label]
+      if (line.materialId) {
+        const material = materialById.get(line.materialId)
+        if (material) {
+          upsertMaterial(material, activeLineGrams, linePath.join(' / '))
+        }
+        return
+      }
+
+      if (line.childFormulaId) {
+        const childFormula = formulaById.get(line.childFormulaId)
+        if (childFormula && childFormula.targetGrams > 0) {
+          walk(childFormula, activeLineGrams / childFormula.targetGrams, linePath, nextTrail)
+        }
+      }
+    })
+  }
+
+  walk(formula, 1, [formula.code], new Set<string>())
+
+  return Array.from(rows.values()).sort((a, b) => {
+    if (a.status !== b.status) {
+      return a.status === 'fail' ? -1 : 1
+    }
+    return b.usageOfLimit - a.usageOfLimit
+  })
+}
+
+function formulaMetadataDraftFromRecord(formula: Formula): FormulaMetadataDraft {
+  return {
+    name: formula.name,
+    targetGrams: formula.targetGrams,
+    concentrationType: formula.concentrationType,
+    finalProductConcentrationPercent: formula.finalProductConcentrationPercent,
+    targetMarkets: formula.targetMarkets.join(', '),
+    brief: formula.brief,
+    inspiration: formula.inspiration,
+    pyramidSummary: formula.pyramidSummary,
+    tags: formula.tags.join(', '),
+    project: formula.project,
+    collection: formula.collection,
+    density: formula.density,
+    bottleVolumeMl: formula.bottleVolumeMl,
+    bottleCount: formula.bottleCount,
+    ifraCategory: formula.ifraCategory,
+    assignedReviewer: formula.assignedReviewer ?? '',
+  }
+}
+
+
+const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
+  session,
   formulaRecords,
   materialRecords,
+  lots,
+  stock,
+  activeFormulaId,
+  onSelectFormula,
+  onFormulaRecordsChange,
+  resolvedLeaves,
+  totals,
+  curve,
+  onSelectMaterial,
+  onNewFormula,
+  onAddLine,
+}: FormulaWorkspaceProps) {
+  const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0]!
+  const canEditFormula = sessionHasPermission(session, 'formulas.edit')
+  const canApproveFormula =
+    isFormulaApproverRole(session.role) && sessionHasPermission(session, 'formulas.approve')
+  const canExportFormula = sessionHasPermission(session, 'formulas.export')
+  const formulaEditable = formula.workflowStatus === 'DRAFT' || formula.workflowStatus === 'CHANGES_REQUESTED'
+  const activeFormulaType = formulaTypeForFormula(formula)
+  const activeFormulaTypeMeta = formulaTypeMeta[activeFormulaType]
+  const selectableChildFormulas = useMemo(
+    () => formulaRecords.filter((item) => item.id !== formula.id),
+    [formula.id, formulaRecords],
+  )
+  const [formulaStatus, setFormulaStatus] = useState('Formula Labspace ready')
+  const [versions, setVersions] = useState<FormulaVersionRecord[]>([])
+  const [versionNote, setVersionNote] = useState(`Snapshot ${formula.code} ${formula.version}`)
+  const [activeLabTab, setActiveLabTab] = useState<FormulaLabTab>('details')
+  const [createSheetOpen, setCreateSheetOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerMode, setPickerMode] = useState<FormulaPickerMode>('materials')
+  const [pickerSource, setPickerSource] = useState<FormulaPickerSource>('inventory')
+  const [materialQuery, setMaterialQuery] = useState('')
+  const [pickerGrams, setPickerGrams] = useState(1)
+  const [nestedGrams, setNestedGrams] = useState(10)
+  const [editingLineId, setEditingLineId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState<FormulaLineDraft | null>(null)
+  const [focusedMaterialId, setFocusedMaterialId] = useState<string | null>(null)
+  const [libraryQuery, setLibraryQuery] = useState('')
+  const [metadataDraft, setMetadataDraft] = useState<FormulaMetadataDraft>(() => formulaMetadataDraftFromRecord(formula))
+  const [metadataDirty, setMetadataDirty] = useState(false)
+  const [undoStack, setUndoStack] = useState<Formula[]>([])
+  const [redoStack, setRedoStack] = useState<Formula[]>([])
+  const [workflowDialog, setWorkflowDialog] = useState<FormulaWorkflowDialog>(null)
+  const [workflowComment, setWorkflowComment] = useState('')
+  const [workflowReviewer, setWorkflowReviewer] = useState(formula.assignedReviewer ?? session.email)
+  const [scaleOpen, setScaleOpen] = useState(false)
+  const [scaleTargetGrams, setScaleTargetGrams] = useState(formula.targetGrams)
+  const [scaleIncrementGrams, setScaleIncrementGrams] = useState(0.01)
+  const [scalePlan, setScalePlan] = useState<FormulaScalePlan | null>(null)
+  const [scaleApplying, setScaleApplying] = useState(false)
+  const [versionDiff, setVersionDiff] = useState<FormulaVersionDiff | null>(null)
+  const [diffFromVersion, setDiffFromVersion] = useState('')
+  const [diffToVersion, setDiffToVersion] = useState('')
+  const [evaluationDay, setEvaluationDay] = useState<1 | 7 | 30>(7)
+  const [evaluationObservation, setEvaluationObservation] = useState('')
+  const [evaluationStability, setEvaluationStability] = useState<FormulaEvaluationRecord['stability']>('PASS')
+  const [evaluationRating, setEvaluationRating] = useState(4)
+  const [metadataSaving, setMetadataSaving] = useState(false)
+  const metadataSaveInFlightRef = useRef(false)
+  const metadataChangeCounterRef = useRef(0)
+  const materialById = useMemo(
+    () => new Map(materialRecords.map((material) => [material.id, material])),
+    [materialRecords],
+  )
+  const lotById = useMemo(
+    () => new Map(lots.map((lot) => [lot.id, lot])),
+    [lots],
+  )
+  const stockByMaterialId = useMemo(
+    () => new Map(stock.map((item) => [item.material.id, item])),
+    [stock],
+  )
+  const formulaById = useMemo(
+    () => new Map(formulaRecords.map((item) => [item.id, item])),
+    [formulaRecords],
+  )
+  const filteredFormulaRecords = useMemo(() => {
+    const query = libraryQuery.trim().toLowerCase()
+    if (!query) {
+      return formulaRecords
+    }
+    return formulaRecords.filter((item) =>
+      item.name.toLowerCase().includes(query) ||
+      item.code.toLowerCase().includes(query) ||
+      item.tags.some((tag) => tag.toLowerCase().includes(query)) ||
+      item.project.toLowerCase().includes(query),
+    )
+  }, [formulaRecords, libraryQuery])
+  const editingLine = editingLineId ? formula.lines.find((line) => line.id === editingLineId) : undefined
+  const editingSourceLot = editingLine?.sourceLotId ? lotById.get(editingLine.sourceLotId) : undefined
+  const editingSourceAvailableGrams = editingSourceLot
+    ? availableLotGrams(editingSourceLot)
+    : editingLine?.sourceAvailableGrams
+  const totalLineGrams = formula.lines.reduce((sum, line) => sum + line.grams, 0)
+  const formulaPercent = formulaFinalPercent(totalLineGrams, formula.targetGrams)
+  const formulaFinalReady = formula.lines.length > 0 && formulaIsFinalized(formulaPercent)
+  const formulaReviewBlocker =
+    formula.lines.length === 0
+      ? 'Add at least one material before submitting for review.'
+      : !formulaFinalReady
+        ? `Formula is ${formulaPercent.toFixed(2)}%. Normalize it to 100% before submitting for review.`
+        : formula.targetMarkets.length === 0
+          ? 'Choose at least one target market in Details before submitting for review.'
+          : formula.finalProductConcentrationPercent <= 0
+            ? 'Set the final-product concentration in Details before submitting for review.'
+        : metadataSaving
+          ? 'Wait for the current draft save to finish.'
+          : undefined
+  const finalPercentGap = 100 - formulaPercent
+  const ifraRows = useMemo(
+    () => buildFormulaIfraRows(formula, formulaById, materialById),
+    [formula, formulaById, materialById],
+  )
+  const ifraFailCount = formulaFinalReady ? ifraRows.filter((row) => row.status === 'fail').length : 0
+  const ifraStatus: DomainStatus = !formulaFinalReady ? 'review' : ifraFailCount > 0 ? 'alert' : 'stable'
+  const ifraFocusRow = ifraRows[0]
+  const focusedMaterial =
+    (focusedMaterialId ? materialById.get(focusedMaterialId) : undefined) ?? ifraFocusRow?.material
+  const focusedStock = focusedMaterial ? stockByMaterialId.get(focusedMaterial.id) : undefined
+  const focusedIfraRow = focusedMaterial ? ifraRows.find((row) => row.material.id === focusedMaterial.id) : undefined
+  const formulaProgressPercent = Math.max(0, Math.min(100, formulaPercent))
+  const currentVersionRecord = versions.find((version) => version.version === formula.version)
+  const lineViewModels = useMemo(
+    () =>
+      formula.lines.map((line) => {
+        const material = line.materialId ? materialById.get(line.materialId) : undefined
+        const childFormula = line.childFormulaId ? formulaById.get(line.childFormulaId) : undefined
+        const sourceLot = line.sourceLotId ? lotById.get(line.sourceLotId) : undefined
+        return {
+          line,
+          material,
+          childFormula,
+          sourceLot,
+          sourceAvailableGrams: sourceLot ? availableLotGrams(sourceLot) : line.sourceAvailableGrams,
+          note: inferFormulaPyramidNote(line, material),
+          odorType: inferFormulaOdorType(line, material),
+          tags: line.tags?.length ? line.tags : material?.odor.slice(0, 2) ?? [],
+        }
+      }),
+    [formula.lines, formulaById, lotById, materialById],
+  )
+  const groupedSections = useMemo(
+    () =>
+      formulaPyramidNotes.map((note) => {
+        const lines = lineViewModels.filter((view) => view.note === note)
+        const grams = lines.reduce((sum, view) => sum + view.line.grams, 0)
+        return { note, lines, grams }
+      }),
+    [lineViewModels],
+  )
+  const filteredMaterials = useMemo(() => {
+    const query = materialQuery.trim().toLowerCase()
+    return materialRecords
+      .filter((material) => {
+        if (!query) {
+          return true
+        }
+        return (
+          material.name.toLowerCase().includes(query) ||
+          material.cas.toLowerCase().includes(query) ||
+          material.family.toLowerCase().includes(query) ||
+          material.odor.some((odor) => odor.toLowerCase().includes(query))
+        )
+      })
+      .slice(0, 36)
+  }, [materialQuery, materialRecords])
+  const filteredInventoryOptions = useMemo(() => {
+    const query = materialQuery.trim().toLowerCase()
+    return lots
+      .map((lot): FormulaInventoryOption | null => {
+        const material = materialById.get(lot.materialId)
+        if (!material || !isLotEligibleForInventory(lot)) {
+          return null
+        }
+        const availableGrams = availableLotGrams(lot)
+        if (availableGrams <= 0) {
+          return null
+        }
+        if (
+          query &&
+          !material.name.toLowerCase().includes(query) &&
+          !material.cas.toLowerCase().includes(query) &&
+          !material.family.toLowerCase().includes(query) &&
+          !material.odor.some((odor) => odor.toLowerCase().includes(query)) &&
+          !lot.lotNumber.toLowerCase().includes(query) &&
+          !lot.location.toLowerCase().includes(query)
+        ) {
+          return null
+        }
+        return { material, lot, availableGrams }
+      })
+      .filter((option): option is FormulaInventoryOption => Boolean(option))
+      .sort((a, b) => {
+        const expirySort = a.lot.expiryDate.localeCompare(b.lot.expiryDate)
+        return expirySort || a.material.name.localeCompare(b.material.name)
+      })
+      .slice(0, 36)
+  }, [lots, materialById, materialQuery])
+  const filteredChildFormulas = useMemo(() => {
+    const query = materialQuery.trim().toLowerCase()
+    return selectableChildFormulas.filter((child) => {
+      if (!query) {
+        return true
+      }
+      return child.name.toLowerCase().includes(query) || child.code.toLowerCase().includes(query)
+    })
+  }, [materialQuery, selectableChildFormulas])
+
+  const resetFormulaWorkspace = useEffectEvent(() => {
+    setMetadataDraft(formulaMetadataDraftFromRecord(formula))
+    setMetadataDirty(false)
+    setUndoStack([])
+    setRedoStack([])
+    setWorkflowDialog(null)
+    setWorkflowComment('')
+    setWorkflowReviewer(formula.assignedReviewer ?? session.email)
+    setScalePlan(null)
+    setScaleTargetGrams(formula.targetGrams)
+    setVersionDiff(null)
+    metadataChangeCounterRef.current = 0
+  })
+
+  useEffect(() => {
+    resetFormulaWorkspace()
+  }, [formula.id, session.email])
+  useEffect(() => {
+    setVersionNote(`Snapshot ${formula.code} ${formula.version}`)
+    setEditingLineId(null)
+    setEditDraft(null)
+    setFocusedMaterialId(null)
+  }, [formula.code, formula.id, formula.version])
+
+  useEffect(() => {
+    let active = true
+    async function loadVersions() {
+      try {
+        const payload = await requestApi<FormulaVersionListResponse>(
+          `/formulas/${encodeURIComponent(formula.id)}/versions`,
+        )
+        if (!active) {
+          return
+        }
+        setVersions(payload.versions)
+        setDiffToVersion(payload.versions[0]?.version ?? '')
+        setDiffFromVersion(payload.versions[1]?.version ?? '')
+        if (payload.versions.length < 2) {
+          setVersionDiff(null)
+        }
+
+      } catch {
+        if (active) {
+          setVersions([])
+          setFormulaStatus('Formula version history unavailable until API is reachable')
+        }
+      }
+    }
+    void loadVersions()
+    return () => {
+      active = false
+    }
+  }, [formula.code, formula.id, formula.version])
+
+  const autosaveFormulaDraft = useEffectEvent(() => {
+    void saveFormulaDraft(true)
+  })
+
+  useEffect(() => {
+    if (!metadataDirty || !canEditFormula || !formulaEditable || metadataSaveInFlightRef.current) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      autosaveFormulaDraft()
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [canEditFormula, formula.id, formulaEditable, metadataDirty, metadataDraft])
+
+  function upsertFormula(nextFormula: Formula) {
+    onFormulaRecordsChange((current) => {
+      const exists = current.some((item) => item.id === nextFormula.id)
+      return exists
+        ? current.map((item) => (item.id === nextFormula.id ? nextFormula : item))
+        : [nextFormula, ...current]
+    })
+  }
+
+  function acceptFormulaMutation(nextFormula: Formula, recordHistory = true) {
+    if (recordHistory && nextFormula.id === formula.id && nextFormula.draftRevision !== formula.draftRevision) {
+      setUndoStack((current) => [...current.slice(-19), structuredClone(formula)])
+      setRedoStack([])
+    }
+    upsertFormula(nextFormula)
+  }
+
+  function updateMetadataDraft(patch: Partial<FormulaMetadataDraft>) {
+    metadataChangeCounterRef.current += 1
+    setMetadataDraft((current) => ({ ...current, ...patch }))
+    setMetadataDirty(true)
+  }
+
+  function formulaDraftPayload(snapshot: Formula) {
+    return {
+      expectedRevision: formula.draftRevision,
+      name: snapshot.name,
+      targetGrams: snapshot.targetGrams,
+      concentrationType: snapshot.concentrationType,
+      finalProductConcentrationPercent: snapshot.finalProductConcentrationPercent,
+      targetMarkets: snapshot.targetMarkets,
+      brief: snapshot.brief,
+      inspiration: snapshot.inspiration,
+      pyramidSummary: snapshot.pyramidSummary,
+      tags: snapshot.tags,
+      project: snapshot.project,
+      collection: snapshot.collection,
+      density: snapshot.density,
+      bottleVolumeMl: snapshot.bottleVolumeMl,
+      bottleCount: snapshot.bottleCount,
+      ifraCategory: snapshot.ifraCategory,
+      assignedReviewer: snapshot.assignedReviewer,
+      lines: snapshot.lines,
+    }
+  }
+
+  async function saveFormulaDraft(silent = false) {
+    if (!canEditFormula || !formulaEditable || metadataSaveInFlightRef.current) {
+      return null
+    }
+    const changeCounter = metadataChangeCounterRef.current
+    metadataSaveInFlightRef.current = true
+    setMetadataSaving(true)
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedRevision: formula.draftRevision,
+          name: metadataDraft.name,
+          targetGrams: metadataDraft.targetGrams,
+          concentrationType: metadataDraft.concentrationType,
+          finalProductConcentrationPercent: metadataDraft.finalProductConcentrationPercent,
+          targetMarkets: parseFormulaTags(metadataDraft.targetMarkets),
+          brief: metadataDraft.brief,
+          inspiration: metadataDraft.inspiration,
+          pyramidSummary: metadataDraft.pyramidSummary,
+          tags: parseFormulaTags(metadataDraft.tags),
+          project: metadataDraft.project,
+          collection: metadataDraft.collection,
+          density: metadataDraft.density,
+          bottleVolumeMl: metadataDraft.bottleVolumeMl,
+          bottleCount: metadataDraft.bottleCount,
+          ifraCategory: metadataDraft.ifraCategory,
+          assignedReviewer: metadataDraft.assignedReviewer,
+        }),
+      })
+      acceptFormulaMutation(payload.formula)
+      if (metadataChangeCounterRef.current === changeCounter) {
+        setMetadataDraft(formulaMetadataDraftFromRecord(payload.formula))
+        setMetadataDirty(false)
+      }
+      setFormulaStatus(silent ? `Draft autosaved / revision ${payload.formula.draftRevision}` : `Draft saved / revision ${payload.formula.draftRevision}`)
+      return payload.formula
+    } catch (error) {
+      setMetadataDirty(true)
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula draft save failed')
+      return null
+    } finally {
+      metadataSaveInFlightRef.current = false
+      setMetadataSaving(false)
+    }
+  }
+
+  async function restoreFormulaSnapshot(snapshot: Formula) {
+    if (!formulaEditable) {
+      return null
+    }
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formulaDraftPayload(snapshot)),
+      })
+      upsertFormula(payload.formula)
+      setMetadataDraft(formulaMetadataDraftFromRecord(payload.formula))
+      setMetadataDirty(false)
+      return payload.formula
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula history restore failed')
+      return null
+    }
+  }
+
+  async function undoFormulaChange() {
+    const snapshot = undoStack[undoStack.length - 1]
+    if (!snapshot) {
+      return
+    }
+    const restored = await restoreFormulaSnapshot(snapshot)
+    if (restored) {
+      setUndoStack((current) => current.slice(0, -1))
+      setRedoStack((current) => [...current.slice(-19), structuredClone(formula)])
+      setFormulaStatus(`Undid change / revision ${restored.draftRevision}`)
+    }
+  }
+
+  async function redoFormulaChange() {
+    const snapshot = redoStack[redoStack.length - 1]
+    if (!snapshot) {
+      return
+    }
+    const restored = await restoreFormulaSnapshot(snapshot)
+    if (restored) {
+      setRedoStack((current) => current.slice(0, -1))
+      setUndoStack((current) => [...current.slice(-19), structuredClone(formula)])
+      setFormulaStatus(`Redid change / revision ${restored.draftRevision}`)
+    }
+  }
+
+  function openWorkflow(mode: Exclude<FormulaWorkflowDialog, null>) {
+    setWorkflowDialog(mode)
+    setWorkflowComment('')
+    setWorkflowReviewer(formula.assignedReviewer ?? session.email)
+  }
+
+  async function submitFormulaReview() {
+    if (metadataDirty) {
+      const saved = await saveFormulaDraft(false)
+      if (!saved) {
+        return
+      }
+    }
+    try {
+      const payload = await requestApi<FormulaReviewResponse>(`/formulas/${encodeURIComponent(formula.id)}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewer: workflowReviewer, comment: workflowComment }),
+      })
+      upsertFormula(payload.formula)
+      setVersions((current) => [payload.version, ...current.filter((version) => version.id !== payload.version.id)])
+      setWorkflowDialog(null)
+      setFormulaStatus(`${payload.formula.code} ${payload.version.version} submitted to ${workflowReviewer}`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula review submission failed')
+    }
+  }
+
+  async function approveFormulaReview() {
+    try {
+      const payload = await requestApi<FormulaReviewResponse>(`/formulas/${encodeURIComponent(formula.id)}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: workflowComment }),
+      })
+      upsertFormula(payload.formula)
+      setVersions((current) => current.map((version) => version.id === payload.version.id ? payload.version : version))
+      setWorkflowDialog(null)
+      setFormulaStatus(`${payload.formula.code} ${payload.version.version} approved and locked`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula approval failed')
+    }
+  }
+
+  async function rejectFormulaReview() {
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: workflowComment }),
+      })
+      upsertFormula(payload.formula)
+      setWorkflowDialog(null)
+      setFormulaStatus(`${payload.formula.code} returned for changes`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula rejection failed')
+    }
+  }
+
+  async function forkWorkingCopy() {
+    try {
+      const payload = await requestApi<FormulaCreateResponse>(`/formulas/${encodeURIComponent(formula.id)}/fork`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: 'Working copy created from approved version' }),
+      })
+      upsertFormula(payload.formula)
+      onSelectFormula(payload.formula.id)
+      setFormulaStatus(`${payload.formula.code} working copy created`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula fork failed')
+    }
+  }
+
+  async function loadScalePlan(options: { targetGrams?: number; incrementGrams?: number } = {}) {
+    const targetGrams = clampPositiveNumber(options.targetGrams ?? scaleTargetGrams, formula.targetGrams)
+    const incrementGrams = options.incrementGrams ?? scaleIncrementGrams
+    setScaleTargetGrams(targetGrams)
+    setScaleIncrementGrams(incrementGrams)
+    try {
+      const payload = await requestApi<FormulaScaleResponse>(`/formulas/${encodeURIComponent(formula.id)}/scale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetGrams, incrementGrams }),
+      })
+      setScalePlan(payload.plan)
+      setScaleOpen(true)
+      setFormulaStatus(`Scale plan ready for ${formatGrams(payload.plan.targetGrams)}`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula scale plan failed')
+    }
+  }
+
+  function beginFormulaReview() {
+    if (!formulaReviewBlocker) {
+      openWorkflow('review')
+      return
+    }
+
+    setFormulaStatus(formulaReviewBlocker)
+    if (formula.lines.length === 0) {
+      setActiveLabTab('material')
+      return
+    }
+    if (!formulaFinalReady) {
+      openScaleFormula()
+      return
+    }
+    if (formula.targetMarkets.length === 0 || formula.finalProductConcentrationPercent <= 0) {
+      setActiveLabTab('details')
+    }
+  }
+
+  async function applyFormulaScale() {
+    if (!formulaEditable || !canEditFormula) {
+      return
+    }
+    setScaleApplying(true)
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/scale/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetGrams: scaleTargetGrams, incrementGrams: scaleIncrementGrams }),
+      })
+      acceptFormulaMutation(payload.formula)
+      setMetadataDraft(formulaMetadataDraftFromRecord(payload.formula))
+      setMetadataDirty(false)
+      setScalePlan(null)
+      setScaleOpen(false)
+      setFormulaStatus(
+        payload.movements && payload.movements.length > 0
+          ? `Scaled to ${formatGrams(payload.formula.targetGrams)} and synchronized ${payload.movements.length} inventory movement(s)`
+          : `Scaled and normalized to ${formatGrams(payload.formula.targetGrams)}`,
+      )
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula scale apply failed')
+    } finally {
+      setScaleApplying(false)
+    }
+  }
+
+  async function savePlannedFormulaSize() {
+    if (!formulaEditable || !canEditFormula) {
+      return
+    }
+    const targetGrams = clampPositiveNumber(scaleTargetGrams, formula.targetGrams)
+    setScaleApplying(true)
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedRevision: formula.draftRevision,
+          targetGrams,
+        }),
+      })
+      acceptFormulaMutation(payload.formula)
+      setMetadataDraft(formulaMetadataDraftFromRecord(payload.formula))
+      setMetadataDirty(false)
+      setScalePlan(null)
+      setFormulaStatus(`Planned formula size set to ${formatGrams(payload.formula.targetGrams)}. Add materials to auto-rescale the composition.`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula size update failed')
+    } finally {
+      setScaleApplying(false)
+    }
+  }
+
+  function openNormalizeFormula() {
+    void loadScalePlan({ targetGrams: formula.targetGrams, incrementGrams: 0.01 })
+  }
+
+  function openScaleFormula() {
+    setScaleTargetGrams(formula.targetGrams)
+    setScaleIncrementGrams(0.01)
+    setScalePlan(null)
+    setScaleOpen(true)
+    if (formula.lines.length === 0) {
+      setFormulaStatus('Set the planned size now. Add materials before auto-rescaling the composition.')
+      return
+    }
+    void loadScalePlan({ targetGrams: formula.targetGrams, incrementGrams: 0.01 })
+  }
+
+  async function loadVersionDiff() {
+    if (!diffFromVersion || !diffToVersion || diffFromVersion === diffToVersion) {
+      setFormulaStatus('Select two different versions to compare')
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaDiffResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/versions/diff?from=${encodeURIComponent(diffFromVersion)}&to=${encodeURIComponent(diffToVersion)}`,
+      )
+      setVersionDiff(payload.diff)
+      setFormulaStatus(`Compared ${payload.before.version} with ${payload.after.version}`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula version comparison failed')
+    }
+  }
+
+  async function saveFormulaEvaluation() {
+    const version = versions[0]
+    if (!version || !evaluationObservation.trim()) {
+      setFormulaStatus('Choose a version and enter an aging observation')
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaEvaluationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/versions/${encodeURIComponent(version.version)}/evaluations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            day: evaluationDay,
+            observation: evaluationObservation,
+            stability: evaluationStability,
+            rating: evaluationRating,
+          }),
+        },
+      )
+      setVersions((current) => current.map((item) => item.id === payload.version.id ? payload.version : item))
+      setEvaluationObservation('')
+      setFormulaStatus(`${payload.version.version} day ${payload.evaluation.day} observation saved`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula evaluation save failed')
+    }
+  }
+
+
+  function openFormulaDraftFlow(type: FormulaType) {
+    setCreateSheetOpen(false)
+    onNewFormula(type)
+  }
+
+  function openCustomMaterialFlow() {
+    setPickerOpen(false)
+    onAddLine()
+  }
+
+  function openLineEditor(line: FormulaLine) {
+    const material = line.materialId ? materialById.get(line.materialId) : undefined
+    if (!formulaEditable || !canEditFormula) {
+      setFormulaStatus(`${formula.code} is ${formula.workflowStatus.replace('_', ' ').toLowerCase()} and cannot be edited directly`)
+      setActiveLabTab(line.materialId ? 'material' : 'details')
+      return
+    }
+    if (material) {
+      setFocusedMaterialId(material.id)
+      setActiveLabTab('material')
+    }
+    setEditingLineId(line.id)
+    setEditDraft(buildFormulaLineDraft(line, material))
+  }
+
+  function updateEditDraft(next: Partial<FormulaLineDraft>) {
+    setEditDraft((current) => {
+      if (!current) {
+        return current
+      }
+      const merged = { ...current, ...next }
+      if ('grams' in next || 'concentration' in next) {
+        merged.activeGrams = Number(((merged.grams * merged.concentration) / 100).toFixed(4))
+      }
+      if ('activeGrams' in next && !('grams' in next)) {
+        merged.grams = Number((merged.activeGrams / Math.max(merged.concentration / 100, 0.0001)).toFixed(4))
+      }
+      return merged
+    })
+  }
+
+  function closeLineEditor() {
+    setEditingLineId(null)
+    setEditDraft(null)
+  }
+
+  async function saveEditedLine() {
+    if (!editingLine || !editDraft) {
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(editingLine.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            grams: clampPositiveNumber(Number(editDraft.grams), editingLine.grams),
+            label: editingLine.label,
+            concentration: editDraft.concentration,
+            pyramidNote: editDraft.pyramidNote,
+            odorType: editDraft.odorType,
+            accord: editDraft.accord,
+            tags: parseFormulaTags(editDraft.tags),
+            notes: editDraft.notes,
+          }),
+        },
+      )
+      acceptFormulaMutation(payload.formula)
+      setFormulaStatus(
+        payload.movements && payload.movements.length > 0
+          ? `${editingLine.label} saved and synchronized ${payload.movements.length} inventory movement(s)`
+          : `${editingLine.label} saved with labspace metadata`,
+      )
+      setEditingLineId(null)
+      setEditDraft(null)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line update failed')
+    }
+  }
+
+  async function deleteLine(line: FormulaLine) {
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}`,
+        { method: 'DELETE' },
+      )
+      acceptFormulaMutation(payload.formula)
+      setFormulaStatus(
+        payload.movements && payload.movements.length > 0
+          ? `${line.label} removed and restored ${payload.movements.length} inventory movement(s)`
+          : `${line.label} removed from ${formula.code}`,
+      )
+      setEditingLineId(null)
+      setEditDraft(null)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line delete failed')
+    }
+  }
+
+  async function moveLine(line: FormulaLine, direction: 'up' | 'down') {
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}/move`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direction }),
+        },
+      )
+      acceptFormulaMutation(payload.formula)
+      setFormulaStatus(`${line.label} reordered`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula line reorder failed')
+    }
+  }
+
+  async function addMaterialToFormula(material: Material, sourceLot?: InventoryLot) {
+    const grams = clampPositiveNumber(Number(pickerGrams), 1)
+    const availableGrams = sourceLot ? availableLotGrams(sourceLot) : undefined
+    const sourceLotNumber = sourceLot?.lotNumber
+    if (sourceLot && availableGrams !== undefined && grams - availableGrams > 0.0001) {
+      setFormulaStatus(`${sourceLot.lotNumber} only has ${formatGrams(availableGrams)} available`)
+      return
+    }
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          materialId: material.id,
+          label: material.name,
+          grams,
+          concentration: 100,
+          pyramidNote: inferFormulaPyramidNote(undefined, material),
+          odorType: inferFormulaOdorType(undefined, material),
+          accord: inferFormulaAccord(undefined, material),
+          tags: material.odor.slice(0, 2),
+          ...(sourceLot
+            ? {
+                sourceLotId: sourceLot.id,
+                sourceLotNumber: sourceLot.lotNumber,
+                sourceLocation: sourceLot.location,
+                sourceAvailableGrams: availableGrams,
+                sourceSupplierLotRef: sourceLot.supplierLotRef,
+                inventoryConsumptionMode: 'CONSUMED',
+              }
+            : {}),
+        }),
+      })
+      acceptFormulaMutation(payload.formula)
+      onSelectMaterial(material.id)
+      setPickerOpen(false)
+      setPickerGrams(1)
+      setFormulaStatus(
+        sourceLotNumber
+          ? `${material.name} consumed from ${sourceLotNumber} and synchronized with inventory`
+          : `${material.name} added to ${formula.code}`,
+      )
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula material add failed')
+    }
+  }
+
+  async function addNestedFormulaLine(child: Formula) {
+    const grams = clampPositiveNumber(Number(nestedGrams), 10)
+    try {
+      const payload = await requestApi<FormulaMutationResponse>(`/formulas/${encodeURIComponent(formula.id)}/lines`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          childFormulaId: child.id,
+          label: child.name,
+          grams,
+          concentration: 100,
+          pyramidNote: 'Middle',
+          odorType: 'Accord',
+          accord: child.name.toLowerCase(),
+          tags: ['accord'],
+        }),
+      })
+      acceptFormulaMutation(payload.formula)
+      setPickerOpen(false)
+      setNestedGrams(10)
+      setFormulaStatus(`${child.code} accord added and cycle guard passed`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Accord add failed')
+    }
+  }
+
+  async function snapshotVersion() {
+    try {
+      const payload = await requestApi<FormulaVersionResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/versions`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: versionNote, actor: formula.owner }),
+        },
+      )
+      upsertFormula(payload.formula)
+      setVersions((current) => [
+        payload.version,
+        ...current.filter((version) => version.id !== payload.version.id),
+      ])
+      setFormulaStatus(`${payload.formula.code} ${payload.version.version} snapshot saved`)
+      return payload
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula snapshot failed')
+      return null
+    }
+  }
+
+  async function exportFormulaRecord() {
+    try {
+      const payload = await requestApi<FormulaExportResponse>(
+        `/formulas/${encodeURIComponent(formula.id)}/export`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ actor: formula.owner }),
+        },
+      )
+      setFormulaStatus(`${payload.document.id} exported with ${payload.audit.action} audit`)
+    } catch (error) {
+      setFormulaStatus(error instanceof Error ? error.message : 'Formula export failed')
+    }
+  }
+
+  return (
+    <div className="formula-labspace">
+      <aside className="formula-lab-library glass">
+        <div className="formula-rail-head">
+          <div>
+            <span>Labspace</span>
+            <strong>Formula Library</strong>
+          </div>
+          <button className="primary-button small" type="button" onClick={() => setCreateSheetOpen(true)} disabled={!canEditFormula}>
+            <Plus size={14} />
+            Create
+          </button>
+        </div>
+        <div className="formula-search-box">
+          <Search size={15} />
+          <input
+            aria-label="Search formulas"
+            placeholder="Search by name, code, tag, or project..."
+            type="search"
+            value={libraryQuery}
+            onChange={(event) => setLibraryQuery(event.target.value)}
+          />
+        </div>
+        <div className="formula-library">
+          {filteredFormulaRecords.map((item) => {
+            const typeMeta = formulaTypeMeta[formulaTypeForFormula(item)]
+            return (
+              <button
+                className={`formula-card formula-rail-card ${item.id === formula.id ? 'is-active' : ''}`}
+                key={item.id}
+                type="button"
+                onClick={() => onSelectFormula(item.id)}
+              >
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.code} / {item.version}</span>
+                </div>
+                <span className={`formula-type-pill tone-${typeMeta.tone}`}>{typeMeta.shortLabel}</span>
+                <StatusBadge status={item.status} />
+                <span className="mono-value">{formatGrams(item.targetGrams)}</span>
+              </button>
+            )
+          })}
+        </div>
+      </aside>
+
+      <main className="formula-lab-editor glass">
+        <div className="formula-lab-topbar">
+          <button className="ghost-button icon-only" type="button" aria-label="Open formula details" onClick={() => setActiveLabTab('details')}>
+            <Menu size={18} />
+          </button>
+          <h2>{formula.name}</h2>
+          <div className="formula-topbar-actions">
+            {formulaEditable && canEditFormula && (
+              <button className="ghost-button small" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
+                <Save size={14} />
+                {metadataSaving ? 'Saving...' : metadataDirty ? 'Save draft' : 'Draft saved'}
+              </button>
+            )}
+            {formulaEditable && canEditFormula && !formulaFinalReady && formula.lines.length > 0 && (
+              <button className="ghost-button small" type="button" onClick={openNormalizeFormula} disabled={metadataSaving}>
+                <SlidersHorizontal size={14} />
+                Normalize to 100%
+              </button>
+            )}
+            {formulaEditable && canEditFormula && (
+              <button
+                className="primary-button small"
+                type="button"
+                onClick={beginFormulaReview}
+                disabled={metadataSaving}
+                title={formulaReviewBlocker}
+              >
+                <Share2 size={14} />
+                Submit review
+              </button>
+            )}
+            {formula.workflowStatus === 'IN_REVIEW' && canApproveFormula && (
+              <>
+                <button className="ghost-button small" type="button" onClick={() => openWorkflow('reject')}>Request changes</button>
+                <button className="primary-button small" type="button" onClick={() => openWorkflow('approve')} disabled={!formulaFinalReady || ifraFailCount > 0}>
+                  <CheckCircle2 size={14} />
+                  Approve
+                </button>
+              </>
+            )}
+            {formula.workflowStatus === 'APPROVED' && canEditFormula && (
+              <button className="primary-button small" type="button" onClick={() => void forkWorkingCopy()}>
+                <RotateCcw size={14} />
+                Fork working copy
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="formula-lab-breadcrumb">
+          <span>Labspace</span>
+          <ChevronRight size={14} />
+          <span>{formula.code}</span>
+          <ChevronRight size={14} />
+          <strong>{formula.name}</strong>
+          <span className={`formula-type-pill tone-${activeFormulaTypeMeta.tone}`}>{activeFormulaTypeMeta.label}</span>
+          <StatusBadge status={formula.status} />
+        </div>
+
+        <section className="formula-lab-hero">
+          <div className="formula-bottle-art">
+            <FlaskConical size={28} />
+          </div>
+          <div>
+            <h1>{formula.name}</h1>
+            <p>{activeFormulaTypeMeta.label} / {formula.brief || 'Add the creative brief in Details.'}</p>
+          </div>
+        </section>
+
+        <div className="formula-lab-tools">
+          <button className="ghost-button icon-only" type="button" aria-label="Undo last action" title="Undo" onClick={() => void undoFormulaChange()} disabled={!formulaEditable || undoStack.length === 0}>
+            <Undo2 size={15} />
+          </button>
+          <button className="ghost-button icon-only" type="button" aria-label="Redo last action" title="Redo" onClick={() => void redoFormulaChange()} disabled={!formulaEditable || redoStack.length === 0}>
+            <Redo2 size={15} />
+          </button>
+          <button
+            className="formula-lab-stats formula-scale-summary"
+            type="button"
+            onClick={openScaleFormula}
+            title="Adjust planned size and auto-rescale the formula"
+            aria-label="Adjust and auto-rescale formula"
+          >
+            <span>#{formula.lines.length}</span>
+            <span>{formulaPercent.toFixed(1)}%</span>
+            <span>{formatGrams(totalLineGrams)}</span>
+            <span>r{formula.draftRevision}</span>
+            <SlidersHorizontal size={14} aria-hidden="true" />
+          </button>
+          <button className="ghost-button icon-only" type="button" aria-label="Edit formula tags" title="Metadata and tags" onClick={() => setActiveLabTab('details')}>
+            <Tag size={15} />
+          </button>
+          <button className="ghost-button icon-only" type="button" aria-label="Export formula" title="Export with audit" onClick={() => void exportFormulaRecord()} disabled={!canExportFormula || formula.lines.length === 0}>
+            <Share2 size={15} />
+          </button>
+          <button className="ghost-button icon-only" type="button" aria-label="Scale formula" title="Adjust planned size, auto-rescale, and print" onClick={openScaleFormula}>
+            <SlidersHorizontal size={15} />
+          </button>
+        </div>
+
+        <div className="formula-ledger">
+          {groupedSections.map((section) => {
+            const meta = formulaNoteMeta[section.note]
+            return (
+              <section className={`formula-ledger-section ${meta.className}`} key={section.note}>
+                <div className="formula-ledger-section-head">
+                  <strong>{meta.label} <span>({section.lines.length})</span></strong>
+                  <span>{formatFormulaPercent(section.grams, formula.targetGrams)} / {formatGrams(section.grams)}</span>
+                </div>
+                {section.lines.length > 0 ? (
+                  section.lines.map(({ line, material, childFormula, sourceLot, sourceAvailableGrams, odorType, tags }) => {
+                    const lineIndex = formula.lines.findIndex((item) => item.id === line.id)
+                    const sourceLotNumber = sourceLot?.lotNumber ?? line.sourceLotNumber
+                    const sourceLocation = sourceLot?.location ?? line.sourceLocation
+                    return (
+                      <div
+                        className="formula-ledger-line"
+                        key={line.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openLineEditor(line)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openLineEditor(line)
+                          }
+                        }}
+                      >
+                        <div className="formula-material-avatar">
+                          {(material?.name ?? childFormula?.name ?? line.label).slice(0, 1)}
+                        </div>
+                        <div className="formula-ledger-main">
+                          <strong>{line.label}</strong>
+                          <span>
+                            {material?.cas ?? childFormula?.code ?? 'accord'} / {inferFormulaPyramidNote(line, material)} / {odorType}
+                          </span>
+                          <div className="formula-tag-row">
+                            {tags.map((tag) => (
+                              <span key={`${line.id}-${tag}`}>#{tag}</span>
+                            ))}
+                            <span className="formula-add-tag">+ Add tag</span>
+                          </div>
+                          {sourceLotNumber && (
+                            <span className="formula-inventory-link">
+                              Stock {sourceLotNumber}
+                              {sourceLocation ? ` / ${sourceLocation}` : ''}
+                              {sourceAvailableGrams !== undefined ? ` / ${formatGrams(sourceAvailableGrams)} available` : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="formula-ledger-amount">
+                          <strong>{formatGrams(line.grams)}</strong>
+                          <span>{formatFormulaPercent(line.grams, formula.targetGrams)}</span>
+                        </div>
+                        <div className="formula-row-actions" onClick={(event) => event.stopPropagation()}>
+                          <button
+                            className="ghost-button tiny"
+                            type="button"
+                            aria-label={`Move ${line.label} up`}
+                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex <= 0 ? 'Already first in the formula' : `Move ${line.label} up`}
+                            onClick={() => void moveLine(line, 'up')}
+                            disabled={!formulaEditable || !canEditFormula || lineIndex <= 0}
+                          >
+                            <ArrowUp size={12} />
+                          </button>
+                          <button
+                            className="ghost-button tiny"
+                            type="button"
+                            aria-label={`Move ${line.label} down`}
+                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex >= formula.lines.length - 1 ? 'Already last in the formula' : `Move ${line.label} down`}
+                            onClick={() => void moveLine(line, 'down')}
+                            disabled={!formulaEditable || !canEditFormula || lineIndex >= formula.lines.length - 1}
+                          >
+                            <ArrowDown size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="formula-ledger-empty">No {meta.label.toLowerCase()} materials yet.</div>
+                )}
+              </section>
+            )
+          })}
+        </div>
+
+        {formula.lines.length === 0 && (
+          <div className="empty-state formula-empty-state">
+            <strong>Draft created. No formula lines yet.</strong>
+            <span>Add a material from Library/Inventory or use the classic add-line modal.</span>
+            <button className="ghost-button" type="button" onClick={onAddLine} disabled={!formulaEditable || !canEditFormula}>
+              Classic Add Line
+            </button>
+          </div>
+        )}
+
+        <button
+          className="formula-floating-add"
+          type="button"
+          aria-label="Add material to formula"
+          disabled={!formulaEditable || !canEditFormula}
+          onClick={() => {
+            setPickerMode('materials')
+            setPickerSource('inventory')
+            setPickerOpen(true)
+          }}
+        >
+          <Plus size={26} />
+        </button>
+
+        <div className="formula-bottom-tabs">
+          {(['sketch', 'material', 'details'] as FormulaLabTab[]).map((tab) => (
+            <button
+              className={activeLabTab === tab ? 'is-active' : ''}
+              key={tab}
+              type="button"
+              onClick={() => setActiveLabTab(tab)}
+            >
+              {tab === 'sketch' && <NotebookTabs size={16} />}
+              {tab === 'material' && <Beaker size={16} />}
+              {tab === 'details' && <ClipboardCheck size={16} />}
+              {tab[0].toUpperCase() + tab.slice(1)}
+            </button>
+          ))}
+        </div>
+      </main>
+
+      <aside className="formula-lab-inspector glass">
+        <div className="formula-inspector-status">
+          <span>{formulaStatus}</span>
+        </div>
+
+        <section className="formula-inspector-card">
+          <div className="formula-card-head">
+            <div>
+              <span>Final product</span>
+              <strong>{formula.name}</strong>
+            </div>
+            <StatusBadge
+              status={formulaFinalReady ? 'stable' : 'review'}
+              label={formulaFinalReady ? '100% ready' : 'Pending final %'}
+            />
+          </div>
+          <div className="metric-grid">
+            <Metric label="Final %" value={`${formulaPercent.toFixed(2)}%`} />
+            <Metric label="Line total" value={`${formatGrams(totalLineGrams)} / ${formatGrams(formula.targetGrams)}`} />
+            <Metric label="Type" value={activeFormulaTypeMeta.label} />
+            <Metric label="Product concentration" value={`${formula.finalProductConcentrationPercent.toFixed(1)}%`} />
+            <Metric label="Version" value={formula.version} />
+            <Metric label="Workflow" value={formula.workflowStatus.replace('_', ' ')} />
+          </div>
+          <div className="formula-progress-track" aria-label="Formula final percent">
+            <span style={{ width: `${formulaProgressPercent}%` }} />
+          </div>
+          <p className="caveat">
+            {formulaFinalReady
+              ? 'Final formula is normalized to 100%; IFRA can be evaluated against the finished product.'
+              : finalPercentGap >= 0
+                ? `${finalPercentGap.toFixed(2)}% remains before IFRA final-product limits are shown.`
+                : `${Math.abs(finalPercentGap).toFixed(2)}% over target; rebalance before approval.`}
+          </p>
+        </section>
+
+        <section className={`formula-inspector-card formula-ifra-panel ${!formulaFinalReady ? 'is-pending' : ifraFailCount > 0 ? 'is-fail' : 'is-pass'}`}>
+          <div className="formula-card-head">
+            <div>
+              <span>IFRA final product</span>
+              <strong>
+                {!formulaFinalReady
+                  ? 'Waiting for final %'
+                  : ifraFailCount > 0
+                    ? `${ifraFailCount} limit breach${ifraFailCount === 1 ? '' : 'es'}`
+                    : 'All limits pass'}
+              </strong>
+            </div>
+            <StatusBadge status={ifraStatus} label={!formulaFinalReady ? 'Pending' : ifraFailCount > 0 ? 'Blocked' : 'Pass'} />
+          </div>
+          {!formulaFinalReady ? (
+            <div className="empty-state compact">
+              <strong>IFRA hidden until the formula totals 100%.</strong>
+              <span>Current formula total is {formulaPercent.toFixed(2)}%. Finish the product concentration first.</span>
+            </div>
+          ) : ifraRows.length > 0 ? (
+            <div className="formula-ifra-list">
+              {ifraRows.slice(0, 6).map((row) => (
+                <button
+                  className={`formula-ifra-row ${row.status === 'fail' ? 'is-fail' : ''}`}
+                  key={row.material.id}
+                  type="button"
+                  onClick={() => {
+                    setFocusedMaterialId(row.material.id)
+                    setActiveLabTab('material')
+                    onSelectMaterial(row.material.id)
+                  }}
+                >
+                  <div>
+                    <strong>{row.material.name}</strong>
+                    <span>{row.sourcePath}</span>
+                  </div>
+                  <span className="mono-value">{row.finalProductPercent.toFixed(3)}% final</span>
+                  <span className="mono-value">Limit {row.ifraLimit.toFixed(2)}%</span>
+                  <StatusBadge status={row.status === 'fail' ? 'alert' : 'stable'} label={row.status === 'fail' ? 'Fail' : 'Pass'} />
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">
+              <strong>No IFRA rows yet.</strong>
+              <span>Add raw materials before final-product IFRA can be calculated.</span>
+            </div>
+          )}
+        </section>
+
+        <div className="formula-inspector-tabs">
+          {(['details', 'material', 'sketch'] as FormulaLabTab[]).map((tab) => (
+            <button
+              className={activeLabTab === tab ? 'is-active' : ''}
+              key={`inspector-${tab}`}
+              type="button"
+              onClick={() => setActiveLabTab(tab)}
+            >
+              {tab === 'details' ? 'Details' : tab === 'material' ? 'Material' : 'Create'}
+            </button>
+          ))}
+        </div>
+
+        {activeLabTab === 'sketch' && (
+          <div className="formula-inspector-stack">
+            <div className="metric-grid">
+              <Metric label="Target" value={formatGrams(formula.targetGrams)} />
+              <Metric label="Actual lines" value={formatGrams(totalLineGrams)} />
+              <Metric label="Version" value={formula.version} />
+              <Metric label="Owner" value={formula.owner} />
+            </div>
+            <div className="formula-create-options compact">
+              <button type="button" onClick={() => setCreateSheetOpen(true)}>
+                <NotebookTabs size={17} />
+                Create Accord or Fine Fragrance
+              </button>
+            </div>
+          </div>
+        )}
+        {activeLabTab === 'material' && (
+          <div className="formula-inspector-stack">
+            {focusedMaterial ? (
+              <section className="formula-inspector-card material-detail-card">
+                <div className="formula-card-head">
+                  <div>
+                    <span>Material detail</span>
+                    <strong>{focusedMaterial.name}</strong>
+                  </div>
+                  <DataTag label="IFRA" value={`${focusedMaterial.ifraLimit.toFixed(2)}%`} tone={focusedMaterial.ifraLimit < 5 ? 'amber' : 'green'} />
+                </div>
+                <div className="metric-grid">
+                  <Metric label="CAS" value={focusedMaterial.cas} />
+                  <Metric label="Family" value={focusedMaterial.family} />
+                  <Metric label="Final product %" value={focusedIfraRow && formulaFinalReady ? `${focusedIfraRow.finalProductPercent.toFixed(3)}%` : 'Pending'} />
+                  <Metric label="Stock available" value={focusedStock ? formatGrams(focusedStock.available) : 'No stock'} />
+                </div>
+                <p className="caveat">{focusedMaterial.odor.join(', ')}. Source: material master and linked inventory lots.</p>
+              </section>
+            ) : null}
+            <div className="resolved-table formula-resolved-list">
+              {resolvedLeaves.length > 0 ? (
+                resolvedLeaves.map((leaf) => (
+                  <button
+                    className={`resolved-row ${focusedMaterialId === leaf.materialId ? 'is-active' : ''}`}
+                    key={leaf.materialId}
+                    type="button"
+                    onClick={() => {
+                      setFocusedMaterialId(leaf.materialId)
+                      onSelectMaterial(leaf.materialId)
+                    }}
+                  >
+                    <div>
+                      <strong>{leaf.materialName}</strong>
+                      <span>{leaf.sourcePath}</span>
+                    </div>
+                    <span className="mono-value">{leaf.effectivePercent.toFixed(2)}%</span>
+                    <span className="mono-value">{formatCurrency(leaf.cost)}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="empty-state">
+                  <strong>No resolved leaves yet.</strong>
+                  <span>Create ingredients before cost and IFRA rollups run.</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {activeLabTab === 'details' && (
+          <div className="formula-inspector-stack formula-details-stack">
+            <div className="metric-grid">
+              <Metric label="Resolved grams" value={formatGrams(totals.totalGrams)} />
+              <Metric label="Formula cost" value={formatCurrency(totals.totalCost)} />
+              <Metric label="Cost / gram" value={formatCurrency(totals.costPerGram)} />
+              <Metric label="Workflow" value={formula.workflowStatus.replace('_', ' ')} />
+            </div>
+
+            <details className="formula-detail-section" open>
+              <summary>
+                <span>Metadata & brief</span>
+                <small>{metadataSaving ? 'Saving...' : metadataDirty ? 'Unsaved' : `Revision ${formula.draftRevision}`}</small>
+              </summary>
+              <div className="formula-metadata-form">
+                <label className="field-row">
+                  <span>Name</span>
+                  <input value={metadataDraft.name} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ name: event.target.value })} />
+                </label>
+                <div className="formula-field-grid">
+                  <label className="field-row">
+                    <span>Concentration type</span>
+                    <select value={metadataDraft.concentrationType} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ concentrationType: event.target.value as Formula['concentrationType'] })}>
+                      <option value="PARFUM">Parfum</option>
+                      <option value="EDP">Eau de Parfum</option>
+                      <option value="EDT">Eau de Toilette</option>
+                      <option value="EDC">Eau de Cologne</option>
+                      <option value="COLOGNE">Cologne</option>
+                      <option value="OTHER">Other / Accord</option>
+                    </select>
+                  </label>
+                  <label className="field-row">
+                    <span>Final product (%)</span>
+                    <input type="number" min={0.01} max={100} step={0.1} value={metadataDraft.finalProductConcentrationPercent} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ finalProductConcentrationPercent: Number(event.target.value) })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Target formula (g)</span>
+                    <input type="number" min={0.01} step={0.01} value={metadataDraft.targetGrams} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ targetGrams: Number(event.target.value) })} />
+                  </label>
+                  <label className="field-row">
+                    <span>IFRA category</span>
+                    <input value={metadataDraft.ifraCategory} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ ifraCategory: event.target.value })} />
+                  </label>
+                </div>
+                <label className="field-row">
+                  <span>Creative brief</span>
+                  <textarea rows={3} value={metadataDraft.brief} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ brief: event.target.value })} />
+                </label>
+                <label className="field-row">
+                  <span>Inspiration</span>
+                  <textarea rows={2} value={metadataDraft.inspiration} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ inspiration: event.target.value })} />
+                </label>
+                <label className="field-row">
+                  <span>Pyramid summary</span>
+                  <textarea rows={2} value={metadataDraft.pyramidSummary} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ pyramidSummary: event.target.value })} />
+                </label>
+                <div className="formula-field-grid">
+                  <label className="field-row">
+                    <span>Project</span>
+                    <input value={metadataDraft.project} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ project: event.target.value })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Collection</span>
+                    <input value={metadataDraft.collection} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ collection: event.target.value })} />
+                  </label>
+                </div>
+                <label className="field-row">
+                  <span>Markets</span>
+                  <input value={metadataDraft.targetMarkets} disabled={!formulaEditable || !canEditFormula} placeholder="EU, US, UK" onChange={(event) => updateMetadataDraft({ targetMarkets: event.target.value })} />
+                </label>
+                <label className="field-row">
+                  <span>Formula tags</span>
+                  <input value={metadataDraft.tags} disabled={!formulaEditable || !canEditFormula} placeholder="woody, citrus, musk" onChange={(event) => updateMetadataDraft({ tags: event.target.value })} />
+                </label>
+                <div className="formula-field-grid">
+                  <label className="field-row">
+                    <span>Density (g/ml)</span>
+                    <input type="number" min={0.01} step={0.01} value={metadataDraft.density} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ density: Number(event.target.value) })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Bottle (ml)</span>
+                    <input type="number" min={0.1} step={0.1} value={metadataDraft.bottleVolumeMl} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ bottleVolumeMl: Number(event.target.value) })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Bottles</span>
+                    <input type="number" min={1} step={1} value={metadataDraft.bottleCount} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ bottleCount: Number(event.target.value) })} />
+                  </label>
+                  <label className="field-row">
+                    <span>Reviewer</span>
+                    <input value={metadataDraft.assignedReviewer} disabled={!formulaEditable || !canEditFormula} placeholder="Reviewer email or role" onChange={(event) => updateMetadataDraft({ assignedReviewer: event.target.value })} />
+                  </label>
+                </div>
+                {formulaEditable && canEditFormula && (
+                  <button className="primary-button" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
+                    <Save size={14} />
+                    {metadataSaving ? 'Saving draft...' : 'Save draft now'}
+                  </button>
+                )}
+              </div>
+            </details>
+
+            <details className="formula-detail-section">
+              <summary>
+                <span>Version control</span>
+                <small>{versions.length} snapshot{versions.length === 1 ? '' : 's'}</small>
+              </summary>
+              <div className="formula-metadata-form">
+                <label className="field-row">
+                  <span>Snapshot note</span>
+                  <input aria-label="Formula version note" value={versionNote} disabled={!formulaEditable || !canEditFormula} onChange={(event) => setVersionNote(event.target.value)} />
+                </label>
+                <div className="action-row">
+                  <button className="primary-button" type="button" onClick={() => void snapshotVersion()} disabled={!formulaEditable || !canEditFormula || formula.lines.length === 0}>
+                    <Save size={14} />
+                    Save version
+                  </button>
+                  <button className="ghost-button" type="button" onClick={openScaleFormula} disabled={formula.lines.length === 0}>Scale & print</button>
+                  <button className="ghost-button" type="button" onClick={() => void exportFormulaRecord()} disabled={!canExportFormula || formula.lines.length === 0}>Export + audit</button>
+                </div>
+                <div className="formula-compare-controls">
+                  <select aria-label="Compare from version" value={diffFromVersion} onChange={(event) => setDiffFromVersion(event.target.value)}>
+                    <option value="">From version</option>
+                    {versions.map((version) => <option key={`from-${version.id}`} value={version.version}>{version.version}</option>)}
+                  </select>
+                  <select aria-label="Compare to version" value={diffToVersion} onChange={(event) => setDiffToVersion(event.target.value)}>
+                    <option value="">To version</option>
+                    {versions.map((version) => <option key={`to-${version.id}`} value={version.version}>{version.version}</option>)}
+                  </select>
+                  <button className="ghost-button" type="button" onClick={() => void loadVersionDiff()} disabled={versions.length < 2}>Compare</button>
+                </div>
+                {versionDiff && (
+                  <div className="formula-diff-summary">
+                    <div className="metric-grid">
+                      <Metric label="Cost delta" value={formatCurrency(versionDiff.totalCostDelta)} />
+                      <Metric label="IFRA blockers" value={`${versionDiff.ifraBlockerDelta >= 0 ? '+' : ''}${versionDiff.ifraBlockerDelta}`} />
+                      <Metric label="Metadata" value={String(versionDiff.metadataChanges.length)} />
+                      <Metric label="Lines changed" value={String(versionDiff.lineChanges.filter((line) => line.change !== 'UNCHANGED').length)} />
+                    </div>
+                    {versionDiff.lineChanges.filter((line) => line.change !== 'UNCHANGED').slice(0, 8).map((line) => (
+                      <div className="formula-diff-line" key={line.key}>
+                        <strong>{line.label}</strong>
+                        <span>{line.change}</span>
+                        <span className="mono-value">{line.beforeGrams.toFixed(3)}g{' -> '}{line.afterGrams.toFixed(3)}g</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="version-list">
+                  {versions.slice(0, 6).map((version) => (
+                    <div className="version-row formula-version-compact" key={version.id}>
+                      <div>
+                        <strong>{version.formulaCode} {version.version}</strong>
+                        <span>{version.note}</span>
+                        <small>{version.evaluations.length} notebook entries / {version.createdBy}</small>
+                      </div>
+                      <StatusBadge status={version.status === 'APPROVED' ? 'stable' : 'review'} label={version.status} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </details>
+
+            <details className="formula-detail-section">
+              <summary>
+                <span>Aging notebook</span>
+                <small>Day 1 / 7 / 30</small>
+              </summary>
+              <div className="formula-metadata-form">
+                <div className="formula-field-grid">
+                  <label className="field-row">
+                    <span>Evaluation day</span>
+                    <select value={evaluationDay} disabled={!canEditFormula || versions.length === 0} onChange={(event) => setEvaluationDay(Number(event.target.value) as 1 | 7 | 30)}>
+                      <option value={1}>Day 1</option>
+                      <option value={7}>Day 7</option>
+                      <option value={30}>Day 30</option>
+                    </select>
+                  </label>
+                  <label className="field-row">
+                    <span>Stability</span>
+                    <select value={evaluationStability} disabled={!canEditFormula || versions.length === 0} onChange={(event) => setEvaluationStability(event.target.value as FormulaEvaluationRecord['stability'])}>
+                      <option value="PASS">Pass</option>
+                      <option value="WATCH">Watch</option>
+                      <option value="FAIL">Fail</option>
+                    </select>
+                  </label>
+                  <label className="field-row">
+                    <span>Rating (1-5)</span>
+                    <input type="number" min={1} max={5} value={evaluationRating} disabled={!canEditFormula || versions.length === 0} onChange={(event) => setEvaluationRating(Number(event.target.value))} />
+                  </label>
+                </div>
+                <label className="field-row">
+                  <span>Observation for {versions[0]?.version ?? 'latest version'}</span>
+                  <textarea rows={3} value={evaluationObservation} disabled={!canEditFormula || versions.length === 0} onChange={(event) => setEvaluationObservation(event.target.value)} />
+                </label>
+                <button className="primary-button" type="button" onClick={() => void saveFormulaEvaluation()} disabled={!canEditFormula || versions.length === 0 || !evaluationObservation.trim()}>Save observation</button>
+                <div className="formula-notebook-list">
+                  {versions.flatMap((version) => version.evaluations.map((evaluation) => ({ version: version.version, evaluation }))).slice(0, 8).map(({ version, evaluation }) => (
+                    <div className="formula-notebook-entry" key={evaluation.id}>
+                      <div><strong>{version} / Day {evaluation.day}</strong><span>{evaluation.observation}</span></div>
+                      <StatusBadge status={evaluation.stability === 'FAIL' ? 'alert' : evaluation.stability === 'WATCH' ? 'review' : 'stable'} label={`${evaluation.stability} / ${evaluation.rating}/5`} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </details>
+
+            {formula.approvalHistory.length > 0 && (
+              <details className="formula-detail-section">
+                <summary><span>Approval history</span><small>{formula.approvalHistory.length} events</small></summary>
+                <div className="formula-notebook-list">
+                  {formula.approvalHistory.slice().reverse().map((event) => (
+                    <div className="formula-notebook-entry" key={event.id}>
+                      <div><strong>{event.action}</strong><span>{event.comment || event.at}</span></div>
+                      <span className="mono-small">{event.actor}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            <span className="mono-small">{currentVersionRecord ? `Current version captured ${currentVersionRecord.status}` : 'Current draft has no matching snapshot'}</span>
+          </div>
+        )}
+
+        <section className="formula-inspector-card">
+          <div className="formula-card-head">
+            <div>
+              <span>Evaporation simulation</span>
+              <strong>Volatility curve</strong>
+            </div>
+            <DataTag label="Model" value="Raoult" tone="blue" />
+          </div>
+          {resolvedLeaves.length > 0 ? (
+            <>
+              <EvaporationChart curve={curve} />
+              <p className="caveat">Directional model only; final organoleptic profile still needs lab evaluation.</p>
+            </>
+          ) : (
+            <div className="empty-state compact">
+              <strong>Curve waits for resolved ingredients.</strong>
+              <span>Add materials before the evaporation simulation runs.</span>
+            </div>
+          )}
+        </section>
+      </aside>
+
+      {workflowDialog && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet workflow-sheet glass" role="dialog" aria-modal="true" aria-label="Formula workflow">
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkflowDialog(null)}><X size={18} /></button>
+            <h3>{workflowDialog === 'review' ? 'Submit for review' : workflowDialog === 'approve' ? 'Approve formula' : 'Request changes'}</h3>
+            <p>
+              {workflowDialog === 'review'
+                ? 'A version snapshot will be captured and assigned to the reviewer.'
+                : workflowDialog === 'approve'
+                  ? 'Approval locks this version after server-side composition and IFRA checks.'
+                  : 'Return this version to a controlled working draft with a clear reason.'}
+            </p>
+            {workflowDialog === 'review' && (
+              <label className="field-row">
+                <span>Reviewer</span>
+                <input autoFocus value={workflowReviewer} onChange={(event) => setWorkflowReviewer(event.target.value)} placeholder="Reviewer email or role" />
+              </label>
+            )}
+            <label className="field-row">
+              <span>{workflowDialog === 'reject' ? 'Required change request' : 'Comment'}</span>
+              <textarea rows={4} autoFocus={workflowDialog !== 'review'} value={workflowComment} onChange={(event) => setWorkflowComment(event.target.value)} />
+            </label>
+            {workflowDialog === 'approve' && (
+              <>
+                <div className="formula-workflow-evidence">
+                  <DataTag label="Composition" value={formulaFinalReady ? '100% ready' : `${formulaPercent.toFixed(2)}%`} tone={formulaFinalReady ? 'green' : 'amber'} />
+                  <DataTag label="IFRA" value={ifraFailCount > 0 ? `${ifraFailCount} blockers` : 'Pass'} tone={ifraFailCount > 0 ? 'amber' : 'green'} />
+                  <DataTag label="Snapshot" value={formula.version} tone="blue" />
+                  <DataTag label="Approval" value="Admin or Manager" tone="green" />
+                </div>
+                <p className="caveat">Approval uses role-gated workflow and is recorded to the formula approval trail.</p>
+              </>
+            )}
+            <div className="action-row formula-dialog-actions">
+              <button className="ghost-button" type="button" onClick={() => setWorkflowDialog(null)}>Cancel</button>
+              {workflowDialog === 'review' && (
+                <button className="primary-button" type="button" onClick={() => void submitFormulaReview()} disabled={!workflowReviewer.trim() || metadataSaving}>Submit review</button>
+              )}
+              {workflowDialog === 'approve' && (
+                <button className="primary-button" type="button" onClick={() => void approveFormulaReview()} disabled={!formulaFinalReady || ifraFailCount > 0}>Approve & lock</button>
+              )}
+              {workflowDialog === 'reject' && (
+                <button className="primary-button" type="button" onClick={() => void rejectFormulaReview()} disabled={!workflowComment.trim()}>Request changes</button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {scaleOpen && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet scale-sheet glass" role="dialog" aria-modal="true" aria-label="Scale and print formula">
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setScaleOpen(false)}><X size={18} /></button>
+            <h3>Scale & weighing sheet</h3>
+            <p>
+              {formula.lines.length > 0
+                ? 'Set a target size and apply auto-rescale to preserve the composition, including inventory-sourced lines.'
+                : 'Set the planned size now. Add materials before applying auto-rescale to the composition.'}
+            </p>
+            <div className="formula-field-grid">
+              <label className="field-row">
+                <span>Target grams</span>
+                <input type="number" min={0.01} step={0.01} value={scaleTargetGrams} onChange={(event) => setScaleTargetGrams(Number(event.target.value))} />
+              </label>
+              <label className="field-row">
+                <span>Target volume (ml)</span>
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  value={Number((scaleTargetGrams / Math.max(formula.density, 0.01)).toFixed(3))}
+                  onChange={(event) => setScaleTargetGrams(Number(event.target.value) * Math.max(formula.density, 0.01))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Scale increment (g)</span>
+                <select value={scaleIncrementGrams} onChange={(event) => setScaleIncrementGrams(Number(event.target.value))}>
+                  <option value={0.001}>0.001g</option>
+                  <option value={0.01}>0.01g</option>
+                  <option value={0.1}>0.1g</option>
+                  <option value={1}>1g</option>
+                </select>
+              </label>
+            </div>
+            {formula.lines.length > 0 && (
+              <button className="ghost-button" type="button" onClick={() => void loadScalePlan()} disabled={scaleApplying}>Recalculate preview</button>
+            )}
+            {scalePlan && (
+              <>
+                <div className="metric-grid formula-scale-metrics">
+                  <Metric label="Target" value={formatGrams(scalePlan.targetGrams)} />
+                  <Metric label="Volume" value={`${scalePlan.targetVolumeMl.toFixed(2)} ml`} />
+                  <Metric label="Full bottles" value={String(scalePlan.bottleCount)} />
+                  <Metric label="Rounding variance" value={formatGrams(scalePlan.varianceGrams)} />
+                </div>
+                <div className="formula-scale-table">
+                  {scalePlan.lines.map((line) => (
+                    <div className="formula-scale-row" key={line.lineId}>
+                      <strong>{line.label}</strong>
+                      <span className="mono-value">{line.targetGrams.toFixed(4)}g</span>
+                      <span className="mono-value">Weigh {line.roundedGrams.toFixed(4)}g</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="action-row formula-dialog-actions">
+                  <button className="ghost-button" type="button" onClick={() => setScaleOpen(false)}>Close</button>
+                  {formulaEditable && canEditFormula && (
+                    <button className="primary-button" type="button" onClick={() => void applyFormulaScale()} disabled={scaleApplying}>
+                      {scaleApplying ? 'Applying...' : 'Apply auto-rescale'}
+                    </button>
+                  )}
+                  <button className="primary-button" type="button" onClick={() => window.print()}>Print weighing sheet</button>
+                </div>
+              </>
+            )}
+            {formula.lines.length === 0 && formulaEditable && canEditFormula && (
+              <div className="action-row formula-dialog-actions">
+                <button className="ghost-button" type="button" onClick={() => setScaleOpen(false)}>Cancel</button>
+                <button className="primary-button" type="button" onClick={() => void savePlannedFormulaSize()} disabled={scaleApplying}>
+                  {scaleApplying ? 'Saving...' : 'Save planned size'}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {createSheetOpen && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet create-sheet glass" role="dialog" aria-modal="true" aria-label="Create New Formula">
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setCreateSheetOpen(false)}>
+              <X size={18} />
+            </button>
+            <h3>Create New Formula</h3>
+            <p>What are you creating?</p>
+            <div className="formula-create-options formula-type-create-options">
+              <button className="formula-type-option" type="button" onClick={() => openFormulaDraftFlow('ACCORD')}>
+                <Library size={18} />
+                <span>
+                  <strong>Accord</strong>
+                  <small>Reusable sub-formula for materials, bases, and building blocks.</small>
+                </span>
+              </button>
+              <button className="formula-type-option" type="button" onClick={() => openFormulaDraftFlow('FINE_FRAGRANCE')}>
+                <FlaskConical size={18} />
+                <span>
+                  <strong>Fine Fragrance</strong>
+                  <small>Finished perfume formula with final-product IFRA and publish approval.</small>
+                </span>
+              </button>
+            </div>
+            <button className="ghost-button" type="button" onClick={() => setCreateSheetOpen(false)}>
+              Maybe later
+            </button>
+          </section>
+        </div>
+      )}
+
+      {pickerOpen && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet picker-sheet glass" role="dialog" aria-modal="true" aria-label="Add to formula">
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setPickerOpen(false)}>
+              <X size={18} />
+            </button>
+            <h3>Add to formula</h3>
+            <div className="formula-segmented">
+              <button className={pickerMode === 'materials' ? 'is-active' : ''} type="button" onClick={() => setPickerMode('materials')}>
+                Materials
+              </button>
+              <button className={pickerMode === 'formulas' ? 'is-active' : ''} type="button" onClick={() => setPickerMode('formulas')}>
+                Formulas
+              </button>
+            </div>
+            <div className="formula-picker-controls">
+              <div className="formula-search-box">
+                <Search size={15} />
+                <input
+                  aria-label="Search materials"
+                  placeholder={pickerMode === 'materials' ? 'Search materials...' : 'Search formulas...'}
+                  type="search"
+                  value={materialQuery}
+                  onChange={(event) => setMaterialQuery(event.target.value)}
+                />
+              </div>
+              <label className="compact-input">
+                <span>{pickerMode === 'materials' ? 'Amount (g)' : 'Accord g'}</span>
+                <input
+                  min={0.01}
+                  step={0.01}
+                  type="number"
+                  value={pickerMode === 'materials' ? pickerGrams : nestedGrams}
+                  onChange={(event) =>
+                    pickerMode === 'materials'
+                      ? setPickerGrams(Number(event.target.value))
+                      : setNestedGrams(Number(event.target.value))
+                  }
+                />
+              </label>
+            </div>
+            {pickerMode === 'materials' && (
+              <>
+                <div className="formula-picker-source-tabs">
+                  <button className={pickerSource === 'library' ? 'is-active' : ''} type="button" onClick={() => setPickerSource('library')}>
+                    <Library size={14} />
+                    Library
+                  </button>
+                  <button className={pickerSource === 'inventory' ? 'is-active' : ''} type="button" onClick={() => setPickerSource('inventory')}>
+                    <PackageSearch size={14} />
+                    Inventory
+                  </button>
+                  <button type="button" onClick={openCustomMaterialFlow}>
+                    <Plus size={14} />
+                    Add custom material
+                  </button>
+                </div>
+                {pickerSource === 'inventory' ? (
+                  <div className="formula-picker-list">
+                    <div className="formula-picker-consumption-note">
+                      Choosing a lot records the entered grams as lab consumption and deducts that lot immediately. Use Library for a composition-only line.
+                    </div>
+                    {filteredInventoryOptions.length > 0 ? (
+                      filteredInventoryOptions.map((option) => {
+                        const requestedGrams = clampPositiveNumber(Number(pickerGrams), 1)
+                        const insufficient = requestedGrams - option.availableGrams > 0.0001
+                        const materialStock = stockByMaterialId.get(option.material.id)
+                        return (
+                          <button
+                            className={`formula-picker-card inventory-card ${insufficient ? 'is-disabled' : ''}`}
+                            type="button"
+                            key={option.lot.id}
+                            onClick={() => void addMaterialToFormula(option.material, option.lot)}
+                            disabled={insufficient}
+                          >
+                            <div>
+                              <strong>{option.material.name}</strong>
+                              <span>
+                                {option.lot.lotNumber} / {option.lot.location} / {formatGrams(option.availableGrams)} available
+                              </span>
+                              <p>
+                                {option.material.cas} / {inferFormulaPyramidNote(undefined, option.material)} / {option.material.family}.
+                                {option.lot.supplierLotRef ? ` Supplier lot ${option.lot.supplierLotRef}.` : ''}
+                              </p>
+                              {insufficient && (
+                                <small>Need {formatGrams(requestedGrams)} but this lot has {formatGrams(option.availableGrams)} available.</small>
+                              )}
+                            </div>
+                            <div className="formula-picker-card-tags">
+                              <DataTag label="Lot" value={option.lot.qualityStatus} tone="green" />
+                              <DataTag label="Total stock" value={formatGrams(materialStock?.available ?? option.availableGrams)} tone="blue" />
+                              <DataTag label="IFRA" value={`${option.material.ifraLimit.toFixed(1)}%`} tone={option.material.ifraLimit < 5 ? 'amber' : 'green'} />
+                            </div>
+                          </button>
+                        )
+                      })
+                    ) : (
+                      <div className="empty-state compact">
+                        <strong>No approved inventory lots match this search.</strong>
+                        <span>Receive stock or clear the search to pick from available raw-material lots.</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="formula-picker-list">
+                    {filteredMaterials.map((material) => (
+                      <button className="formula-picker-card" type="button" key={material.id} onClick={() => void addMaterialToFormula(material)}>
+                        <div>
+                          <strong>{material.name}</strong>
+                          <span>{material.cas} / {inferFormulaPyramidNote(undefined, material)} / {material.family}</span>
+                          <p>{material.odor.join(', ')} aroma profile. Source: global library material master.</p>
+                        </div>
+                        <DataTag label="IFRA" value={`${material.ifraLimit.toFixed(1)}%`} tone={material.ifraLimit < 5 ? 'amber' : 'green'} />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {pickerMode === 'formulas' && (
+              <div className="formula-picker-list">
+                {filteredChildFormulas.map((child) => (
+                  <button className="formula-picker-card" type="button" key={child.id} onClick={() => void addNestedFormulaLine(child)}>
+                    <div>
+                      <strong>{child.name}</strong>
+                      <span>{child.code} / {child.version} / {child.lines.length} lines</span>
+                      <p>Add this as an accord. Cycle guard still runs on save.</p>
+                    </div>
+                    <StatusBadge status={child.status} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {editingLine && editDraft && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet line-sheet glass" role="dialog" aria-modal="true" aria-label={`Edit ${editingLine.label}`}>
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={closeLineEditor}>
+              <X size={18} />
+            </button>
+            <div className="formula-sheet-head">
+              <button className="ghost-button" type="button" onClick={closeLineEditor}>
+                Cancel
+              </button>
+              <h3>{editingLine.label}</h3>
+              <button className="primary-button" type="button" onClick={() => void saveEditedLine()}>
+                Save
+              </button>
+            </div>
+            <div className="line-sheet-section">
+              <h4>Quantities</h4>
+              <label className="field-row">
+                <span>Amount (g)</span>
+                <input
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  value={editDraft.grams}
+                  onChange={(event) => updateEditDraft({ grams: Number(event.target.value) })}
+                />
+              </label>
+              <label className="field-row">
+                <span>Concentration (%)</span>
+                <input
+                  type="number"
+                  min={0.01}
+                  max={100}
+                  step={0.1}
+                  value={editDraft.concentration}
+                  onChange={(event) =>
+                    updateEditDraft({ concentration: Math.min(100, Math.max(0.01, Number(event.target.value))) })
+                  }
+                />
+              </label>
+              <label className="field-row">
+                <span>Active Amount (g)</span>
+                <input
+                  type="number"
+                  min={0.0001}
+                  step={0.0001}
+                  value={editDraft.activeGrams}
+                  onChange={(event) => updateEditDraft({ activeGrams: Number(event.target.value) })}
+                />
+              </label>
+              <p className="caveat">Editing active amount recalculates amount.</p>
+            </div>
+            <div className="line-sheet-section">
+              <h4>Classification</h4>
+              <span className="line-sheet-label">Pyramid Note</span>
+              <div className="formula-note-picker">
+                {formulaPyramidNotes.map((note) => (
+                  <button
+                    className={`${formulaNoteMeta[note].className} ${editDraft.pyramidNote === note ? 'is-active' : ''}`}
+                    key={note}
+                    type="button"
+                    onClick={() => updateEditDraft({ pyramidNote: note })}
+                  >
+                    {note}
+                  </button>
+                ))}
+              </div>
+              <label className="field-row">
+                <span>Odor Type (optional)</span>
+                <input value={editDraft.odorType} onChange={(event) => updateEditDraft({ odorType: event.target.value })} />
+              </label>
+              <label className="field-row">
+                <span>Accord (optional)</span>
+                <input value={editDraft.accord} onChange={(event) => updateEditDraft({ accord: event.target.value })} />
+              </label>
+              <label className="field-row">
+                <span>Tags</span>
+                <input placeholder="Add tag..." value={editDraft.tags} onChange={(event) => updateEditDraft({ tags: event.target.value })} />
+              </label>
+            </div>
+            <div className="line-sheet-section">
+              <h4>Details</h4>
+              {(editingSourceLot || editingLine.sourceLotNumber) && (
+                <div className="formula-source-panel">
+                  <span>Inventory source</span>
+                  <strong>{editingSourceLot?.lotNumber ?? editingLine.sourceLotNumber}</strong>
+                  <small>
+                    {(editingSourceLot?.location ?? editingLine.sourceLocation) || 'Warehouse linked'}
+                    {editingSourceAvailableGrams !== undefined
+                      ? ` / ${formatGrams(editingSourceAvailableGrams)} available`
+                      : ''}
+                  </small>
+                  {editingSourceLot?.supplierLotRef ?? editingLine.sourceSupplierLotRef ? (
+                    <small>Supplier lot {editingSourceLot?.supplierLotRef ?? editingLine.sourceSupplierLotRef}</small>
+                  ) : null}
+                </div>
+              )}
+              <label className="field-row">
+                <span>Notes (optional)</span>
+                <textarea
+                  placeholder="Add notes about this material..."
+                  value={editDraft.notes}
+                  onChange={(event) => updateEditDraft({ notes: event.target.value })}
+                />
+              </label>
+              <Metric label="Active %" value={formatFormulaPercent(editDraft.activeGrams, formula.targetGrams)} />
+              <button className="ghost-button danger" type="button" onClick={() => void deleteLine(editingLine)}>
+                <Trash2 size={14} />
+                Remove Material
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+})
+
+const FormulaWorkspace = memo(function FormulaWorkspace({
+  session,
+  formulaRecords,
+  materialRecords,
+  lots,
+  stock,
   activeFormulaId,
   onSelectFormula,
   onFormulaRecordsChange,
@@ -3541,8 +6822,11 @@ function FormulaWorkspace({
   onNewFormula,
   onAddLine,
 }: {
+  session: AuthSession
   formulaRecords: Formula[]
   materialRecords: Material[]
+  lots: InventoryLot[]
+  stock: ReturnType<typeof stockSummary>
   activeFormulaId: string
   onSelectFormula: (id: string) => void
   onFormulaRecordsChange: Dispatch<SetStateAction<Formula[]>>
@@ -3550,9 +6834,49 @@ function FormulaWorkspace({
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
   onSelectMaterial: (id: string) => void
-  onNewFormula: () => void
+  onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
 }) {
+  if (formulaRecords.length === 0) {
+    return (
+      <section className="panel formula-empty-state" aria-label="Empty formula library">
+        <div className="formula-empty-icon">
+          <FlaskConical size={24} />
+        </div>
+        <span className="mono-small">Formula Library</span>
+        <h3>Create your first formula</h3>
+        <p>Start an Accord or a Fine Fragrance in this workspace.</p>
+        <div className="formula-empty-actions">
+          <button className="primary-button" type="button" onClick={() => onNewFormula('ACCORD')}>
+            New Accord
+          </button>
+          <button className="ghost-button" type="button" onClick={() => onNewFormula('FINE_FRAGRANCE')}>
+            New Fine Fragrance
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <FormulaLabspaceWorkspace
+      session={session}
+      formulaRecords={formulaRecords}
+      materialRecords={materialRecords}
+      lots={lots}
+      stock={stock}
+      activeFormulaId={activeFormulaId}
+      onSelectFormula={onSelectFormula}
+      onFormulaRecordsChange={onFormulaRecordsChange}
+      resolvedLeaves={resolvedLeaves}
+      totals={totals}
+      curve={curve}
+      onSelectMaterial={onSelectMaterial}
+      onNewFormula={onNewFormula}
+      onAddLine={onAddLine}
+    />
+  )
+  /*
   const fallbackFormula = formulas.find((item) => item.id === 'frm-0421')!
   const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0] ?? fallbackFormula
   const activeLeaves = resolvedLeaves
@@ -3669,7 +6993,7 @@ function FormulaWorkspace({
   async function addNestedFormulaLine() {
     const grams = Number(nestedGrams)
     if (!nestedFormulaId || !Number.isFinite(grams) || grams <= 0) {
-      setFormulaStatus('Choose a child formula and grams before adding nested accord')
+      setFormulaStatus('Choose a child formula and grams before adding accord')
       return
     }
     try {
@@ -3680,9 +7004,9 @@ function FormulaWorkspace({
       })
       upsertFormula(payload.formula)
       setNestedGrams(10)
-      setFormulaStatus('Nested accord added and cycle guard passed')
+      setFormulaStatus('Accord added and cycle guard passed')
     } catch (error) {
-      setFormulaStatus(error instanceof Error ? error.message : 'Nested formula add failed')
+      setFormulaStatus(error instanceof Error ? error.message : 'Accord add failed')
     }
   }
 
@@ -3802,7 +7126,7 @@ function FormulaWorkspace({
                 <div>
                   <strong>{line.label}</strong>
                   <span>
-                    {line.childFormulaId ? 'Nested accord' : 'Raw material leaf'}
+                    {line.childFormulaId ? 'Accord' : 'Raw material leaf'}
                     {line.materialId ? ` / ${materialRecords.find((material) => material.id === line.materialId)?.cas ?? 'material'}` : ''}
                   </span>
                 </div>
@@ -3845,12 +7169,12 @@ function FormulaWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Nested Accord" icon={Layers3}>
+      <Panel title="Accord" icon={Layers3}>
         <div className="material-form-grid">
           <label className="field-row">
             <span>Child formula</span>
             <select
-              aria-label="Nested child formula"
+              aria-label="Accord child formula"
               value={nestedFormulaId}
               onChange={(event) => setNestedFormulaId(event.target.value)}
             >
@@ -3862,9 +7186,9 @@ function FormulaWorkspace({
             </select>
           </label>
           <label className="field-row">
-            <span>Nested grams</span>
+            <span>Accord grams</span>
             <input
-              aria-label="Nested formula grams"
+              aria-label="Accord formula grams"
               min={0.01}
               step={0.01}
               type="number"
@@ -3873,12 +7197,12 @@ function FormulaWorkspace({
             />
           </label>
           <button className="primary-button" type="button" onClick={() => void addNestedFormulaLine()} disabled={!nestedFormulaId}>
-            Add Nested
+            Add Accord
           </button>
         </div>
         <ul className="policy-list">
           <li>Cycle guard blocks parent-child loops before saving.</li>
-          <li>Nested save recalculates resolve and cost but creates no stock movement.</li>
+          <li>Accord save recalculates resolve and cost but creates no stock movement.</li>
         </ul>
       </Panel>
 
@@ -3971,9 +7295,11 @@ function FormulaWorkspace({
       </Panel>
     </div>
   )
-}
+  */
+})
 
-function InventoryWorkspace({
+const InventoryWorkspace = memo(function InventoryWorkspace({
+  session,
   lots,
   movements,
   storageLocations,
@@ -3985,7 +7311,9 @@ function InventoryWorkspace({
   onReceiveStock,
   onAdjustStock,
   onTransferStock,
+  onRequestInventoryApproval,
 }: {
+  session: AuthSession
   lots: InventoryLot[]
   movements: InventoryMovement[]
   storageLocations: StorageLocation[]
@@ -3997,6 +7325,11 @@ function InventoryWorkspace({
   onReceiveStock: () => void
   onAdjustStock: () => void
   onTransferStock: () => void
+  onRequestInventoryApproval: (
+    action: InventoryApprovalAction,
+    payload: Record<string, unknown>,
+    reason: string,
+  ) => Promise<InventoryApprovalRequestResponse>
 }) {
   const [selectedLotId, setSelectedLotId] = useState(lots[0]?.id ?? '')
   const [qualityStatus, setQualityStatus] = useState<LotQualityStatus>('APPROVED')
@@ -4010,10 +7343,30 @@ function InventoryWorkspace({
   const [newLocationName, setNewLocationName] = useState('Retest Bin 1')
   const [newLocationZone, setNewLocationZone] = useState('Quality')
   const [newLocationCapacity, setNewLocationCapacity] = useState(600)
-  const [inventoryStatus, setInventoryStatus] = useState('Phase 6 console ready')
+  const [inventoryStatus, setInventoryStatus] = useState('Inventory console ready')
+  const [lotComplianceDocuments, setLotComplianceDocuments] = useState<DocumentRecord[]>([])
+  const [lotDocumentStatus, setLotDocumentStatus] = useState('Document review queue ready')
+  const [approvingLotDocumentId, setApprovingLotDocumentId] = useState<string | null>(null)
   const selectedLot = lots.find((lot) => lot.id === selectedLotId) ?? lots[0]
   const selectedMaterial = selectedLot ? materialRecords.find((material) => material.id === selectedLot.materialId) : undefined
   const selectedLocation = selectedLot ? storageLocations.find((location) => location.name === selectedLot.location) : undefined
+  const canReceiveInventory = sessionHasPermission(session, 'inventory.receive')
+  const canAdjustInventory = sessionHasPermission(session, 'inventory.adjust')
+  const canManageDocuments = sessionHasPermission(session, 'documents.manage')
+  const inventoryLotComplianceDocuments = useMemo(() => {
+    if (!selectedLot || !selectedMaterial) {
+      return []
+    }
+    return lotComplianceDocuments.filter((document) => {
+      if (document.type === 'SDS' && document.linkedTo === selectedMaterial.id) {
+        return true
+      }
+      if (document.type === 'CoA' && document.linkedTo === selectedLot.id) {
+        return true
+      }
+      return false
+    })
+  }, [lotComplianceDocuments, selectedMaterial, selectedLot])
 
   useEffect(() => {
     if (lots.length === 0) {
@@ -4049,13 +7402,62 @@ function InventoryWorkspace({
       })
       .catch(() => {
         if (active) {
-          setInventoryStatus('API sync unavailable, showing local seed data')
+          setInventoryStatus('Inventory API unavailable; no cached stock is displayed')
         }
       })
     return () => {
       active = false
     }
-  }, [onLotsChange, onMovementsChange, onStorageLocationsChange])
+  }, [onLotsChange, onMovementsChange, onStorageLocationsChange, session.organizationId])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    async function loadComplianceDocuments() {
+      try {
+        const payload = await requestApi<DocumentRecord[]>('/documents', { signal: controller.signal })
+        setLotComplianceDocuments(payload)
+        setLotDocumentStatus('Document review queue synced from Documents API')
+      } catch {
+        if (!controller.signal.aborted) {
+          setLotDocumentStatus('Document review queue unavailable from API')
+        }
+      }
+    }
+
+    void loadComplianceDocuments()
+
+    return () => {
+      controller.abort()
+    }
+  }, [session.organizationId])
+
+  async function approveLotComplianceDocument(documentId: string) {
+    if (!canManageDocuments) {
+      setLotDocumentStatus('Document approval requires documents.manage permission')
+      return
+    }
+
+    setApprovingLotDocumentId(documentId)
+    setLotDocumentStatus('Approving review document')
+    try {
+      const payload = await requestApi<DocumentApprovalResponse>(`/documents/${encodeURIComponent(documentId)}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actor: session.email,
+          note: `Approved from inventory review for ${selectedLot?.lotNumber ?? 'lot'}`,
+        }),
+      })
+      setLotComplianceDocuments((current) =>
+        current.map((document) => (document.id === documentId ? payload.document : document)),
+      )
+      setLotDocumentStatus(`${payload.document.title} approved`)
+    } catch (error) {
+      setLotDocumentStatus(error instanceof Error ? error.message : 'Document approval failed')
+    } finally {
+      setApprovingLotDocumentId(null)
+    }
+  }
 
   function upsertLot(lot: InventoryLot) {
     onLotsChange((current) => current.map((item) => (item.id === lot.id ? lot : item)))
@@ -4072,7 +7474,22 @@ function InventoryWorkspace({
     if (!selectedLot) {
       return
     }
+    const qualityPayload = {
+      lotId: selectedLot.id,
+      qualityStatus,
+      reason: qualityReason,
+    }
     try {
+      if (!canReceiveInventory) {
+        await onRequestInventoryApproval(
+          'inventory.quality',
+          qualityPayload,
+          `Change ${selectedLot.lotNumber} QC status to ${qualityStatus}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} QC update is pending admin approval`)
+        return
+      }
+
       const payload = await requestApi<LotQualityResponse>(`/lots/${encodeURIComponent(selectedLot.id)}/quality`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -4081,6 +7498,15 @@ function InventoryWorkspace({
       upsertLot(payload.lot)
       setInventoryStatus(`${payload.lot.lotNumber} moved to ${payload.lot.qualityStatus} with no stock movement`)
     } catch (error) {
+      if (error instanceof Error && error.message.includes('cannot perform inventory.receive')) {
+        await onRequestInventoryApproval(
+          'inventory.quality',
+          qualityPayload,
+          `Change ${selectedLot.lotNumber} QC status to ${qualityStatus}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} QC update is pending admin approval`)
+        return
+      }
       setInventoryStatus(error instanceof Error ? error.message : 'QC status update failed')
     }
   }
@@ -4089,7 +7515,22 @@ function InventoryWorkspace({
     if (!selectedLot) {
       return
     }
+    const stockTakePayload = {
+      lotId: selectedLot.id,
+      countedGrams: stockTakeCount,
+      reason: stockTakeReason,
+    }
     try {
+      if (!canAdjustInventory) {
+        await onRequestInventoryApproval(
+          'inventory.stockTake',
+          stockTakePayload,
+          `Reconcile ${selectedLot.lotNumber} to ${formatGrams(stockTakeCount)}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} stock take is pending admin approval`)
+        return
+      }
+
       const payload = await requestApi<StockTakeResponse>('/inventory/stock-takes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4105,6 +7546,15 @@ function InventoryWorkspace({
       setStockTakeRecords((current) => [payload.stockTake, ...current.filter((item) => item.id !== payload.stockTake.id)])
       setInventoryStatus(payload.invariant)
     } catch (error) {
+      if (error instanceof Error && error.message.includes('cannot perform inventory.adjust')) {
+        await onRequestInventoryApproval(
+          'inventory.stockTake',
+          stockTakePayload,
+          `Reconcile ${selectedLot.lotNumber} to ${formatGrams(stockTakeCount)}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} stock take is pending admin approval`)
+        return
+      }
       setInventoryStatus(error instanceof Error ? error.message : 'Stock take failed')
     }
   }
@@ -4261,7 +7711,7 @@ function InventoryWorkspace({
                 />
               </label>
               <button className="primary-button" type="button" onClick={() => void updateLotQuality()}>
-                Update QC
+                {canReceiveInventory ? 'Update QC' : 'Request QC Approval'}
               </button>
             </div>
 
@@ -4286,7 +7736,7 @@ function InventoryWorkspace({
                 />
               </label>
               <button className="primary-button" type="button" onClick={() => void reconcileStockTake()}>
-                Stock Take
+                {canAdjustInventory ? 'Stock Take' : 'Request Stock Take Approval'}
               </button>
             </div>
 
@@ -4353,6 +7803,72 @@ function InventoryWorkspace({
             )
           })}
         </div>
+      </Panel>
+
+      <Panel className="wide" title="SDS / CoA Review" icon={FileLock2}>
+        {selectedLot ? (
+          <>
+            <div className="tag-row">
+              <DataTag label="Lot" value={selectedLot.lotNumber} tone="blue" />
+              <DataTag label="Material" value={selectedMaterial?.name ?? selectedLot.materialId} />
+              <DataTag label="Review" value={`${inventoryLotComplianceDocuments.filter((doc) => doc.status === 'REVIEW_REQUIRED').length}`} tone="amber" />
+              <DataTag label="Queued" value={`${inventoryLotComplianceDocuments.length}`} />
+            </div>
+            <div className="document-list compact-list">
+              {inventoryLotComplianceDocuments.length === 0 ? (
+                <div className="empty-state compact">
+                  <strong>No SDS / CoA documents available for this lot yet.</strong>
+                  <span>Upload SDS for material and CoA for lot in Documents module when needed.</span>
+                </div>
+              ) : (
+                inventoryLotComplianceDocuments.map((document) => (
+                  <div className="document-row" key={document.id}>
+                    <span className="mono-value">{document.id}</span>
+                      <div className="document-main">
+                        <strong>{document.title}</strong>
+                        <span>
+                          {document.type} / {document.status} / {document.sizeKb}KB
+                        </span>
+                      </div>
+                      <DataTag label={document.type} value={document.linkedTo} />
+                      <StatusBadge
+                        status={
+                          document.status === 'REVIEW_REQUIRED'
+                            ? 'review'
+                            : document.status === 'APPROVED'
+                              ? 'stable'
+                              : document.status === 'EXPIRED'
+                                ? 'alert'
+                                : document.status === 'EXPIRING'
+                                  ? 'testing'
+                                  : document.status === 'SHARED'
+                                    ? 'stable'
+                                    : 'draft'
+                        }
+                        label={document.status}
+                      />
+                    <button
+                      className="primary-button small"
+                      type="button"
+                      onClick={() => void approveLotComplianceDocument(document.id)}
+                      disabled={document.status !== 'REVIEW_REQUIRED' || !canManageDocuments || approvingLotDocumentId === document.id}
+                    >
+                      {approvingLotDocumentId === document.id ? 'Approving' : 'Approve'}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            {!canManageDocuments ? (
+              <div className="empty-state compact">Document approval requires documents.manage permission.</div>
+            ) : null}
+            <div className="policy-list compact">
+              <li>{lotDocumentStatus}</li>
+            </div>
+          </>
+        ) : (
+          <div className="empty-state compact">Select a lot to review SDS / CoA documents.</div>
+        )}
       </Panel>
 
       <Panel title="Labels, Genealogy & Shopping List" icon={ShoppingCart}>
@@ -4470,9 +7986,9 @@ function InventoryWorkspace({
       </Panel>
     </div>
   )
-}
+})
 
-function LabUsageWorkspace({
+const LabUsageWorkspace = memo(function LabUsageWorkspace({
   labPlan,
   batchGrams,
   setBatchGrams,
@@ -4689,7 +8205,7 @@ function LabUsageWorkspace({
       </Panel>
     </div>
   )
-}
+})
 
 function DocumentsWorkspace() {
   const [documentRows, setDocumentRows] = useState<DocumentRecord[]>([])
@@ -4795,7 +8311,7 @@ function DocumentsWorkspace() {
 
   async function shareDocument(documentId: string) {
     setSharingDocumentId(documentId)
-    setStatusMessage('Creating tenant-scoped external share link')
+    setStatusMessage('Creating workspace-scoped external share link')
 
     try {
       const payload = await requestApi<DocumentShareResponse>(`/documents/${encodeURIComponent(documentId)}/share`, {
@@ -4969,7 +8485,7 @@ function DocumentsWorkspace() {
         ) : (
           <div className="empty-state">
             <strong>No signed URL yet</strong>
-            <span>Select a document to create a short-lived tenant-scoped access URL.</span>
+            <span>Select a document to create a short-lived workspace-scoped access URL.</span>
           </div>
         )}
       </Panel>
@@ -5041,6 +8557,171 @@ const productionLifecycle: ProductionBatchRecord['status'][] = [
   'RELEASED',
 ]
 
+const productionConsumptionRequiredStatuses = new Set<ProductionBatchRecord['status']>([
+  'FILTRATION',
+  'QC',
+  'BOTTLING',
+  'RELEASED',
+])
+
+type ProductionLifecycleFallback = {
+  batch: ProductionBatchRecord
+  message: string
+  changed: boolean
+}
+
+type ProductionConsumeFallback = ProductionLifecycleFallback & {
+  movement?: InventoryMovement
+}
+
+function isApprovalPendingMessage(message: string) {
+  return message.toLowerCase().includes('pending approval')
+}
+
+function updateProductionWorkOrderStep(
+  workOrder: ProductionBatchRecord['workOrder'],
+  label: string,
+  status: ProductionBatchRecord['workOrder']['steps'][number]['status'],
+  evidence: string,
+): ProductionBatchRecord['workOrder'] {
+  return {
+    ...workOrder,
+    steps: workOrder.steps.map((step) => (step.label === label ? { ...step, status, evidence } : step)),
+  }
+}
+
+function releaseProductionBatchLocal(batch: ProductionBatchRecord): ProductionBatchRecord {
+  if (batch.outputLot) {
+    return batch
+  }
+
+  const releasedAt = new Date().toISOString()
+  const yieldGrams = Number((batch.consumedGrams * 0.985).toFixed(3))
+  const yieldVariancePercent = Number((((yieldGrams - batch.targetGrams) / batch.targetGrams) * 100).toFixed(2))
+  const outputLot = {
+    id: `FG-${batch.id}`,
+    lotNumber: `FG-${batch.id}`,
+    formulaId: batch.formulaId,
+    quantityGrams: yieldGrams,
+    qualityStatus: 'RELEASED' as const,
+    releasedAt,
+  }
+
+  return {
+    ...batch,
+    yieldGrams,
+    yieldVariancePercent,
+    outputLot,
+    genealogy: {
+      ...batch.genealogy,
+      outputLotId: outputLot.id,
+    },
+    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'DONE', outputLot.id),
+  }
+}
+
+function applyProductionLifecycleLocal(
+  batch: ProductionBatchRecord,
+  status: ProductionBatchRecord['status'],
+): ProductionLifecycleFallback {
+  if (!productionLifecycle.includes(status)) {
+    return { batch, changed: false, message: `${status} is not a supported lifecycle gate` }
+  }
+  if (status === 'WEIGHING' && batch.consumedGrams > 0) {
+    return { batch, changed: false, message: `${batch.id} cannot return to weighing after consumption` }
+  }
+  if (productionConsumptionRequiredStatuses.has(status) && batch.consumedGrams <= 0) {
+    return { batch, changed: false, message: `${batch.id} must consume inventory before ${status}` }
+  }
+  if (status === 'RELEASED' && batch.qcStatus !== 'PASSED') {
+    return { batch, changed: false, message: `${batch.id} must pass QC before release` }
+  }
+
+  let next: ProductionBatchRecord = { ...batch, status }
+  if (status === 'MACERATION') {
+    next = {
+      ...next,
+      workOrder: updateProductionWorkOrderStep(
+        next.workOrder,
+        'Weigh raw materials',
+        batch.consumedGrams > 0 ? 'DONE' : 'READY',
+        batch.consumedGrams > 0 ? 'Input weighed' : 'Maceration gate selected',
+      ),
+    }
+  }
+  if (status === 'FILTRATION') {
+    next = {
+      ...next,
+      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Maceration hold', 'DONE', 'Filtration gate selected'),
+    }
+  }
+  if (status === 'QC' || status === 'BOTTLING') {
+    next = {
+      ...next,
+      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Filter and bottle', 'READY', `${status} gate selected`),
+    }
+  }
+  if (status === 'RELEASED') {
+    next = releaseProductionBatchLocal(next)
+  }
+
+  return { batch: next, changed: true, message: `${batch.id} moved to ${next.status}` }
+}
+
+function applyProductionQcLocal(batch: ProductionBatchRecord, result: 'PASSED' | 'FAILED'): ProductionLifecycleFallback {
+  const timestamp = new Date().toISOString()
+  const status = result === 'PASSED' ? 'QC' : 'HOLD'
+  const updated: ProductionBatchRecord = {
+    ...batch,
+    status,
+    qcStatus: result,
+    qcChecks: batch.qcChecks.map((check) => ({
+      ...check,
+      result,
+      recordedAt: timestamp,
+      note: result === 'PASSED' ? 'Within production release tolerance' : 'Deviation review required',
+    })),
+    workOrder:
+      result === 'PASSED'
+        ? updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'READY', 'QC passed')
+        : batch.workOrder,
+  }
+  return { batch: updated, changed: true, message: `${batch.id} QC ${result}; status is now ${updated.status}` }
+}
+
+function applyProductionConsumeLocal(batch: ProductionBatchRecord): ProductionConsumeFallback {
+  if (batch.consumedGrams > 0) {
+    return { batch, changed: false, message: `${batch.id} has already consumed inventory` }
+  }
+
+  const timestamp = new Date().toISOString()
+  const movement: InventoryMovement = {
+    id: `MOV-PROD-${batch.id}-LOCAL`,
+    at: timestamp,
+    type: 'PRODUCTION_CONSUMPTION',
+    direction: 'OUT',
+    materialId: batch.formulaId,
+    lotId: `LOCAL-${batch.id}`,
+    quantityGrams: batch.targetGrams,
+    balanceAfter: 0,
+    ref: batch.id,
+    actor: 'local-production-fallback',
+  }
+  const updated: ProductionBatchRecord = {
+    ...batch,
+    consumedGrams: batch.targetGrams,
+    status: 'MACERATION',
+    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Weigh raw materials', 'DONE', movement.id),
+    genealogy: {
+      ...batch.genealogy,
+      inputLotIds: [movement.lotId],
+      inputMovementIds: [movement.id],
+    },
+  }
+
+  return { batch: updated, changed: true, movement, message: `${batch.id} consumed in local production preview` }
+}
+
 function ProductionWorkspace() {
   const approvedFormulaIds = useMemo(
     () => new Set(formulaVersions.filter((version) => version.status === 'APPROVED').map((version) => version.formulaId)),
@@ -5111,7 +8792,16 @@ function ProductionWorkspace() {
       await loadBatches()
       setStatusMessage(`${batchId} consumed through ${payload.movements.length} production movement(s)`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Production consumption failed')
+      const message = error instanceof Error ? error.message : 'Production consumption failed'
+      const batch = batches.find((item) => item.id === batchId)
+      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionConsumeLocal(batch) : null
+      if (fallback?.changed && fallback.movement) {
+        setBatches((current) => current.map((batch) => (batch.id === batchId ? fallback.batch : batch)))
+        setLastMovements([fallback.movement])
+        setStatusMessage(`${message}; local preview: ${fallback.message}`)
+      } else {
+        setStatusMessage(fallback?.message ?? message)
+      }
     } finally {
       setBusyId(null)
     }
@@ -5129,7 +8819,13 @@ function ProductionWorkspace() {
       updateBatch(batch)
       setStatusMessage(`${batch.id} QC ${result}; status is now ${batch.status}`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'QC update failed')
+      const message = error instanceof Error ? error.message : 'QC update failed'
+      const batch = batches.find((item) => item.id === batchId)
+      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionQcLocal(batch, result) : null
+      if (fallback?.changed) {
+        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
+      }
+      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
     } finally {
       setBusyId(null)
     }
@@ -5147,7 +8843,13 @@ function ProductionWorkspace() {
       updateBatch(payload.batch)
       setStatusMessage(`${payload.batch.id} moved to ${payload.batch.status}`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Lifecycle update failed')
+      const message = error instanceof Error ? error.message : 'Lifecycle update failed'
+      const batch = batches.find((item) => item.id === batchId)
+      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionLifecycleLocal(batch, status) : null
+      if (fallback?.changed) {
+        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
+      }
+      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
     } finally {
       setBusyId(null)
     }
@@ -5206,6 +8908,7 @@ function ProductionWorkspace() {
         ) : (
           <div className="empty-state compact">No batch created yet.</div>
         )}
+        {activeBatch && <div className="status-strip">{statusMessage}</div>}
         {activeBatch && (
           <div className="metric-grid">
             <Metric label="Active batch" value={activeBatch.id} />
@@ -5350,7 +9053,7 @@ function ProductionWorkspace() {
         )}
       </Panel>
 
-      <Panel title="Phase 9 Guardrails" icon={ShieldCheck}>
+      <Panel title="Production Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>Release is blocked until inventory is consumed and QC passes.</li>
           <li>Release creates a finished output-lot record linked back to input lots and movement IDs.</li>
@@ -5914,7 +9617,7 @@ function ProcurementWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Phase 10 Guardrails" icon={ShieldCheck}>
+      <Panel title="Procurement Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>Supplier master updates are audited and separate from inventory.</li>
           <li>PO state transitions are explicit: DRAFT, SENT, PARTIAL, RECEIVED.</li>
@@ -6436,7 +10139,7 @@ function CommerceWorkspace({
             </div>
           </>
         ) : (
-          <div className="empty-state compact">Select a SKU to preview tenant label and sample request.</div>
+          <div className="empty-state compact">Select a SKU to preview workspace label and sample request.</div>
         )}
       </Panel>
 
@@ -6468,7 +10171,7 @@ function CommerceWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Phase 11 Guardrails" icon={ShieldCheck}>
+      <Panel title="Commerce Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>SKU records store pack, price, label, and material mapping only.</li>
           <li>Available packs are derived from approved inventory lots at read time.</li>
@@ -6998,7 +10701,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         )}
       </Panel>
 
-      <Panel title="Phase 12 Guardrails" icon={ShieldCheck}>
+      <Panel title="Orders Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>Order creation prices SKU packs but does not reserve or move inventory.</li>
           <li>Reservation reduces available stock only and creates no InventoryMovement.</li>
@@ -7356,6 +11059,13 @@ function AnalyticsWorkspace() {
 }
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
+  const internalAdminView = isInternalAdminSession(session)
+  const consoleApiLabel = internalAdminView ? 'Commercial console API' : 'Billing console API'
+  const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Billing console synced from live API'
+  const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading billing controls'
+  const fallbackMessage = internalAdminView
+    ? 'Using local SaaS readiness seed until API is reachable'
+    : 'Using local billing seed until API is reachable'
   const fallback = useMemo<SaasConsoleResponse>(() => ({
     plans: [clientFallbackPlan],
     plan: clientFallbackPlan,
@@ -7395,25 +11105,59 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     apiKeys: [],
     webhooks: [],
     webhookDeliveries: [],
+    auditExports: [],
     readiness: [
       {
         key: 'api-offline',
-        label: 'Commercial console API',
+        label: consoleApiLabel,
         status: 'warning',
         detail: 'Client fallback is active until API is reachable',
       },
     ],
     invariant: 'client fallback contains no commercial state; API is source of truth',
-  }), [session.organizationId])
+  }), [consoleApiLabel, session.organizationId])
   const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
-  const [statusMessage, setStatusMessage] = useState('Loading SaaS readiness controls')
+  const [statusMessage, setStatusMessage] = useState(loadingMessage)
   const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
   const [billingAction, setBillingAction] = useState<BillingActionResponse | null>(null)
   const [exporting, setExporting] = useState(false)
   const [billingBusyAction, setBillingBusyAction] = useState<string | null>(null)
+  const [trustBusyAction, setTrustBusyAction] = useState<string | null>(null)
+  const [trustSecret, setTrustSecret] = useState<{ label: string; value: string } | null>(null)
+  const [ssoDraft, setSsoDraft] = useState({
+    domain: fallback.sso.domain,
+    issuerUrl: fallback.sso.issuerUrl,
+    metadataUrl: fallback.sso.metadataUrl ?? '',
+    clientId: fallback.sso.clientId ?? '',
+    enforceSso: fallback.sso.enforceSso,
+    scimEnabled: fallback.sso.scim.enabled,
+    roleMapping: Object.entries(fallback.sso.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
+  })
+  const [apiKeyDraft, setApiKeyDraft] = useState({
+    label: 'Operations integration',
+    scopes: 'materials.read,orders.write,webhooks.read',
+  })
+  const [webhookDraft, setWebhookDraft] = useState({
+    url: 'https://hooks.example.test/olfactoryops',
+    events: 'order.fulfilled,document.downloaded,audit.export.ready',
+  })
   const activeSeats = saasData.usage.activeSeats
   const storageUsedGb = saasData.usage.storageGb
   const apiUsage = saasData.usage.apiCalls
+  const saasHealth = useMemo(() => buildSaasHealthSummary(saasData), [saasData])
+  const saasHealthSource = statusMessage.toLowerCase().includes('fallback') ? 'Local seed' : 'Live API'
+
+  function syncSsoDraft(next: SsoConfigRecord) {
+    setSsoDraft({
+      domain: next.domain,
+      issuerUrl: next.issuerUrl,
+      metadataUrl: next.metadataUrl ?? '',
+      clientId: next.clientId ?? '',
+      enforceSso: next.enforceSso,
+      scimEnabled: next.scim.enabled,
+      roleMapping: Object.entries(next.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
+    })
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -7422,10 +11166,11 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       try {
         const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
         setSaasData(payload)
-        setStatusMessage('Commercial console synced from live API')
+        syncSsoDraft(payload.sso)
+        setStatusMessage(syncedMessage)
       } catch {
         if (!controller.signal.aborted) {
-          setStatusMessage('Using local SaaS readiness seed until API is reachable')
+          setStatusMessage(fallbackMessage)
         }
       }
     }
@@ -7433,15 +11178,43 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     void loadSaasConsole()
 
     return () => controller.abort()
-  }, [])
+  }, [fallbackMessage, syncedMessage])
+
+  async function refreshSaasConsole(status?: string) {
+    const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
+    setSaasData(consolePayload)
+    syncSsoDraft(consolePayload.sso)
+    if (status) {
+      setStatusMessage(status)
+    }
+    return consolePayload
+  }
+
+  function parseCsv(value: string) {
+    return value.split(',').map((item) => item.trim()).filter(Boolean)
+  }
+
+  function parseRoleMapping(value: string) {
+    return Object.fromEntries(
+      value
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [group, ...roleParts] = line.split(':')
+          return [group?.trim() ?? '', roleParts.join(':').trim()]
+        })
+        .filter(([group, role]) => group && role),
+    )
+  }
 
   async function queueAuditExport() {
     setExporting(true)
-    setStatusMessage('Queueing tenant-scoped audit export')
+    setStatusMessage('Queueing workspace-scoped audit export')
     try {
       const payload = await requestApi<AuditExportResponse>('/audit/export', { method: 'POST' })
       setAuditExport(payload)
-      setStatusMessage(`${payload.id} queued for ${payload.scope}`)
+      await refreshSaasConsole(`${payload.id} ready for ${payload.scope}`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Audit export failed')
     } finally {
@@ -7461,8 +11234,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       setBillingAction(payload)
       setStatusMessage(`${payload.mode} ${payload.status}`)
       if (path.includes('/freeze') || path.includes('/reactivate')) {
-        const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
-        setSaasData(consolePayload)
+        await refreshSaasConsole()
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : `${action} failed`)
@@ -7480,10 +11252,9 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId, billingCycle: 'monthly' }),
       })
-      const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
+      const consolePayload = await refreshSaasConsole()
       setBillingAction(payload)
-      setSaasData(consolePayload)
-      setStatusMessage(`${consolePayload.plan.name} selected for this tenant`)
+      setStatusMessage(`${consolePayload.plan.name} selected for this workspace`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Plan selection failed')
     } finally {
@@ -7498,8 +11269,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       await requestApi<{ invariant: string }>(`/webhooks/deliveries/${encodeURIComponent(deliveryId)}/retry`, {
         method: 'POST',
       })
-      const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
-      setSaasData(consolePayload)
+      await refreshSaasConsole()
       setStatusMessage(`${deliveryId} delivered with preserved idempotency key`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Webhook retry failed')
@@ -7508,8 +11278,226 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  async function saveSsoConfig() {
+    setTrustBusyAction('sso')
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<SsoMutationResponse>('/sso-config', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: saasData.sso.provider,
+          domain: ssoDraft.domain,
+          issuerUrl: ssoDraft.issuerUrl,
+          metadataUrl: ssoDraft.metadataUrl,
+          clientId: ssoDraft.clientId,
+          enforceSso: ssoDraft.enforceSso,
+          jitProvisioning: true,
+          scim: {
+            enabled: ssoDraft.scimEnabled,
+            baseUrl: saasData.sso.scim.baseUrl,
+            deprovisionAction: 'revoke_sessions',
+          },
+          roleMapping: parseRoleMapping(ssoDraft.roleMapping),
+        }),
+      })
+      syncSsoDraft(payload.config)
+      await refreshSaasConsole(`${payload.config.domain} trust policy saved`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'SSO update failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function rotateScimToken() {
+    setTrustBusyAction('scim')
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<SsoMutationResponse>('/sso-config/scim-token/rotate', { method: 'POST' })
+      if (payload.secret) {
+        setTrustSecret({ label: 'SCIM bearer token', value: payload.secret })
+      }
+      await refreshSaasConsole('SCIM token rotated and audit logged')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'SCIM token rotation failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function createApiKey() {
+    setTrustBusyAction('api-create')
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<ApiKeyMutationResponse>('/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label: apiKeyDraft.label, scopes: parseCsv(apiKeyDraft.scopes) }),
+      })
+      if (payload.secret) {
+        setTrustSecret({ label: `${payload.apiKey.label} API key`, value: payload.secret })
+      }
+      await refreshSaasConsole(`${payload.apiKey.label} created`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'API key creation failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function rotateApiKey(id: string) {
+    setTrustBusyAction(id)
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<ApiKeyMutationResponse>(`/api-keys/${encodeURIComponent(id)}/rotate`, { method: 'POST' })
+      if (payload.secret) {
+        setTrustSecret({ label: `${payload.apiKey.label} rotated key`, value: payload.secret })
+      }
+      await refreshSaasConsole(`${id} rotated`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'API key rotation failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function revokeApiKey(id: string) {
+    setTrustBusyAction(id)
+    setTrustSecret(null)
+    try {
+      await requestApi<ApiKeyMutationResponse>(`/api-keys/${encodeURIComponent(id)}/revoke`, { method: 'POST' })
+      await refreshSaasConsole(`${id} revoked`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'API key revoke failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function createWebhook() {
+    setTrustBusyAction('webhook-create')
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<WebhookMutationResponse>('/webhooks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: webhookDraft.url, events: parseCsv(webhookDraft.events) }),
+      })
+      if (payload.secret) {
+        setTrustSecret({ label: `${payload.webhook.id} signing secret`, value: payload.secret })
+      }
+      await refreshSaasConsole(`${payload.webhook.id} webhook created`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Webhook creation failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function updateWebhookStatus(webhook: WebhookRecord) {
+    setTrustBusyAction(webhook.id)
+    try {
+      const nextStatus = webhook.status === 'active' ? 'paused' : 'active'
+      await requestApi<WebhookMutationResponse>(`/webhooks/${encodeURIComponent(webhook.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      })
+      await refreshSaasConsole(`${webhook.id} ${nextStatus}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Webhook update failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function rotateWebhookSecret(id: string) {
+    setTrustBusyAction(id)
+    setTrustSecret(null)
+    try {
+      const payload = await requestApi<WebhookMutationResponse>(`/webhooks/${encodeURIComponent(id)}/rotate-secret`, {
+        method: 'POST',
+      })
+      if (payload.secret) {
+        setTrustSecret({ label: `${payload.webhook.id} signing secret`, value: payload.secret })
+      }
+      await refreshSaasConsole(`${id} signing secret rotated`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Webhook secret rotation failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function deleteWebhook(id: string) {
+    setTrustBusyAction(id)
+    setTrustSecret(null)
+    try {
+      await requestApi<WebhookMutationResponse>(`/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      await refreshSaasConsole(`${id} removed; delivery evidence retained`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Webhook removal failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
   return (
     <div className="workspace-grid saas-grid">
+      {internalAdminView ? (
+        <Panel
+          className="wide saas-health-panel"
+          title="SaaS Health"
+          icon={Gauge}
+          right={<StatusBadge status={saasHealthTone(saasHealth.status)} label={`${saasHealth.score}%`} />}
+        >
+          <div className="saas-health-summary">
+            <div className="saas-health-score">
+              <span className="mono-small">Commercial readiness</span>
+              <strong>{saasHealth.score}%</strong>
+              <span>
+                {saasHealth.blockedCount > 0
+                  ? 'Blocked controls need admin action before launch.'
+                  : saasHealth.warningCount > 0
+                    ? 'Sell-ready with warnings to watch before launch.'
+                    : 'All SaaS health controls are passing.'}
+              </span>
+            </div>
+            <div className="metric-grid saas-health-metrics">
+              <Metric label="Passing" value={`${saasHealth.passCount}/${saasHealth.factors.length}`} />
+              <Metric label="Warnings" value={String(saasHealth.warningCount)} />
+              <Metric label="Blocked" value={String(saasHealth.blockedCount)} />
+              <Metric label="Source" value={saasHealthSource} />
+            </div>
+          </div>
+          <div className={`usage-meter saas-health-meter tone-${saasHealth.status}`} aria-label="SaaS health score">
+            <span style={{ width: `${saasHealth.score}%` }} />
+          </div>
+          <div className="document-list compact-list saas-health-list">
+            {saasHealth.factors.map((factor) => (
+              <div className="document-row" key={factor.key}>
+                <div>
+                  <strong>{factor.label}</strong>
+                  <span>{factor.detail}</span>
+                </div>
+                <StatusBadge status={saasHealthTone(factor.status)} label={factor.status.toUpperCase()} />
+              </div>
+            ))}
+          </div>
+          <div className="action-row">
+            <button
+              className="ghost-button"
+              type="button"
+              onClick={() => void refreshSaasConsole('SaaS health recalculated from live API')}
+            >
+              Refresh health
+            </button>
+            <DataTag label="Invariant" value="server-side gates" tone="green" />
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel title="Billing & Plan Limits" icon={BadgeDollarSign}>
         <div className="metric-grid">
           <Metric label="Plan" value={saasData.plan.name} />
@@ -7527,12 +11515,12 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             className="primary-button"
             type="button"
             onClick={() => void runBillingAction('checkout', '/billing/checkout', {
-              body: JSON.stringify({ planId: saasData.plan.id, mode: 'manual_sales' }),
+              body: JSON.stringify({ planId: saasData.plan.id, mode: internalAdminView ? 'manual_sales' : 'customer_checkout' }),
               headers: { 'Content-Type': 'application/json' },
             })}
             disabled={billingBusyAction !== null}
           >
-            Start sale
+            {internalAdminView ? 'Start sale' : 'Upgrade plan'}
           </button>
           <button
             className="ghost-button"
@@ -7542,7 +11530,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           >
             Billing portal
           </button>
-          {saasData.subscription.canWrite ? (
+          {internalAdminView && saasData.subscription.canWrite ? (
             <button
               className="ghost-button"
               type="button"
@@ -7552,9 +11540,10 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
               })}
               disabled={billingBusyAction !== null}
             >
-              Freeze tenant
+              Freeze workspace
             </button>
-          ) : (
+          ) : null}
+          {!saasData.subscription.canWrite ? (
             <button
               className="primary-button"
               type="button"
@@ -7563,11 +11552,15 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             >
               Reactivate
             </button>
-          )}
+          ) : null}
         </div>
         <ul className="policy-list">
-          <li>Plan limits are enforced server-side before commercial writes.</li>
-          <li>Tenant freeze keeps read/export access and blocks create/update operations.</li>
+          <li>Plan limits are enforced server-side before {internalAdminView ? 'commercial writes' : 'workspace changes'}.</li>
+          <li>
+            {internalAdminView
+              ? 'Workspace freeze keeps read/export access and blocks create/update operations.'
+              : 'Billing portal and upgrades never bypass workspace-scoped permission checks.'}
+          </li>
           <li>{statusMessage}</li>
         </ul>
         {billingAction ? (
@@ -7637,11 +11630,72 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </div>
       </Panel>
 
+      {trustSecret ? (
+        <Panel className="wide" title="One-Time Secret Reveal" icon={FileLock2}>
+          <div className="secret-reveal-card">
+            <div>
+              <span className="mono-small">{trustSecret.label}</span>
+              <strong>{trustSecret.value}</strong>
+              <span>This value is not stored in browser state after refresh. Store it in your password manager now.</span>
+            </div>
+            <button className="ghost-button small" type="button" onClick={() => setTrustSecret(null)}>
+              Dismiss
+            </button>
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel title="SSO / SCIM Readiness" icon={LockKeyhole}>
         <div className="tenant-summary">
           <span className="mono-small">{saasData.sso.id}</span>
           <strong>{saasData.sso.provider} for {saasData.sso.domain}</strong>
-          <span>Configuration status: {saasData.sso.status}</span>
+          <span>Status: {saasData.sso.status} / SCIM {saasData.sso.scim.status}</span>
+        </div>
+        <div className="settings-form-grid trust-form-grid">
+          <label className="field-row">
+            <span>Verified domain</span>
+            <input value={ssoDraft.domain} onChange={(event) => setSsoDraft((current) => ({ ...current, domain: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Issuer URL</span>
+            <input value={ssoDraft.issuerUrl} onChange={(event) => setSsoDraft((current) => ({ ...current, issuerUrl: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Metadata URL</span>
+            <input value={ssoDraft.metadataUrl} onChange={(event) => setSsoDraft((current) => ({ ...current, metadataUrl: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Client ID</span>
+            <input value={ssoDraft.clientId} onChange={(event) => setSsoDraft((current) => ({ ...current, clientId: event.target.value }))} />
+          </label>
+          <label className="field-row trust-map-field">
+            <span>Group to role mapping</span>
+            <textarea value={ssoDraft.roleMapping} onChange={(event) => setSsoDraft((current) => ({ ...current, roleMapping: event.target.value }))} />
+          </label>
+        </div>
+        <div className="action-row">
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={ssoDraft.enforceSso}
+              onChange={(event) => setSsoDraft((current) => ({ ...current, enforceSso: event.target.checked }))}
+            />
+            <span>Enforce SSO</span>
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={ssoDraft.scimEnabled}
+              onChange={(event) => setSsoDraft((current) => ({ ...current, scimEnabled: event.target.checked }))}
+            />
+            <span>Enable SCIM</span>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void saveSsoConfig()} disabled={trustBusyAction !== null}>
+            {trustBusyAction === 'sso' ? 'Saving' : 'Save trust policy'}
+          </button>
+          <button className="ghost-button" type="button" onClick={() => void rotateScimToken()} disabled={trustBusyAction !== null}>
+            {trustBusyAction === 'scim' ? 'Rotating' : 'Rotate SCIM token'}
+          </button>
         </div>
         <div className="record-grid compact-record-grid">
           {Object.entries(saasData.sso.roleMapping).map(([group, role]) => (
@@ -7649,7 +11703,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
               <div>
                 <span className="mono-small">{group}</span>
                 <strong>{role}</strong>
-                <span>SCIM deprovision revokes sessions</span>
+                <span>{saasData.sso.scim.deprovisionAction.replace('_', ' ')}</span>
               </div>
             </div>
           ))}
@@ -7657,24 +11711,67 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       </Panel>
 
       <Panel title="API Keys" icon={KeyRound}>
+        <div className="settings-form-grid trust-form-grid">
+          <label className="field-row">
+            <span>Key label</span>
+            <input value={apiKeyDraft.label} onChange={(event) => setApiKeyDraft((current) => ({ ...current, label: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Scopes</span>
+            <input value={apiKeyDraft.scopes} onChange={(event) => setApiKeyDraft((current) => ({ ...current, scopes: event.target.value }))} />
+          </label>
+        </div>
+        <div className="action-row">
+          <button className="primary-button" type="button" onClick={() => void createApiKey()} disabled={trustBusyAction !== null}>
+            {trustBusyAction === 'api-create' ? 'Creating' : 'Create API key'}
+          </button>
+          <DataTag label="Hash" value="server-side SHA-256" tone="green" />
+          <DataTag label="Quota" value={`${apiUsage}/${saasData.plan.apiQuota}`} tone="blue" />
+        </div>
         <div className="document-list compact-list">
           {saasData.apiKeys.map((key) => (
             <div className="document-row" key={key.id}>
               <div>
                 <strong>{key.label}</strong>
-                <span>{key.id} / ****{key.lastFour} / rotated {new Date(key.rotatedAt).toLocaleDateString()}</span>
+                <span>{key.id} / {key.prefix}****{key.lastFour} / rotated {new Date(key.rotatedAt).toLocaleDateString()}</span>
+                <span>{key.scopes.join(', ')}</span>
               </div>
-              <StatusBadge status={key.status === 'active' ? 'stable' : 'alert'} label={key.status.toUpperCase()} />
+              <div className="row-actions">
+                <StatusBadge status={key.status === 'active' ? 'stable' : 'alert'} label={key.status.toUpperCase()} />
+                {key.status === 'active' ? (
+                  <>
+                    <button className="ghost-button small" type="button" onClick={() => void rotateApiKey(key.id)} disabled={trustBusyAction !== null}>
+                      Rotate
+                    </button>
+                    <button className="ghost-button small" type="button" onClick={() => void revokeApiKey(key.id)} disabled={trustBusyAction !== null}>
+                      Revoke
+                    </button>
+                  </>
+                ) : null}
+              </div>
             </div>
           ))}
-        </div>
-        <div className="tag-row">
-          <DataTag label="Quota" value={`${apiUsage}/${saasData.plan.apiQuota}`} tone="blue" />
-          <DataTag label="Managed by" value="security.apiKeys.manage" tone="amber" />
         </div>
       </Panel>
 
       <Panel title="Webhooks" icon={Globe2}>
+        <div className="settings-form-grid trust-form-grid">
+          <label className="field-row">
+            <span>Endpoint URL</span>
+            <input value={webhookDraft.url} onChange={(event) => setWebhookDraft((current) => ({ ...current, url: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Events</span>
+            <input value={webhookDraft.events} onChange={(event) => setWebhookDraft((current) => ({ ...current, events: event.target.value }))} />
+          </label>
+        </div>
+        <div className="action-row">
+          <button className="primary-button" type="button" onClick={() => void createWebhook()} disabled={trustBusyAction !== null}>
+            {trustBusyAction === 'webhook-create' ? 'Creating' : 'Create webhook'}
+          </button>
+          <DataTag label="Limit" value={`${saasData.usage.webhooks}/${saasData.plan.limits.webhooks}`} tone="blue" />
+          <DataTag label="Signing" value="HMAC-ready secret" tone="green" />
+        </div>
         <div className="document-list compact-list">
           {saasData.webhooks.map((webhook) => (
             <div className="document-row" key={webhook.id}>
@@ -7682,8 +11779,20 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
                 <strong>{webhook.id}</strong>
                 <span>{webhook.url}</span>
                 <span>{webhook.events.join(', ')}</span>
+                <span>Secret ****{webhook.signingSecretLastFour} / rotated {new Date(webhook.signingSecretRotatedAt).toLocaleDateString()}</span>
               </div>
-              <StatusBadge status={webhook.status === 'active' ? 'stable' : 'review'} label={webhook.status.toUpperCase()} />
+              <div className="row-actions">
+                <StatusBadge status={webhook.status === 'active' ? 'stable' : 'review'} label={webhook.status.toUpperCase()} />
+                <button className="ghost-button small" type="button" onClick={() => void updateWebhookStatus(webhook)} disabled={trustBusyAction !== null}>
+                  {webhook.status === 'active' ? 'Pause' : 'Activate'}
+                </button>
+                <button className="ghost-button small" type="button" onClick={() => void rotateWebhookSecret(webhook.id)} disabled={trustBusyAction !== null}>
+                  Rotate
+                </button>
+                <button className="ghost-button small" type="button" onClick={() => void deleteWebhook(webhook.id)} disabled={trustBusyAction !== null}>
+                  Disable
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -7719,67 +11828,94 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </div>
       </Panel>
 
-      <Panel title="Commercial Readiness Gate" icon={ShieldCheck}>
-        <div className="document-list compact-list">
-          {saasData.readiness.map((check) => (
-            <div className="document-row" key={check.key}>
-              <div>
-                <strong>{check.label}</strong>
-                <span>{check.detail}</span>
-              </div>
-              <StatusBadge
-                status={check.status === 'blocked' ? 'alert' : check.status === 'warning' ? 'review' : 'stable'}
-                label={check.status.toUpperCase()}
-              />
+      {internalAdminView ? (
+        <>
+          <Panel title="Commercial Readiness Gate" icon={ShieldCheck}>
+            <div className="document-list compact-list">
+              {saasData.readiness.map((check) => (
+                <div className="document-row" key={check.key}>
+                  <div>
+                    <strong>{check.label}</strong>
+                    <span>{check.detail}</span>
+                  </div>
+                  <StatusBadge
+                    status={check.status === 'blocked' ? 'alert' : check.status === 'warning' ? 'review' : 'stable'}
+                    label={check.status.toUpperCase()}
+                  />
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </Panel>
+          </Panel>
 
-      <Panel className="wide" title="Audit Export & Enterprise Evidence" icon={ClipboardCheck}>
-        <div className="action-row">
-          <button className="primary-button" type="button" onClick={() => void queueAuditExport()} disabled={exporting}>
-            {exporting ? 'Queueing' : 'Queue audit export'}
-          </button>
-          <DataTag label="Scope" value={session.organizationId} tone="blue" />
-          <DataTag label="Format" value="JSON" tone="green" />
-        </div>
-        {auditExport ? (
-          <div className="audit-export-card">
-            <span className="mono-small">{auditExport.id}</span>
-            <strong>{auditExport.status}</strong>
-            <span>{auditExport.format} evidence export for {auditExport.scope}</span>
-            <span>Audit: {auditExport.audit.requestId}</span>
-          </div>
-        ) : (
-          <div className="empty-state compact">No export queued in this session.</div>
-        )}
-      </Panel>
+          <Panel className="wide" title="Audit Export & Enterprise Evidence" icon={ClipboardCheck}>
+            <div className="action-row">
+              <button className="primary-button" type="button" onClick={() => void queueAuditExport()} disabled={exporting}>
+                {exporting ? 'Queueing' : 'Queue audit export'}
+              </button>
+              <DataTag label="Scope" value={session.organizationId} tone="blue" />
+              <DataTag label="Format" value="JSON" tone="green" />
+            </div>
+            {auditExport ? (
+              <div className="audit-export-card">
+                <span className="mono-small">{auditExport.id}</span>
+                <strong>{auditExport.status}</strong>
+                <span>{auditExport.format} evidence export for {auditExport.scope}</span>
+                <span>Audit: {auditExport.audit.requestId}</span>
+              </div>
+            ) : (
+              <div className="empty-state compact">No export queued in this session.</div>
+            )}
+            <div className="document-list compact-list">
+              {saasData.auditExports.map((job) => (
+                <div className="document-row" key={job.id}>
+                  <div>
+                    <strong>{job.id}</strong>
+                    <span>{job.format} / {job.scope} / {job.eventCount} event(s)</span>
+                    <span>{job.checksum} / expires {new Date(job.expiresAt).toLocaleDateString()}</span>
+                  </div>
+                  <div className="row-actions">
+                    <StatusBadge status={job.status === 'READY' ? 'stable' : job.status === 'FAILED' ? 'alert' : 'review'} label={job.status} />
+                    {job.downloadUrl ? <DataTag label="Download" value="signed URL ready" tone="green" /> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </>
+      ) : null}
     </div>
   )
 }
 
 function GenericDomainWorkspace({
   domain,
+  session,
   onOpenModal,
 }: {
   domain: DomainModule
+  session: AuthSession
   onOpenModal: (modal: ModalKind) => void
 }) {
+  const internalAdminView = isInternalAdminSession(session)
+
   return (
     <div className="workspace-grid generic-grid">
       <Panel title="Feature Set" icon={Layers3}>
         <CardList items={domain.features} />
       </Panel>
-      <Panel title="Entities" icon={Database}>
-        <CardList items={domain.entities} mono />
-      </Panel>
-      <Panel title="Invariants" icon={ShieldCheck}>
-        <CardList items={domain.invariants} />
-      </Panel>
-      <Panel title="API Surface" icon={Command}>
-        <CardList items={domain.apis} mono />
-      </Panel>
+      {internalAdminView ? (
+        <>
+          <Panel title="Entities" icon={Database}>
+            <CardList items={domain.entities} mono />
+          </Panel>
+          <Panel title="Invariants" icon={ShieldCheck}>
+            <CardList items={domain.invariants} />
+          </Panel>
+          <Panel title="API Surface" icon={Command}>
+            <CardList items={domain.apis} mono />
+          </Panel>
+        </>
+      ) : null}
       <Panel title="Records" icon={Activity} className="wide">
         <div className="record-grid">
           {records[domain.key].map((record) => (
@@ -7794,17 +11930,19 @@ function GenericDomainWorkspace({
             </div>
           ))}
         </div>
-        <div className="action-row">
-          <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
-            Audit this module
-          </button>
-          {(domain.key === 'identity' || domain.key === 'saas') && (
-            <button className="primary-button" type="button" onClick={() => onOpenModal('ssoPolicy')}>
-              <ShieldCheck size={16} />
-              Security policy
+        {internalAdminView ? (
+          <div className="action-row">
+            <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
+              Audit this module
             </button>
-          )}
-        </div>
+            {(domain.key === 'identity' || domain.key === 'saas') && (
+              <button className="primary-button" type="button" onClick={() => onOpenModal('ssoPolicy')}>
+                <ShieldCheck size={16} />
+                Security policy
+              </button>
+            )}
+          </div>
+        ) : null}
       </Panel>
     </div>
   )
@@ -7900,7 +12038,7 @@ function CustomizationWorkspace() {
         audit: addAudit(current.audit, payload.audit),
       }))
       setSettingsDraft(payload.settings)
-      setCustomizationStatus('Tenant settings saved with audit evidence')
+      setCustomizationStatus('Workspace settings saved with audit evidence')
     } catch {
       setCustomizationStatus('Settings update blocked by customization policy')
     }
@@ -8031,7 +12169,7 @@ function CustomizationWorkspace() {
         audit: addAudit(current.audit, payload.audit),
       }))
       setBrandingDraft(payload.branding)
-      setCustomizationStatus('Export branding saved as tenant configuration')
+      setCustomizationStatus('Export branding saved as workspace configuration')
     } catch {
       setCustomizationStatus('Branding update blocked; accent color must be hex')
     }
@@ -8039,7 +12177,7 @@ function CustomizationWorkspace() {
 
   return (
     <div className="workspace-grid customization-grid">
-      <Panel title="Tenant Settings" icon={Settings}>
+      <Panel title="Workspace Settings" icon={Settings}>
         <div className="tag-row">
           <DataTag label="Locale" value={customizationData.settings.locale} />
           <DataTag label="Currency" value={customizationData.settings.currency} tone="blue" />
@@ -8120,7 +12258,6 @@ function CustomizationWorkspace() {
                 <strong>{flag.label}</strong>
                 <span>{flag.key}</span>
               </div>
-              <DataTag label="Phase" value={`P${flag.phase}`} tone="blue" />
               <input
                 aria-label={`Toggle ${flag.label}`}
                 checked={flag.enabled}
@@ -8455,35 +12592,105 @@ function IdentityWorkspace() {
       permissionMatrix: buildRolePermissionMatrix(organizationRolePolicies, organizationPermissionCatalog),
       securityPolicy: clientFallbackSecurityPolicy,
       audit: [],
-      invariant: 'client fallback contains no tenant seed; API is source of truth',
+      invariant: 'client fallback contains no workspace seed; API is source of truth',
     }
   }, [])
   const [tenantData, setTenantData] = useState<TenantConsoleResponse>(fallbackTenant)
-  const [tenantStatus, setTenantStatus] = useState('Loading tenant console')
+  const [tenantStatus, setTenantStatus] = useState('Loading workspace console')
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalQueueItem[]>([])
   const [inviteEmail, setInviteEmail] = useState('new.viewer@example.test')
   const [inviteRole, setInviteRole] = useState('Viewer')
   const [permissionRole, setPermissionRole] = useState('Viewer')
   const [permissionName, setPermissionName] = useState('inventory.adjust')
+  const [permissionBusyKey, setPermissionBusyKey] = useState<string | null>(null)
+  const [tenantConsoleReady, setTenantConsoleReady] = useState(false)
   const [probeResult, setProbeResult] = useState<SecurityProbeResult | null>(null)
+  const tenantSyncGenerationRef = useRef(0)
+  const tenantRefreshIdRef = useRef(0)
+  const tenantPermissionMutationRef = useRef(false)
   const permissionOptions = tenantData.permissionCatalog.map((permission) => permission.key)
   const selectedRolePolicy = tenantData.rolePolicies.find((policy) => policy.role === permissionRole) ?? tenantData.rolePolicies[0]
   const selectedRoleMatrix =
     tenantData.permissionMatrix.find((matrix) => matrix.role === selectedRolePolicy?.role) ?? tenantData.permissionMatrix[0]
   const selectedPermissionKeys = new Set(selectedRolePolicy?.permissions ?? [])
 
-  async function refreshTenantConsole(nextStatus = 'Tenant console synced from API') {
+  async function refreshTenantConsole(nextStatus = 'Workspace console synced from API') {
+    if (tenantPermissionMutationRef.current) {
+      return
+    }
+    const requestId = ++tenantRefreshIdRef.current
+    const generation = tenantSyncGenerationRef.current
+    const refreshIsCurrent = () =>
+      requestId === tenantRefreshIdRef.current &&
+      generation === tenantSyncGenerationRef.current &&
+      !tenantPermissionMutationRef.current
     try {
       const payload = await requestApi<TenantConsoleResponse>('/security/tenant-console')
+      if (!refreshIsCurrent()) {
+        return
+      }
       setTenantData(payload)
+      setTenantConsoleReady(true)
       setTenantStatus(nextStatus)
     } catch {
-      setTenantStatus('Using local tenant seed until API is reachable')
+      if (!refreshIsCurrent()) {
+        return
+      }
+      setTenantConsoleReady(false)
+      setTenantStatus('Using local workspace seed until API is reachable')
+    }
+  }
+
+  async function refreshApprovalQueue() {
+    try {
+      const [operationPayload, inventoryPayload] = await Promise.all([
+        requestApi<{ requests: OperationApprovalRequestRecord[] }>('/approval-requests'),
+        requestApi<{ requests: InventoryApprovalRequestRecord[] }>('/inventory/approval-requests'),
+      ])
+      setApprovalQueue([
+        ...operationPayload.requests.map((request) => ({
+          id: request.id,
+          source: 'operation' as const,
+          action: request.action,
+          status: request.status,
+          targetLabel: request.targetLabel,
+          reason: request.reason,
+          requiredPermission: request.requiredPermission,
+        })),
+        ...inventoryPayload.requests.map((request) => ({
+          id: request.id,
+          source: 'inventory' as const,
+          action: request.action,
+          status: request.status,
+          targetLabel: request.targetLabel,
+          reason: request.reason,
+          requiredPermission: request.requiredPermission,
+        })),
+      ])
+    } catch {
+      setApprovalQueue([])
     }
   }
 
   useEffect(() => {
     void refreshTenantConsole()
+    void refreshApprovalQueue()
   }, [])
+
+  async function reviewApprovalRequest(item: ApprovalQueueItem, decision: 'approve' | 'reject') {
+    const basePath = item.source === 'inventory' ? '/inventory/approval-requests' : '/approval-requests'
+    try {
+      await requestApi(`${basePath}/${encodeURIComponent(item.id)}/${decision}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: `${decision} from Security approval queue` }),
+      })
+      await refreshApprovalQueue()
+      setTenantStatus(`${item.id} ${decision === 'approve' ? 'approved' : 'rejected'}`)
+    } catch (error) {
+      setTenantStatus(error instanceof Error ? error.message : `Approval ${decision} failed`)
+    }
+  }
 
   async function inviteTenantMember() {
     try {
@@ -8499,7 +12706,7 @@ function IdentityWorkspace() {
       setInviteEmail('')
       await refreshTenantConsole('Invite created; credential remains invite-only')
     } catch {
-      setTenantStatus('Invite blocked by tenant membership policy')
+      setTenantStatus('Invite blocked by workspace membership policy')
     }
   }
 
@@ -8512,7 +12719,7 @@ function IdentityWorkspace() {
       })
       await refreshTenantConsole(status === 'DEACTIVATED' ? 'Member deactivated and sessions revoked' : 'Member activated')
     } catch {
-      setTenantStatus('Membership status update blocked by tenant policy')
+      setTenantStatus('Membership status update blocked by workspace policy')
     }
   }
 
@@ -8523,7 +12730,7 @@ function IdentityWorkspace() {
       })
       await refreshTenantConsole('Session revoked and audit event recorded')
     } catch {
-      setTenantStatus('Session revoke blocked by tenant policy')
+      setTenantStatus('Session revoke blocked by workspace policy')
     }
   }
 
@@ -8536,7 +12743,7 @@ function IdentityWorkspace() {
       })
       await refreshTenantConsole(`All active sessions revoked for ${email}`)
     } catch {
-      setTenantStatus('Revoke-all blocked by tenant policy')
+      setTenantStatus('Revoke-all blocked by workspace policy')
     }
   }
 
@@ -8555,7 +12762,7 @@ function IdentityWorkspace() {
     try {
       await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
       writeStoredAuthSession(null)
-      setTenantStatus('Current session logged out; sign in again to load tenant console')
+      setTenantStatus('Current session logged out; sign in again to load the workspace console')
     } catch {
       setTenantStatus('Logout blocked by session lifecycle policy')
     }
@@ -8568,17 +12775,17 @@ function IdentityWorkspace() {
       )
       setProbeResult({
         status: 'allowed',
-        title: 'Tenant probe allowed',
+        title: 'Workspace probe allowed',
         detail: `Current session can access ${organizationId}`,
       })
     } catch {
       setProbeResult({
         status: 'blocked',
-        title: 'Tenant probe blocked',
+        title: 'Workspace probe blocked',
         detail: `Current session cannot access ${organizationId}`,
       })
     } finally {
-      void refreshTenantConsole('Tenant probe recorded in audit trail')
+      void refreshTenantConsole('Workspace probe recorded in audit trail')
     }
   }
 
@@ -8603,41 +12810,76 @@ function IdentityWorkspace() {
     }
   }
 
-  async function updateRolePermission(permissionKey: string, enabled: boolean) {
-    if (!selectedRolePolicy) {
+  async function updateRolePermission(role: string, permissionKey: string, enabled: boolean) {
+    const rolePolicy = tenantData.rolePolicies.find((policy) => policy.role === role)
+    if (!tenantConsoleReady || !rolePolicy || tenantPermissionMutationRef.current) {
       return
     }
+    tenantPermissionMutationRef.current = true
+    tenantSyncGenerationRef.current += 1
+    const busyKey = `${rolePolicy.role}:${permissionKey}`
     const nextPermissions = enabled
-      ? Array.from(new Set([...selectedRolePolicy.permissions, permissionKey]))
-      : selectedRolePolicy.permissions.filter((permission) => permission !== permissionKey)
+      ? Array.from(new Set([...rolePolicy.permissions, permissionKey]))
+      : rolePolicy.permissions.filter((permission) => permission !== permissionKey)
+    const previousTenantData = tenantData
+    const nextRolePolicy = { ...rolePolicy, permissions: nextPermissions }
+    const nextRolePolicies = tenantData.rolePolicies.map((policy) =>
+      policy.role === nextRolePolicy.role && policy.scope === nextRolePolicy.scope ? nextRolePolicy : policy,
+    )
+    setPermissionBusyKey(busyKey)
+    setTenantData((current) => ({
+      ...current,
+      rolePolicies: nextRolePolicies,
+      permissionMatrix: buildRolePermissionMatrix(nextRolePolicies, current.permissionCatalog),
+    }))
+    setTenantStatus(`${rolePolicy.role} permission matrix updating...`)
     try {
-      await requestApi<PermissionMatrixResponse>(
-        `/security/roles/${encodeURIComponent(selectedRolePolicy.role)}/permissions`,
+      const payload = await requestApi<PermissionMatrixResponse>(
+        `/security/roles/${encodeURIComponent(rolePolicy.role)}/permissions`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ permissions: nextPermissions }),
         },
       )
-      await refreshTenantConsole(`${selectedRolePolicy.role} permission matrix updated`)
+      setTenantData((current) => {
+        const mergedRolePolicies = current.rolePolicies.map((policy) =>
+          policy.role === payload.rolePolicy.role && policy.scope === payload.rolePolicy.scope ? payload.rolePolicy : policy,
+        )
+        return {
+          ...current,
+          rolePolicies: mergedRolePolicies,
+          permissionCatalog: payload.permissionCatalog,
+          permissionMatrix: payload.matrix,
+          audit: [payload.audit, ...current.audit.filter((event) => event.id !== payload.audit.id)],
+          invariant: payload.invariant,
+        }
+      })
+      setTenantStatus(`${rolePolicy.role} permission matrix updated`)
       setProbeResult({
         status: 'allowed',
         title: 'Permission matrix updated',
-        detail: `${selectedRolePolicy.role} ${enabled ? 'now includes' : 'no longer includes'} ${permissionKey}`,
+        detail: `${rolePolicy.role} ${enabled ? 'now includes' : 'no longer includes'} ${permissionKey}`,
       })
-    } catch {
-      setTenantStatus('Permission update blocked by role policy guard')
+    } catch (error) {
+      setTenantData(previousTenantData)
+      const message = error instanceof Error ? error.message : 'Permission update blocked by role policy guard'
+      setTenantStatus(message)
       setProbeResult({
         status: 'blocked',
         title: 'Permission update blocked',
-        detail: `${selectedRolePolicy.role} cannot be changed to that permission set`,
+        detail: message,
       })
+    } finally {
+      tenantPermissionMutationRef.current = false
+      tenantSyncGenerationRef.current += 1
+      setPermissionBusyKey(null)
     }
   }
 
   return (
     <div className="workspace-grid identity-grid">
-      <Panel title="Tenant Boundary" icon={Building2}>
+      <Panel title="Workspace Boundary" icon={Building2}>
         <div className="tenant-summary">
           <span className="mono-small">{tenantData.organization.id}</span>
           <strong>{tenantData.organization.name}</strong>
@@ -8665,10 +12907,10 @@ function IdentityWorkspace() {
         </div>
         <div className="action-row">
           <button className="primary-button" type="button" onClick={() => void runTenantProbe('org-nxl')}>
-            Probe current tenant
+            Probe current workspace
           </button>
           <button className="ghost-button" type="button" onClick={() => void runTenantProbe('org-other')}>
-            Probe external tenant
+            Probe external workspace
           </button>
         </div>
         {probeResult && (
@@ -8677,6 +12919,56 @@ function IdentityWorkspace() {
             <span>{probeResult.detail}</span>
           </div>
         )}
+      </Panel>
+
+      <Panel
+        title="Approval Queue"
+        icon={ShieldCheck}
+        right={<DataTag label="Pending" value={String(approvalQueue.filter((item) => item.status === 'PENDING').length)} tone="amber" />}
+      >
+        <div className="member-list">
+          {approvalQueue.length > 0 ? (
+            approvalQueue.slice(0, 8).map((item) => (
+              <div className="member-row" key={`${item.source}-${item.id}`}>
+                <div>
+                  <strong>{item.targetLabel}</strong>
+                  <span>
+                    {item.id} / {item.source} / {item.action}
+                  </span>
+                  <span>{item.reason}</span>
+                </div>
+                <div className="action-row">
+                  <StatusBadge status={item.status === 'PENDING' ? 'review' : item.status === 'APPROVED' ? 'stable' : 'draft'} label={item.status} />
+                  {item.status === 'PENDING' ? (
+                    <>
+                      <button
+                        className="ghost-button small"
+                        type="button"
+                        onClick={() => void reviewApprovalRequest(item, 'reject')}
+                      >
+                        Reject
+                      </button>
+                      <button
+                        className="primary-button small"
+                        type="button"
+                        onClick={() => void reviewApprovalRequest(item, 'approve')}
+                      >
+                        Approve
+                      </button>
+                    </>
+                  ) : (
+                    <DataTag label="Reviewed" value={item.source} tone="blue" />
+                  )}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="empty-state compact">
+              <strong>No approval requests visible.</strong>
+              <span>Requests appear here for their requester and for roles allowed to approve them.</span>
+            </div>
+          )}
+        </div>
       </Panel>
 
       <Panel title="Members & Roles" icon={UsersRound}>
@@ -8805,6 +13097,7 @@ function IdentityWorkspace() {
             <select
               aria-label="Permission role"
               value={permissionRole}
+              disabled={!tenantConsoleReady || permissionBusyKey !== null}
               onChange={(event) => setPermissionRole(event.target.value)}
             >
               {tenantData.rolePolicies.map((policy) => (
@@ -8819,6 +13112,7 @@ function IdentityWorkspace() {
             <select
               aria-label="Permission name"
               value={permissionName}
+              disabled={!tenantConsoleReady || permissionBusyKey !== null}
               onChange={(event) => setPermissionName(event.target.value)}
             >
               {permissionOptions.map((permission) => (
@@ -8828,7 +13122,7 @@ function IdentityWorkspace() {
               ))}
             </select>
           </label>
-          <button className="primary-button" type="button" onClick={() => void runPermissionProbe()}>
+          <button className="primary-button" type="button" onClick={() => void runPermissionProbe()} disabled={!tenantConsoleReady}>
             Run probe
           </button>
         </div>
@@ -8838,6 +13132,7 @@ function IdentityWorkspace() {
               className={`permission-role-card ${matrix.role === permissionRole ? 'is-selected' : ''}`}
               key={matrix.role}
               type="button"
+              disabled={!tenantConsoleReady || permissionBusyKey !== null}
               onClick={() => setPermissionRole(matrix.role)}
             >
               <strong>{matrix.role}</strong>
@@ -8854,22 +13149,31 @@ function IdentityWorkspace() {
             <DataTag label="MFA" value={selectedRoleMatrix.mfaRequired ? 'Required' : 'Optional'} tone={selectedRoleMatrix.mfaRequired ? 'amber' : 'green'} />
           </div>
         )}
-        <div className="permission-grid">
+        <div className="permission-grid" key={selectedRolePolicy?.role ?? permissionRole} aria-busy={!tenantConsoleReady}>
           {tenantData.permissionCatalog.map((permission) => {
             const granted = selectedPermissionKeys.has(permission.key)
             const locked = permissionRole === 'Owner' && ownerLockedPermissionKeys.includes(permission.key)
+            const busy = permissionBusyKey === `${selectedRolePolicy?.role}:${permission.key}`
             return (
-              <label className={`permission-row-card ${granted ? 'is-granted' : ''}`} key={permission.key}>
+              <label
+                className={`permission-row-card ${granted ? 'is-granted' : ''} ${busy ? 'is-busy' : ''}`}
+                key={permission.key}
+              >
                 <input
                   type="checkbox"
                   checked={granted}
-                  disabled={locked}
-                  onChange={(event) => void updateRolePermission(permission.key, event.target.checked)}
+                  disabled={!tenantConsoleReady || locked || permissionBusyKey !== null}
+                  onChange={(event) => {
+                    if (selectedRolePolicy) {
+                      void updateRolePermission(selectedRolePolicy.role, permission.key, event.target.checked)
+                    }
+                  }}
                 />
                 <span>
                   <strong>{permission.label}</strong>
                   <small>{permission.key}</small>
                   <small>{permission.description}</small>
+                  {busy ? <small>Saving permission change...</small> : null}
                 </span>
                 <DataTag label={permission.category} value={permission.risk} tone={permissionRiskTone(permission.risk)} />
               </label>
@@ -8884,35 +13188,23 @@ function IdentityWorkspace() {
         </ul>
       </Panel>
 
-      <Panel className="wide" title="Tenant Security Audit" icon={ClipboardCheck}>
+      <Panel className="wide" title="Workspace Security Audit" icon={ClipboardCheck}>
         <AuditList events={tenantData.audit.length > 0 ? tenantData.audit : auditEvents} />
       </Panel>
     </div>
   )
 }
 
-function PhaseRoadmap({ onNavigate }: { onNavigate: (key: DomainKey) => void }) {
-  return (
-    <div className="phase-strip">
-      {phases.map((phase) => (
-        <button className="phase-card" key={phase.id} type="button" onClick={() => onNavigate(phase.domain)}>
-          <span className="mono-value">P{phase.id}</span>
-          <strong>{phase.name}</strong>
-          <span>{phase.gate}</span>
-          <div className="phase-footer">
-            <StatusDot status={phase.status} />
-            <span className="mono-small">{phase.coverage}% / {phase.securityLayer}</span>
-          </div>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function WorkflowGraph({ onNavigate }: { onNavigate: (key: DomainKey) => void }) {
+function WorkflowGraph({
+  nodes,
+  onNavigate,
+}: {
+  nodes: { key: DomainKey; label: string; detail: string }[]
+  onNavigate: (key: DomainKey) => void
+}) {
   return (
     <div className="workflow-graph">
-      {workflowNodes.map((node, index) => {
+      {nodes.map((node, index) => {
         const Icon = domainIcons[node.key]
         return (
           <div className="workflow-step-wrap" key={node.key}>
@@ -8921,7 +13213,7 @@ function WorkflowGraph({ onNavigate }: { onNavigate: (key: DomainKey) => void })
               <strong>{node.label}</strong>
               <span>{node.detail}</span>
             </button>
-            {index < workflowNodes.length - 1 && <ChevronRight className="workflow-arrow" size={18} />}
+            {index < nodes.length - 1 && <ChevronRight className="workflow-arrow" size={18} />}
           </div>
         )
       })}
@@ -8929,21 +13221,26 @@ function WorkflowGraph({ onNavigate }: { onNavigate: (key: DomainKey) => void })
   )
 }
 
-function DomainMatrix({ onNavigate }: { onNavigate: (key: DomainKey) => void }) {
+function DomainMatrix({ session, onNavigate }: { session: AuthSession; onNavigate: (key: DomainKey) => void }) {
+  const internalAdminView = isInternalAdminSession(session)
+
   return (
     <div className="domain-matrix">
-      {domains.map((domain) => {
+      {visibleDomainsForSession(session).map((domain) => {
+        const displayDomain = domainDisplayForSession(domain, session)
         const Icon = domainIcons[domain.key]
         return (
           <button className="domain-cell" key={domain.key} type="button" onClick={() => onNavigate(domain.key)}>
             <Icon size={18} />
             <div>
-              <strong>{domain.shortName}</strong>
-              <span>{domain.phase}</span>
+              <strong>{displayDomain.shortName}</strong>
+              <span>{internalAdminView ? displayDomain.owner : displayDomain.screens[0]}</span>
             </div>
-            <div className="health-bar">
-              <span style={{ width: `${domain.health}%` }} />
-            </div>
+            {internalAdminView ? (
+              <div className="health-bar">
+                <span style={{ width: `${displayDomain.health}%` }} />
+              </div>
+            ) : null}
           </button>
         )
       })}
@@ -8951,29 +13248,37 @@ function DomainMatrix({ onNavigate }: { onNavigate: (key: DomainKey) => void }) 
   )
 }
 
-function EnterpriseReadiness({ onOpenModal }: { onOpenModal: (modal: ModalKind) => void }) {
+function EnterpriseReadiness({
+  session,
+  onOpenModal,
+}: {
+  session: AuthSession
+  onOpenModal: (modal: ModalKind) => void
+}) {
+  const internalAdminView = isInternalAdminSession(session)
+
   return (
-    <Panel className="enterprise-panel" title="Enterprise Readiness" icon={ShieldCheck}>
+    <Panel className="enterprise-panel" title={internalAdminView ? 'Enterprise Readiness' : 'Billing Readiness'} icon={ShieldCheck}>
       <div className="enterprise-stack">
         <div className="readiness-item">
           <span>SSO/SCIM</span>
-          <StatusBadge status="review" />
+          <StatusBadge status="stable" />
         </div>
         <div className="readiness-item">
           <span>API key rotation</span>
-          <StatusBadge status="testing" />
+          <StatusBadge status="stable" />
         </div>
         <div className="readiness-item">
           <span>Audit export</span>
-          <StatusBadge status="active" />
+          <StatusBadge status="stable" />
         </div>
         <div className="readiness-item">
-          <span>Dedicated tenant option</span>
-          <StatusBadge status="draft" />
+          <span>{internalAdminView ? 'Dedicated workspace option' : 'Plan limits'}</span>
+          <StatusBadge status="active" />
         </div>
       </div>
       <button className="primary-button full" type="button" onClick={() => onOpenModal('ssoPolicy')}>
-        Review trust layer
+        {internalAdminView ? 'Open trust layer' : 'Open billing controls'}
       </button>
     </Panel>
   )
@@ -9101,29 +13406,49 @@ function UsagePreview({
 
 function CommandPalette({
   open,
+  session,
   onClose,
   onNavigate,
   onCommit,
 }: {
   open: boolean
+  session: AuthSession
   onClose: () => void
   onNavigate: (key: DomainKey) => void
   onCommit: () => void
 }) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const internalAdminView = isInternalAdminSession(session)
+  const commandDomains = useMemo(() => visibleDomainsForSession(session), [session])
+  const canCommitLabUsage = sessionHasPermission(session, 'inventory.commitLabUsage')
+  const canReviewAuditExport =
+    internalAdminView && (domainVisibleForSession('saas', session) || sessionHasPermission(session, 'audit.export'))
   const commands = useMemo(
     () => [
       { label: 'Open OlfactoryOps Console', detail: 'Dashboard', action: () => onNavigate('dashboard') },
-      ...domains.map((domain) => ({
-        label: `Open ${domain.name}`,
-        detail: `Phase ${domain.phase}`,
-        action: () => onNavigate(domain.key),
-      })),
-      { label: 'Commit FRM-0421 lab usage', detail: 'Create OUT movements', action: onCommit },
-      { label: 'Review audit export', detail: 'Enterprise evidence', action: () => onNavigate('saas') },
+      ...commandDomains.map((domain) => {
+        const displayDomain = domainDisplayForSession(domain, session)
+        return {
+          label: `Open ${displayDomain.name}`,
+          detail: `${displayDomain.owner} / ${displayDomain.health}% health`,
+          action: () => onNavigate(domain.key),
+        }
+      }),
+      ...(canCommitLabUsage
+        ? [{ label: 'Commit FRM-0421 lab usage', detail: 'Create OUT movements', action: onCommit }]
+        : []),
+      ...(canReviewAuditExport
+        ? [
+            {
+              label: 'Review audit export',
+              detail: internalAdminView ? 'Enterprise evidence' : 'Billing evidence',
+              action: () => onNavigate('saas'),
+            },
+          ]
+        : []),
     ],
-    [onCommit, onNavigate],
+    [canCommitLabUsage, canReviewAuditExport, commandDomains, internalAdminView, onCommit, onNavigate, session],
   )
   const filtered = commands.filter((command) =>
     `${command.label} ${command.detail}`.toLowerCase().includes(query.toLowerCase()),
@@ -9147,6 +13472,9 @@ function CommandPalette({
         <motion.div className="modal-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
           <motion.div
             className="command-palette glass"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
             initial={{ scale: 0.96, y: 12 }}
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.96, y: 12 }}
@@ -9229,6 +13557,9 @@ function BlackPopup({
         <motion.div className="modal-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
           <motion.div
             className="black-popup glass"
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
             initial={{ opacity: 0, scale: 0.96, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 16 }}

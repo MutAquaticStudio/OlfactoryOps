@@ -19,6 +19,10 @@ export type DomainKey =
   | 'saas'
 
 export type MaterialTier = 'Top' | 'Heart' | 'Base'
+export type FormulaPyramidNote = 'Top' | 'Middle' | 'Base' | 'Solvent'
+export type FormulaType = 'ACCORD' | 'FINE_FRAGRANCE'
+export type FormulaConcentrationType = 'PARFUM' | 'EDP' | 'EDT' | 'EDC' | 'COLOGNE' | 'OTHER'
+export type FormulaWorkflowStatus = 'DRAFT' | 'IN_REVIEW' | 'CHANGES_REQUESTED' | 'APPROVED' | 'ARCHIVED'
 
 export interface Phase {
   id: number
@@ -52,6 +56,7 @@ export interface DomainModule {
 
 export interface Material {
   id: string
+  organizationId?: string
   name: string
   cas: string
   family: string
@@ -101,12 +106,163 @@ export interface FormulaLine {
   materialId?: string
   childFormulaId?: string
   dilution?: number
+  concentration?: number
+  pyramidNote?: FormulaPyramidNote
+  odorType?: string
+  accord?: string
+  tags?: string[]
+  notes?: string
+  sourceLotId?: string
+  sourceLotNumber?: string
+  sourceLocation?: string
+  sourceAvailableGrams?: number
+  sourceSupplierLotRef?: string
+  inventoryConsumptionMode?: 'LINKED' | 'CONSUMED'
+  inventoryConsumedGrams?: number
+}
+
+export interface FormulaApprovalEvent {
+  id: string
+  action: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'FORKED'
+  actor: string
+  reviewer?: string
+  comment?: string
+  signature?: string
+  at: string
+}
+
+export interface FormulaEvaluationRecord {
+  id: string
+  day: 1 | 7 | 30
+  observation: string
+  stability: 'PASS' | 'WATCH' | 'FAIL'
+  rating: number
+  evaluator: string
+  evaluatedAt: string
+}
+
+export interface FormulaSnapshotMetadata {
+  formulaType: FormulaType
+  concentrationType: FormulaConcentrationType
+  finalProductConcentrationPercent: number
+  targetMarkets: string[]
+  brief: string
+  inspiration: string
+  pyramidSummary: string
+  tags: string[]
+  project: string
+  collection: string
+  density: number
+  bottleVolumeMl: number
+  bottleCount: number
+  ifraCategory: string
+}
+
+export interface FormulaIfraRow {
+  materialId: string
+  materialName: string
+  activePercent: number
+  finalProductPercent: number
+  limitPercent: number
+  usageOfLimit: number
+  marginPercent: number
+  sourcePath: string
+  status: 'PASS' | 'NEAR_LIMIT' | 'BLOCKER' | 'NO_LIMIT'
+}
+
+export interface FormulaIfraEvaluation {
+  formulaId: string
+  category: string
+  compositionReady: boolean
+  finalProductConcentrationPercent: number
+  blockerCount: number
+  nearLimitCount: number
+  rows: FormulaIfraRow[]
+  label: string
+}
+
+export interface FormulaEvaporationPoint {
+  hour: number
+  Top: number
+  Heart: number
+  Base: number
+}
+
+export interface FormulaScaleLine {
+  lineId: string
+  label: string
+  targetGrams: number
+  roundedGrams: number
+  varianceGrams: number
+}
+
+export interface FormulaScalePlan {
+  formulaId: string
+  targetGrams: number
+  targetVolumeMl: number
+  bottleCount: number
+  incrementGrams: number
+  lines: FormulaScaleLine[]
+  totalRoundedGrams: number
+  varianceGrams: number
+}
+
+export interface FormulaVersionDiffLine {
+  key: string
+  label: string
+  beforeGrams: number
+  afterGrams: number
+  deltaGrams: number
+  beforeActiveGrams: number
+  afterActiveGrams: number
+  change: 'ADDED' | 'REMOVED' | 'CHANGED' | 'UNCHANGED'
+}
+
+export interface FormulaVersionDiff {
+  formulaId: string
+  beforeVersion: string
+  afterVersion: string
+  metadataChanges: Array<{
+    field: keyof FormulaSnapshotMetadata
+    before: FormulaSnapshotMetadata[keyof FormulaSnapshotMetadata]
+    after: FormulaSnapshotMetadata[keyof FormulaSnapshotMetadata]
+  }>
+  lineChanges: FormulaVersionDiffLine[]
+  totalGramsDelta: number
+  totalCostDelta: number
+  ifraBlockerDelta: number
+  evaporationDelta: Record<MaterialTier, number>
 }
 
 export interface Formula {
   id: string
   code: string
   name: string
+  formulaType: FormulaType
+  organizationId: string
+  brandId: string
+  concentrationType: FormulaConcentrationType
+  finalProductConcentrationPercent: number
+  targetMarkets: string[]
+  brief: string
+  inspiration: string
+  pyramidSummary: string
+  tags: string[]
+  project: string
+  collection: string
+  density: number
+  bottleVolumeMl: number
+  bottleCount: number
+  ifraCategory: string
+  workflowStatus: FormulaWorkflowStatus
+  draftRevision: number
+  updatedAt: string
+  updatedBy: string
+  lockedVersion?: string
+  parentFormulaId?: string
+  parentVersion?: string
+  assignedReviewer?: string
+  approvalHistory: FormulaApprovalEvent[]
   version: string
   status: DomainStatus
   targetGrams: number
@@ -118,6 +274,12 @@ export interface FormulaVersionRecord {
   id: string
   formulaId: string
   formulaCode: string
+  organizationId: string
+  metadata: FormulaSnapshotMetadata
+  evaluations: FormulaEvaluationRecord[]
+  resolvedLeaves: ResolvedLeaf[]
+  ifraEvaluation: FormulaIfraEvaluation
+  evaporation: FormulaEvaporationPoint[]
   version: string
   status: 'SNAPSHOT' | 'APPROVED'
   createdAt: string
@@ -136,6 +298,8 @@ export interface ResolvedLeaf {
   grams: number
   effectivePercent: number
   cost: number
+  activeGrams: number
+  activePercent: number
   tier: MaterialTier
   vaporPressure: number
   sourcePath: string
@@ -145,6 +309,7 @@ export type LotQualityStatus = 'APPROVED' | 'QUARANTINE' | 'ON_HOLD' | 'REJECTED
 
 export interface InventoryLot {
   id: string
+  organizationId?: string
   materialId: string
   lotNumber: string
   quantityGrams: number
@@ -319,6 +484,7 @@ export interface OrganizationRecord {
   id: string
   name: string
   slug: string
+  customDomain?: string
   plan: 'Free' | 'Pro' | 'Team' | 'Enterprise'
   status: 'ACTIVE' | 'FROZEN' | 'SUSPENDED'
   primaryContact: string
@@ -984,33 +1150,82 @@ export interface BillingConsoleResponse {
   apiKeys: ApiKeyRecord[]
   webhooks: WebhookRecord[]
   webhookDeliveries: WebhookDeliveryRecord[]
+  auditExports: AuditExportJobRecord[]
   readiness: CommercialReadinessCheck[]
   invariant: string
 }
 
 export interface SsoConfigRecord {
   id: string
+  organizationId: string
   provider: 'OIDC' | 'SAML'
   domain: string
-  status: 'draft' | 'verified'
+  status: 'draft' | 'verified' | 'enforced'
+  issuerUrl: string
+  metadataUrl?: string
+  clientId?: string
+  acsUrl: string
+  entityId: string
+  domainVerifiedAt?: string
+  jitProvisioning: boolean
+  enforceSso: boolean
+  scim: {
+    enabled: boolean
+    baseUrl: string
+    tokenLastFour?: string
+    tokenRotatedAt?: string
+    tokenHash?: string
+    deprovisionAction: 'revoke_sessions' | 'disable_user'
+    status: 'disabled' | 'enabled'
+  }
   roleMapping: Record<string, string>
+  updatedAt: string
 }
 
 export interface ApiKeyRecord {
   id: string
+  organizationId: string
   label: string
+  prefix: string
   lastFour: string
   scopes: string[]
+  createdAt: string
+  createdBy: string
   rotatedAt: string
+  lastUsedAt?: string
+  expiresAt?: string
   status: 'active' | 'revoked'
+  secretHash?: string
 }
 
 export interface WebhookRecord {
   id: string
+  organizationId: string
   url: string
   events: string[]
   status: 'active' | 'paused'
   lastDelivery: string
+  createdAt: string
+  owner: string
+  signingSecretLastFour: string
+  signingSecretRotatedAt: string
+  failureCount: number
+}
+
+export interface AuditExportJobRecord {
+  id: string
+  organizationId: string
+  requestedBy: string
+  format: 'JSON' | 'CSV'
+  scope: string
+  status: 'QUEUED' | 'PROCESSING' | 'READY' | 'FAILED'
+  eventCount: number
+  checksum: string
+  downloadUrl?: string
+  createdAt: string
+  completedAt?: string
+  expiresAt: string
+  auditEventId: string
 }
 
 export interface BusinessRecord {
@@ -1094,25 +1309,6 @@ export const statusMeta: Record<DomainStatus, { label: string; color: string }> 
   alert: { label: 'Alert', color: '#f2585f' },
 }
 
-export const phases: Phase[] = [
-  { id: 0, name: 'Architecture Blueprint', domain: 'platform', goal: 'Bounded contexts, invariants, permission map', gate: 'Baseline approved', status: 'stable', securityLayer: 'L0', coverage: 100 },
-  { id: 1, name: 'Platform Foundation', domain: 'platform', goal: 'Shell, API convention, health, logging', gate: 'Health and shell green', status: 'active', securityLayer: 'L1', coverage: 88 },
-  { id: 2, name: 'Tenant/Auth/Security', domain: 'identity', goal: 'Org, brand, user, session, RBAC, audit', gate: 'Tenant isolation tests pass', status: 'active', securityLayer: 'L2/L4', coverage: 86 },
-  { id: 3, name: 'Customization Core', domain: 'customization', goal: 'Settings, flags, fields, numbering, branding', gate: 'Config without fork', status: 'active', securityLayer: 'L0', coverage: 84 },
-  { id: 4, name: 'Material Intelligence', domain: 'materials', goal: 'Material master, SDS, provenance, molecules', gate: 'Searchable, sourced data', status: 'active', securityLayer: 'L5', coverage: 90 },
-  { id: 5, name: 'Formula R&D', domain: 'formulas', goal: 'Nested formulas, resolve, version, IFRA, cost', gate: 'Save does not consume stock', status: 'active', securityLayer: 'L4/L5', coverage: 90 },
-  { id: 6, name: 'Lab Inventory Core', domain: 'inventory', goal: 'Lots, movements, FEFO, QC, stock take', gate: 'Only movement changes stock', status: 'active', securityLayer: 'L5', coverage: 92 },
-  { id: 7, name: 'Lab Usage Traceability', domain: 'labUsage', goal: 'Commit and reverse usage with audit', gate: 'OUT and IN compensation verified', status: 'active', securityLayer: 'L5', coverage: 84 },
-  { id: 8, name: 'Documents & Compliance', domain: 'documents', goal: 'Private docs, signed URL, generation, compliance coverage', gate: 'Access logged and coverage visible', status: 'active', securityLayer: 'L5', coverage: 76 },
-  { id: 9, name: 'Production Batch', domain: 'production', goal: 'Approved formula to batch, QC, lifecycle', gate: 'Production separate from lab trial', status: 'active', securityLayer: 'L5', coverage: 78 },
-  { id: 10, name: 'Procurement', domain: 'procurement', goal: 'Supplier, PO, goods receipt, price history', gate: 'Low stock to receipt works', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
-  { id: 11, name: 'Commerce', domain: 'commerce', goal: 'SKU, pack size, price list, quote/sample', gate: 'Commerce stock reads inventory', status: 'active', securityLayer: 'L4', coverage: 74 },
-  { id: 12, name: 'Orders & Fulfillment', domain: 'orders', goal: 'Orders, reservation, shipment, fulfillment', gate: 'Reservation is not movement', status: 'active', securityLayer: 'L5', coverage: 76 },
-  { id: 13, name: 'Costing & Finance', domain: 'costing', goal: 'Formula, batch, SKU costs, valuation', gate: 'Cost trace reconciles', status: 'active', securityLayer: 'L4/L5', coverage: 78 },
-  { id: 14, name: 'Analytics', domain: 'analytics', goal: 'Burn rate, forecast, expiry, compare', gate: 'Read-only dashboard', status: 'active', securityLayer: 'L4', coverage: 77 },
-  { id: 15, name: 'Commercial Readiness', domain: 'saas', goal: 'Billing, subscription gates, SSO, SCIM, API keys, audit export', gate: 'Sell-ready controls enforced', status: 'active', securityLayer: 'L6/L7/L8', coverage: 82 },
-]
-
 export const domains: DomainModule[] = [
   {
     key: 'platform',
@@ -1129,7 +1325,7 @@ export const domains: DomainModule[] = [
     invariants: ['INV-001 tenant isolation', 'INV-009 audit high-risk', 'INV-010 config not fork'],
     apis: ['/api/v1/health', '/api/v1/version', '/api/v1/audit-logs'],
     permissions: ['platform.view', 'audit.view'],
-    screens: ['Dashboard', 'Audit dashboard', 'Phase roadmap'],
+    screens: ['Dashboard', 'Audit dashboard'],
     activity: 'Request ID propagated through shell demo',
   },
   {
@@ -1191,18 +1387,18 @@ export const domains: DomainModule[] = [
     phase: '5',
     name: 'Formula R&D',
     shortName: 'Formulas',
-    responsibility: 'Formula tree, nested accords, versions, resolve, IFRA, evaporation',
+    responsibility: 'Formula tree, accords, versions, resolve, IFRA, evaporation',
     status: 'active',
     health: 90,
-    risk: 'Nested line editing, version snapshots, approval, export audit, resolve, and cost roll-up are live',
+    risk: 'Accord line editing, version snapshots, approval, export audit, resolve, and cost roll-up are live',
     owner: 'Perfumer Team',
     entities: ['Formula', 'FormulaLine', 'FormulaVersion', 'ReviewRecord'],
-    features: ['Gram-first editor', 'Nested accord', 'Line edit/delete/reorder', 'Version snapshot', 'Approval state', 'Formula export audit', 'Cost roll-up', 'Evaporation curve'],
+    features: ['Gram-first editor', 'Accord', 'Line edit/delete/reorder', 'Version snapshot', 'Approval state', 'Formula export audit', 'Cost roll-up', 'Evaporation curve'],
     invariants: ['INV-006 save non-consuming', 'INV-007 explicit consumption only', 'INV-013 resolve before compute'],
     apis: ['/api/v1/formulas', '/api/v1/formulas/:id/lines', '/api/v1/formulas/:id/lines/:lineId', '/api/v1/formulas/:id/versions', '/api/v1/formulas/:id/approve', '/api/v1/formulas/:id/export', '/api/v1/formulas/:id/resolve', '/api/v1/formulas/:id/cost'],
     permissions: ['formulas.view', 'formulas.viewSensitive', 'formulas.export'],
-    screens: ['Formula table', 'Nested editor', 'Line controls', 'Resolve preview', 'Version history', 'Approval and export'],
-    activity: 'FRM-0421 can snapshot, approve, export, and resolve nested accord leaves without stock movement',
+    screens: ['Formula table', 'Accord editor', 'Line controls', 'Resolve preview', 'Version history', 'Approval and export'],
+    activity: 'FRM-0421 can snapshot, approve, export, and resolve accord leaves without stock movement',
   },
   {
     key: 'inventory',
@@ -1372,17 +1568,17 @@ export const domains: DomainModule[] = [
     name: 'Commercial & Enterprise Readiness',
     shortName: 'SaaS',
     responsibility: 'Billing, plans, SSO, SCIM, API keys, webhooks, audit export, platform admin',
-    status: 'testing',
-    health: 66,
-    risk: 'Subscription gates, usage metering, invoices, webhooks, and audit export are live; payment provider remains configurable',
+    status: 'active',
+    health: 93,
+    risk: 'SaaS health now aggregates subscription gates, usage metering, invoices, SSO/SCIM, API keys, webhooks, and audit export evidence',
     owner: 'Enterprise',
     entities: ['Plan', 'Subscription', 'UsageMeter', 'SSOConfig', 'SCIMToken', 'ApiKey', 'Webhook'],
-    features: ['Plan limit enforcement', 'Subscription freeze/reactivate', 'Invoice lifecycle', 'SSO/SCIM', 'Webhook retry', 'Audit export', 'Platform admin'],
+    features: ['SaaS health engine', 'Plan limit enforcement', 'Subscription freeze/reactivate', 'Invoice lifecycle', 'SSO/SCIM', 'Webhook retry', 'Audit export', 'Platform admin'],
     invariants: ['Tenant admin never crosses org', 'Platform actions audited', 'Frozen tenant cannot perform commercial writes'],
     apis: ['/api/v1/billing/console', '/api/v1/billing/checkout', '/api/v1/billing/subscription/freeze', '/api/v1/sso-config', '/api/v1/audit/export', '/api/v1/platform/tenants'],
     permissions: ['billing.manage', 'security.sso.manage', 'audit.export'],
     screens: ['Billing', 'SSO/SCIM', 'API keys', 'Platform console'],
-    activity: 'Commercial console enforces limits, queues invoices/actions, retries webhooks, and exports tenant-scoped evidence',
+    activity: 'Commercial console scores SaaS health, enforces limits, queues invoices/actions, retries webhooks, and exports workspace-scoped evidence',
   },
 ]
 
@@ -1579,6 +1775,31 @@ export const formulas: Formula[] = [
     id: 'frm-accord-citrus',
     code: 'ACC-0007',
     name: 'Citrus Lift Accord',
+    organizationId: 'org-nxl',
+    brandId: 'brand-nxl',
+    concentrationType: 'OTHER',
+    finalProductConcentrationPercent: 100,
+    targetMarkets: ['GLOBAL'],
+    brief: 'A bright, reusable citrus accord with a transparent floral lift.',
+    inspiration: 'Fresh bergamot peel in cool morning air.',
+    pyramidSummary: 'Top-led citrus with an airy floral and woody drydown.',
+    tags: ['citrus', 'fresh', 'accord'],
+    project: 'Core accords',
+    collection: 'Lab foundations',
+    density: 0.91,
+    bottleVolumeMl: 50,
+    bottleCount: 1,
+    ifraCategory: '4',
+    workflowStatus: 'APPROVED',
+    draftRevision: 4,
+    updatedAt: '2026-06-24T08:10:00.000Z',
+    updatedBy: 'Thuan Le Minh',
+    lockedVersion: 'v4',
+    assignedReviewer: 'Lab Manager',
+    approvalHistory: [
+      { id: 'APR-ACC-0007', action: 'APPROVED', actor: 'Thuan Le Minh', reviewer: 'Lab Manager', comment: 'Reusable accord approved.', signature: 'Thuan Le Minh', at: '2026-06-24T08:10:00.000Z' },
+    ],
+    formulaType: 'ACCORD',
     version: 'v4',
     status: 'stable',
     targetGrams: 100,
@@ -1594,6 +1815,29 @@ export const formulas: Formula[] = [
     id: 'frm-0421',
     code: 'FRM-0421',
     name: 'Nocturne 17',
+    organizationId: 'org-nxl',
+    brandId: 'brand-nxl',
+    concentrationType: 'EDP',
+    finalProductConcentrationPercent: 20,
+    targetMarkets: ['EU', 'US', 'UK'],
+    brief: 'A luminous woody citrus fragrance with a soft musky trail.',
+    inspiration: 'Blue hour over a rain-cooled city.',
+    pyramidSummary: 'Citrus top, jasmine heart, amber-wood and musk base.',
+    tags: ['woody', 'citrus', 'musk'],
+    project: 'Nocturne',
+    collection: 'Edition 01',
+    density: 0.87,
+    bottleVolumeMl: 50,
+    bottleCount: 100,
+    ifraCategory: '4',
+    workflowStatus: 'DRAFT',
+    draftRevision: 13,
+    updatedAt: '2026-07-18T00:00:00.000Z',
+    updatedBy: 'Thuan Le Minh',
+    parentVersion: 'v12',
+    assignedReviewer: 'Lab Manager',
+    approvalHistory: [],
+    formulaType: 'FINE_FRAGRANCE',
     version: 'v12',
     status: 'active',
     targetGrams: 100,
@@ -1617,6 +1861,12 @@ export const formulaVersions: FormulaVersionRecord[] = [
     formulaCode: 'FRM-0421',
     version: 'v12',
     status: 'APPROVED',
+    organizationId: 'org-nxl',
+    metadata: formulaSnapshotMetadata(formulas[1]!),
+    evaluations: [],
+    resolvedLeaves: resolveFormulaWithCatalog('frm-0421', formulas, materials),
+    ifraEvaluation: evaluateFormulaIfra(formulas[1]!, resolveFormulaWithCatalog('frm-0421', formulas, materials)),
+    evaporation: evaporationCurve(resolveFormulaWithCatalog('frm-0421', formulas, materials)),
     createdAt: '2026-06-30T09:16:00.000Z',
     createdBy: 'Thuan Le Minh',
     note: 'Approved Nocturne 17 working version for lab trial and export.',
@@ -1632,9 +1882,25 @@ export const formulaVersions: FormulaVersionRecord[] = [
     formulaCode: 'ACC-0007',
     version: 'v4',
     status: 'APPROVED',
+    organizationId: 'org-nxl',
+    metadata: formulaSnapshotMetadata(formulas[0]!),
+    evaluations: [
+      {
+        id: 'EVAL-ACC-0007-D7',
+        day: 7,
+        observation: 'Citrus lift remains clear; no haze or sediment.',
+        stability: 'PASS',
+        rating: 4,
+        evaluator: 'Lab Manager',
+        evaluatedAt: '2026-06-23T08:10:00.000Z',
+      },
+    ],
+    resolvedLeaves: resolveFormulaWithCatalog('frm-accord-citrus', formulas, materials),
+    ifraEvaluation: evaluateFormulaIfra(formulas[0]!, resolveFormulaWithCatalog('frm-accord-citrus', formulas, materials)),
+    evaporation: evaporationCurve(resolveFormulaWithCatalog('frm-accord-citrus', formulas, materials)),
     createdAt: '2026-06-24T08:10:00.000Z',
     createdBy: 'Thuan Le Minh',
-    note: 'Citrus Lift Accord approved as reusable nested accord.',
+    note: 'Citrus Lift Accord approved as reusable accord.',
     lineCount: 4,
     totalGrams: 100,
     totalCost: 10.88,
@@ -1928,15 +2194,17 @@ export const organizations: OrganizationRecord[] = [
     id: 'org-nxl',
     name: 'NOXELIS Lab',
     slug: 'noxelis',
+    customDomain: 'example.test',
     plan: 'Team',
     status: 'ACTIVE',
-    primaryContact: 'owner@example.test',
+    primaryContact: 'admin@labofscents.org',
     createdAt: '2026-01-08T03:20:00.000Z',
   },
   {
     id: 'org-other',
     name: 'External Demo Tenant',
     slug: 'external-demo',
+    customDomain: 'external-demo.labofscents.org',
     plan: 'Free',
     status: 'ACTIVE',
     primaryContact: 'owner@example.com',
@@ -1951,6 +2219,18 @@ export const brands: BrandRecord[] = [
 ]
 
 export const memberships: MembershipRecord[] = [
+  {
+    id: 'MBR-ADMIN',
+    userId: 'usr-admin',
+    email: 'admin@labofscents.org',
+    name: 'Thuan Le Minh',
+    organizationId: 'org-nxl',
+    brandIds: ['brand-nxl', 'brand-atelier'],
+    role: 'Admin',
+    status: 'ACTIVE',
+    mfaEnabled: true,
+    lastActiveAt: '2026-07-01T09:10:00.000Z',
+  },
   {
     id: 'MBR-OWNER',
     userId: 'usr-owner',
@@ -1991,7 +2271,7 @@ export const memberships: MembershipRecord[] = [
 ]
 
 export const permissionCatalog: PermissionDefinition[] = [
-  { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the tenant-scoped OlfactoryOps console.' },
+  { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the workspace-scoped OlfactoryOps console.' },
   { key: 'audit.view', label: 'View audit trail', category: 'Audit', scope: 'organization', risk: 'medium', description: 'Read tenant audit events and security evidence.' },
   { key: 'audit.export', label: 'Export audit evidence', category: 'Audit', scope: 'organization', risk: 'high', description: 'Export regulated tenant audit data.' },
   { key: 'security.manageUsers', label: 'Manage members', category: 'Security', scope: 'organization', risk: 'critical', description: 'Invite, activate, deactivate, and assign tenant roles.' },
@@ -1999,13 +2279,16 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'security.policy.manage', label: 'Manage security policy', category: 'Security', scope: 'organization', risk: 'critical', description: 'Change MFA, session timeout, and IP allowlist policy.' },
   { key: 'security.sessions.manage', label: 'Manage sessions', category: 'Security', scope: 'organization', risk: 'high', description: 'Revoke active sessions for tenant members.' },
   { key: 'security.apiKeys.manage', label: 'Manage API keys', category: 'Security', scope: 'organization', risk: 'critical', description: 'Create, rotate, and revoke API credentials.' },
+  { key: 'security.webhooks.manage', label: 'Manage webhooks', category: 'Security', scope: 'organization', risk: 'high', description: 'Create, rotate, pause, and remove signed tenant webhooks.' },
   { key: 'security.sso.manage', label: 'Manage SSO/SCIM', category: 'Security', scope: 'organization', risk: 'critical', description: 'Configure enterprise identity providers and provisioning.' },
   { key: 'customization.manage', label: 'Manage tenant config', category: 'Customization', scope: 'organization', risk: 'medium', description: 'Edit settings, flags, fields, numbering, and branding.' },
   { key: 'materials.view', label: 'View materials', category: 'Materials', scope: 'organization', risk: 'low', description: 'Read tenant material records.' },
   { key: 'materials.create', label: 'Create materials', category: 'Materials', scope: 'organization', risk: 'medium', description: 'Create new material records.' },
   { key: 'materials.update', label: 'Update materials', category: 'Materials', scope: 'organization', risk: 'medium', description: 'Edit material records and provenance.' },
   { key: 'formulas.view', label: 'View formulas', category: 'Formulas', scope: 'organization', risk: 'medium', description: 'Read formula records without sensitive export privileges.' },
-  { key: 'formulas.viewSensitive', label: 'View sensitive formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'View confidential ratios, nested formulas, and sensitive composition.' },
+  { key: 'formulas.viewSensitive', label: 'View sensitive formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'View confidential ratios, accords, and sensitive composition.' },
+  { key: 'formulas.edit', label: 'Edit formula drafts', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Create, edit, fork, and submit formula drafts without consuming stock.' },
+  { key: 'formulas.approve', label: 'Approve formulas', category: 'Formulas', scope: 'organization', risk: 'critical', description: 'Approve immutable formula versions after compliance review.' },
   { key: 'formulas.export', label: 'Export formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Export formula data outside the application.' },
   { key: 'inventory.view', label: 'View inventory', category: 'Inventory', scope: 'organization', risk: 'low', description: 'Read stock summaries, lots, and movements.' },
   { key: 'inventory.receive', label: 'Receive inventory', category: 'Inventory', scope: 'organization', risk: 'medium', description: 'Create receipt movements and approved lots.' },
@@ -2034,32 +2317,65 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'platform.impersonation.audit', label: 'Audit impersonation', category: 'Platform Admin', scope: 'platform', risk: 'critical', description: 'Review support impersonation and operator actions.' },
 ]
 
-function organizationPermissions(...categories: string[]) {
-  const categorySet = new Set(categories)
-  return permissionCatalog
-    .filter((permission) => permission.scope === 'organization' && categorySet.has(permission.category))
-    .map((permission) => permission.key)
-}
-
 const allOrganizationPermissions = permissionCatalog
   .filter((permission) => permission.scope === 'organization')
   .map((permission) => permission.key)
+
+const internalAdministrationPermissions = new Set([
+  'platform.view',
+  'audit.view',
+  'audit.export',
+  'security.manageUsers',
+  'security.viewAuditLog',
+  'security.policy.manage',
+  'security.sessions.manage',
+  'security.apiKeys.manage',
+  'security.webhooks.manage',
+  'security.sso.manage',
+  'customization.manage',
+])
+
+const customerOwnerPermissions = allOrganizationPermissions.filter(
+  (permission) => !internalAdministrationPermissions.has(permission),
+)
 
 export const rolePolicies: RolePolicy[] = [
   {
     role: 'Owner',
     scope: 'organization',
     mfaRequired: true,
-    permissions: allOrganizationPermissions,
+    permissions: customerOwnerPermissions,
   },
   {
     role: 'Admin',
     scope: 'organization',
     mfaRequired: true,
+    permissions: allOrganizationPermissions,
+  },
+  {
+    role: 'Manager',
+    scope: 'organization',
+    mfaRequired: false,
     permissions: [
-      ...organizationPermissions('Platform', 'Audit', 'Security', 'Customization', 'Materials', 'Formulas', 'Inventory', 'Documents', 'Production', 'Procurement', 'Commerce', 'Orders', 'Costing', 'Analytics'),
-      'audit.export',
-    ].filter((permission) => !['billing.manage', 'security.sso.manage', 'security.apiKeys.manage'].includes(permission)),
+      'materials.view',
+      'materials.create',
+      'materials.update',
+      'formulas.view',
+      'documents.download',
+      'documents.view',
+      'formulas.viewSensitive',
+      'formulas.edit',
+      'formulas.approve',
+      'inventory.view',
+      'inventory.adjust',
+      'inventory.commitLabUsage',
+      'inventory.receive',
+      'inventory.reverseLabUsage',
+      'production.view',
+      'production.consume',
+      'production.qc',
+      'analytics.view',
+    ],
   },
   {
     role: 'Lab Manager',
@@ -2073,6 +2389,8 @@ export const rolePolicies: RolePolicy[] = [
       'documents.download',
       'documents.view',
       'formulas.viewSensitive',
+      'formulas.edit',
+      'formulas.approve',
       'inventory.view',
       'inventory.adjust',
       'inventory.commitLabUsage',
@@ -2092,6 +2410,7 @@ export const rolePolicies: RolePolicy[] = [
       'materials.view',
       'formulas.view',
       'formulas.viewSensitive',
+      'formulas.edit',
       'formulas.export',
       'documents.view',
       'documents.download',
@@ -2209,6 +2528,24 @@ export const tenantSettings: TenantSettingsRecord = {
 
 export const authSessions: AuthSession[] = [
   {
+    id: 'SES-0000',
+    userId: 'usr-admin',
+    email: 'admin@labofscents.org',
+    organizationId: 'org-nxl',
+    brandId: 'brand-nxl',
+    role: 'Admin',
+    issuedAt: '2026-07-03T08:10:00.000Z',
+    lastSeenAt: '2026-07-03T08:18:00.000Z',
+    idleExpiresAt: '2026-07-10T08:33:00.000Z',
+    expiresAt: '2026-07-10T16:10:00.000Z',
+    status: 'ACTIVE',
+    mfaVerified: true,
+    ipAddress: '203.0.113.18',
+    userAgent: 'Codex Desktop / Chrome',
+    deviceId: 'dev-admin-codex',
+    location: 'Bangkok, TH',
+  },
+  {
     id: 'SES-0001',
     userId: 'usr-owner',
     email: 'owner@example.test',
@@ -2247,6 +2584,19 @@ export const authSessions: AuthSession[] = [
 ]
 
 export const userSettings: UserSettingsRecord[] = [
+  {
+    userId: 'usr-admin',
+    organizationId: 'org-nxl',
+    email: 'admin@labofscents.org',
+    displayName: 'Thuan Le Minh',
+    preferredLanding: 'dashboard',
+    uiDensity: 'comfortable',
+    sidebarMode: 'expanded',
+    reduceMotion: false,
+    emailDigest: 'weekly',
+    accentColor: '#4d9bff',
+    updatedAt: '2026-07-10T00:00:00.000Z',
+  },
   {
     userId: 'usr-owner',
     organizationId: 'org-nxl',
@@ -2781,23 +3131,46 @@ export const billingInvoices: BillingInvoiceRecord[] = [
 
 export const ssoConfig: SsoConfigRecord = {
   id: 'SSO-NXL',
+  organizationId: 'org-nxl',
   provider: 'OIDC',
   domain: 'example.test',
   status: 'verified',
+  issuerUrl: 'https://idp.example.test/oauth2/default',
+  metadataUrl: 'https://idp.example.test/.well-known/openid-configuration',
+  clientId: 'olfactoryops-prod',
+  acsUrl: 'https://api.labofscents.org/api/v1/auth/sso/callback',
+  entityId: 'urn:olfactoryops:org-nxl',
+  domainVerifiedAt: '2026-06-20T09:00:00Z',
+  jitProvisioning: true,
+  enforceSso: false,
+  scim: {
+    enabled: true,
+    baseUrl: 'https://api.labofscents.org/api/v1/scim/v2/org-nxl',
+    tokenLastFour: '7Q2A',
+    tokenRotatedAt: '2026-06-21T09:00:00Z',
+    deprovisionAction: 'revoke_sessions',
+    status: 'enabled',
+  },
   roleMapping: {
     'noxel-admins': 'Owner',
     'noxel-lab': 'Lab Manager',
     'noxel-viewers': 'Viewer',
   },
+  updatedAt: '2026-06-21T09:00:00Z',
 }
 
 export const apiKeys: ApiKeyRecord[] = [
   {
     id: 'KEY-DEMO',
+    organizationId: 'org-nxl',
     label: 'Demo integration',
+    prefix: 'key_demo',
     lastFour: '9AF2',
     scopes: ['materials.read', 'orders.write', 'webhooks.read'],
+    createdAt: '2026-06-18T09:00:00Z',
+    createdBy: 'usr-owner',
     rotatedAt: '2026-06-18T09:00:00Z',
+    lastUsedAt: '2026-06-30T08:44:00Z',
     status: 'active',
   },
 ]
@@ -2805,10 +3178,34 @@ export const apiKeys: ApiKeyRecord[] = [
 export const webhooks: WebhookRecord[] = [
   {
     id: 'WH-ORDERS',
+    organizationId: 'org-nxl',
     url: 'https://hooks.example.test/orders',
     events: ['order.reserved', 'order.fulfilled', 'document.downloaded'],
     status: 'active',
     lastDelivery: '2026-06-30T08:44:00Z',
+    createdAt: '2026-06-18T09:15:00Z',
+    owner: 'usr-owner',
+    signingSecretLastFour: '40F2',
+    signingSecretRotatedAt: '2026-06-18T09:15:00Z',
+    failureCount: 0,
+  },
+]
+
+export const auditExportJobs: AuditExportJobRecord[] = [
+  {
+    id: 'AUD-EXP-SEED-001',
+    organizationId: 'org-nxl',
+    requestedBy: 'usr-owner',
+    format: 'JSON',
+    scope: 'org-nxl',
+    status: 'READY',
+    eventCount: auditEvents.length,
+    checksum: 'sha256:seeded-enterprise-evidence',
+    downloadUrl: 'https://api.labofscents.org/api/v1/audit/exports/AUD-EXP-SEED-001/download',
+    createdAt: '2026-06-30T09:05:00Z',
+    completedAt: '2026-06-30T09:05:02Z',
+    expiresAt: '2026-07-30T09:05:02Z',
+    auditEventId: 'AUD-9143',
   },
 ]
 
@@ -3132,14 +3529,22 @@ export function resolveFormulaWithCatalog(
 
   const leaves: ResolvedLeaf[] = []
 
-  function walk(formula: Formula, scale: number, path: string[], trail: Set<string>) {
+  function walk(
+    formula: Formula,
+    physicalScale: number,
+    activeScale: number,
+    path: string[],
+    trail: Set<string>,
+  ) {
     if (trail.has(formula.id)) {
       return
     }
     const nextTrail = new Set(trail).add(formula.id)
 
     formula.lines.forEach((line) => {
-      const lineGrams = line.grams * scale
+      const concentrationFraction = Math.min(100, Math.max(0, Number(line.concentration ?? line.dilution ?? 100))) / 100
+      const lineGrams = line.grams * physicalScale
+      const activeGrams = line.grams * activeScale * concentrationFraction
       if (line.materialId) {
         const material = materialLookup.get(line.materialId)
         if (!material) {
@@ -3150,6 +3555,8 @@ export function resolveFormulaWithCatalog(
           materialName: material.name,
           grams: lineGrams,
           effectivePercent: (lineGrams / rootFormula.targetGrams) * 100,
+          activeGrams,
+          activePercent: (activeGrams / rootFormula.targetGrams) * 100,
           cost: lineGrams * material.costPerGram,
           tier: material.tier,
           vaporPressure: material.vaporPressure,
@@ -3163,12 +3570,18 @@ export function resolveFormulaWithCatalog(
         if (!child) {
           return
         }
-        walk(child, lineGrams / child.targetGrams, [...path, line.label], nextTrail)
+        walk(
+          child,
+          lineGrams / child.targetGrams,
+          activeGrams / child.targetGrams,
+          [...path, line.label],
+          nextTrail,
+        )
       }
     })
   }
 
-  walk(root, 1, [root.code], new Set<string>())
+  walk(root, 1, 1, [root.code], new Set<string>())
 
   return Array.from(
     leaves.reduce((map, leaf) => {
@@ -3177,6 +3590,8 @@ export function resolveFormulaWithCatalog(
         existing.grams += leaf.grams
         existing.effectivePercent += leaf.effectivePercent
         existing.cost += leaf.cost
+        existing.activeGrams += leaf.activeGrams
+        existing.activePercent += leaf.activePercent
         existing.sourcePath = `${existing.sourcePath}; ${leaf.sourcePath}`
       } else {
         map.set(leaf.materialId, { ...leaf })
@@ -3189,6 +3604,188 @@ export function resolveFormulaWithCatalog(
 export function resolveFormula(formulaId: string): ResolvedLeaf[] {
   return resolveFormulaWithCatalog(formulaId, formulas)
 }
+
+export function formulaSnapshotMetadata(formula: Formula): FormulaSnapshotMetadata {
+  return {
+    formulaType: formula.formulaType,
+    concentrationType: formula.concentrationType,
+    finalProductConcentrationPercent: formula.finalProductConcentrationPercent,
+    targetMarkets: [...formula.targetMarkets],
+    brief: formula.brief,
+    inspiration: formula.inspiration,
+    pyramidSummary: formula.pyramidSummary,
+    tags: [...formula.tags],
+    project: formula.project,
+    collection: formula.collection,
+    density: formula.density,
+    bottleVolumeMl: formula.bottleVolumeMl,
+    bottleCount: formula.bottleCount,
+    ifraCategory: formula.ifraCategory,
+  }
+}
+
+export function formulaComposition(formula: Formula) {
+  const totalGrams = formula.lines.reduce((sum, line) => sum + line.grams, 0)
+  const percent = formula.targetGrams > 0 ? (totalGrams / formula.targetGrams) * 100 : 0
+  const gapPercent = 100 - percent
+  return {
+    totalGrams,
+    percent,
+    gapPercent,
+    ready: formula.lines.length > 0 && Math.abs(gapPercent) <= 0.05,
+  }
+}
+
+export function evaluateFormulaIfra(
+  formula: Formula,
+  leaves: ResolvedLeaf[] = resolveFormulaWithCatalog(formula.id),
+  materialCatalog: Material[] = materials,
+): FormulaIfraEvaluation {
+  const materialLookup = new Map(materialCatalog.map((material) => [material.id, material]))
+  const composition = formulaComposition(formula)
+  const finalConcentration = Math.min(100, Math.max(0, formula.finalProductConcentrationPercent))
+  const rows = leaves
+    .map((leaf): FormulaIfraRow | null => {
+      const material = materialLookup.get(leaf.materialId)
+      if (!material) {
+        return null
+      }
+      const limitPercent = Math.max(0, material.ifraLimit)
+      const finalProductPercent = leaf.activePercent * (finalConcentration / 100)
+      const usageOfLimit = limitPercent > 0 ? (finalProductPercent / limitPercent) * 100 : 0
+      const marginPercent = limitPercent - finalProductPercent
+      const status: FormulaIfraRow['status'] =
+        limitPercent <= 0
+          ? 'NO_LIMIT'
+          : marginPercent < -0.0001
+            ? 'BLOCKER'
+            : usageOfLimit >= 80
+              ? 'NEAR_LIMIT'
+              : 'PASS'
+      return {
+        materialId: material.id,
+        materialName: material.name,
+        activePercent: leaf.activePercent,
+        finalProductPercent,
+        limitPercent,
+        usageOfLimit,
+        marginPercent,
+        sourcePath: leaf.sourcePath,
+        status,
+      }
+    })
+    .filter((row): row is FormulaIfraRow => Boolean(row))
+    .sort((left, right) => {
+      const order: Record<FormulaIfraRow['status'], number> = { BLOCKER: 0, NEAR_LIMIT: 1, PASS: 2, NO_LIMIT: 3 }
+      return order[left.status] - order[right.status] || right.usageOfLimit - left.usageOfLimit
+    })
+
+  const blockerCount = rows.filter((row) => row.status === 'BLOCKER').length
+  const nearLimitCount = rows.filter((row) => row.status === 'NEAR_LIMIT').length
+  return {
+    formulaId: formula.id,
+    category: formula.ifraCategory,
+    compositionReady: composition.ready,
+    finalProductConcentrationPercent: finalConcentration,
+    blockerCount,
+    nearLimitCount,
+    rows,
+    label: !composition.ready
+      ? 'Complete the formula to 100% before final-product IFRA evaluation.'
+      : blockerCount > 0
+        ? `${blockerCount} IFRA blocker${blockerCount === 1 ? '' : 's'}`
+        : nearLimitCount > 0
+          ? `${nearLimitCount} material${nearLimitCount === 1 ? '' : 's'} near the IFRA limit`
+          : 'Final-product IFRA check passed',
+  }
+}
+
+export function scaleFormula(formula: Formula, targetGrams: number, incrementGrams = 0.01): FormulaScalePlan {
+  const safeTargetGrams = Math.max(0.01, targetGrams)
+  const safeIncrement = Math.max(0.0001, incrementGrams)
+  const scale = formula.targetGrams > 0 ? safeTargetGrams / formula.targetGrams : 0
+  const lines = formula.lines.map((line) => {
+    const targetLineGrams = line.grams * scale
+    const roundedGrams = Math.round(targetLineGrams / safeIncrement) * safeIncrement
+    return {
+      lineId: line.id,
+      label: line.label,
+      targetGrams: targetLineGrams,
+      roundedGrams,
+      varianceGrams: roundedGrams - targetLineGrams,
+    }
+  })
+  const totalRoundedGrams = lines.reduce((sum, line) => sum + line.roundedGrams, 0)
+  const density = Math.max(0.01, formula.density)
+  const targetVolumeMl = safeTargetGrams / density
+  return {
+    formulaId: formula.id,
+    targetGrams: safeTargetGrams,
+    targetVolumeMl,
+    bottleCount: formula.bottleVolumeMl > 0 ? Math.floor(targetVolumeMl / formula.bottleVolumeMl) : 0,
+    incrementGrams: safeIncrement,
+    lines,
+    totalRoundedGrams,
+    varianceGrams: totalRoundedGrams - safeTargetGrams,
+  }
+}
+
+function formulaVersionLineKey(line: FormulaLine) {
+  return line.materialId ? `material:${line.materialId}` : line.childFormulaId ? `formula:${line.childFormulaId}` : `line:${line.id}`
+}
+
+export function diffFormulaVersions(before: FormulaVersionRecord, after: FormulaVersionRecord): FormulaVersionDiff {
+  const metadataFields = Object.keys(before.metadata) as Array<keyof FormulaSnapshotMetadata>
+  const metadataChanges = metadataFields
+    .filter((field) => JSON.stringify(before.metadata[field]) !== JSON.stringify(after.metadata[field]))
+    .map((field) => ({ field, before: before.metadata[field], after: after.metadata[field] }))
+  const beforeLines = new Map(before.lines.map((line) => [formulaVersionLineKey(line), line]))
+  const afterLines = new Map(after.lines.map((line) => [formulaVersionLineKey(line), line]))
+  const lineKeys = Array.from(new Set([...beforeLines.keys(), ...afterLines.keys()]))
+  const lineChanges = lineKeys.map((key): FormulaVersionDiffLine => {
+    const beforeLine = beforeLines.get(key)
+    const afterLine = afterLines.get(key)
+    const beforeGrams = beforeLine?.grams ?? 0
+    const afterGrams = afterLine?.grams ?? 0
+    const beforeActiveGrams = beforeGrams * Math.min(100, Math.max(0, Number(beforeLine?.concentration ?? beforeLine?.dilution ?? 100))) / 100
+    const afterActiveGrams = afterGrams * Math.min(100, Math.max(0, Number(afterLine?.concentration ?? afterLine?.dilution ?? 100))) / 100
+    const change: FormulaVersionDiffLine['change'] = !beforeLine
+      ? 'ADDED'
+      : !afterLine
+        ? 'REMOVED'
+        : Math.abs(beforeGrams - afterGrams) > 0.0001 || Math.abs(beforeActiveGrams - afterActiveGrams) > 0.0001 || beforeLine.label !== afterLine.label
+          ? 'CHANGED'
+          : 'UNCHANGED'
+    return {
+      key,
+      label: afterLine?.label ?? beforeLine?.label ?? key,
+      beforeGrams,
+      afterGrams,
+      deltaGrams: afterGrams - beforeGrams,
+      beforeActiveGrams,
+      afterActiveGrams,
+      change,
+    }
+  })
+  const beforeEvaporation = before.evaporation[before.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
+  const afterEvaporation = after.evaporation[after.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
+  return {
+    formulaId: after.formulaId,
+    beforeVersion: before.version,
+    afterVersion: after.version,
+    metadataChanges,
+    lineChanges,
+    totalGramsDelta: after.totalGrams - before.totalGrams,
+    totalCostDelta: after.totalCost - before.totalCost,
+    ifraBlockerDelta: after.ifraEvaluation.blockerCount - before.ifraEvaluation.blockerCount,
+    evaporationDelta: {
+      Top: afterEvaporation.Top - beforeEvaporation.Top,
+      Heart: afterEvaporation.Heart - beforeEvaporation.Heart,
+      Base: afterEvaporation.Base - beforeEvaporation.Base,
+    },
+  }
+}
+
 
 export function formulaTotals(leaves: ResolvedLeaf[]) {
   const totalCost = leaves.reduce((sum, leaf) => sum + leaf.cost, 0)
@@ -3707,14 +4304,14 @@ export function evaporationCurve(leaves: ResolvedLeaf[]) {
   const timepoints = [0, 1, 2, 4, 8, 12, 18, 24]
   const initialByTier: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
   leaves.forEach((leaf) => {
-    initialByTier[leaf.tier] += leaf.effectivePercent
+    initialByTier[leaf.tier] += leaf.activePercent
   })
 
   return timepoints.map((hour) => {
     const remaining: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
     leaves.forEach((leaf) => {
       const tau = Math.max(0.7, 7 / Math.sqrt(Math.max(leaf.vaporPressure, 0.0001)))
-      const amount = leaf.effectivePercent * Math.exp(-hour / tau)
+      const amount = leaf.activePercent * Math.exp(-hour / tau)
       remaining[leaf.tier] += amount
     })
 
@@ -3801,8 +4398,8 @@ export function planLabUsage(leaves: ResolvedLeaf[], lots: InventoryLot[], batch
 }
 
 export function readinessStats() {
-  const done = phases.filter((phase) => phase.status === 'stable' || phase.status === 'active').length
-  const avgCoverage = Math.round(phases.reduce((sum, phase) => sum + phase.coverage, 0) / phases.length)
+  const done = domains.filter((domain) => domain.status === 'stable' || domain.status === 'active').length
+  const avgCoverage = Math.round(domains.reduce((sum, domain) => sum + domain.health, 0) / domains.length)
   const risks = domains.filter((domain) => domain.status === 'alert' || domain.health < 55).length
   return { done, avgCoverage, risks }
 }

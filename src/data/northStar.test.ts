@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   evaporationCurve,
+  diffFormulaVersions,
+  evaluateFormulaIfra,
+  formulaVersions,
   canDownloadDocument,
   documentComplianceDashboard,
   documentRequiredPermissions,
@@ -11,10 +14,16 @@ import {
   planLabUsage,
   resolveFormula,
   stockSummary,
+  resolveFormulaWithCatalog,
+  scaleFormula,
+  apiKeys,
+  auditExportJobs,
+  ssoConfig,
+  webhooks,
 } from './northStar'
 
 describe('OlfactoryOps domain invariants', () => {
-  it('resolves nested accord leaves before cost and physical models', () => {
+  it('resolves accord leaves before cost and physical models', () => {
     const leaves = resolveFormula('frm-0421')
     const hedione = leaves.find((leaf) => leaf.materialName === 'Hedione')
     const iso = leaves.find((leaf) => leaf.materialName === 'Iso E Super')
@@ -65,6 +74,66 @@ describe('OlfactoryOps domain invariants', () => {
     })
   })
 
+  it('propagates active concentration through nested accords', () => {
+    const accord = {
+      ...structuredClone(formulas[0]!),
+      id: 'test-accord',
+      code: 'ACC-TEST',
+      lines: [
+        { id: 'accord-hedione', label: 'Hedione', materialId: 'mat-hedione', grams: 30 },
+        { id: 'accord-iso', label: 'Iso E Super', materialId: 'mat-iso', grams: 70 },
+      ],
+    }
+    const parent = {
+      ...structuredClone(formulas[1]!),
+      id: 'test-parent',
+      code: 'FRM-TEST',
+      lines: [
+        { id: 'parent-accord', label: 'Test Accord', childFormulaId: accord.id, grams: 20 },
+        { id: 'parent-solvent', label: 'Ethanol 96%', materialId: 'mat-ethanol', grams: 80 },
+      ],
+    }
+    const leaves = resolveFormulaWithCatalog(parent.id, [parent, accord])
+    const hedione = leaves.find((leaf) => leaf.materialId === 'mat-hedione')
+
+    expect(hedione?.grams).toBeCloseTo(6)
+    expect(hedione?.activePercent).toBeCloseTo(6)
+  })
+
+  it('evaluates IFRA against the final product concentration', () => {
+    const formula = formulas.find((item) => item.id === 'frm-0421')!
+    const evaluation = evaluateFormulaIfra(formula, resolveFormula(formula.id))
+    const muscenone = evaluation.rows.find((row) => row.materialId === 'mat-muscenone')
+
+    expect(evaluation.compositionReady).toBe(true)
+    expect(muscenone?.activePercent).toBeCloseTo(2)
+    expect(muscenone?.finalProductPercent).toBeCloseTo(0.4)
+    expect(evaluation.blockerCount).toBe(0)
+  })
+
+  it('scales and rounds a formula without changing inventory', () => {
+    const formula = formulas.find((item) => item.id === 'frm-0421')!
+    const plan = scaleFormula(formula, 250, 0.01)
+
+    expect(plan.targetGrams).toBe(250)
+    expect(plan.totalRoundedGrams).toBeCloseTo(250)
+    expect(plan.lines.find((line) => line.label === 'Muscenone Delta')?.roundedGrams).toBeCloseTo(5)
+  })
+
+  it('reports ingredient and compliance evidence in version diffs', () => {
+    const before = structuredClone(formulaVersions.find((version) => version.formulaId === 'frm-0421')!)
+    const after = structuredClone(before)
+    after.version = 'v13'
+    after.totalGrams += 1
+    after.totalCost += 0.5
+    after.lines[0] = { ...after.lines[0]!, grams: after.lines[0]!.grams + 1 }
+    const diff = diffFormulaVersions(before, after)
+
+    expect(diff.lineChanges.some((line) => line.change === 'CHANGED')).toBe(true)
+    expect(diff.totalGramsDelta).toBeCloseTo(1)
+    expect(diff.totalCostDelta).toBeCloseTo(0.5)
+  })
+
   it('requires sensitive formula permission for highly confidential document downloads', () => {
     const formulaExport = documents.find((document) => document.id === 'DOC-121')
     expect(formulaExport).toBeDefined()
@@ -84,5 +153,15 @@ describe('OlfactoryOps domain invariants', () => {
     expect(dashboard.requirements.some((requirement) => requirement.id === 'REQ-SDS-mat-iso')).toBe(true)
     expect(dashboard.expiringDocuments.some((document) => document.id === 'DOC-118')).toBe(true)
     expect(dashboard.invariant).toContain('private documents')
+  })
+
+  it('keeps enterprise trust seed tenant-scoped without bundled secrets', () => {
+    expect(ssoConfig.organizationId).toBe('org-nxl')
+    expect(ssoConfig.scim.tokenLastFour).toBeDefined()
+    expect(ssoConfig.scim.tokenHash).toBeUndefined()
+    expect(webhooks.every((webhook) => webhook.organizationId === 'org-nxl')).toBe(true)
+    expect(auditExportJobs.every((job) => job.organizationId === 'org-nxl')).toBe(true)
+    expect(apiKeys.every((key) => key.organizationId === 'org-nxl')).toBe(true)
+    expect(apiKeys.every((key) => !key.secretHash)).toBe(true)
   })
 })

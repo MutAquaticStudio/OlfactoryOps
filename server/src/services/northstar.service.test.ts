@@ -1,13 +1,97 @@
+import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
+const adminEmail = 'admin@labofscents.org'
+const adminPassword = 'UnitTestAdminPassword2026!'
 
-function createAuthenticatedService(email = 'owner@example.test') {
-  const service = new NorthStarService()
-  service.login(email)
+const testMfaEncryptionKey = 'unit-test-mfa-encryption-key-2026-07-18'
+const testBase32Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+function createAuthenticatedService(email = adminEmail) {
+
+  const service = createTestService()
+  const login = service.login(email, email === adminEmail ? adminPassword : undefined)
+  const internals = service as unknown as { sessions: Array<{ id: string; mfaVerified: boolean }> }
+  internals.sessions = internals.sessions.map((session) =>
+    session.id === login.data.session.id ? { ...session, mfaVerified: true } : session,
+  )
+  service.authenticateSession(login.data.session.id)
   return service
+}
+
+function testPasswordHashForEmail(email: string, password: string) {
+  return `sha256:${createHash('sha256').update(`auth:v1:${email.trim().toLowerCase()}:${password}`).digest('hex')}`
+}
+
+function createTestService() {
+  return new NorthStarService({
+    authCredentials: [
+      {
+        email: adminEmail,
+        passwordHash: testPasswordHashForEmail(adminEmail, adminPassword),
+        passwordSetAt: fixedSessionFixtureNow.toISOString(),
+      },
+    ],
+    mfaEncryptionKey: testMfaEncryptionKey,
+  })
+}
+
+function provisionTestCredential(service: NorthStarService, email: string, password: string) {
+  const internals = service as unknown as {
+    authCredentialRecords: { email: string; passwordHash: string; passwordSetAt: string }[]
+  }
+  const normalizedEmail = email.trim().toLowerCase()
+  internals.authCredentialRecords = [
+    {
+      email: normalizedEmail,
+      passwordHash: testPasswordHashForEmail(normalizedEmail, password),
+      passwordSetAt: fixedSessionFixtureNow.toISOString(),
+    },
+    ...internals.authCredentialRecords.filter((credential) => credential.email !== normalizedEmail),
+  ]
+}
+
+function credentialForEmail(service: NorthStarService, email: string) {
+  const internals = service as unknown as {
+    authCredentialRecords: { email: string; passwordHash: string; passwordSetAt: string }[]
+  }
+  return internals.authCredentialRecords.find((credential) => credential.email === email.trim().toLowerCase())
+}
+
+function decodeTestBase32(secret: string) {
+  let bits = 0
+  let accumulator = 0
+  const bytes: number[] = []
+  for (const character of secret) {
+    const index = testBase32Alphabet.indexOf(character)
+    if (index < 0) {
+      throw new Error('Invalid test Base32 secret')
+    }
+    accumulator = (accumulator << 5) | index
+    bits += 5
+    if (bits >= 8) {
+      bytes.push((accumulator >>> (bits - 8)) & 255)
+      bits -= 8
+    }
+  }
+  return Buffer.from(bytes)
+}
+
+function currentTestTotp(secret: string) {
+  const counter = Math.floor(fixedSessionFixtureNow.getTime() / 1000 / 30)
+  const counterBuffer = Buffer.alloc(8)
+  counterBuffer.writeUInt32BE(Math.floor(counter / 0x1_0000_0000), 0)
+  counterBuffer.writeUInt32BE(counter >>> 0, 4)
+  const digest = createHmac('sha1', decodeTestBase32(secret)).update(counterBuffer).digest()
+  const offset = digest[digest.length - 1] & 0x0f
+  const binary =
+    ((digest[offset] & 0x7f) << 24) |
+    ((digest[offset + 1] & 0xff) << 16) |
+    ((digest[offset + 2] & 0xff) << 8) |
+    (digest[offset + 3] & 0xff)
+  return String(binary % 1_000_000).padStart(6, '0')
 }
 
 describe('NorthStarService', () => {
@@ -21,16 +105,37 @@ describe('NorthStarService', () => {
   })
 
   it('requires an authenticated session before protected tenant operations', () => {
-    const service = new NorthStarService()
+    const service = createTestService()
 
     expect(() => service.tenantConsole()).toThrow(UnauthorizedException)
     expect(() => service.requestDocumentSignedUrl('DOC-118')).toThrow(UnauthorizedException)
     expect(() => service.authenticateSession(undefined)).toThrow(UnauthorizedException)
   })
 
+  it('requires the configured admin password before issuing an admin session', () => {
+    const service = createTestService()
+
+    expect(() => service.login(adminEmail)).toThrow(ForbiddenException)
+    expect(() => service.login(adminEmail, 'wrong-password')).toThrow(ForbiddenException)
+
+    const login = service.login(adminEmail, adminPassword).data
+
+    expect(login.session.email).toBe(adminEmail)
+    expect(login.session.role).toBe('Admin')
+    expect(login.permissions).toContain('security.manageUsers')
+    expect(credentialForEmail(service, adminEmail)?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
+  })
+
+  it('blocks active memberships that have not completed password setup', () => {
+    const service = createTestService()
+
+    expect(() => service.login('owner@example.test', 'any-password')).toThrow(ForbiddenException)
+    expect(() => service.login('lab@example.test', 'any-password')).toThrow(ForbiddenException)
+  })
+
   it('issues session-bound CSRF tokens without exposing them through session lists', () => {
-    const service = new NorthStarService()
-    const login = service.login('owner@example.test').data
+    const service = createTestService()
+    const login = service.login(adminEmail, adminPassword).data
 
     expect(login.csrfToken).toMatch(/^csrf_/)
     expect(login.session).not.toHaveProperty('csrfToken')
@@ -324,17 +429,17 @@ describe('NorthStarService', () => {
     expect(service.permissionProbe('inventory.adjust', 'Viewer').data.allowed).toBe(true)
   })
 
-  it('blocks unknown permissions and unsafe Owner permission removal', () => {
+  it('blocks unknown permissions and unsafe Admin permission removal', () => {
     const service = createAuthenticatedService()
-    const owner = service.permissionMatrix().data.matrix.find((row) => row.role === 'Owner')
+    const admin = service.permissionMatrix().data.matrix.find((row) => row.role === 'Admin')
 
     expect(() => service.setRolePermissions('Viewer', ['inventory.view', 'tenant.escape'])).toThrow(
       UnprocessableEntityException,
     )
     expect(() =>
       service.setRolePermissions(
-        'Owner',
-        (owner?.allowedPermissions ?? []).filter((permission) => permission !== 'security.manageUsers'),
+        'Admin',
+        (admin?.allowedPermissions ?? []).filter((permission) => permission !== 'security.manageUsers'),
       ),
     ).toThrow(UnprocessableEntityException)
   })
@@ -366,6 +471,249 @@ describe('NorthStarService', () => {
     expect(result.audit.action).toBe('membership.invite')
     expect(result.invariant).toContain('invitee sets password')
     expect(() => service.login('new.viewer@example.test')).toThrow(ForbiddenException)
+  })
+
+  it('keeps a normal invited user blocked until admin approval and then enforces viewer permissions', () => {
+    const service = createAuthenticatedService()
+    const invited = service.inviteMember({
+      email: 'approved.viewer@example.test',
+      name: 'Approved Viewer',
+      role: 'Viewer',
+      brandIds: ['brand-nxl'],
+    }).data
+
+    expect(invited.membership.status).toBe('INVITED')
+    expect(() => service.login('approved.viewer@example.test')).toThrow(ForbiddenException)
+
+    const approval = service.setMembershipStatus(invited.membership.id, 'ACTIVE').data
+    expect(approval.membership.status).toBe('ACTIVE')
+    expect(approval.audit.action).toBe('membership.status.update')
+    expect(() => service.login('approved.viewer@example.test')).toThrow(ForbiddenException)
+
+    provisionTestCredential(service, 'approved.viewer@example.test', 'ApprovedViewer2026!')
+    const login = service.login('approved.viewer@example.test', 'ApprovedViewer2026!').data
+    const me = service.me().data
+    const settings = service.updateUserSettings({
+      displayName: 'Normal Viewer',
+      preferredLanding: 'documents',
+      accentColor: '#37D6A0',
+    }).data
+
+    expect(login.session.role).toBe('Viewer')
+    expect(login.session.organizationId).toBe('org-nxl')
+    expect(me.permissions).toContain('documents.view')
+    expect(me.permissions).not.toContain('security.manageUsers')
+    expect(settings.settings.displayName).toBe('Normal Viewer')
+    expect(settings.settings.organizationId).toBe('org-nxl')
+    expect(credentialForEmail(service, 'approved.viewer@example.test')?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
+    expect(() => service.tenantConsole()).toThrow(ForbiddenException)
+    expect(() => service.inviteMember({ email: 'should.block@example.test', role: 'Viewer' })).toThrow(ForbiddenException)
+    expect(() => service.setMembershipStatus('MBR-LAB', 'DEACTIVATED')).toThrow(ForbiddenException)
+    expect(() => service.billingConsole()).toThrow(ForbiddenException)
+    expect(() => service.selectBillingPlan({ planId: 'PLAN-ARTISAN' })).toThrow(ForbiddenException)
+    expect(() => service.openBillingPortal()).toThrow(ForbiddenException)
+  })
+
+  it('routes normal-user inventory updates through admin approval before mutating stock', () => {
+    const service = createAuthenticatedService()
+    const invited = service.inviteMember({
+      email: 'inventory.requester@example.test',
+      name: 'Inventory Requester',
+      role: 'Viewer',
+      brandIds: ['brand-nxl'],
+    }).data
+    service.setMembershipStatus(invited.membership.id, 'ACTIVE')
+    provisionTestCredential(service, 'inventory.requester@example.test', 'InventoryRequester2026!')
+
+    service.login('inventory.requester@example.test', 'InventoryRequester2026!')
+    const beforeMovements = service.inventoryMovements().data.length
+    const beforeLot = service.lotsList().data.find((lot) => lot.id === 'lot-amb-001')
+
+    expect(() =>
+      service.adjustInventory({
+        lotId: 'lot-amb-001',
+        direction: 'OUT',
+        quantityGrams: 2,
+        reason: 'Viewer direct correction',
+      }),
+    ).toThrow(ForbiddenException)
+
+    const requested = service.requestInventoryApproval({
+      action: 'inventory.adjust',
+      payload: {
+        lotId: 'lot-amb-001',
+        direction: 'OUT',
+        quantityGrams: 2,
+        reason: 'Bench count variance',
+      },
+      reason: 'Please approve shelf correction',
+    }).data
+    const requesterQueue = service.inventoryApprovalRequests().data.requests
+
+    expect(requested.request.status).toBe('PENDING')
+    expect(requested.request.requiredPermission).toBe('inventory.adjust')
+    expect(requested.audit.outcome).toBe('review')
+    expect(requesterQueue).toHaveLength(1)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(service.lotsList().data.find((lot) => lot.id === 'lot-amb-001')?.quantityGrams).toBe(beforeLot?.quantityGrams)
+
+    service.login(adminEmail, adminPassword)
+    const approverQueue = service.inventoryApprovalRequests().data.requests
+    const approved = service.approveInventoryApprovalRequest(requested.request.id, { note: 'Count verified' }).data
+    const approvedResult = approved.result as { movement: { id: string; type: string; actor: string } }
+    const afterLot = service.lotsList().data.find((lot) => lot.id === 'lot-amb-001')
+
+    expect(approverQueue.some((request) => request.id === requested.request.id)).toBe(true)
+    expect(approved.request.status).toBe('APPROVED')
+    expect(approved.request.reviewedBy).toBe('usr-admin')
+    expect(approved.request.resultRef).toBe(approvedResult.movement.id)
+    expect(approvedResult.movement.type).toBe('ADJUSTMENT')
+    expect(approvedResult.movement.actor).toBe('usr-admin')
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements + 1)
+    expect(afterLot?.quantityGrams).toBe((beforeLot?.quantityGrams ?? 0) - 2)
+    expect(() => service.approveInventoryApprovalRequest(requested.request.id)).toThrow(UnprocessableEntityException)
+
+    service.login('inventory.requester@example.test', 'InventoryRequester2026!')
+    const transferRequest = service.requestInventoryApproval({
+      action: 'inventory.transfer',
+      payload: { lotId: 'lot-amb-001', toLocation: 'Cold Room A' },
+      reason: 'Move to controlled storage',
+    }).data
+
+    service.login(adminEmail, adminPassword)
+    const movementsBeforeReject = service.inventoryMovements().data.length
+    const rejected = service.rejectInventoryApprovalRequest(transferRequest.request.id, { note: 'Location not approved' }).data
+
+    expect(rejected.request.status).toBe('REJECTED')
+    expect(rejected.audit.action).toBe('inventory.approval.reject')
+    expect(service.inventoryMovements().data.length).toBe(movementsBeforeReject)
+    expect(service.lotsList().data.find((lot) => lot.id === 'lot-amb-001')?.location).not.toBe('Cold Room A')
+
+    service.login('inventory.requester@example.test', 'InventoryRequester2026!')
+    const qualityRequest = service.requestInventoryApproval({
+      action: 'inventory.quality',
+      payload: { lotId: 'lot-amb-001', qualityStatus: 'ON_HOLD', reason: 'Pending retest evidence' },
+      reason: 'Move lot to hold before release',
+    }).data
+
+    service.login(adminEmail, adminPassword)
+    const movementsBeforeQuality = service.inventoryMovements().data.length
+    const qualityApproval = service.approveInventoryApprovalRequest(qualityRequest.request.id, { note: 'Retest required' }).data
+
+    expect(qualityApproval.request.status).toBe('APPROVED')
+    expect(qualityApproval.result.lot.qualityStatus).toBe('ON_HOLD')
+    expect(service.inventoryMovements().data.length).toBe(movementsBeforeQuality)
+
+    service.login('inventory.requester@example.test', 'InventoryRequester2026!')
+    const beforeStockTakeLot = service.lotsList().data.find((lot) => lot.id === 'lot-amb-001')
+    const stockTakeRequest = service.requestInventoryApproval({
+      action: 'inventory.stockTake',
+      payload: {
+        lotId: 'lot-amb-001',
+        countedGrams: (beforeStockTakeLot?.quantityGrams ?? 0) - 1,
+        reason: 'Shelf count correction',
+      },
+      reason: 'Approve stock take variance',
+    }).data
+
+    service.login(adminEmail, adminPassword)
+    const movementsBeforeStockTake = service.inventoryMovements().data.length
+    const stockTakeApproval = service.approveInventoryApprovalRequest(stockTakeRequest.request.id, { note: 'Variance accepted' }).data
+    const stockTakeResult = stockTakeApproval.result as {
+      movement?: { type: string }
+      stockTake: { status: string }
+    }
+
+    expect(stockTakeApproval.request.status).toBe('APPROVED')
+    expect(stockTakeResult.movement?.type).toBe('ADJUSTMENT')
+    expect(stockTakeResult.stockTake.status).toBe('ADJUSTED')
+    expect(service.inventoryMovements().data.length).toBe(movementsBeforeStockTake + 1)
+  })
+
+  it('routes non-inventory writes through operation approval before execution', () => {
+    const service = createAuthenticatedService()
+    const invited = service.inviteMember({
+      email: 'operation.requester@example.test',
+      name: 'Operation Requester',
+      role: 'Viewer',
+      brandIds: ['brand-nxl'],
+    }).data
+    service.setMembershipStatus(invited.membership.id, 'ACTIVE')
+    provisionTestCredential(service, 'operation.requester@example.test', 'OperationRequester2026!')
+
+    service.login('operation.requester@example.test', 'OperationRequester2026!')
+    expect(() => service.createFormulaDraft({ name: 'Viewer Direct Formula', targetGrams: 50 })).toThrow(ForbiddenException)
+
+    const formulaRequest = service.requestOperationApproval({
+      method: 'POST',
+      path: '/formulas',
+      payload: { name: 'Approved Operation Formula', targetGrams: 50 },
+      reason: 'Viewer needs a formula draft',
+    }).data
+
+    expect(formulaRequest.request.status).toBe('PENDING')
+    expect(formulaRequest.request.requiredPermission).toBe('formulas.edit')
+    expect(service.operationApprovalRequests().data.requests).toHaveLength(1)
+
+    service.login(adminEmail, adminPassword)
+    const approvedFormula = service.approveOperationApprovalRequest(formulaRequest.request.id, { note: 'Approved draft' }).data
+    const formulaResult = approvedFormula.result as { formula: { name: string; targetGrams: number } }
+
+    expect(approvedFormula.request.status).toBe('APPROVED')
+    expect(formulaResult.formula.name).toBe('Approved Operation Formula')
+    expect(formulaResult.formula.targetGrams).toBe(50)
+    expect(() => service.approveOperationApprovalRequest(formulaRequest.request.id)).toThrow(UnprocessableEntityException)
+
+    service.login('operation.requester@example.test', 'OperationRequester2026!')
+    expect(() => service.generateDocument({ type: 'CoA', linkedTo: 'lot-iso-001' })).toThrow(ForbiddenException)
+    const documentRequest = service.requestOperationApproval({
+      method: 'POST',
+      path: '/documents/generate',
+      payload: { type: 'CoA', linkedTo: 'lot-iso-001' },
+      reason: 'Need CoA generated for customer review',
+    }).data
+
+    service.login(adminEmail, adminPassword)
+    const approvedDocument = service.approveOperationApprovalRequest(documentRequest.request.id).data
+    const documentResult = approvedDocument.result as { document: { type: string; linkedTo: string; status: string } }
+
+    expect(documentRequest.request.requiredPermission).toBe('documents.manage')
+    expect(documentResult.document.type).toBe('CoA')
+    expect(documentResult.document.linkedTo).toBe('lot-iso-001')
+    expect(documentResult.document.status).toBe('REVIEW_REQUIRED')
+
+    service.login('operation.requester@example.test', 'OperationRequester2026!')
+    const exportRequest = service.requestOperationApproval({
+      method: 'POST',
+      path: '/formulas/frm-0421/export',
+      reason: 'Need an immutable formula export',
+    }).data
+    const evaluationRequest = service.requestOperationApproval({
+      method: 'POST',
+      path: '/formulas/frm-0421/versions/v12/evaluations',
+      payload: {
+        day: 30,
+        observation: 'Approved operation notebook entry',
+        stability: 'PASS',
+        rating: 4,
+      },
+      reason: 'Record the approved aging observation',
+    }).data
+
+    service.login(adminEmail, adminPassword)
+    const approvedExport = service.approveOperationApprovalRequest(exportRequest.request.id).data
+    const approvedEvaluation = service.approveOperationApprovalRequest(evaluationRequest.request.id).data
+    const exportResult = approvedExport.result as { document: { type: string } }
+    const evaluationResult = approvedEvaluation.result as unknown as {
+      version: { evaluations: Array<{ observation: string }> }
+    }
+
+    expect(exportRequest.request.requiredPermission).toBe('formulas.export')
+    expect(exportResult.document.type).toBe('Formula Export')
+    expect(evaluationRequest.request.requiredPermission).toBe('formulas.edit')
+    expect(evaluationResult.version.evaluations.some(
+      (evaluation) => evaluation.observation === 'Approved operation notebook entry',
+    )).toBe(true)
   })
 
   it('blocks cross-tenant brand grants during member invite', () => {
@@ -405,17 +753,17 @@ describe('NorthStarService', () => {
 
   it('creates bounded login sessions and clamps concurrent sessions', () => {
     const service = createAuthenticatedService()
-    const firstLogin = service.login('owner@example.test').data
-    const secondLogin = service.login('owner@example.test').data
+    const firstLogin = service.login(adminEmail, adminPassword).data
+    const secondLogin = service.login(adminEmail, adminPassword).data
     const consoleState = service.tenantConsole().data
-    const activeOwnerSessions = consoleState.sessions.filter(
-      (session) => session.email === 'owner@example.test' && session.status === 'ACTIVE',
+    const activeAdminSessions = consoleState.sessions.filter(
+      (session) => session.email === adminEmail && session.status === 'ACTIVE',
     )
 
     expect(firstLogin.session.idleExpiresAt).toBeTruthy()
     expect(firstLogin.session.expiresAt).not.toBe(firstLogin.session.idleExpiresAt)
     expect(secondLogin.revokedForLimit.length).toBeGreaterThanOrEqual(1)
-    expect(activeOwnerSessions.length).toBeLessThanOrEqual(consoleState.securityPolicy.concurrentSessionLimit)
+    expect(activeAdminSessions.length).toBeLessThanOrEqual(consoleState.securityPolicy.concurrentSessionLimit)
     expect(secondLogin.invariant).toContain('idle and absolute')
   })
 
@@ -426,10 +774,11 @@ describe('NorthStarService', () => {
       workspaceSlug: 'atelier-smoke',
       email: 'owner@atelier-smoke.test',
       name: 'Atelier Owner',
+      password: 'AtelierSmoke2026',
     }).data
-    const consoleState = service.tenantConsole().data
 
     expect(result.organization.slug).toBe('atelier-smoke')
+    expect(result.organization.customDomain).toBe('atelier-smoke.labofscents.org')
     expect(result.organization.plan).toBe('Free')
     expect(result.brand.organizationId).toBe(result.organization.id)
     expect(result.membership.id).toBe('MBR-ATELIER-SMOKE')
@@ -442,7 +791,11 @@ describe('NorthStarService', () => {
     expect(result.session.brandId).toBe(result.brand.id)
     expect(result.subscription.organizationId).toBe(result.organization.id)
     expect(result.subscription.planId).toBe('PLAN-APPRENTICE')
+    expect(result.sso.organizationId).toBe(result.organization.id)
+    expect(result.sso.domain).toBe('atelier-smoke.labofscents.org')
+    expect(result.sso.status).toBe('verified')
     expect(result.audit.action).toBe('auth.signup')
+    expect(credentialForEmail(service, 'owner@atelier-smoke.test')?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
     expect(service.me().data.userSettings).toMatchObject({
       userId: result.session.userId,
       organizationId: result.organization.id,
@@ -450,11 +803,152 @@ describe('NorthStarService', () => {
       displayName: 'Atelier Owner',
       preferredLanding: 'dashboard',
     })
-    expect(consoleState.organization.id).toBe(result.organization.id)
-    expect(consoleState.brands).toEqual([result.brand])
-    expect(consoleState.memberships.some((membership) => membership.email === result.membership.email)).toBe(true)
+    expect(() => service.tenantConsole()).toThrow(ForbiddenException)
     expect(service.billingConsole().data.subscription.organizationId).toBe(result.organization.id)
+    expect(service.billingConsole().data.sso.domain).toBe('atelier-smoke.labofscents.org')
+    expect(service.billingConsole().data.usage).toMatchObject({
+      organizationId: result.organization.id,
+      formulas: 0,
+      lots: 0,
+      documents: 0,
+    })
+    expect(() => service.assertPlanCapacity('formulas')).not.toThrow()
+    expect(() => service.login('owner@atelier-smoke.test')).toThrow(ForbiddenException)
+    expect(() => service.login('owner@atelier-smoke.test', 'WrongPassword2026')).toThrow(ForbiddenException)
+    expect(service.login('owner@atelier-smoke.test', 'AtelierSmoke2026').data.session.organizationId).toBe(
+      result.organization.id,
+    )
     expect(() => service.tenantProbe('org-nxl')).toThrow(ForbiddenException)
+  })
+
+  it('rejects weak signup passwords before provisioning a tenant', () => {
+    const service = createAuthenticatedService()
+
+    expect(() =>
+      service.signup({
+        organizationName: 'Weak Signup Lab',
+        workspaceSlug: 'weak-signup-lab',
+        email: 'owner@weak-signup.test',
+        name: 'Weak Owner',
+        password: 'short1',
+      }),
+    ).toThrow(UnprocessableEntityException)
+    expect(() => service.tenantProbe('org-weak-signup-lab')).toThrow(ForbiddenException)
+  })
+
+  it('does not require MFA for formula approval when role is allowed', () => {
+    const service = createTestService()
+    service.login(adminEmail, adminPassword)
+
+    service.submitFormulaForReview('frm-0421', {
+      reviewer: adminEmail,
+      comment: 'Approval regression review',
+    })
+    const approved = service.approveFormula('frm-0421', {
+      comment: 'Approved without MFA by admin role',
+    }).data
+    expect(approved.formula.workflowStatus).toBe('APPROVED')
+    expect(approved.version.status).toBe('APPROVED')
+  })
+
+  it('requires Admin or Manager role to approve a Formula', () => {
+    const service = createTestService()
+    service.login(adminEmail, adminPassword)
+    service.submitFormulaForReview('frm-0421', {
+      reviewer: adminEmail,
+      comment: 'Review ready for role-gate validation',
+    })
+
+    const internals = service as unknown as {
+      sessions: Array<{ id: string; role: string }>
+      activeSessionId: string | null
+    }
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === internals.activeSessionId
+        ? { ...session, role: 'Owner' }
+        : session,
+    )
+    expect(() =>
+      service.approveFormula('frm-0421', { comment: 'Owner should not be able to approve' }),
+    ).toThrow(ForbiddenException)
+
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === internals.activeSessionId
+        ? { ...session, role: 'Lab Manager' }
+      : session,
+    )
+    const approvedByLabManager = service.approveFormula('frm-0421', { comment: 'Lab Manager can approve' }).data
+    expect(approvedByLabManager.formula.workflowStatus).toBe('APPROVED')
+    expect(approvedByLabManager.version.status).toBe('APPROVED')
+
+    const managerDraft = service.createFormulaDraft({ name: 'Manager Approval draft', targetGrams: 100 }).data
+    service.updateFormulaDraft(managerDraft.formula.id, {
+      targetMarkets: ['GLOBAL'],
+      lines: [{ id: 'mat-line-manager', label: 'Iso E Super', materialId: 'mat-iso', grams: 100 }],
+    })
+    service.submitFormulaForReview(managerDraft.formula.id, {
+      reviewer: adminEmail,
+      comment: 'Manager approval check',
+    })
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === internals.activeSessionId
+        ? { ...session, role: 'Manager' }
+        : session,
+    )
+    const approvedByManager = service.approveFormula(managerDraft.formula.id, { comment: 'Manager can approve' }).data
+    const approved = approvedByManager
+    expect(approved.formula.workflowStatus).toBe('APPROVED')
+    expect(approved.version.status).toBe('APPROVED')
+  })
+
+  it('consumes each MFA recovery code once for a fresh session', () => {
+    const service = createTestService()
+    service.login(adminEmail, adminPassword)
+    const setup = service.beginMfaEnrollment({ password: adminPassword }).data
+    const recoveryCode = setup.recoveryCodes[0]!
+    service.verifyMfa({ code: currentTestTotp(setup.secret) })
+
+    const freshLogin = service.login(adminEmail, adminPassword).data
+    expect(freshLogin.session.mfaVerified).toBe(false)
+
+    const verified = service.verifyMfa({ code: recoveryCode.toLowerCase() }).data
+    expect(verified).toMatchObject({
+      method: 'recovery',
+      remainingRecoveryCodes: 7,
+      sessionVerified: true,
+      session: {
+        id: freshLogin.session.id,
+        mfaVerified: true,
+      },
+    })
+    expect(verified.invariant).toContain('consumed exactly once')
+
+    const internals = service as unknown as {
+      mfaEnrollmentRecords: Array<{ recoveryCodeHashes: string[] }>
+    }
+    expect(internals.mfaEnrollmentRecords[0]?.recoveryCodeHashes).toHaveLength(7)
+    expect(() => service.verifyMfa({ code: recoveryCode })).toThrow(ForbiddenException)
+    expect(internals.mfaEnrollmentRecords[0]?.recoveryCodeHashes).toHaveLength(7)
+  })
+
+  it('never stores signatures or credentials in the generic operation approval queue', () => {
+    const service = createAuthenticatedService()
+
+    expect(() =>
+      service.requestOperationApproval({
+        method: 'POST',
+        path: '/formulas/frm-0421/approve',
+        payload: { signature: 'Someone Else' },
+      }),
+    ).toThrow(UnprocessableEntityException)
+    expect(() =>
+      service.requestOperationApproval({
+        method: 'POST',
+        path: '/materials',
+        payload: { name: 'Sensitive material request', currentPassword: 'NeverPersistThis' },
+      }),
+    ).toThrow(UnprocessableEntityException)
+    expect(service.operationApprovalRequests().data.requests).toEqual([])
   })
 
   it('touches active sessions without changing absolute expiry', () => {
@@ -479,7 +973,7 @@ describe('NorthStarService', () => {
     expect(revoked.revokedSessions.length).toBeGreaterThanOrEqual(1)
     expect(revoked.audit.action).toBe('session.revokeAll')
     expect(activeLabSessions).toHaveLength(0)
-    expect(consoleState.sessions.some((session) => session.email === 'owner@example.test' && session.status === 'ACTIVE')).toBe(true)
+    expect(consoleState.sessions.some((session) => session.email === adminEmail && session.status === 'ACTIVE')).toBe(true)
   })
 
   it('logs out the current session with audit evidence', () => {
@@ -575,6 +1069,33 @@ describe('NorthStarService', () => {
     )
   })
 
+  it('allows Manager role to update material metadata', () => {
+    const service = createTestService()
+    service.login(adminEmail, adminPassword)
+
+    const internals = service as unknown as {
+      sessions: Array<{ id: string; role: string }>
+      activeSessionId: string | null
+    }
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === internals.activeSessionId ? { ...session, role: 'Manager' } : session,
+    )
+
+    const before = service.material('mat-iso').data
+    const nextDensity = before.density + 0.01
+    const updated = service.updateMaterial('mat-iso', {
+      family: 'Citrus-Manager',
+      density: nextDensity,
+      costPerGram: before.costPerGram,
+      ifraLimit: before.ifraLimit,
+    }).data
+
+    expect(updated.material.family).toBe('Citrus-Manager')
+    expect(updated.material.density).toBe(nextDensity)
+    expect(updated.audit.action).toBe('material.update')
+    expect(updated.material.provenance.some((record) => record.field === 'family')).toBe(true)
+  })
+
   it('stages SDS extraction for review and only writes approved provenance fields', () => {
     const service = createAuthenticatedService()
     const review = service.ingestMaterialDocument('mat-iso', {
@@ -619,26 +1140,50 @@ describe('NorthStarService', () => {
     const result = service.createFormulaDraft({ name: 'Midnight Vetiver', targetGrams: 50 }).data
 
     expect(result.formula.code).toBe('FRM-0422')
+    expect(result.formula.formulaType).toBe('FINE_FRAGRANCE')
     expect(result.formula.status).toBe('draft')
     expect(result.invariant).toContain('does not create inventory movement')
     expect(service.formulas().data[0]?.id).toBe(result.formula.id)
+    const accord = service.createFormulaDraft({ name: 'Line Test Accord', targetGrams: 30, formulaType: 'ACCORD' }).data
+    expect(accord.formula.code).toBe('ACC-0423')
+    expect(accord.formula.formulaType).toBe('ACCORD')
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
-  it('adds formula ingredient lines and resolves draft cost without consuming inventory', () => {
+  it('consumes the selected inventory lot when adding an inventory-sourced formula line', () => {
     const service = createAuthenticatedService()
     const formula = service.createFormulaDraft({ name: 'Line Test Accord', targetGrams: 80 }).data.formula
-    const beforeMovements = service.inventoryMovements().data.length
-    const result = service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 16 }).data
+    const beforeLot = service.inventoryConsole().data.lots.find((lot) => lot.id === 'lot-hed-001')
+    expect(beforeLot).toBeDefined()
+    const result = service.addFormulaLine(formula.id, {
+      materialId: 'mat-hedione',
+      grams: 16,
+      sourceLotId: 'lot-hed-001',
+      inventoryConsumptionMode: 'CONSUMED',
+    }).data
     const resolved = service.resolveFormula(formula.id).data
+    const afterLot = service.inventoryConsole().data.lots.find((lot) => lot.id === 'lot-hed-001')
 
     expect(result.line.label).toBe('Hedione')
+    expect(result.line.sourceLotNumber).toBe('L-HED-014')
+    expect(result.line.sourceLocation).toBe('Amber Shelf 2')
+    expect(result.line.inventoryConsumptionMode).toBe('CONSUMED')
+    expect(result.line.inventoryConsumedGrams).toBe(16)
     expect(result.formula.lines).toHaveLength(1)
     expect(result.leaves[0]?.materialId).toBe('mat-hedione')
     expect(result.totals.totalGrams).toBe(16)
     expect(resolved.leaves[0]?.effectivePercent).toBe(20)
-    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
-    expect(result.invariant).toContain('does not create inventory movement')
+    expect(result.movements).toHaveLength(1)
+    expect(result.movements[0]?.type).toBe('LAB_CONSUMPTION')
+    expect(afterLot?.quantityGrams).toBe((beforeLot?.quantityGrams ?? 0) - 16)
+    expect(result.invariant).toContain('LAB_CONSUMPTION')
+    expect(() =>
+      service.addFormulaLine(formula.id, {
+        materialId: 'mat-hedione',
+        grams: 1,
+        sourceLotId: 'lot-iso-001',
+      }),
+    ).toThrow(UnprocessableEntityException)
   })
 
   it('edits, reorders, and deletes formula lines without consuming inventory', () => {
@@ -661,6 +1206,45 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
+  it('adjusts and reverses inventory when a consumed formula line changes', () => {
+    const service = createAuthenticatedService()
+    const formula = service.createFormulaDraft({ name: 'Inventory-synced Accord', targetGrams: 60 }).data.formula
+    const beforeLot = service.inventoryConsole().data.lots.find((lot) => lot.id === 'lot-hed-001')
+    expect(beforeLot).toBeDefined()
+
+    const added = service.addFormulaLine(formula.id, {
+      materialId: 'mat-hedione',
+      grams: 10,
+      sourceLotId: 'lot-hed-001',
+      inventoryConsumptionMode: 'CONSUMED',
+    }).data
+    const updated = service.updateFormulaLine(formula.id, added.line.id, { grams: 14 }).data
+    const afterUpdate = service.inventoryConsole().data.lots.find((lot) => lot.id === 'lot-hed-001')
+    const deleted = service.deleteFormulaLine(formula.id, added.line.id).data
+    const afterDelete = service.inventoryConsole().data.lots.find((lot) => lot.id === 'lot-hed-001')
+
+    expect(updated.movements[0]?.type).toBe('LAB_CONSUMPTION')
+    expect(updated.movements[0]?.quantityGrams).toBe(4)
+    expect(afterUpdate?.quantityGrams).toBe((beforeLot?.quantityGrams ?? 0) - 14)
+    expect(deleted.movements[0]?.type).toBe('REVERSAL')
+    expect(deleted.movements[0]?.quantityGrams).toBe(14)
+    expect(afterDelete?.quantityGrams).toBe(beforeLot?.quantityGrams)
+  })
+
+  it('applies a batch scale to the draft and normalizes the composition', () => {
+    const service = createAuthenticatedService()
+    const formula = service.createFormulaDraft({ name: 'Scale Test Accord', targetGrams: 100 }).data.formula
+    service.addFormulaLine(formula.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(formula.id, { materialId: 'mat-iso', grams: 30 })
+
+    const scaled = service.applyFormulaScale(formula.id, { targetGrams: 50, incrementGrams: 0.01 }).data
+
+    expect(scaled.formula.targetGrams).toBe(50)
+    expect(scaled.formula.lines.reduce((total, line) => total + line.grams, 0)).toBe(50)
+    expect(scaled.formula.lines.map((line) => line.grams)).toEqual([35, 15])
+    expect(scaled.invariant).toContain('without inventory movement')
+  })
+
   it('resolves nested child formulas and blocks formula cycles', () => {
     const service = createAuthenticatedService()
     const parent = service.createFormulaDraft({ name: 'Nested Citrus Trial', targetGrams: 100 }).data.formula
@@ -679,24 +1263,152 @@ describe('NorthStarService', () => {
     ).toThrow(UnprocessableEntityException)
   })
 
-  it('snapshots, approves, and exports formula versions with audit but no stock movement', () => {
+  it('reviews, approves, evaluates, compares, locks, forks, and exports formula versions without stock movement', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
-    const snapshot = service.createFormulaVersion('frm-0421', { note: 'Bench QA snapshot' }).data
-    const approval = service.approveFormula('frm-0421').data
+    const updated = service.updateFormulaDraft('frm-0421', {
+      expectedRevision: 13,
+      brief: 'Bench QA brief with stronger drydown persistence.',
+    }).data
+    const submission = service.submitFormulaForReview('frm-0421', {
+      reviewer: adminEmail,
+      comment: 'Ready for compliance review',
+    }).data
+    const approval = service.approveFormula('frm-0421', {
+      comment: 'Compliance evidence reviewed',
+    }).data
+    const evaluation = service.addFormulaEvaluation('frm-0421', approval.version.version, {
+      day: 7,
+      observation: 'Clear, stable, and aligned with the approved reference.',
+      stability: 'PASS',
+      rating: 5,
+    }).data
+    const diff = service.formulaVersionDiff('frm-0421', 'v12', approval.version.version).data
     const exported = service.exportFormula('frm-0421').data
+    const forked = service.forkFormula('frm-0421', { comment: 'Continue exploration after approval' }).data
     const versions = service.formulaVersions('frm-0421').data
 
-    expect(snapshot.formula.version).toBe('v13')
-    expect(snapshot.version.status).toBe('SNAPSHOT')
+    expect(updated.formula.draftRevision).toBe(14)
+    expect(submission.formula.version).toBe('v13')
+    expect(submission.formula.workflowStatus).toBe('IN_REVIEW')
     expect(approval.formula.status).toBe('stable')
+    expect(approval.formula.workflowStatus).toBe('APPROVED')
     expect(approval.version.status).toBe('APPROVED')
+    expect(approval.ifra.blockerCount).toBe(0)
+    expect(evaluation.version.evaluations).toHaveLength(1)
+    expect(diff.diff.metadataChanges.some((change) => change.field === 'brief')).toBe(true)
+    expect(() => service.addFormulaLine('frm-0421', { materialId: 'mat-hedione', grams: 1 })).toThrow(
+      UnprocessableEntityException,
+    )
+    expect(forked.formula.parentFormulaId).toBe('frm-0421')
+    expect(forked.formula.workflowStatus).toBe('DRAFT')
     expect(exported.document.type).toBe('Formula Export')
-    expect(exported.document.sensitivity).toBe('Highly Confidential')
-    expect(exported.audit.action).toBe('formula.export')
+    expect(exported.document.storageKey).toContain('org-nxl/formulas/')
     expect(versions.versions[0]?.status).toBe('APPROVED')
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
-    expect(exported.invariant).toContain('creates no inventory movement')
+  })
+
+  it('rejects stale autosaves and blocks IFRA failures at approval', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({
+      name: 'IFRA Blocker Trial',
+      targetGrams: 100,
+      finalProductConcentrationPercent: 100,
+      targetMarkets: ['EU'],
+      assignedReviewer: adminEmail,
+    }).data.formula
+    const saved = service.updateFormulaDraft(draft.id, { expectedRevision: 1, brief: 'First autosave' }).data.formula
+
+    expect(saved.draftRevision).toBe(2)
+    expect(() => service.updateFormulaDraft(draft.id, { expectedRevision: 1, brief: 'Stale tab write' })).toThrow(
+      UnprocessableEntityException,
+    )
+
+    service.addFormulaLine(draft.id, { materialId: 'mat-muscenone', grams: 100 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail })
+    expect(() => service.approveFormula(draft.id, { comment: 'Should reject due IFRA blocker' })).toThrow(
+      UnprocessableEntityException,
+    )
+  })
+
+  it('keeps Formula records isolated between workspaces', () => {
+    const service = createAuthenticatedService()
+    const signup = service.signup({
+      organizationName: 'Formula Isolation Lab',
+      workspaceSlug: 'formula-isolation',
+      email: 'owner@formula-isolation.test',
+      name: 'Formula Owner',
+      password: 'FormulaIsolation2026!',
+    }).data
+    const tenantFormula = service.createFormulaDraft({ name: 'Private Tenant Formula' }).data.formula
+
+    expect(tenantFormula.organizationId).toBe(signup.organization.id)
+    expect(service.formulas().data.some((formula) => formula.id === 'frm-0421')).toBe(false)
+    expect(() => service.labUsagePlan('frm-0421', 10)).toThrowError('was not found')
+    expect(() => service.createProductionBatch('frm-0421', 10)).toThrowError('was not found')
+    expect(() => service.costingFormula('frm-0421')).toThrowError('was not found')
+    expect(() => service.generateDocument({ type: 'Formula Spec Sheet', linkedTo: 'frm-0421' })).toThrowError('was not found')
+
+    service.login(adminEmail, adminPassword)
+    expect(service.formulas().data.some((formula) => formula.id === tenantFormula.id)).toBe(false)
+    expect(() => service.resolveFormula(tenantFormula.id)).toThrowError('was not found')
+    expect(() => service.labUsagePlan(tenantFormula.id, 10)).toThrowError('was not found')
+    expect(() => service.createProductionBatch(tenantFormula.id, 10)).toThrowError('was not found')
+    expect(() => service.costingFormula(tenantFormula.id)).toThrowError('was not found')
+    expect(() => service.generateDocument({ type: 'Formula Spec Sheet', linkedTo: tenantFormula.id })).toThrowError('was not found')
+  })
+
+  it('scopes Formula inventory sources to the active workspace', () => {
+    const service = createAuthenticatedService()
+    const adminLotIds = service.inventoryConsole().data.lots.map((lot) => lot.id)
+    const signup = service.signup({
+      organizationName: 'Formula Inventory Lab',
+      workspaceSlug: 'formula-inventory',
+      email: 'owner@formula-inventory.test',
+      name: 'Formula Inventory Owner',
+      password: 'FormulaInventory2026!',
+    }).data
+
+    expect(service.inventoryConsole().data.lots).toEqual([])
+    expect(service.inventoryConsole().data.movements).toEqual([])
+
+    const formula = service.createFormulaDraft({ name: 'Workspace Lot Formula' }).data.formula
+    expect(() =>
+      service.addFormulaLine(formula.id, {
+        materialId: 'mat-iso',
+        grams: 10,
+        sourceLotId: adminLotIds[0],
+      }),
+    ).toThrowError('was not found')
+    expect(() =>
+      service.adjustInventory({
+        lotId: adminLotIds[0],
+        direction: 'OUT',
+        quantityGrams: 1,
+        reason: 'Cross-workspace probe',
+      }),
+    ).toThrowError('was not found')
+
+    const receipt = service.receiveInventoryReceipt({
+      materialId: 'mat-iso',
+      lotNumber: 'L-TENANT-ISO-001',
+      quantityGrams: 25,
+      expiryDate: '2028-01-01',
+    }).data
+    expect(receipt.lot.organizationId).toBe(signup.organization.id)
+    expect(service.inventoryConsole().data.lots.map((lot) => lot.id)).toEqual([receipt.lot.id])
+
+    const linked = service.addFormulaLine(formula.id, {
+      materialId: 'mat-iso',
+      grams: 10,
+      sourceLotId: receipt.lot.id,
+    }).data
+    expect(linked.line.sourceLotId).toBe(receipt.lot.id)
+    expect(linked.line.sourceLotNumber).toBe(receipt.lot.lotNumber)
+
+    service.login(adminEmail, adminPassword)
+    expect(service.inventoryConsole().data.lots.some((lot) => lot.id === receipt.lot.id)).toBe(false)
+    expect(() => service.lotLabel(receipt.lot.id)).toThrowError('was not found')
   })
 
   it('receives direct inventory receipts through lot and IN movement', () => {
@@ -1082,9 +1794,77 @@ describe('NorthStarService', () => {
     const service = createAuthenticatedService()
     const exportJob = service.auditExport().data
 
-    expect(exportJob.status).toBe('QUEUED')
-    expect(exportJob.scope).toBe('ORG-NXL')
+    expect(exportJob.status).toBe('READY')
+    expect(exportJob.scope).toBe('org-nxl')
+    expect(exportJob.checksum).toMatch(/^sha256:/)
+    expect(exportJob.downloadUrl).toContain('/audit/exports/')
     expect(exportJob.audit.action).toBe('audit.export')
+    expect(service.billingConsole().data.auditExports.some((job) => job.id === exportJob.id)).toBe(true)
+  })
+
+  it('manages enterprise trust layer lifecycle without exposing persisted secrets', () => {
+    const service = createAuthenticatedService()
+
+    expect(() =>
+      service.updateSsoConfig({
+        domain: 'labofscents.org',
+        issuerUrl: 'https://idp.labofscents.org/oauth2/default',
+        enforceSso: true,
+        scim: { enabled: true },
+      }),
+    ).toThrow(ForbiddenException)
+
+    service.selectBillingPlan({ planId: 'PLAN-MAISON' })
+    const sso = service.updateSsoConfig({
+      domain: 'labofscents.org',
+      issuerUrl: 'https://idp.labofscents.org/oauth2/default',
+      metadataUrl: 'https://idp.labofscents.org/.well-known/openid-configuration',
+      clientId: 'oo-enterprise',
+      enforceSso: true,
+      scim: { enabled: true },
+      roleMapping: { 'labofscents-admins': 'Owner', 'labofscents-lab': 'Lab Manager' },
+    }).data
+    const scim = service.rotateScimToken().data
+
+    expect(sso.config.status).toBe('enforced')
+    expect(sso.config.organizationId).toBe('org-nxl')
+    expect(scim.secret).toMatch(/^scim_oo_/)
+    expect(scim.config.scim.tokenLastFour).toBe(scim.secret?.slice(-4).toUpperCase())
+    expect(scim.config.scim).not.toHaveProperty('tokenHash')
+
+    const createdKey = service.createApiKey({
+      label: 'ERP bridge',
+      scopes: ['materials.read', 'orders.write', 'not.allowed'],
+    }).data
+    const rotatedKey = service.rotateApiKey(createdKey.apiKey.id).data
+    const revokedKey = service.revokeApiKey(createdKey.apiKey.id).data
+
+    expect(createdKey.secret).toMatch(/^oo_live_/)
+    expect(createdKey.apiKey.scopes).toEqual(['materials.read', 'orders.write'])
+    expect(createdKey.apiKey).not.toHaveProperty('secretHash')
+    expect(rotatedKey.secret).toMatch(/^oo_live_/)
+    expect(rotatedKey.secret).not.toBe(createdKey.secret)
+    expect(revokedKey.apiKey.status).toBe('revoked')
+    expect(revokedKey.apiKey).not.toHaveProperty('secretHash')
+
+    const webhook = service.createWebhook({
+      url: 'https://hooks.labofscents.org/ops',
+      events: ['order.fulfilled', 'audit.export.ready', 'unsupported.event'],
+    }).data
+    const rotatedWebhook = service.rotateWebhookSecret(webhook.webhook.id).data
+    const pausedWebhook = service.deleteWebhook(webhook.webhook.id).data
+
+    expect(webhook.secret).toMatch(/^whsec_/)
+    expect(webhook.webhook.events).toEqual(['order.fulfilled', 'audit.export.ready'])
+    expect(rotatedWebhook.secret).toMatch(/^whsec_/)
+    expect(rotatedWebhook.secret).not.toBe(webhook.secret)
+    expect(pausedWebhook.webhook.status).toBe('paused')
+
+    const consoleState = service.billingConsole().data
+    expect(consoleState.sso.domain).toBe('labofscents.org')
+    expect(consoleState.apiKeys.some((key) => key.id === createdKey.apiKey.id && key.status === 'revoked')).toBe(true)
+    expect(consoleState.webhooks.some((item) => item.id === webhook.webhook.id && item.status === 'paused')).toBe(true)
+    expect(consoleState.readiness.some((check) => check.key === 'audit-export-evidence')).toBe(true)
   })
 
   it('enforces commercial subscription freeze and plan capacity before writes', () => {
@@ -1111,12 +1891,13 @@ describe('NorthStarService', () => {
   })
 
   it('lets a new signup tenant choose a paid trial plan without leaking another tenant subscription', () => {
-    const service = new NorthStarService()
+    const service = createTestService()
     const signup = service.signup({
       organizationName: 'Billing Onboarding Lab',
       workspaceSlug: 'billing-onboarding-lab',
       email: 'owner@billing-onboarding.test',
       name: 'Billing Owner',
+      password: 'BillingOwner2026',
     }).data
 
     expect(signup.subscription.planId).toBe('PLAN-APPRENTICE')
@@ -1127,12 +1908,18 @@ describe('NorthStarService', () => {
 
     expect(selection.mode).toBe('plan_selected')
     expect(consoleState.subscription.organizationId).toBe(signup.organization.id)
+    expect(consoleState.sso.organizationId).toBe(signup.organization.id)
+    expect(consoleState.sso.domain).toBe('billing-onboarding-lab.labofscents.org')
+    expect(consoleState.sso.status).toBe('verified')
+    expect(consoleState.apiKeys).toEqual([])
+    expect(consoleState.webhooks).toEqual([])
+    expect(consoleState.auditExports).toEqual([])
     expect(consoleState.subscription.planId).toBe('PLAN-ARTISAN')
     expect(consoleState.subscription.status).toBe('trialing')
     expect(consoleState.plan.name).toBe('Artisan')
     expect(consoleState.usage.activeSeats).toBe(1)
     expect(consoleState.invoices.some((invoice) => invoice.subscriptionId === consoleState.subscription.id)).toBe(true)
-    expect(service.tenantConsole().data.organization.plan).toBe('Pro')
+    expect(service.billingConsole().data.subscription.planId).toBe('PLAN-ARTISAN')
     expect(() => service.tenantProbe('org-nxl')).toThrow(ForbiddenException)
   })
 

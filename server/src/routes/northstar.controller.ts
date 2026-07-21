@@ -19,6 +19,59 @@ type LabUsageBody = {
   actor?: string
 }
 
+type FormulaDraftBody = {
+  expectedRevision?: number
+  name?: string
+  formulaType?: 'ACCORD' | 'FINE_FRAGRANCE'
+  targetGrams?: number
+  concentrationType?: 'PARFUM' | 'EDP' | 'EDT' | 'EDC' | 'COLOGNE' | 'OTHER'
+  finalProductConcentrationPercent?: number
+  targetMarkets?: string[]
+  brief?: string
+  inspiration?: string
+  pyramidSummary?: string
+  tags?: string[]
+  project?: string
+  collection?: string
+  density?: number
+  bottleVolumeMl?: number
+  bottleCount?: number
+  ifraCategory?: string
+  assignedReviewer?: string
+  lines?: Array<{
+    id: string
+    label: string
+    grams: number
+    materialId?: string
+    childFormulaId?: string
+    dilution?: number
+    concentration?: number
+    pyramidNote?: 'Top' | 'Middle' | 'Base' | 'Solvent'
+    odorType?: string
+    accord?: string
+    tags?: string[]
+    notes?: string
+    sourceLotId?: string
+    sourceLotNumber?: string
+    sourceLocation?: string
+    sourceAvailableGrams?: number
+    sourceSupplierLotRef?: string
+  }>
+}
+
+type FormulaReviewBody = {
+  reviewer?: string
+  comment?: string
+  signature?: string
+}
+
+type FormulaEvaluationBody = {
+  day?: number
+  observation?: string
+  stability?: 'PASS' | 'WATCH' | 'FAIL'
+  rating?: number
+}
+
 type CatalogSkuBody = {
   materialId?: string
   name?: string
@@ -210,14 +263,41 @@ export class NorthStarController {
   }
 
   @Post('formulas')
-  createFormulaDraft(@Body() body: { name?: string; targetGrams?: number; owner?: string }) {
+  createFormulaDraft(@Body() body: FormulaDraftBody) {
     return this.northStar.createFormulaDraft(body)
+  }
+
+  @Patch('formulas/:id')
+  updateFormulaDraft(@Param('id') id: string, @Body() body: FormulaDraftBody) {
+    return this.northStar.updateFormulaDraft(id, body)
+  }
+
+  @Post('formulas/:id/fork')
+  forkFormula(@Param('id') id: string, @Body() body: { name?: string; comment?: string }) {
+    return this.northStar.forkFormula(id, body)
   }
 
   @Post('formulas/:id/lines')
   addFormulaLine(
     @Param('id') id: string,
-    @Body() body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+    @Body() body: {
+      materialId?: string
+      childFormulaId?: string
+      grams?: number
+      label?: string
+      dilution?: number
+      concentration?: number
+      pyramidNote?: 'Top' | 'Middle' | 'Base' | 'Solvent'
+      odorType?: string
+      accord?: string
+      tags?: string[]
+      notes?: string
+      sourceLotId?: string
+      sourceLotNumber?: string
+      sourceLocation?: string
+      sourceAvailableGrams?: number
+      sourceSupplierLotRef?: string
+    },
   ) {
     return this.northStar.addFormulaLine(id, body)
   }
@@ -226,7 +306,24 @@ export class NorthStarController {
   updateFormulaLine(
     @Param('id') id: string,
     @Param('lineId') lineId: string,
-    @Body() body: { materialId?: string; childFormulaId?: string; grams?: number; label?: string },
+    @Body() body: {
+      materialId?: string
+      childFormulaId?: string
+      grams?: number
+      label?: string
+      dilution?: number
+      concentration?: number
+      pyramidNote?: 'Top' | 'Middle' | 'Base' | 'Solvent'
+      odorType?: string
+      accord?: string
+      tags?: string[]
+      notes?: string
+      sourceLotId?: string
+      sourceLotNumber?: string
+      sourceLocation?: string
+      sourceAvailableGrams?: number
+      sourceSupplierLotRef?: string
+    },
   ) {
     return this.northStar.updateFormulaLine(id, lineId, body)
   }
@@ -255,6 +352,24 @@ export class NorthStarController {
     return this.northStar.formulaCost(id)
   }
 
+  @Get('formulas/:id/ifra-check')
+  formulaIfra(@Param('id') id: string) {
+    return this.northStar.formulaIfra(id)
+  }
+
+  @Get('formulas/:id/evaporation')
+  formulaEvaporation(@Param('id') id: string) {
+    return this.northStar.formulaEvaporation(id)
+  }
+
+  @Post('formulas/:id/scale')
+  formulaScale(
+    @Param('id') id: string,
+    @Body() body: { targetGrams?: number; targetVolumeMl?: number; bottleCount?: number; incrementGrams?: number },
+  ) {
+    return this.northStar.formulaScale(id, body)
+  }
+
   @Get('formulas/:id/versions')
   formulaVersions(@Param('id') id: string) {
     return this.northStar.formulaVersions(id)
@@ -265,8 +380,36 @@ export class NorthStarController {
     return this.northStar.createFormulaVersion(id, body)
   }
 
+  @Get('formulas/:id/versions/diff')
+  formulaVersionDiff(
+    @Param('id') id: string,
+    @Query('from') fromVersion?: string,
+    @Query('to') toVersion?: string,
+  ) {
+    return this.northStar.formulaVersionDiff(id, fromVersion, toVersion)
+  }
+
+  @Post('formulas/:id/versions/:version/evaluations')
+  addFormulaEvaluation(
+    @Param('id') id: string,
+    @Param('version') version: string,
+    @Body() body: FormulaEvaluationBody,
+  ) {
+    return this.northStar.addFormulaEvaluation(id, version, body)
+  }
+
+  @Post('formulas/:id/review')
+  submitFormulaForReview(@Param('id') id: string, @Body() body: FormulaReviewBody) {
+    return this.northStar.submitFormulaForReview(id, body)
+  }
+
+  @Post('formulas/:id/reject')
+  rejectFormula(@Param('id') id: string, @Body() body: FormulaReviewBody) {
+    return this.northStar.rejectFormula(id, body)
+  }
+
   @Post('formulas/:id/approve')
-  approveFormula(@Param('id') id: string, @Body() body: { actor?: string }) {
+  approveFormula(@Param('id') id: string, @Body() body: FormulaReviewBody) {
     return this.northStar.approveFormula(id, body)
   }
 
@@ -382,14 +525,72 @@ export class NorthStarController {
     return this.northStar.transferInventory(body)
   }
 
+  @Get('inventory/approval-requests')
+  inventoryApprovalRequests() {
+    return this.northStar.inventoryApprovalRequests()
+  }
+
+  @Post('inventory/approval-requests')
+  requestInventoryApproval(@Body() body: { action?: string; payload?: unknown; reason?: string }) {
+    return this.northStar.requestInventoryApproval(body)
+  }
+
+  @Post('inventory/approval-requests/:id/approve')
+  approveInventoryApprovalRequest(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.northStar.approveInventoryApprovalRequest(id, body)
+  }
+
+  @Post('inventory/approval-requests/:id/reject')
+  rejectInventoryApprovalRequest(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.northStar.rejectInventoryApprovalRequest(id, body)
+  }
+
+  @Get('approval-requests')
+  operationApprovalRequests() {
+    return this.northStar.operationApprovalRequests()
+  }
+
+  @Post('approval-requests')
+  requestOperationApproval(@Body() body: { method?: string; path?: string; payload?: unknown; reason?: string }) {
+    return this.northStar.requestOperationApproval(body)
+  }
+
+  @Post('approval-requests/:id/approve')
+  approveOperationApprovalRequest(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.northStar.approveOperationApprovalRequest(id, body)
+  }
+
+  @Post('approval-requests/:id/reject')
+  rejectOperationApprovalRequest(@Param('id') id: string, @Body() body: { note?: string }) {
+    return this.northStar.rejectOperationApprovalRequest(id, body)
+  }
+
   @Post('auth/login')
-  login(@Body() body: { email?: string }) {
-    return this.northStar.login(body.email)
+  login(@Body() body: { email?: string; password?: string }) {
+    return this.northStar.login(body.email, body.password)
   }
 
   @Post('auth/signup')
-  signup(@Body() body: { organizationName?: string; workspaceSlug?: string; email?: string; name?: string }) {
+  signup(
+    @Body()
+    body: { organizationName?: string; workspaceSlug?: string; email?: string; name?: string; password?: string; customDomain?: string },
+  ) {
     return this.northStar.signup(body)
+  }
+
+  @Get('auth/mfa/status')
+  mfaStatus() {
+    return this.northStar.mfaStatus()
+  }
+
+  @Post('auth/mfa/enroll')
+  beginMfaEnrollment(@Body() body: { password?: string }) {
+    return this.northStar.beginMfaEnrollment(body)
+  }
+
+  @Post('auth/mfa/verify')
+  verifyMfa(@Body() body: { code?: string }) {
+    return this.northStar.verifyMfa(body)
   }
 
   @Post('auth/logout')
@@ -954,9 +1155,34 @@ export class NorthStarController {
     return this.northStar.ssoConfig()
   }
 
+  @Patch('sso-config')
+  updateSsoConfig(@Body() body: Record<string, unknown>) {
+    return this.northStar.updateSsoConfig(body)
+  }
+
+  @Post('sso-config/scim-token/rotate')
+  rotateScimToken() {
+    return this.northStar.rotateScimToken()
+  }
+
   @Get('api-keys')
   apiKeys() {
     return this.northStar.apiKeys()
+  }
+
+  @Post('api-keys')
+  createApiKey(@Body() body: { label?: string; scopes?: string[]; expiresAt?: string }) {
+    return this.northStar.createApiKey(body)
+  }
+
+  @Post('api-keys/:id/rotate')
+  rotateApiKey(@Param('id') id: string) {
+    return this.northStar.rotateApiKey(id)
+  }
+
+  @Post('api-keys/:id/revoke')
+  revokeApiKey(@Param('id') id: string) {
+    return this.northStar.revokeApiKey(id)
   }
 
   @Get('webhooks')
@@ -964,8 +1190,33 @@ export class NorthStarController {
     return this.northStar.webhooks()
   }
 
+  @Post('webhooks')
+  createWebhook(@Body() body: { url?: string; events?: string[] }) {
+    return this.northStar.createWebhook(body)
+  }
+
+  @Patch('webhooks/:id')
+  updateWebhook(@Param('id') id: string, @Body() body: { url?: string; events?: string[]; status?: 'active' | 'paused' }) {
+    return this.northStar.updateWebhook(id, body)
+  }
+
+  @Post('webhooks/:id/rotate-secret')
+  rotateWebhookSecret(@Param('id') id: string) {
+    return this.northStar.rotateWebhookSecret(id)
+  }
+
+  @Delete('webhooks/:id')
+  deleteWebhook(@Param('id') id: string) {
+    return this.northStar.deleteWebhook(id)
+  }
+
+  @Get('audit/exports')
+  auditExports() {
+    return this.northStar.auditExports()
+  }
+
   @Post('audit/export')
-  auditExport() {
-    return this.northStar.auditExport()
+  auditExport(@Body() body: { format?: 'JSON' | 'CSV'; scope?: string }) {
+    return this.northStar.auditExport(body)
   }
 }

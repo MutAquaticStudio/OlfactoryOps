@@ -52,6 +52,12 @@ export class TooManyRequestsException extends AppHttpError {
   }
 }
 
+export class PayloadTooLargeException extends AppHttpError {
+  constructor(payload: ErrorPayload = 'Payload too large') {
+    super(413, payload, 'Payload Too Large')
+  }
+}
+
 export function Injectable(): ClassDecorator {
   return () => undefined
 }

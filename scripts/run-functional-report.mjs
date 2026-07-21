@@ -8,7 +8,8 @@ const reportRoot = path.join(repoRoot, 'reports')
 
 const appUrl = stripTrailingSlash(process.env.FUNCTIONAL_APP_URL ?? 'https://labofscents.pages.dev')
 const apiBaseUrl = stripTrailingSlash(process.env.FUNCTIONAL_API_URL ?? 'https://api.labofscents.org/api/v1')
-const loginEmail = process.env.FUNCTIONAL_LOGIN_EMAIL ?? 'owner@example.test'
+const loginEmail = process.env.FUNCTIONAL_LOGIN_EMAIL ?? 'admin@labofscents.org'
+const loginPassword = requireEnvironmentSecret('FUNCTIONAL_LOGIN_PASSWORD')
 const documentId = process.env.FUNCTIONAL_DOCUMENT_ID ?? 'DOC-118'
 const browserFallbackReason =
   process.env.FUNCTIONAL_BROWSER_FALLBACK_REASON ??
@@ -29,17 +30,20 @@ const testCases = [
     id: 'TC-001',
     module: 'Edge API / Auth Boundary',
     priority: 'P0',
-    title: 'Public health is open and protected routes reject anonymous access',
-    objective: 'Verify the production Worker is reachable while tenant and secret-bearing routes require authentication.',
+    title: 'Public health is open while API metadata and browser boundaries are hardened',
+    objective: 'Verify the Worker is reachable, sensitive routes require authentication, and API responses enforce security headers and CORS.',
     steps: [
-      'Call GET /health without cookies.',
+      'Call GET /health without cookies and inspect response headers.',
+      'Call GET /health from an untrusted Origin.',
       'Call GET /persistence/status without cookies.',
       'Call GET /security/tenant-console without cookies.',
       'Call GET /api-keys without cookies.',
     ],
     assertions: [
       '/health returns 200 and service identity.',
-      'Persistence status reports hybrid D1 with normalized sell-ready domain tables outside Formula.',
+      'API responses are no-store, nosniff, deny framing, and use a restrictive CSP.',
+      'An untrusted Origin receives no Access-Control-Allow-Origin header.',
+      'Persistence status rejects anonymous access because it exposes deployment internals.',
       'Tenant console returns 401 without a session.',
       'API keys return 401 without a session.',
     ],
@@ -47,51 +51,20 @@ const testCases = [
       const health = await apiFetch('/health', {}, { useCookie: false })
       assertStatus(health, 200, 'health should be public')
       assert(Boolean(health.json?.ok), 'health payload should include ok=true')
+      assertHeaderContains(health, 'cache-control', 'no-store')
+      assertHeaderEquals(health, 'x-content-type-options', 'nosniff')
+      assertHeaderEquals(health, 'x-frame-options', 'DENY')
+      assertHeaderContains(health, 'content-security-policy', "default-src 'none'")
+
+      const disallowedOrigin = await apiFetch('/health', {}, { useCookie: false, origin: 'https://attacker.invalid' })
+      assertStatus(disallowedOrigin, 200, 'health remains public for non-browser tooling')
+      assert(
+        disallowedOrigin.headers.get('access-control-allow-origin') === null,
+        'untrusted Origin should not receive Access-Control-Allow-Origin',
+      )
 
       const persistence = await apiFetch('/persistence/status', {}, { useCookie: false })
-      assertStatus(persistence, 200, 'persistence status should be public')
-      assert(persistence.json?.data?.adapter === 'cloudflare-d1-hybrid', 'persistence adapter should be hybrid D1')
-      const requiredTables = [
-        'auth_sessions',
-        'audit_events',
-        'tenant_organizations',
-        'tenant_brands',
-        'tenant_memberships',
-        'role_policies',
-        'material_records',
-        'molecule_components',
-        'storage_locations',
-        'stock_take_records',
-        'tenant_settings',
-        'feature_flags',
-        'numbering_sequences',
-        'custom_fields',
-        'tenant_branding',
-        'document_records',
-        'production_batches',
-        'suppliers',
-        'purchase_orders',
-        'price_history',
-        'commercial_skus',
-        'price_lists',
-        'quotes',
-        'sample_requests',
-        'customers',
-        'sales_orders',
-        'order_shipments',
-        'order_documents',
-        'scheduled_reports',
-        'billing_subscriptions',
-        'billing_invoices',
-        'webhook_deliveries',
-        'inventory_lots',
-        'inventory_movements',
-        'lab_usage_records',
-      ]
-      assert(
-        requiredTables.every((table) => persistence.json.data.normalizedTables.includes(table)),
-        'persistence status should report normalized commercial operations tables',
-      )
+      assertStatus(persistence, 401, 'persistence status should reject anonymous access')
 
       const tenant = await apiFetch('/security/tenant-console', {}, { useCookie: false })
       assertStatus(tenant, 401, 'tenant console should reject anonymous access')
@@ -101,7 +74,9 @@ const testCases = [
 
       return [
         `Health service: ${health.json.service ?? 'unknown'}`,
-        `Persistence: ${persistence.json.data.adapter} / ${persistence.json.data.normalizedTables.join(', ')}`,
+        `Security headers: ${health.headers.get('x-content-type-options')} / ${health.headers.get('x-frame-options')}`,
+        `Untrusted CORS origin allowed: ${disallowedOrigin.headers.get('access-control-allow-origin') ?? 'no'}`,
+        `Persistence status: ${persistence.status} ${persistence.json.message}`,
         `Anonymous tenant status: ${tenant.status}`,
         `Anonymous api-key status: ${apiKeys.status}`,
       ]
@@ -120,7 +95,7 @@ const testCases = [
       'Call GET /me with bearer fallback for tooling compatibility.',
     ],
     assertions: [
-      'Login returns a session for org-nxl Owner.',
+      'Login returns a session for org-nxl Admin.',
       'Set-Cookie includes HttpOnly, Secure, SameSite=None, and oo_session.',
       '/me works with cookie auth.',
       '/me works with bearer fallback.',
@@ -131,7 +106,7 @@ const testCases = [
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: loginEmail }),
+          body: JSON.stringify({ email: loginEmail, password: loginPassword }),
         },
         { useCookie: false },
       )
@@ -146,8 +121,8 @@ const testCases = [
 
       const session = login.json?.data?.session
       assert(session?.email === loginEmail, 'login session should match requested email')
-      assert(session?.organizationId === 'org-nxl', 'owner demo should be scoped to org-nxl')
-      assert(session?.role === 'Owner', 'owner demo should have Owner role')
+      assert(session?.organizationId === 'org-nxl', 'admin demo should be scoped to org-nxl')
+      assert(session?.role === 'Admin', 'admin demo should have Admin role')
       csrfToken = login.json?.data?.csrfToken ?? null
       assert(csrfToken && csrfToken.startsWith('csrf_'), 'login should return a session-bound CSRF token')
 
@@ -173,7 +148,7 @@ const testCases = [
     title: 'Tenant console is scoped and permission probes block unauthorized roles',
     objective: 'Verify server-side tenant isolation and role permission decisions for the active session.',
     steps: [
-      'Call GET /security/tenant-console with owner cookie.',
+      'Call GET /security/tenant-console with admin cookie.',
       'Call GET /security/tenant-probe?organizationId=org-other.',
       'Call GET /security/permission-probe for Viewer inventory.adjust.',
       'Call GET /security/permission-probe for Owner inventory.adjust.',
@@ -186,7 +161,7 @@ const testCases = [
     ],
     execute: async () => {
       const consoleResponse = await apiFetch('/security/tenant-console')
-      assertStatus(consoleResponse, 200, 'tenant console should load for owner')
+      assertStatus(consoleResponse, 200, 'tenant console should load for admin')
       const tenantData = consoleResponse.json?.data
       assert(tenantData?.organization?.id === 'org-nxl', 'tenant console organization should be org-nxl')
       assert(
@@ -270,7 +245,7 @@ const testCases = [
     title: 'Signed document URL is nonce-bearing and audited behind auth',
     objective: 'Verify document download signing remains permission-gated and private object paths are represented as signed URLs.',
     steps: [
-      `POST /documents/${documentId}/signed-url with owner cookie.`,
+      `POST /documents/${documentId}/signed-url with admin cookie.`,
       'Inspect the returned signed URL metadata.',
     ],
     assertions: [
@@ -284,7 +259,7 @@ const testCases = [
       assertStatus(missingCsrf, 403, 'signed document URL without CSRF should be blocked')
 
       const signed = await apiFetch(`/documents/${documentId}/signed-url`, { method: 'POST' })
-      assertStatus(signed, 200, 'signed document URL should be created for owner')
+      assertStatus(signed, 200, 'signed document URL should be created for admin')
       const data = signed.json?.data
       const signedUrl = data?.signedUrl?.url
       assert(data?.document?.id === documentId, 'signed URL should target requested document')
@@ -302,19 +277,19 @@ const testCases = [
   },
   {
     id: 'TC-006',
-    module: 'Production Phase 9',
+    module: 'Production',
     priority: 'P0',
-    title: 'Production read model includes work order, QC protocol, genealogy, and output lot evidence',
-    objective: 'Verify the Phase 9 production hardening is visible through API read models without creating a new batch by default.',
+    title: 'Production read model preserves lifecycle, work order, QC, and genealogy invariants',
+    objective: 'Verify active batches remain pending release while every released batch carries an output lot and genealogy evidence.',
     steps: [
       'Call GET /production/batches.',
-      'Inspect the newest batch for work order steps and QC checks.',
-      'Find a released batch with output lot genealogy.',
+      'Inspect the newest batches for work order steps, QC checks, and genealogy.',
+      'Validate output-lot evidence for released batches or pending-release evidence for an active batch.',
     ],
     assertions: [
       'At least one batch exists.',
       'Every inspected batch has a workOrder, qcChecks, and genealogy.',
-      'At least one released batch has outputLot and genealogy.outputLotId.',
+      'Released batches have outputLot and genealogy.outputLotId; active batches do not expose a released output.',
     ],
     execute: async () => {
       const batchesResponse = await apiFetch('/production/batches')
@@ -330,17 +305,30 @@ const testCases = [
         assert(batch.genealogy && Array.isArray(batch.genealogy.inputLotIds), `batch ${batch.id} should include genealogy`)
       }
 
-      let releasedBatch = batches.find((batch) => batch.status === 'RELEASED' && batch.outputLot && batch.genealogy?.outputLotId)
+      const invalidReleasedBatch = batches.find(
+        (batch) => batch.status === 'RELEASED' && (!batch.outputLot || !batch.genealogy?.outputLotId),
+      )
+      assert(!invalidReleasedBatch, `released batch ${invalidReleasedBatch?.id ?? ''} should include output genealogy`)
+
+      let releasedBatch = batches.find(
+        (batch) => batch.status === 'RELEASED' && batch.outputLot && batch.genealogy?.outputLotId,
+      )
       if (!releasedBatch && productionMutationEnabled) {
         releasedBatch = await createReleasedProductionBatch()
       }
-      assert(releasedBatch, 'at least one released batch should expose output lot genealogy')
+      const activeBatch = batches.find((batch) => batch.status !== 'RELEASED')
+      if (!releasedBatch) {
+        assert(activeBatch, 'an active batch should provide pending-release lifecycle evidence')
+        assert(!activeBatch.outputLot, `active batch ${activeBatch.id} should not expose an output lot`)
+        assert(!activeBatch.genealogy?.outputLotId, `active batch ${activeBatch.id} should not expose output genealogy`)
+      }
 
       return [
         `Batches: ${batches.length}`,
         `Inspected: ${inspected.map((batch) => batch.id).join(', ')}`,
-        `Released output: ${releasedBatch.outputLot.lotNumber}`,
-        `Genealogy outputLotId: ${releasedBatch.genealogy.outputLotId}`,
+        releasedBatch
+          ? `Released output: ${releasedBatch.outputLot.lotNumber} / ${releasedBatch.genealogy.outputLotId}`
+          : `Pending release: ${activeBatch.id} / ${activeBatch.status}`,
       ]
     },
   },
@@ -348,11 +336,11 @@ const testCases = [
     id: 'TC-007',
     module: 'Frontend Auth / Production UI',
     priority: 'P0',
-    title: 'Live UI logs in without frontend secrets and renders Production phase evidence',
-    objective: 'Verify the deployed Pages app can authenticate with the cookie session, survive reload, and render the Phase 9 production panels.',
+    title: 'Live UI logs in without frontend secrets and renders the Production lifecycle',
+    objective: 'Verify the deployed Pages app can authenticate with the cookie session, survive reload, and render customer-facing Production controls.',
     steps: [
       'Open the live Pages app in Chromium.',
-      'Login with owner@example.test.',
+      'Login with admin@labofscents.org.',
       'Inspect localStorage and API-domain cookies.',
       'Reload and confirm the console restores from cookie.',
       'Open the Production module and capture screenshot evidence.',
@@ -362,10 +350,62 @@ const testCases = [
       'localStorage does not contain olfactoryops.auth.v1.',
       'localStorage only stores the session marker.',
       'API cookie named oo_session is HttpOnly and Secure.',
-      'Production UI shows Work Order & QC Protocol, Batch Board, and Phase 9 Guardrails.',
+      'Production UI shows Work Order & QC Protocol, Batch Board, and Lifecycle Gate.',
       'No relevant console errors, page errors, or failed requests are emitted.',
     ],
     execute: async () => runUiFunctionalCase(),
+  },
+  {
+    id: 'TC-008',
+    module: 'Edge API / Abuse Controls',
+    priority: 'P0',
+    title: 'Authentication throttling returns a standard retry boundary',
+    objective: 'Verify repeated invalid logins are stopped by the D1-backed limiter before the authentication handler runs again.',
+    steps: [
+      'Submit eight invalid logins for a unique non-member email.',
+      'Submit a ninth invalid login inside the same ten-minute window.',
+      'Inspect the 429 payload and Retry-After header.',
+    ],
+    assertions: [
+      'The first eight invalid logins preserve the normal 403 authentication response.',
+      'The ninth attempt returns 429 with auth-login limit metadata.',
+      'Retry-After is a positive number of seconds.',
+    ],
+    execute: async () => {
+      const testEmail = `rate-limit-${runStamp.toLowerCase()}@example.invalid`
+      for (let attempt = 1; attempt <= 8; attempt += 1) {
+        const rejected = await apiFetch(
+          '/auth/login',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: testEmail, password: 'DefinitelyWrong2026' }),
+          },
+          { useCookie: false, useCsrf: false },
+        )
+        assertStatus(rejected, 403, `invalid login ${attempt} should preserve auth rejection`)
+      }
+
+      const limited = await apiFetch(
+        '/auth/login',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: testEmail, password: 'DefinitelyWrong2026' }),
+        },
+        { useCookie: false, useCsrf: false },
+      )
+      assertStatus(limited, 429, 'ninth invalid login should be rate limited')
+      assert(limited.json?.limitKey === 'auth-login', 'rate-limit payload should identify auth-login')
+      const retryAfter = Number(limited.headers.get('retry-after'))
+      assert(Number.isFinite(retryAfter) && retryAfter > 0, 'Retry-After should be a positive number')
+
+      return [
+        `Rate-limit email: ${testEmail}`,
+        `Limit key: ${limited.json.limitKey}`,
+        `Retry-After: ${retryAfter}s`,
+      ]
+    },
   },
 ]
 
@@ -470,6 +510,7 @@ async function runUiFunctionalCase() {
     assert(!/vite|webpack|runtime error|internal server error/i.test(bodyText), 'app should not show a framework error overlay')
 
     await page.getByLabel('Login email').fill(loginEmail)
+    await page.getByLabel('Login password').fill(loginPassword)
     await page.getByRole('button', { name: /^Login$/ }).last().click()
     await page.locator('.topbar').waitFor({ timeout: 20_000 })
     await page.waitForFunction(() => window.localStorage.getItem('olfactoryops.has_session.v1') === '1')
@@ -498,10 +539,10 @@ async function runUiFunctionalCase() {
     const workOrderHeading = page.getByText('Work Order & QC Protocol')
     await workOrderHeading.waitFor({ timeout: 20_000 })
     await page.getByText('Batch Board').waitFor({ timeout: 20_000 })
-    await page.getByText('Phase 9 Guardrails').waitFor({ timeout: 20_000 })
+    await page.getByText('Lifecycle Gate').waitFor({ timeout: 20_000 })
     await page.getByText(/Output|Pending release/).first().waitFor({ timeout: 20_000 })
 
-    const productionScreenshot = path.join(evidenceRoot, 'ui-production-phase9.png')
+    const productionScreenshot = path.join(evidenceRoot, 'ui-production-lifecycle.png')
     await workOrderHeading.scrollIntoViewIfNeeded()
     await page.screenshot({ path: productionScreenshot, fullPage: true })
 
@@ -524,7 +565,7 @@ async function runUiFunctionalCase() {
 
 async function apiFetch(pathname, init = {}, options = {}) {
   const headers = new Headers(init.headers ?? {})
-  headers.set('Origin', appUrl)
+  headers.set('Origin', options.origin ?? appUrl)
   if (csrfToken && options.useCsrf !== false && isMutatingRequest(init)) {
     headers.set('X-CSRF-Token', csrfToken)
   }
@@ -588,6 +629,19 @@ function getSetCookieValues(headers) {
   }
   const value = headers.get('set-cookie')
   return value ? [value] : []
+}
+
+function assertHeaderEquals(response, name, expected) {
+  const actual = response.headers.get(name)
+  assert(actual === expected, `${name} should equal ${expected}, got ${actual ?? '(missing)'}`)
+}
+
+function assertHeaderContains(response, name, expected) {
+  const actual = response.headers.get(name)
+  assert(
+    typeof actual === 'string' && actual.includes(expected),
+    `${name} should include ${expected}, got ${actual ?? '(missing)'}`,
+  )
 }
 
 function assertStatus(response, expected, message) {
@@ -688,6 +742,14 @@ function stampForFile(date) {
 
 function relativeReportPath(filePath) {
   return path.relative(reportRoot, filePath).replace(/\\/g, '/')
+}
+
+function requireEnvironmentSecret(name) {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`${name} is required; provide it through the process environment`)
+  }
+  return value
 }
 
 function stripTrailingSlash(value) {
