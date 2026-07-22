@@ -199,11 +199,20 @@ The beta can use Vercel for the Vite frontend while Cloudflare remains the API a
 
 - `https://olfactoryops-beta.vercel.app`: Vercel beta frontend, built with `npm run build:test`.
 - `https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1`: Cloudflare Worker test API backed by the isolated `olfactoryops-test` D1 database.
-- `https://beta.labofscents.org`: recommended customer-facing beta hostname after it is added to the Vercel project and its DNS CNAME is created in the Cloudflare zone.
+- `https://beta.labofscents.org`: recommended customer-facing beta hostname after it is added to the Vercel project and its Cloudflare DNS record is created.
 
 `vercel.json` supplies SPA fallback and the same browser security headers used by Pages. The test Worker allowlists only the named Vercel and beta origins; do not allow `*.vercel.app`, because credentialed CORS must remain restricted to trusted frontend hosts.
 
 Keep the beta hostname under `labofscents.org` when possible. It is same-site with `api.labofscents.org`, which makes the secure session cookie more reliable than using an unrelated `vercel.app` hostname.
+
+For the Vercel project currently used by this repository, add the following Cloudflare DNS-only record, then run `vercel domains verify beta.labofscents.org --scope noxelis`:
+
+```text
+Type: A
+Name: beta
+Target: 76.76.21.21
+Proxy status: DNS only
+```
 
 ### Supabase Boundary
 

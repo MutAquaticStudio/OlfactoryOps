@@ -32,3 +32,4 @@ reports/*.md
 *.njsproj
 *.sln
 *.sw?
+.vercel
