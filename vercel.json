@@ -5,6 +5,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/status",
+      "destination": "/status.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }
