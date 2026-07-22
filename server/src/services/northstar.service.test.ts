@@ -211,7 +211,7 @@ describe('NorthStarService', () => {
 
   it('commits lab usage through OUT movements and reverses by compensation', () => {
     const service = createAuthenticatedService()
-    const commit = service.commitLabUsage('frm-0421', 12.5).data
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5).data
 
     expect(commit.usage.status).toBe('COMMITTED')
     expect(commit.usage.weighingSession?.status).toBe('READY')
@@ -228,7 +228,7 @@ describe('NorthStarService', () => {
 
   it('exposes lab usage history, detail, and reverse-by-id evidence', () => {
     const service = createAuthenticatedService()
-    const commit = service.commitLabUsage('frm-0421', 12.5, {
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5, {
       purpose: 'sample',
       projectCode: 'NXL-RD-0421',
       sampleCode: 'SMP-0421-A',
@@ -257,14 +257,14 @@ describe('NorthStarService', () => {
   it('records lab weighing sessions without creating inventory movements', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const actuals = plan.allocations.map((allocation, index) => ({
       materialId: allocation.materialId,
       lotId: allocation.lotId,
       actualGrams: index === 0 ? Number((allocation.allocatedGrams * 1.01).toFixed(4)) : allocation.allocatedGrams,
     }))
 
-    const result = service.recordLabWeighingSession('frm-0421', 12.5, {
+    const result = service.recordLabWeighingSession('frm-accord-citrus', 12.5, {
       actuals,
       tolerancePercent: 2,
       operator: 'Bench Chemist',
@@ -279,11 +279,11 @@ describe('NorthStarService', () => {
 
   it('commits lab usage with actual weighed quantities', () => {
     const service = createAuthenticatedService()
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const firstAllocation = plan.allocations[0]!
     const actualGrams = Number((firstAllocation.allocatedGrams * 0.99).toFixed(4))
 
-    const commit = service.commitLabUsage('frm-0421', 12.5, {
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5, {
       actuals: [
         {
           materialId: firstAllocation.materialId,
@@ -304,11 +304,11 @@ describe('NorthStarService', () => {
   it('blocks out-of-tolerance lab weighing commits before inventory changes', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const firstAllocation = plan.allocations[0]!
 
     expect(() =>
-      service.commitLabUsage('frm-0421', 12.5, {
+      service.commitLabUsage('frm-accord-citrus', 12.5, {
         actuals: [
           {
             materialId: firstAllocation.materialId,
@@ -320,6 +320,19 @@ describe('NorthStarService', () => {
         operator: 'Bench Chemist',
       }),
     ).toThrow(UnprocessableEntityException)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('requires a currently published formula before planning or posting lab inventory usage', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    expect(() => service.labUsagePlan('frm-0421', 12.5)).toThrowError(
+      'Formula FRM-0421 must be published before lab inventory usage',
+    )
+    expect(() => service.commitLabUsage('frm-0421', 12.5)).toThrowError(
+      'Formula FRM-0421 must be published before lab inventory usage',
+    )
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 

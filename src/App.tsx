@@ -1605,6 +1605,7 @@ function App() {
   const [materialRecords, setMaterialRecords] = useState<Material[]>(() => structuredClone(materials))
   const [formulaRecords, setFormulaRecords] = useState<Formula[]>([])
   const [activeFormulaId, setActiveFormulaId] = useState('')
+  const [labUsageFormulaId, setLabUsageFormulaId] = useState('')
   const [lots, setLots] = useState<InventoryLot[]>([])
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [storageLocationRecords, setStorageLocationRecords] = useState<StorageLocation[]>(storageLocations)
@@ -1657,6 +1658,21 @@ function App() {
   const selectedFormula = useMemo(() => {
     return scopedFormulaRecords.find((formula) => formula.id === activeFormulaId) ?? scopedFormulaRecords[0] ?? emptyFormulaPlaceholder
   }, [activeFormulaId, scopedFormulaRecords])
+  const publishedLabUsageFormulas = useMemo(
+    () =>
+      scopedFormulaRecords.filter(
+        (formula) => formula.workflowStatus === 'APPROVED' && Boolean(formula.lockedVersion),
+      ),
+    [scopedFormulaRecords],
+  )
+  const selectedLabUsageFormula = useMemo(
+    () =>
+      publishedLabUsageFormulas.find((formula) => formula.id === labUsageFormulaId) ??
+      publishedLabUsageFormulas[0] ??
+      emptyFormulaPlaceholder,
+    [labUsageFormulaId, publishedLabUsageFormulas],
+  )
+  const hasPublishedLabUsageFormula = publishedLabUsageFormulas.length > 0
   const resolvedLeaves = useMemo(
     () =>
       resolveFormulaWithCatalog(
@@ -1668,14 +1684,21 @@ function App() {
   )
   const totals = useMemo(() => formulaTotals(resolvedLeaves), [resolvedLeaves])
   const curve = useMemo(() => evaporationCurve(resolvedLeaves), [resolvedLeaves])
+  const labUsageResolvedLeaves = useMemo(
+    () =>
+      hasPublishedLabUsageFormula
+        ? resolveFormulaWithCatalog(selectedLabUsageFormula.id, scopedFormulaRecords, materialRecords)
+        : [],
+    [hasPublishedLabUsageFormula, materialRecords, scopedFormulaRecords, selectedLabUsageFormula.id],
+  )
   const labPlan = useMemo(
-    () => planLabUsage(resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams),
-    [resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams],
+    () => planLabUsage(labUsageResolvedLeaves, lots, batchGrams, selectedLabUsageFormula.targetGrams),
+    [labUsageResolvedLeaves, lots, batchGrams, selectedLabUsageFormula.targetGrams],
   )
   const weighingSessionPreview = useMemo(
     () =>
       buildWeighingSessionPreview({
-        formula: selectedFormula,
+        formula: selectedLabUsageFormula,
         plan: labPlan,
         lots,
         batchGrams,
@@ -1683,7 +1706,7 @@ function App() {
         tolerancePercent: weighingTolerancePercent,
         operator: weighingOperator,
       }),
-    [actualWeights, batchGrams, labPlan, lots, selectedFormula, weighingOperator, weighingTolerancePercent],
+    [actualWeights, batchGrams, labPlan, lots, selectedLabUsageFormula, weighingOperator, weighingTolerancePercent],
   )
   const weighingReady = weighingSessionPreview.status === 'READY'
   const stock = useMemo(() => stockSummary(lots, materialRecords), [lots, materialRecords])
@@ -1696,6 +1719,18 @@ function App() {
     selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
   const canReceiveInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.receive') : false
   const canAdjustInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.adjust') : false
+
+  useEffect(() => {
+    setLabUsageFormulaId((current) =>
+      publishedLabUsageFormulas.some((formula) => formula.id === current)
+        ? current
+        : (publishedLabUsageFormulas[0]?.id ?? ''),
+    )
+  }, [publishedLabUsageFormulas])
+
+  useEffect(() => {
+    setActualWeights({})
+  }, [labUsageFormulaId])
   const navigateToDomain = useCallback(
     (key: DomainKey) => {
       setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
@@ -1932,7 +1967,11 @@ function App() {
   }, [labPlan.allocations])
 
   const commitLabUsage = useCallback(async () => {
-    if (!weighingReady || resolvedLeaves.length === 0) {
+    if (!hasPublishedLabUsageFormula) {
+      setLabUsageStatusMessage('Publish a formula before recording lab inventory usage')
+      return
+    }
+    if (!weighingReady || labUsageResolvedLeaves.length === 0) {
       return
     }
 
@@ -1945,7 +1984,7 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          formulaId: selectedFormula.id,
+          formulaId: selectedLabUsageFormula.id,
           grams: batchGrams,
           ...(actualsDifferFromTargets
             ? {
@@ -1980,8 +2019,9 @@ function App() {
     labUsageProjectCode,
     labUsagePurpose,
     labUsageSampleCode,
-    resolvedLeaves.length,
-    selectedFormula.id,
+    hasPublishedLabUsageFormula,
+    labUsageResolvedLeaves.length,
+    selectedLabUsageFormula.id,
     weighingOperator,
     weighingSessionPreview.lines,
     weighingTolerancePercent,
@@ -2541,6 +2581,11 @@ function App() {
                   setFormulaRecords={setFormulaRecords}
                   activeFormulaId={activeFormulaId}
                   setActiveFormulaId={setActiveFormulaId}
+                  labUsageFormulaRecords={publishedLabUsageFormulas}
+                  labUsageFormulaId={labUsageFormulaId}
+                  setLabUsageFormulaId={setLabUsageFormulaId}
+                  selectedLabUsageFormula={selectedLabUsageFormula}
+                  hasPublishedLabUsageFormula={hasPublishedLabUsageFormula}
                   resolvedLeaves={resolvedLeaves}
                   totals={totals}
                   curve={curve}
@@ -2627,7 +2672,7 @@ function App() {
         actionLabel="Create movements"
         onClose={() => setModal(null)}
         onAction={commitLabUsage}
-        actionDisabled={!weighingReady || labUsageBusy}
+        actionDisabled={!hasPublishedLabUsageFormula || !weighingReady || labUsageBusy}
       >
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} compact />
         <WeighingEvidence session={weighingSessionPreview} compact />
@@ -3951,6 +3996,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setFormulaRecords,
   activeFormulaId,
   setActiveFormulaId,
+  labUsageFormulaRecords,
+  labUsageFormulaId,
+  setLabUsageFormulaId,
+  selectedLabUsageFormula,
+  hasPublishedLabUsageFormula,
   resolvedLeaves,
   totals,
   curve,
@@ -4004,6 +4054,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setFormulaRecords: Dispatch<SetStateAction<Formula[]>>
   activeFormulaId: string
   setActiveFormulaId: (id: string) => void
+  labUsageFormulaRecords: Formula[]
+  labUsageFormulaId: string
+  setLabUsageFormulaId: (id: string) => void
+  selectedLabUsageFormula: Formula
+  hasPublishedLabUsageFormula: boolean
   resolvedLeaves: ResolvedLeaf[]
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
@@ -4101,6 +4156,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
       )}
       {domain.key === 'labUsage' && (
         <LabUsageWorkspace
+          publishedFormulas={labUsageFormulaRecords}
+          selectedFormulaId={labUsageFormulaId}
+          setSelectedFormulaId={setLabUsageFormulaId}
+          selectedFormula={selectedLabUsageFormula}
+          hasPublishedFormula={hasPublishedLabUsageFormula}
           labPlan={labPlan}
           batchGrams={batchGrams}
           setBatchGrams={setBatchGrams}
@@ -8239,6 +8299,11 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
 })
 
 const LabUsageWorkspace = memo(function LabUsageWorkspace({
+  publishedFormulas,
+  selectedFormulaId,
+  setSelectedFormulaId,
+  selectedFormula,
+  hasPublishedFormula,
   labPlan,
   batchGrams,
   setBatchGrams,
@@ -8263,6 +8328,11 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   onCommit,
   onReverse,
 }: {
+  publishedFormulas: Formula[]
+  selectedFormulaId: string
+  setSelectedFormulaId: (id: string) => void
+  selectedFormula: Formula
+  hasPublishedFormula: boolean
   labPlan: ReturnType<typeof planLabUsage>
   batchGrams: number
   setBatchGrams: (value: number) => void
@@ -8293,12 +8363,41 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   return (
     <div className="workspace-grid lab-grid">
       <Panel
-        title="Commit Preview"
+        title="Inventory Usage Preview"
         icon={ClipboardCheck}
         right={<DataTag label="Formula" value={weighingSession.formulaCode} />}
       >
+        <div className="lab-usage-formula-picker">
+          <label className="field-row">
+            <span>Published formula</span>
+            <select
+              aria-label="Published formula for lab usage"
+              value={selectedFormulaId}
+              onChange={(event) => setSelectedFormulaId(event.target.value)}
+              disabled={!hasPublishedFormula}
+            >
+              {!hasPublishedFormula ? <option value="">No published formulas available</option> : null}
+              {publishedFormulas.map((formula) => (
+                <option key={formula.id} value={formula.id}>
+                  {formula.code} / {formula.name} / {formula.version}
+                </option>
+              ))}
+            </select>
+          </label>
+          {hasPublishedFormula ? (
+            <div className="lab-usage-formula-summary">
+              <strong>{selectedFormula.name}</strong>
+              <span>
+                {selectedFormula.formulaType === 'ACCORD' ? 'Accord' : 'Fine fragrance'} / published{' '}
+                {selectedFormula.lockedVersion ?? selectedFormula.version}
+              </span>
+            </div>
+          ) : (
+            <div className="empty-state compact">Publish and approve a formula before recording material usage.</div>
+          )}
+        </div>
         <label className="slider-row">
-          <span>Trial batch grams</span>
+          <span>Batch grams</span>
           <input
             min={5}
             max={40}
@@ -8310,11 +8409,22 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
           <strong className="mono-value">{formatGrams(batchGrams)}</strong>
         </label>
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} />
-        <div className="empty-state compact">{statusMessage}</div>
+        <div className="empty-state compact">
+          <strong>Inventory movement log</strong>
+          <span>
+            Actual weights post immutable <code>LAB_CONSUMPTION</code> movements against the allocated inventory lots.
+          </span>
+          <span>{statusMessage}</span>
+        </div>
         <div className="action-row">
-          <button className="primary-button" type="button" onClick={onCommit} disabled={!weighingReady || busy}>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={onCommit}
+            disabled={!hasPublishedFormula || !weighingReady || busy}
+          >
             <Play size={16} />
-            {busy ? 'Working' : 'Commit Actual Usage'}
+            {busy ? 'Working' : 'Post inventory usage'}
           </button>
           <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted || busy}>
             <RotateCcw size={16} />
@@ -8427,10 +8537,10 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Usage History" icon={Activity}>
+      <Panel title="Inventory Movement History" icon={Activity}>
         <div className="history-list">
           {usageHistory.length === 0 ? (
-            <div className="empty-state">No lab usage committed in this session.</div>
+            <div className="empty-state">No lab inventory movements recorded in this workspace.</div>
           ) : (
             usageHistory.map((usage) => (
               <div className="history-row" key={usage.id}>
@@ -8438,6 +8548,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
                   <strong>{usage.id}</strong>
                   <span>
                     {usage.formulaCode} / {formatGrams(usage.batchGrams)}
+                    {' / LAB_CONSUMPTION'}
                     {usage.purpose ? ` / ${usage.purpose}` : ''}
                     {usage.sampleCode ? ` / ${usage.sampleCode}` : ''}
                     {usage.weighingSession

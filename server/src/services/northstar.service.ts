@@ -3763,7 +3763,7 @@ export class NorthStarService {
 
   labUsagePlan(formulaId: string, grams: number) {
     const session = this.currentSession()
-    const formula = this.formulaForSession(formulaId, session)
+    const formula = this.publishedFormulaForLabUsage(formulaId, session)
     if (!Number.isFinite(grams) || grams <= 0) {
       throw new UnprocessableEntityException('Lab usage grams must be greater than 0')
     }
@@ -3811,7 +3811,7 @@ export class NorthStarService {
 
   recordLabWeighingSession(formulaId: string, grams: number, options: LabWeighingOptions = {}) {
     const session = this.currentSession()
-    const formula = this.formulaForSession(formulaId, session)
+    const formula = this.publishedFormulaForLabUsage(formulaId, session)
     const plan = this.labUsagePlan(formulaId, grams).data
     if (!plan.canCommit) {
       throw new UnprocessableEntityException({
@@ -3891,7 +3891,7 @@ export class NorthStarService {
   commitLabUsage(formulaId: string, grams: number, options: LabWeighingOptions = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'inventory.commitLabUsage')
-    const formula = this.formulaForSession(formulaId, session)
+    const formula = this.publishedFormulaForLabUsage(formulaId, session)
     const plan = this.labUsagePlan(formulaId, grams).data
     const weighingSession = this.recordLabWeighingSession(formulaId, grams, options).data.weighingSession
     if (weighingSession.status !== 'READY') {
@@ -7871,6 +7871,23 @@ export class NorthStarService {
     const formula = this.formulaCatalogForSession(session).find((item) => item.id === id)
     if (!formula) {
       throw new NotFoundException(`Formula ${id} was not found`)
+    }
+    return formula
+  }
+
+  private publishedFormulaForLabUsage(id: string, session: AuthSession) {
+    if (!id.trim()) {
+      throw new UnprocessableEntityException('Select a published formula before recording lab usage')
+    }
+    const formula = this.formulaForSession(id, session)
+    const hasApprovedSnapshot = this.formulaVersionRecords.some(
+      (version) =>
+        version.formulaId === formula.id &&
+        (version.organizationId || 'org-nxl') === session.organizationId &&
+        version.status === 'APPROVED',
+    )
+    if (formula.workflowStatus !== 'APPROVED' || !hasApprovedSnapshot) {
+      throw new UnprocessableEntityException(`Formula ${formula.code} must be published before lab inventory usage`)
     }
     return formula
   }

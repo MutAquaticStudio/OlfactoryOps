@@ -809,7 +809,7 @@ export class NorthStarController {
   }
 
   @Get('lab-usage/plan')
-  labUsagePlan(@Query('formulaId') formulaId = 'frm-0421', @Query('grams') grams = '12.5') {
+  labUsagePlan(@Query('formulaId') formulaId = '', @Query('grams') grams = '12.5') {
     return this.northStar.labUsagePlan(formulaId, Number(grams))
   }
 
@@ -820,7 +820,7 @@ export class NorthStarController {
 
   @Post('lab-usage/weighing-session')
   recordLabWeighingSession(@Body() body: LabUsageBody = {}) {
-    return this.northStar.recordLabWeighingSession(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
+    return this.northStar.recordLabWeighingSession(body.formulaId ?? '', body.grams ?? 12.5, {
       actuals: body.actuals,
       tolerancePercent: body.tolerancePercent,
       operator: body.operator,
@@ -829,7 +829,7 @@ export class NorthStarController {
 
   @Post('lab-usage/commit')
   commitLabUsage(@Body() body: LabUsageBody = {}) {
-    return this.northStar.commitLabUsage(body.formulaId ?? 'frm-0421', body.grams ?? 12.5, {
+    return this.northStar.commitLabUsage(body.formulaId ?? '', body.grams ?? 12.5, {
       actuals: body.actuals,
       tolerancePercent: body.tolerancePercent,
       operator: body.operator,

@@ -3430,6 +3430,33 @@ kbd {
   color: var(--text-2);
 }
 
+.lab-usage-formula-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr);
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.lab-usage-formula-summary {
+  display: grid;
+  gap: 3px;
+  min-height: 66px;
+  padding: 10px 12px;
+  border: 1px solid rgba(55, 214, 160, 0.2);
+  border-radius: 8px;
+  background: rgba(55, 214, 160, 0.06);
+}
+
+.lab-usage-formula-summary strong {
+  color: var(--text);
+}
+
+.lab-usage-formula-summary span {
+  color: var(--text-2);
+  font-size: 0.76rem;
+}
+
 input[type='range'] {
   accent-color: var(--blue);
 }
@@ -4404,6 +4431,7 @@ input[type='range'] {
   }
 
   .slider-row,
+  .lab-usage-formula-picker,
   .tenant-form-row,
   .weighing-controls,
   .customization-form-grid,
