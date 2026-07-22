@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
+import QRCode from 'qrcode'
 import {
   Activity,
   ArrowDown,
@@ -79,16 +80,15 @@ import {
   formatSequenceValue,
   formulaTotals,
   formulas,
-  formulaVersions,
   initialLots,
   isLotEligibleForInventory,
   materials,
   moleculeComponents,
+  orderRequiredGrams,
   permissionCatalog,
   planLabUsage,
   priceLists,
   priceHistory,
-  productionBatches,
   purchaseOrders,
   quotes,
   readinessStats,
@@ -1037,6 +1037,55 @@ const sensitiveApprovalFieldNames = new Set([
   'mfacode',
 ])
 
+function escapePrintHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function openPrintDocument(title: string, content: string) {
+  const printWindow = window.open('', '_blank', 'popup,width=860,height=760,noopener,noreferrer')
+  if (!printWindow) {
+    return false
+  }
+  printWindow.document.open()
+  printWindow.document.write(`<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapePrintHtml(title)}</title>
+<style>
+  @page { size: auto; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: #102033; background: #fff; font: 12px/1.45 Arial, sans-serif; }
+  .sheet { max-width: 760px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; gap: 18px; border-bottom: 2px solid #102033; padding-bottom: 12px; margin-bottom: 18px; }
+  .brand { font-size: 20px; font-weight: 700; letter-spacing: .4px; }
+  .muted { color: #566579; }
+  .tag { border: 1px solid #102033; border-radius: 4px; padding: 4px 8px; font-weight: 700; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { border: 1px solid #aab6c4; padding: 8px; text-align: left; vertical-align: top; }
+  th { background: #edf3f8; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+  .field { border-bottom: 1px solid #aab6c4; min-height: 32px; padding: 3px 0; }
+  .field strong { display: block; font-size: 10px; text-transform: uppercase; color: #566579; }
+  .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 42px; }
+  .signature { border-top: 1px solid #102033; padding-top: 6px; min-height: 38px; }
+  .label { width: 100mm; min-height: 60mm; border: 1.5px solid #102033; padding: 8mm; display: grid; grid-template-columns: 1fr 38mm; gap: 6mm; }
+  .label h1 { font-size: 15px; margin: 0 0 4px; }
+  .label p { margin: 2px 0; }
+  .label code { display: block; margin-top: 8px; word-break: break-all; font-size: 8px; }
+  .qr svg { width: 34mm; height: 34mm; display: block; }
+  @media print { body { print-color-adjust: exact; } .sheet { max-width: none; } }
+</style></head><body>${content}</body></html>`)
+  printWindow.document.close()
+  printWindow.setTimeout(() => {
+    printWindow.focus()
+    printWindow.print()
+  }, 180)
+  return true
+}
+
 let csrfToken: string | null = null
 
 async function requestApi<T>(path: string, init?: RequestInit) {
@@ -1566,6 +1615,8 @@ function App() {
   const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
   const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
   const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
+  const [receiveSdsFile, setReceiveSdsFile] = useState<File | null>(null)
+  const [receiveCoaFile, setReceiveCoaFile] = useState<File | null>(null)
   const [adjustmentLotId, setAdjustmentLotId] = useState('')
   const [adjustmentDirection, setAdjustmentDirection] = useState<'IN' | 'OUT'>('OUT')
   const [adjustmentQuantityGrams, setAdjustmentQuantityGrams] = useState(5)
@@ -2063,6 +2114,24 @@ function App() {
       location: 'Receiving Bay',
       qualityStatus: 'APPROVED',
       container: 'Receiving container',
+      documents: [
+        receiveSdsFile
+          ? {
+              type: 'SDS' as const,
+              fileName: receiveSdsFile.name,
+              fileSizeKb: Math.ceil(receiveSdsFile.size / 1024),
+              mimeType: receiveSdsFile.type || 'application/octet-stream',
+            }
+          : null,
+        receiveCoaFile
+          ? {
+              type: 'CoA' as const,
+              fileName: receiveCoaFile.name,
+              fileSizeKb: Math.ceil(receiveCoaFile.size / 1024),
+              mimeType: receiveCoaFile.type || 'application/octet-stream',
+            }
+          : null,
+      ].filter((document): document is NonNullable<typeof document> => document !== null),
     }
 
     try {
@@ -2085,6 +2154,8 @@ function App() {
       setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
       setReceiveQuantityGrams(25)
+      setReceiveSdsFile(null)
+      setReceiveCoaFile(null)
       setActiveKey('inventory')
       setModal(null)
     } catch (error) {
@@ -2108,6 +2179,8 @@ function App() {
     receiveLotNumber,
     receiveMaterialId,
     receiveQuantityGrams,
+    receiveCoaFile,
+    receiveSdsFile,
     lots.length,
     submitInventoryApprovalRequest,
   ])
@@ -2682,6 +2755,26 @@ function App() {
               value={receiveExpiryDate}
               onChange={(event) => setReceiveExpiryDate(event.target.value)}
             />
+          </label>
+          <label className="field-row">
+            <span>SDS file</span>
+            <input
+              aria-label="Receipt SDS file"
+              accept="application/pdf,image/png,image/jpeg"
+              type="file"
+              onChange={(event) => setReceiveSdsFile(event.target.files?.[0] ?? null)}
+            />
+            <small>{receiveSdsFile ? `${receiveSdsFile.name} attached for review` : 'Optional PDF or image'}</small>
+          </label>
+          <label className="field-row">
+            <span>CoA file</span>
+            <input
+              aria-label="Receipt CoA file"
+              accept="application/pdf,image/png,image/jpeg"
+              type="file"
+              onChange={(event) => setReceiveCoaFile(event.target.files?.[0] ?? null)}
+            />
+            <small>{receiveCoaFile ? `${receiveCoaFile.name} attached for review` : 'Optional PDF or image'}</small>
           </label>
         </div>
       </BlackPopup>
@@ -3988,7 +4081,9 @@ const DomainWorkspace = memo(function DomainWorkspace({
         />
       )}
       {domain.key === 'documents' && <DocumentsWorkspace />}
-      {domain.key === 'production' && <ProductionWorkspace />}
+      {domain.key === 'production' && (
+        <ProductionWorkspace formulaRecords={formulaRecords} materialRecords={materialRecords} />
+      )}
       {domain.key === 'procurement' && (
         <ProcurementWorkspace
           stock={stock}
@@ -3997,7 +4092,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
           onMovementsChange={onMovementsChange}
         />
       )}
-      {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} />}
+      {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} session={session} />}
       {domain.key === 'orders' && <OrdersWorkspace stock={stock} />}
       {domain.key === 'costing' && <CostingWorkspace />}
       {domain.key === 'analytics' && <AnalyticsWorkspace />}
@@ -7428,6 +7523,28 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
     }
   }
 
+  async function openLotComplianceDocument(documentId: string) {
+    const documentWindow = window.open('', '_blank', 'noopener,noreferrer')
+    setLotDocumentStatus('Checking permission before opening document')
+    try {
+      const payload = await requestApi<DocumentDownloadResponse>(`/documents/${encodeURIComponent(documentId)}/signed-url`, {
+        method: 'POST',
+      })
+      setLotComplianceDocuments((current) =>
+        current.map((document) => (document.id === documentId ? payload.document : document)),
+      )
+      if (!documentWindow) {
+        setLotDocumentStatus('Document link prepared; allow pop-ups to open the signed document')
+        return
+      }
+      documentWindow.location.assign(payload.signedUrl.url)
+      setLotDocumentStatus(`${payload.document.title} opened with a time-limited link`)
+    } catch (error) {
+      documentWindow?.close()
+      setLotDocumentStatus(error instanceof Error ? error.message : 'Document could not be opened')
+    }
+  }
+
   function upsertLot(lot: InventoryLot) {
     onLotsChange((current) => current.map((item) => (item.id === lot.id ? lot : item)))
   }
@@ -7552,7 +7669,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   }
 
   async function printLotLabel() {
-    if (!selectedLot) {
+    if (!selectedLot || !selectedMaterial) {
       return
     }
     try {
@@ -7560,10 +7677,55 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         method: 'POST',
       })
       setLabelPayload(payload.label)
+      const qrSvg = await QRCode.toString(payload.label.qrValue, {
+        type: 'svg',
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 220,
+      })
+      const printed = openPrintDocument(
+        `QR label ${selectedLot.lotNumber}`,
+        `<main class="sheet"><section class="label">
+          <div><div class="brand">OlfactoryOps</div><h1>${escapePrintHtml(selectedMaterial.name)}</h1>
+          <p><strong>Lot:</strong> ${escapePrintHtml(selectedLot.lotNumber)}</p>
+          <p><strong>CAS:</strong> ${escapePrintHtml(selectedMaterial.cas)}</p>
+          <p><strong>Quantity:</strong> ${escapePrintHtml(formatGrams(selectedLot.quantityGrams))}</p>
+          <p><strong>Expiry:</strong> ${escapePrintHtml(selectedLot.expiryDate)}</p>
+          <p><strong>Storage:</strong> ${escapePrintHtml(payload.label.storageText)}</p>
+          <code>${escapePrintHtml(payload.label.qrValue)}</code></div><div class="qr">${qrSvg}</div>
+        </section></main>`,
+      )
+      if (!printed) {
+        setInventoryStatus('Label generated; allow pop-ups to print the QR label')
+        return
+      }
       setInventoryStatus(payload.invariant)
     } catch (error) {
       setInventoryStatus(error instanceof Error ? error.message : 'Label generation failed')
     }
+  }
+
+  function printWeightSheet() {
+    if (!selectedLot || !selectedMaterial) {
+      return
+    }
+    const printed = openPrintDocument(
+      `Weight sheet ${selectedLot.lotNumber}`,
+      `<main class="sheet"><header class="header"><div><div class="brand">OlfactoryOps</div>
+        <div class="muted">Controlled material weighing record</div></div><div class="tag">WEIGHT SHEET</div></header>
+        <section class="grid"><div class="field"><strong>Material</strong>${escapePrintHtml(selectedMaterial.name)}</div>
+        <div class="field"><strong>CAS</strong>${escapePrintHtml(selectedMaterial.cas)}</div>
+        <div class="field"><strong>Lot number</strong>${escapePrintHtml(selectedLot.lotNumber)}</div>
+        <div class="field"><strong>Available at print</strong>${escapePrintHtml(formatGrams(selectedLot.quantityGrams - selectedLot.reservedGrams))}</div>
+        <div class="field"><strong>Expiry</strong>${escapePrintHtml(selectedLot.expiryDate)}</div>
+        <div class="field"><strong>Storage location</strong>${escapePrintHtml(selectedLot.location)}</div></section>
+        <table><thead><tr><th>Line</th><th>Target g</th><th>Tare g</th><th>Actual g</th><th>Net g</th><th>Deviation</th></tr></thead>
+        <tbody>${[1, 2, 3, 4].map((line) => `<tr><td>${line}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>
+        <section class="grid"><div class="field"><strong>Batch / formula</strong></div><div class="field"><strong>Equipment ID</strong></div>
+        <div class="field"><strong>Weighed by</strong></div><div class="field"><strong>Timestamp</strong></div></section>
+        <section class="signatures"><div class="signature">Prepared by</div><div class="signature">Checked by</div><div class="signature">QA release</div></section></main>`,
+    )
+    setInventoryStatus(printed ? `Weight sheet opened for ${selectedLot.lotNumber}` : 'Allow pop-ups to print the weight sheet')
   }
 
   async function loadLotGenealogy() {
@@ -7713,6 +7875,9 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               <button className="ghost-button small" type="button" onClick={() => void printLotLabel()}>
                 Print QR Label
               </button>
+              <button className="ghost-button small" type="button" onClick={printWeightSheet}>
+                Print Weight Sheet
+              </button>
               <button className="ghost-button small" type="button" onClick={() => void loadLotGenealogy()}>
                 View Genealogy
               </button>
@@ -7787,7 +7952,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               {inventoryLotComplianceDocuments.length === 0 ? (
                 <div className="empty-state compact">
                   <strong>No SDS / CoA documents available for this lot yet.</strong>
-                  <span>Upload SDS for material and CoA for lot in Documents module when needed.</span>
+                  <span>Attach SDS and CoA while receiving stock; this review queue is the document entry point for inventory.</span>
                 </div>
               ) : (
                 inventoryLotComplianceDocuments.map((document) => (
@@ -7816,6 +7981,13 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
                         }
                         label={document.status}
                       />
+                    <button
+                      className="ghost-button small"
+                      type="button"
+                      onClick={() => void openLotComplianceDocument(document.id)}
+                    >
+                      View
+                    </button>
                     <button
                       className="primary-button small"
                       type="button"
@@ -8527,11 +8699,37 @@ const productionLifecycle: ProductionBatchRecord['status'][] = [
 ]
 
 const productionConsumptionRequiredStatuses = new Set<ProductionBatchRecord['status']>([
+  'MACERATION',
   'FILTRATION',
   'QC',
   'BOTTLING',
   'RELEASED',
 ])
+
+function canMoveProductionBatch(batch: ProductionBatchRecord, status: ProductionBatchRecord['status']) {
+  if (status === batch.status || batch.status === 'RELEASED') {
+    return false
+  }
+  if (status === 'HOLD') {
+    return true
+  }
+  const nextByStatus: Partial<Record<ProductionBatchRecord['status'], ProductionBatchRecord['status']>> = {
+    PLANNED: 'WEIGHING',
+    WEIGHING: 'MACERATION',
+    MACERATION: 'FILTRATION',
+    FILTRATION: 'QC',
+    QC: 'BOTTLING',
+    BOTTLING: 'RELEASED',
+    HOLD: batch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING',
+  }
+  if (nextByStatus[batch.status] !== status) {
+    return false
+  }
+  if (productionConsumptionRequiredStatuses.has(status) && batch.consumedGrams <= 0) {
+    return false
+  }
+  return !(status === 'BOTTLING' || status === 'RELEASED') || batch.qcStatus === 'PASSED'
+}
 
 type ProductionLifecycleFallback = {
   batch: ProductionBatchRecord
@@ -8595,6 +8793,9 @@ function applyProductionLifecycleLocal(
 ): ProductionLifecycleFallback {
   if (!productionLifecycle.includes(status)) {
     return { batch, changed: false, message: `${status} is not a supported lifecycle gate` }
+  }
+  if (!canMoveProductionBatch(batch, status)) {
+    return { batch, changed: false, message: `${batch.id} cannot move from ${batch.status} to ${status}` }
   }
   if (status === 'WEIGHING' && batch.consumedGrams > 0) {
     return { batch, changed: false, message: `${batch.id} cannot return to weighing after consumption` }
@@ -8691,17 +8892,19 @@ function applyProductionConsumeLocal(batch: ProductionBatchRecord): ProductionCo
   return { batch: updated, changed: true, movement, message: `${batch.id} consumed in local production preview` }
 }
 
-function ProductionWorkspace() {
-  const approvedFormulaIds = useMemo(
-    () => new Set(formulaVersions.filter((version) => version.status === 'APPROVED').map((version) => version.formulaId)),
-    [],
-  )
+function ProductionWorkspace({
+  formulaRecords,
+  materialRecords,
+}: {
+  formulaRecords: Formula[]
+  materialRecords: Material[]
+}) {
   const approvedFormulas = useMemo(
-    () => formulas.filter((formula) => approvedFormulaIds.has(formula.id)),
-    [approvedFormulaIds],
+    () => formulaRecords.filter((formula) => formula.workflowStatus === 'APPROVED'),
+    [formulaRecords],
   )
-  const [batches, setBatches] = useState<ProductionBatchRecord[]>(productionBatches)
-  const [selectedFormulaId, setSelectedFormulaId] = useState(approvedFormulas[0]?.id ?? 'frm-0421')
+  const [batches, setBatches] = useState<ProductionBatchRecord[]>([])
+  const [selectedFormulaId, setSelectedFormulaId] = useState('')
   const [targetGrams, setTargetGrams] = useState(25)
   const [statusMessage, setStatusMessage] = useState('Loading production batches')
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -8710,9 +8913,9 @@ function ProductionWorkspace() {
   const activeBatch = batches[0]
 
   const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
-    const leaves = resolveFormulaWithCatalog(batch.formulaId, formulas, materials)
+    const leaves = resolveFormulaWithCatalog(batch.formulaId, formulaRecords, materialRecords)
     return formulaTotals(leaves).costPerGram * batch.targetGrams
-  }, [])
+  }, [formulaRecords, materialRecords])
 
   const updateBatch = useCallback((updated: ProductionBatchRecord) => {
     setBatches((current) => current.map((batch) => (batch.id === updated.id ? updated : batch)))
@@ -8724,7 +8927,8 @@ function ProductionWorkspace() {
       setBatches(payload)
       setStatusMessage('Production batches synced from live API')
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Using local production batch seed')
+      setBatches([])
+      setStatusMessage(error instanceof Error ? error.message : 'Production batches are unavailable')
     }
   }, [])
 
@@ -8732,7 +8936,17 @@ function ProductionWorkspace() {
     void loadBatches()
   }, [loadBatches])
 
+  useEffect(() => {
+    setSelectedFormulaId((current) =>
+      approvedFormulas.some((formula) => formula.id === current) ? current : (approvedFormulas[0]?.id ?? ''),
+    )
+  }, [approvedFormulas])
+
   async function createBatch() {
+    if (!selectedFormulaId) {
+      setStatusMessage('Approve a formula in this workspace before creating a production batch')
+      return
+    }
     setCreating(true)
     setStatusMessage('Creating production batch from approved formula')
     try {
@@ -8830,7 +9044,12 @@ function ProductionWorkspace() {
         <div className="material-form-grid">
           <label className="field-row">
             <span>Approved formula</span>
-            <select value={selectedFormulaId} onChange={(event) => setSelectedFormulaId(event.target.value)}>
+            <select
+              value={selectedFormulaId}
+              onChange={(event) => setSelectedFormulaId(event.target.value)}
+              disabled={approvedFormulas.length === 0}
+            >
+              {approvedFormulas.length === 0 ? <option value="">No approved formulas in this workspace</option> : null}
               {approvedFormulas.map((formula) => (
                 <option value={formula.id} key={formula.id}>
                   {formula.code} / {formula.name}
@@ -8848,7 +9067,12 @@ function ProductionWorkspace() {
               onChange={(event) => setTargetGrams(Number(event.target.value))}
             />
           </label>
-          <button className="primary-button" type="button" onClick={() => void createBatch()} disabled={creating || targetGrams <= 0}>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createBatch()}
+            disabled={creating || targetGrams <= 0 || !selectedFormulaId}
+          >
             {creating ? 'Creating' : 'Create batch'}
           </button>
         </div>
@@ -8868,7 +9092,7 @@ function ProductionWorkspace() {
                 key={status}
                 type="button"
                 onClick={() => void moveBatch(activeBatch.id, status)}
-                disabled={busyId === activeBatch.id || status === 'WEIGHING'}
+                disabled={busyId === activeBatch.id || !canMoveProductionBatch(activeBatch, status)}
               >
                 <span>{status}</span>
               </button>
@@ -8954,7 +9178,7 @@ function ProductionWorkspace() {
                   className="primary-button small"
                   type="button"
                   onClick={() => void consumeBatch(batch.id)}
-                  disabled={busyId === batch.id || batch.consumedGrams > 0}
+                  disabled={busyId === batch.id || batch.consumedGrams > 0 || batch.status !== 'WEIGHING'}
                 >
                   Consume
                 </button>
@@ -8962,7 +9186,7 @@ function ProductionWorkspace() {
                   className="ghost-button small"
                   type="button"
                   onClick={() => void moveBatch(batch.id, 'FILTRATION')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'FILTRATION')}
                 >
                   Filtration
                 </button>
@@ -8970,7 +9194,7 @@ function ProductionWorkspace() {
                   className="ghost-button small"
                   type="button"
                   onClick={() => void moveBatch(batch.id, 'QC')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'QC')}
                 >
                   QC ready
                 </button>
@@ -8978,7 +9202,7 @@ function ProductionWorkspace() {
                   className="ghost-button small"
                   type="button"
                   onClick={() => void recordQc(batch.id, 'PASSED')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.qcStatus === 'PASSED'}
+                  disabled={busyId === batch.id || batch.status !== 'QC' || batch.qcStatus === 'PASSED'}
                 >
                   QC pass
                 </button>
@@ -8986,15 +9210,23 @@ function ProductionWorkspace() {
                   className="ghost-button small"
                   type="button"
                   onClick={() => void recordQc(batch.id, 'FAILED')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
+                  disabled={busyId === batch.id || batch.status !== 'QC'}
                 >
                   Hold
                 </button>
                 <button
                   className="ghost-button small"
                   type="button"
+                  onClick={() => void moveBatch(batch.id, batch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING')}
+                  disabled={busyId === batch.id || batch.status !== 'HOLD'}
+                >
+                  Resume
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
                   onClick={() => void moveBatch(batch.id, 'RELEASED')}
-                  disabled={busyId === batch.id || batch.qcStatus !== 'PASSED' || batch.status === 'RELEASED'}
+                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'RELEASED')}
                 >
                   Release
                 </button>
@@ -9642,9 +9874,11 @@ const shipmentStatusTone: Record<ShipmentRecord['status'], DomainStatus> = {
 function CommerceWorkspace({
   stock,
   materialRecords,
+  session,
 }: {
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  session: AuthSession
 }) {
   const materialOptions = materialRecords.length > 0 ? materialRecords : materials
   const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
@@ -9655,6 +9889,7 @@ function CommerceWorkspace({
   const [priceListRows, setPriceListRows] = useState<PriceListRecord[]>(priceLists)
   const [quoteRows, setQuoteRows] = useState<QuoteRecord[]>(quotes)
   const [sampleRows, setSampleRows] = useState<SampleRequestRecord[]>(sampleRequests)
+  const [customerRows, setCustomerRows] = useState<CustomerRecord[]>([])
   const [selectedSkuId, setSelectedSkuId] = useState(commercialSkus[0]?.id ?? '')
   const [statusMessage, setStatusMessage] = useState('Loading commerce workspace')
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -9677,10 +9912,14 @@ function CommerceWorkspace({
     sampleEligible: true,
   })
   const [quoteDraft, setQuoteDraft] = useState({
-    customer: 'Maison Trial Studio',
+    customerId: '',
+    newCustomerName: '',
+    newCustomerEmail: '',
     customerGroup: 'Studio' as PriceListRecord['customerGroup'],
-    quantityPacks: 2,
   })
+  const [quoteLines, setQuoteLines] = useState(() => [
+    { id: 'quote-line-1', skuId: commercialSkus[0]?.id ?? '', quantityPacks: 1 },
+  ])
   const [sampleDraft, setSampleDraft] = useState({
     customer: 'Atelier Preview',
     packs: 1,
@@ -9691,6 +9930,9 @@ function CommerceWorkspace({
     [materialOptions],
   )
   const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
+  const customerById = useMemo(() => new Map(customerRows.map((customer) => [customer.id, customer])), [customerRows])
+  const selectedQuoteCustomer = customerById.get(quoteDraft.customerId)
+  const quoteCustomerGroup = selectedQuoteCustomer?.group ?? quoteDraft.customerGroup
   const activePriceListByGroup = useMemo(() => {
     const map = new Map<PriceListRecord['customerGroup'], PriceListRecord>()
     priceListRows.forEach((priceList) => {
@@ -9704,13 +9946,24 @@ function CommerceWorkspace({
   const selectedMaterial = selectedSku ? materialById.get(selectedSku.materialId) : undefined
   const activePriceList = useMemo(
     () =>
-      activePriceListByGroup.get(quoteDraft.customerGroup) ??
+      activePriceListByGroup.get(quoteCustomerGroup) ??
       (selectedSku ? activePriceListByGroup.get(selectedSku.tier) : undefined) ??
       priceListRows[0],
-    [activePriceListByGroup, priceListRows, quoteDraft.customerGroup, selectedSku],
+    [activePriceListByGroup, priceListRows, quoteCustomerGroup, selectedSku],
   )
-  const quoteUnitPrice = selectedSku && activePriceList ? selectedSku.price * activePriceList.multiplier : 0
-  const quoteTotal = quoteUnitPrice * quoteDraft.quantityPacks
+  const quoteLineRows = useMemo(
+    () =>
+      quoteLines.flatMap((line) => {
+        const sku = skuById.get(line.skuId)
+        if (!sku) {
+          return []
+        }
+        const unitPrice = sku.price * (activePriceList?.multiplier ?? 1)
+        return [{ ...line, sku, unitPrice, lineTotal: unitPrice * line.quantityPacks }]
+      }),
+    [activePriceList?.multiplier, quoteLines, skuById],
+  )
+  const quoteTotal = quoteLineRows.reduce((sum, line) => sum + line.lineTotal, 0)
 
   useEffect(() => {
     setSkuRows((current) => syncSkuAvailabilityRows(current, stock))
@@ -9720,11 +9973,12 @@ function CommerceWorkspace({
     let active = true
     async function loadCommerce() {
       try {
-        const [skuPayload, priceListPayload, quotePayload, samplePayload] = await Promise.all([
+        const [skuPayload, priceListPayload, quotePayload, samplePayload, customerPayload] = await Promise.all([
           requestApi<CatalogSkuAvailability[]>('/catalog/skus'),
           requestApi<PriceListRecord[]>('/price-lists'),
           requestApi<QuoteRecord[]>('/quotes'),
           requestApi<SampleRequestRecord[]>('/samples'),
+          requestApi<CustomerRecord[]>('/customers'),
         ])
         if (!active) {
           return
@@ -9733,7 +9987,19 @@ function CommerceWorkspace({
         setPriceListRows(priceListPayload)
         setQuoteRows(quotePayload)
         setSampleRows(samplePayload)
+        setCustomerRows(customerPayload)
         setSelectedSkuId((current) => (skuPayload.some((sku) => sku.id === current) ? current : skuPayload[0]?.id ?? ''))
+        setQuoteDraft((current) => ({
+          ...current,
+          customerId: customerPayload.some((customer) => customer.id === current.customerId)
+            ? current.customerId
+            : customerPayload[0]?.id ?? '',
+        }))
+        setQuoteLines((current) =>
+          current.length > 0
+            ? current.map((line) => ({ ...line, skuId: skuPayload.some((sku) => sku.id === line.skuId) ? line.skuId : skuPayload[0]?.id ?? '' }))
+            : [{ id: 'quote-line-1', skuId: skuPayload[0]?.id ?? '', quantityPacks: 1 }],
+        )
         setStatusMessage('Commerce API synced: catalog, price lists, quotes, and sample queue are live')
       } catch (error) {
         if (active) {
@@ -9803,7 +10069,7 @@ function CommerceWorkspace({
   }
 
   async function createQuote() {
-    if (!selectedSku) {
+    if (!selectedQuoteCustomer || quoteLineRows.length === 0) {
       return
     }
     setBusyId('quote-create')
@@ -9813,10 +10079,10 @@ function CommerceWorkspace({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          skuId: selectedSku.id,
-          customer: quoteDraft.customer,
-          customerGroup: quoteDraft.customerGroup,
-          quantityPacks: Number(quoteDraft.quantityPacks),
+          customerId: selectedQuoteCustomer.id,
+          customer: selectedQuoteCustomer.name,
+          customerGroup: selectedQuoteCustomer.group,
+          lines: quoteLineRows.map((line) => ({ skuId: line.sku.id, quantityPacks: Number(line.quantityPacks) })),
         }),
       })
       setQuoteRows((current) => [payload.quote, ...current])
@@ -9826,6 +10092,76 @@ function CommerceWorkspace({
     } finally {
       setBusyId(null)
     }
+  }
+  async function createQuoteCustomer() {
+    if (!quoteDraft.newCustomerName.trim()) {
+      return
+    }
+    setBusyId('quote-customer-create')
+    try {
+      const payload = await requestApi<CustomerCreateResponse>('/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: quoteDraft.newCustomerName.trim(),
+          group: quoteDraft.customerGroup,
+          contactEmail: quoteDraft.newCustomerEmail.trim() || undefined,
+          creditLimit: 250,
+          paymentTerms: 'NET_15',
+        }),
+      })
+      setCustomerRows((current) => [payload.customer, ...current])
+      setQuoteDraft((current) => ({
+        ...current,
+        customerId: payload.customer.id,
+        newCustomerName: '',
+        newCustomerEmail: '',
+      }))
+      setStatusMessage(`Customer ${payload.customer.name} created and selected for quote`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Customer create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function addQuoteLine() {
+    const skuId = selectedSku?.id ?? skuRows[0]?.id ?? ''
+    if (!skuId || quoteLines.some((line) => line.skuId === skuId)) {
+      setStatusMessage('Choose a different SKU from the catalog before adding another quote line')
+      return
+    }
+    setQuoteLines((current) => [
+      ...current,
+      { id: `quote-line-${Date.now()}`, skuId, quantityPacks: 1 },
+    ])
+  }
+
+  function updateQuoteLine(id: string, patch: Partial<{ skuId: string; quantityPacks: number }>) {
+    setQuoteLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)))
+  }
+
+  function removeQuoteLine(id: string) {
+    setQuoteLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
+  }
+
+  function printQuote(quote: QuoteRecord) {
+    const customer = customerRows.find((item) => item.name === quote.customer)
+    const lines = quote.lines?.length
+      ? quote.lines
+      : [{ skuId: quote.skuId, quantityPacks: quote.quantityPacks, unitPrice: quote.unitPrice, lineTotal: quote.total }]
+    const printableLines = lines
+      .map((line) => `<tr><td>${escapePrintHtml(skuById.get(line.skuId)?.name ?? line.skuId)}</td><td>${line.quantityPacks}</td><td>${escapePrintHtml(formatCurrency(line.unitPrice))}</td><td>${escapePrintHtml(formatCurrency(line.lineTotal))}</td></tr>`)
+      .join('')
+    const printed = openPrintDocument(
+      `Quote ${quote.id}`,
+      `<main class="sheet"><header class="header"><div><div class="brand">OlfactoryOps</div><div class="muted">Fragrance materials quotation</div></div><div class="tag">${escapePrintHtml(quote.id)}</div></header>
+      <section class="grid"><div class="field"><strong>Customer</strong>${escapePrintHtml(quote.customer)}</div><div class="field"><strong>Customer group</strong>${escapePrintHtml(quote.customerGroup)}</div><div class="field"><strong>Contact</strong>${escapePrintHtml(customer?.contactEmail ?? 'To be confirmed')}</div><div class="field"><strong>Issued</strong>${escapePrintHtml(new Date(quote.createdAt).toLocaleDateString())}</div></section>
+      <table><thead><tr><th>SKU</th><th>Packs</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${printableLines}</tbody></table>
+      <section class="grid"><div class="field"><strong>Quote status</strong>${escapePrintHtml(quote.status)}</div><div class="field"><strong>Total</strong>${escapePrintHtml(formatCurrency(quote.total))} ${escapePrintHtml(quote.currency)}</div></section>
+      <section class="signatures"><div class="signature">Prepared by</div><div class="signature">Accepted by client</div><div class="signature">Date</div></section></main>`,
+    )
+    setStatusMessage(printed ? `${quote.id} opened for print or Save as PDF` : 'Allow pop-ups to print or save the quote as PDF')
   }
 
   async function requestSample() {
@@ -10018,49 +10354,66 @@ function CommerceWorkspace({
           <>
             <div className="material-form-grid">
               <label className="field-row">
-                <span>Customer</span>
-                <input
-                  aria-label="Quote customer"
-                  value={quoteDraft.customer}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customer: event.target.value }))}
-                />
-              </label>
-              <label className="field-row">
-                <span>Customer group</span>
+                <span>Customer list</span>
                 <select
-                  aria-label="Quote customer group"
-                  value={quoteDraft.customerGroup}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))}
+                  aria-label="Quote customer"
+                  value={quoteDraft.customerId}
+                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customerId: event.target.value }))}
                 >
-                  <option value="Studio">Studio</option>
-                  <option value="Lab">Lab</option>
-                  <option value="Bulk">Bulk</option>
-                  <option value="Contract">Contract</option>
+                  {customerRows.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name} / {customer.group}</option>
+                  ))}
                 </select>
               </label>
               <label className="field-row">
-                <span>Quantity packs</span>
-                <input
-                  aria-label="Quote quantity packs"
-                  min={1}
-                  type="number"
-                  value={quoteDraft.quantityPacks}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, quantityPacks: Number(event.target.value) }))}
-                />
+                <span>New customer name</span>
+                <input aria-label="New quote customer name" value={quoteDraft.newCustomerName} onChange={(event) => setQuoteDraft((current) => ({ ...current, newCustomerName: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>New customer email</span>
+                <input aria-label="New quote customer email" type="email" value={quoteDraft.newCustomerEmail} onChange={(event) => setQuoteDraft((current) => ({ ...current, newCustomerEmail: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>New customer group</span>
+                <select aria-label="New quote customer group" value={quoteDraft.customerGroup} onChange={(event) => setQuoteDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))}>
+                  <option value="Studio">Studio</option><option value="Lab">Lab</option><option value="Bulk">Bulk</option><option value="Contract">Contract</option>
+                </select>
               </label>
               <button
-                className="primary-button"
+                className="ghost-button"
                 type="button"
-                onClick={() => void createQuote()}
-                disabled={busyId === 'quote-create' || !quoteDraft.customer.trim() || quoteDraft.quantityPacks <= 0}
+                onClick={() => void createQuoteCustomer()}
+                disabled={busyId === 'quote-customer-create' || !quoteDraft.newCustomerName.trim()}
               >
+                Create customer
+              </button>
+            </div>
+            <div className="document-list compact-list">
+              {quoteLineRows.map((line) => (
+                <div className="document-row quote-row" key={line.id}>
+                  <div>
+                    <strong>{line.sku.name}</strong>
+                    <span>{formatGrams(line.sku.packSizeGrams)} / {line.sku.canSellPacks} packs available</span>
+                  </div>
+                  <label className="field-row compact-field">
+                    <span>Packs</span>
+                    <input aria-label={`Quote packs ${line.sku.id}`} min={1} type="number" value={line.quantityPacks} onChange={(event) => updateQuoteLine(line.id, { quantityPacks: Number(event.target.value) })} />
+                  </label>
+                  <div className="mono-value">{formatCurrency(line.lineTotal)}</div>
+                  <button className="ghost-button tiny" type="button" onClick={() => removeQuoteLine(line.id)} disabled={quoteLines.length === 1}>Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="action-row">
+              <button className="ghost-button small" type="button" onClick={addQuoteLine}>Add selected SKU</button>
+              <button className="primary-button" type="button" onClick={() => void createQuote()} disabled={busyId === 'quote-create' || !selectedQuoteCustomer || quoteLineRows.length === 0 || quoteLineRows.some((line) => line.quantityPacks <= 0)}>
                 Create Quote
               </button>
             </div>
             <div className="metric-grid">
-              <Metric label="Selected SKU" value={selectedSku.name} />
-              <Metric label="Available" value={`${selectedSku.canSellPacks} packs`} />
-              <Metric label="Unit quote" value={formatCurrency(quoteUnitPrice)} />
+              <Metric label="Customer" value={selectedQuoteCustomer?.name ?? 'Create or select customer'} />
+              <Metric label="Quote lines" value={String(quoteLineRows.length)} />
+              <Metric label="Price list" value={activePriceList?.name ?? 'Not available'} />
               <Metric label="Quote total" value={formatCurrency(quoteTotal)} />
             </div>
           </>
@@ -10118,11 +10471,15 @@ function CommerceWorkspace({
             {quoteRows.slice(0, 5).map((quote) => (
               <div className="document-row quote-row" key={quote.id}>
                 <div>
-                  <strong>{quote.id} / {skuById.get(quote.skuId)?.name ?? quote.skuId}</strong>
-                  <span>{quote.customer} / {quote.customerGroup} / {quote.quantityPacks} packs</span>
+                  <strong>{quote.id} / {quote.customer}</strong>
+                  <span>{quote.customerGroup} / {quote.lines?.length ?? 1} SKU line(s) / {quote.lines?.reduce((sum, line) => sum + line.quantityPacks, 0) ?? quote.quantityPacks} packs</span>
                 </div>
                 <StatusBadge status={quoteStatusTone[quote.status]} label={quote.status} />
                 <div className="mono-value">{formatCurrency(quote.total)}</div>
+                <div className="document-actions">
+                  <button className="ghost-button tiny" type="button" onClick={() => printQuote(quote)}>Print / PDF</button>
+                  <a className="ghost-button tiny" href={`mailto:${encodeURIComponent(customerRows.find((customer) => customer.name === quote.customer)?.contactEmail ?? '')}?subject=${encodeURIComponent(`Quotation ${quote.id}`)}&body=${encodeURIComponent(`Hello ${quote.customer},\n\nPlease find quotation ${quote.id} totaling ${formatCurrency(quote.total)} ${quote.currency}.\n\nRegards,\nOlfactoryOps`)}`}>Email</a>
+                </div>
               </div>
             ))}
           </div>
@@ -10140,14 +10497,14 @@ function CommerceWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Commerce Guardrails" icon={ShieldCheck}>
+      {isInternalAdminSession(session) ? <Panel title="Commerce Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>SKU records store pack, price, label, and material mapping only.</li>
           <li>Available packs are derived from approved inventory lots at read time.</li>
           <li>Quotes and samples do not create reservations or InventoryMovement rows.</li>
           <li>Public storefront, customer portal, and document-per-SKU surfacing remain next gates.</li>
         </ul>
-      </Panel>
+      </Panel> : null}
     </div>
   )
 }
@@ -10176,12 +10533,13 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   })
   const [orderDraft, setOrderDraft] = useState({
     customerId: '',
-    skuId: commercialSkus[0]?.id ?? '',
-    quantity: 1,
     discountPercent: 0,
     taxPercent: 8,
     shippingCost: 12,
   })
+  const [orderLines, setOrderLines] = useState(() => [
+    { id: 'order-line-1', skuId: commercialSkus[0]?.id ?? '', quantity: 1 },
+  ])
   const [shipDraft, setShipDraft] = useState({
     carrier: 'DHL' as ShipmentRecord['carrier'],
     trackingNumber: 'DHL-PHASE12',
@@ -10202,11 +10560,21 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     () => documentRows.filter((document) => document.orderId === selectedOrderKey),
     [documentRows, selectedOrderKey],
   )
-  const draftSku = skuById.get(orderDraft.skuId)
   const draftCustomer = customerById.get(orderDraft.customerId)
   const draftPriceList = priceLists.find((priceList) => priceList.customerGroup === draftCustomer?.group && priceList.status === 'ACTIVE')
-  const draftUnitPrice = draftSku ? draftSku.price * (draftPriceList?.multiplier ?? 1) : 0
-  const draftSubtotal = draftUnitPrice * orderDraft.quantity
+  const draftLineRows = useMemo(
+    () =>
+      orderLines.flatMap((line) => {
+        const sku = skuById.get(line.skuId)
+        if (!sku) {
+          return []
+        }
+        const unitPrice = sku.price * (draftPriceList?.multiplier ?? 1)
+        return [{ ...line, sku, unitPrice, lineTotal: unitPrice * line.quantity }]
+      }),
+    [draftPriceList?.multiplier, orderLines, skuById],
+  )
+  const draftSubtotal = draftLineRows.reduce((sum, line) => sum + line.lineTotal, 0)
   const draftTotal = draftSubtotal * (1 - orderDraft.discountPercent / 100) * (1 + orderDraft.taxPercent / 100) + orderDraft.shippingCost
   const creditAvailable = draftCustomer ? draftCustomer.creditLimit - draftTotal : 0
 
@@ -10256,8 +10624,12 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     setOrderDraft((current) => ({
       ...current,
       customerId: customerById.has(current.customerId) ? current.customerId : customerRows[0]?.id ?? '',
-      skuId: skuById.has(current.skuId) ? current.skuId : skuRows[0]?.id ?? '',
     }))
+    setOrderLines((current) =>
+      current.length > 0
+        ? current.map((line) => ({ ...line, skuId: skuById.has(line.skuId) ? line.skuId : skuRows[0]?.id ?? '' }))
+        : [{ id: 'order-line-1', skuId: skuRows[0]?.id ?? '', quantity: 1 }],
+    )
   }, [customerById, customerRows, skuById, skuRows])
 
   async function createCustomer() {
@@ -10304,7 +10676,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...orderDraft,
-          quantity: Number(orderDraft.quantity),
+          lines: draftLineRows.map((line) => ({ skuId: line.sku.id, quantity: Number(line.quantity) })),
           discountPercent: Number(orderDraft.discountPercent),
           taxPercent: Number(orderDraft.taxPercent),
           shippingCost: Number(orderDraft.shippingCost),
@@ -10318,6 +10690,23 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     } finally {
       setBusyId(null)
     }
+  }
+
+  function addOrderLine() {
+    const skuId = skuRows.find((sku) => !orderLines.some((line) => line.skuId === sku.id))?.id ?? ''
+    if (!skuId) {
+      setStatusMessage('Each available SKU is already in this order')
+      return
+    }
+    setOrderLines((current) => [...current, { id: `order-line-${Date.now()}`, skuId, quantity: 1 }])
+  }
+
+  function updateOrderLine(id: string, patch: Partial<{ skuId: string; quantity: number }>) {
+    setOrderLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)))
+  }
+
+  function removeOrderLine(id: string) {
+    setOrderLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
   }
 
   async function runOrderAction(orderId: string, action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill') {
@@ -10422,31 +10811,26 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                 ))}
               </select>
             </label>
-            <label className="field-row">
-              <span>SKU</span>
-              <select
-                aria-label="Order SKU"
-                value={orderDraft.skuId}
-                onChange={(event) => setOrderDraft((current) => ({ ...current, skuId: event.target.value }))}
-              >
-                {skuRows.map((sku) => (
-                  <option key={sku.id} value={sku.id}>
-                    {sku.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="document-list compact-list">
+              {draftLineRows.map((line) => (
+                <div className="document-row order-document-row" key={line.id}>
+                  <label className="field-row compact-field">
+                    <span>SKU</span>
+                    <select aria-label={`Order SKU ${line.id}`} value={line.skuId} onChange={(event) => updateOrderLine(line.id, { skuId: event.target.value })}>
+                      {skuRows.map((sku) => <option key={sku.id} value={sku.id}>{sku.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="field-row compact-field">
+                    <span>Packs</span>
+                    <input aria-label={`Order quantity ${line.id}`} min={1} type="number" value={line.quantity} onChange={(event) => updateOrderLine(line.id, { quantity: Number(event.target.value) })} />
+                  </label>
+                  <div className="mono-value">{formatCurrency(line.lineTotal)}</div>
+                  <button className="ghost-button tiny" type="button" onClick={() => removeOrderLine(line.id)} disabled={orderLines.length === 1}>Remove</button>
+                </div>
+              ))}
+              <button className="ghost-button small" type="button" onClick={addOrderLine}>Add SKU</button>
+            </div>
             <div className="form-triple">
-              <label className="field-row">
-                <span>Packs</span>
-                <input
-                  aria-label="Order quantity"
-                  min={1}
-                  type="number"
-                  value={orderDraft.quantity}
-                  onChange={(event) => setOrderDraft((current) => ({ ...current, quantity: Number(event.target.value) }))}
-                />
-              </label>
               <label className="field-row">
                 <span>Tax %</span>
                 <input
@@ -10476,7 +10860,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               className="primary-button"
               type="button"
               onClick={() => void createOrder()}
-              disabled={busyId === 'order-create' || !orderDraft.customerId || !orderDraft.skuId || orderDraft.quantity <= 0}
+              disabled={busyId === 'order-create' || !orderDraft.customerId || draftLineRows.length === 0 || draftLineRows.some((line) => line.quantity <= 0)}
             >
               Create Order
             </button>
@@ -10488,6 +10872,9 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         <div className="document-list compact-list order-list">
           {orderRows.map((order) => {
             const sku = skuById.get(order.skuId)
+            const orderLinesForDisplay = order.lines?.length
+              ? order.lines
+              : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
             const busy = busyId?.endsWith(order.id) ?? false
             return (
               <div
@@ -10504,7 +10891,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               >
                 <div>
                   <strong>{order.id} / {order.customer}</strong>
-                  <span>{sku?.name ?? order.skuId} / {order.quantity} pack(s) / {formatCurrency(order.total)}</span>
+                  <span>{orderLinesForDisplay.length === 1 ? `${sku?.name ?? order.skuId} / ${orderLinesForDisplay[0]?.quantity ?? order.quantity} pack(s)` : `${orderLinesForDisplay.length} SKU lines / ${orderLinesForDisplay.reduce((sum, line) => sum + line.quantity, 0)} packs`} / {formatCurrency(order.total)}</span>
                   <span>{formatGrams(order.reservedGrams)} reserved / {formatGrams(order.fulfilledGrams)} fulfilled</span>
                 </div>
                 <StatusBadge status={orderStatusTone[order.status]} label={order.status} />
@@ -10572,12 +10959,12 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
       </Panel>
 
       <Panel title="Reservation vs Available" icon={Boxes}>
-        {selectedOrder && selectedSku ? (
+        {selectedOrder ? (
           <>
             <div className="metric-grid">
-              <Metric label="SKU" value={selectedSku.name} />
-              <Metric label="Can sell" value={`${selectedSku.canSellPacks} packs`} />
-              <Metric label="Required" value={formatGrams(selectedSku.packSizeGrams * selectedOrder.quantity)} />
+              <Metric label="SKU lines" value={String(selectedOrder.lines?.length ?? 1)} />
+              <Metric label="Packs" value={String((selectedOrder.lines?.reduce((sum, line) => sum + line.quantity, 0)) ?? selectedOrder.quantity)} />
+              <Metric label="Required" value={formatGrams(orderRequiredGrams(selectedOrder, skuRows))} />
               <Metric label="Reserved" value={formatGrams(selectedOrder.reservedGrams)} />
             </div>
             <div className="allocation-list">
@@ -10841,33 +11228,45 @@ function AnalyticsWorkspace() {
   const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(clientFallbackAnalytics)
   const [statusMessage, setStatusMessage] = useState('Loading analytics dashboard')
   const [runningReportId, setRunningReportId] = useState<string | null>(null)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
   const burnChart = analyticsData.burnRate.map((row) => ({
     name: row.materialName.split(' ')[0],
     usage: row.usageGrams,
     daily: row.dailyBurnGrams,
   }))
 
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadAnalytics() {
+  const refreshAnalytics = useCallback(async (signal?: AbortSignal) => {
       try {
         const dashboard = await requestApi<AnalyticsDashboardReport>('/analytics/dashboard', {
-          signal: controller.signal,
+          signal,
         })
         setAnalyticsData(dashboard)
-        setStatusMessage('Analytics synced from live API')
+        setLastSyncedAt(new Date().toISOString())
+        setStatusMessage('Live analytics synced from API')
       } catch {
-        if (!controller.signal.aborted) {
+        if (!signal?.aborted) {
           setStatusMessage('Using local analytics seed until API is reachable')
         }
       }
-    }
-
-    void loadAnalytics()
-
-    return () => controller.abort()
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshAnalytics(controller.signal)
+      }
+    }
+    void refreshAnalytics(controller.signal)
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+
+    return () => {
+      controller.abort()
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [refreshAnalytics])
 
   async function runReport(reportId: string) {
     setRunningReportId(reportId)
@@ -10892,12 +11291,16 @@ function AnalyticsWorkspace() {
 
   return (
     <div className="workspace-grid analytics-grid">
-      <Panel title="Read-only Intelligence" icon={BarChart3} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+      <Panel title="Live Analyst Dashboard" icon={BarChart3} right={<div className="action-row"><DataTag label="Status" value={statusMessage} tone="blue" /><button className="ghost-button tiny" type="button" onClick={() => void refreshAnalytics()}>Refresh</button></div>}>
         <div className="metric-grid analytics-metrics">
           <Metric label="Burn rows" value={String(analyticsData.burnRate.length)} />
           <Metric label="Forecast rows" value={String(analyticsData.lowStockForecast.length)} />
           <Metric label="Expiry risks" value={String(analyticsData.expiryRisk.length)} />
           <Metric label="Reports" value={String(analyticsData.scheduledReports.length)} />
+        </div>
+        <div className="tag-row">
+          <DataTag label="Refresh" value="30 sec" tone="green" />
+          <DataTag label="Last sync" value={lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : 'Waiting'} />
         </div>
         <div className="chart-wrap compact-chart">
           <ResponsiveContainer width="100%" height={180}>

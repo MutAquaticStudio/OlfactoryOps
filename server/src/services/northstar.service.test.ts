@@ -1693,6 +1693,42 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
+  it('prices and reserves each line of a multi-SKU quote and order', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const quote = service.createQuote({
+      customerId: 'CUS-DEMO',
+      lines: [
+        { skuId: 'SKU-ISO-050', quantityPacks: 1 },
+        { skuId: 'SKU-BER-025', quantityPacks: 1 },
+      ],
+    }).data.quote
+
+    expect(quote.lines).toEqual([
+      { skuId: 'SKU-ISO-050', quantityPacks: 1, unitPrice: 18, lineTotal: 18 },
+      { skuId: 'SKU-BER-025', quantityPacks: 1, unitPrice: 16, lineTotal: 16 },
+    ])
+    expect(quote.total).toBe(34)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+
+    const order = service.createOrder({
+      customerId: 'CUS-DEMO',
+      lines: [
+        { skuId: 'SKU-ISO-050', quantity: 1 },
+        { skuId: 'SKU-BER-025', quantity: 1 },
+      ],
+    }).data.order
+    const reservation = service.reserveOrder(order.id).data
+    const reservedOrder = service.orders().data.find((item) => item.id === order.id)
+
+    expect(order.lines).toHaveLength(2)
+    expect(order.total).toBe(34)
+    expect(reservedOrder?.reservedGrams).toBe(75)
+    expect(reservation.allocations.reduce((sum, allocation) => sum + allocation.allocatedGrams, 0)).toBe(75)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
   it('runs order lifecycle through reserve, pack, ship, and fulfillment trace', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length

@@ -1421,6 +1421,7 @@ type QuoteRow = {
   currency: string
   status: string
   created_at: string
+  lines_json: string | null
 }
 
 type SampleRequestRow = {
@@ -1464,6 +1465,7 @@ type SalesOrderRow = {
   reservation_allocations_json: string | null
   shipment_id: string | null
   document_ids_json: string | null
+  lines_json: string | null
   created_at: string
 }
 
@@ -3162,7 +3164,7 @@ async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
   const quoteRows = await db
     .prepare(
       `SELECT id, sku_id, customer, customer_group, quantity_packs, unit_price,
-        total, currency, status, created_at
+        total, currency, status, created_at, lines_json
        FROM quotes
        ORDER BY created_at DESC, id DESC`,
     )
@@ -3304,9 +3306,9 @@ async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: s
         .prepare(
           `INSERT INTO quotes (
             id, sku_id, customer, customer_group, quantity_packs, unit_price,
-            total, currency, status, created_at, updated_at
+            total, currency, status, created_at, lines_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
           ON CONFLICT(id) DO UPDATE SET
             sku_id = excluded.sku_id,
             customer = excluded.customer,
@@ -3317,6 +3319,7 @@ async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: s
             currency = excluded.currency,
             status = excluded.status,
             created_at = excluded.created_at,
+            lines_json = excluded.lines_json,
             updated_at = excluded.updated_at`,
         )
         .bind(
@@ -3330,6 +3333,7 @@ async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: s
           quote.currency,
           quote.status,
           quote.createdAt,
+          quote.lines ? JSON.stringify(quote.lines) : null,
           updatedAt,
         ),
     ),
@@ -3476,7 +3480,7 @@ async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
     .prepare(
       `SELECT id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
         tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
-        carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, created_at
+        carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, lines_json, created_at
        FROM sales_orders
        ORDER BY created_at DESC, id DESC`,
     )
@@ -3537,9 +3541,9 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
             id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
             tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
             carrier, tracking_number, reservation_allocations_json, shipment_id,
-            document_ids_json, created_at, updated_at
+            document_ids_json, lines_json, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
           ON CONFLICT(id) DO UPDATE SET
             sku_id = excluded.sku_id,
             customer_id = excluded.customer_id,
@@ -3559,6 +3563,7 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
             reservation_allocations_json = excluded.reservation_allocations_json,
             shipment_id = excluded.shipment_id,
             document_ids_json = excluded.document_ids_json,
+            lines_json = excluded.lines_json,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at`,
         )
@@ -3582,6 +3587,7 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
           order.reservationAllocations ? JSON.stringify(order.reservationAllocations) : null,
           order.shipmentId ?? null,
           order.documentIds ? JSON.stringify(order.documentIds) : null,
+          order.lines ? JSON.stringify(order.lines) : null,
           order.createdAt,
           updatedAt,
         ),
@@ -4737,6 +4743,7 @@ function quoteFromRow(row: QuoteRow): QuoteRecord {
     currency: row.currency,
     status: readQuoteStatus(row.status),
     createdAt: row.created_at,
+    lines: row.lines_json ? parseJson<NonNullable<QuoteRecord['lines']>>(row.lines_json, []) : undefined,
   }
 }
 
@@ -4800,6 +4807,7 @@ function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
       : undefined,
     shipmentId: row.shipment_id ?? undefined,
     documentIds: row.document_ids_json ? parseJson<string[]>(row.document_ids_json, []) : undefined,
+    lines: row.lines_json ? parseJson<NonNullable<SalesOrderRecord['lines']>>(row.lines_json, []) : undefined,
     createdAt: row.created_at,
   }
 }
