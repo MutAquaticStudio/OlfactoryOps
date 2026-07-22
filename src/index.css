@@ -4123,6 +4123,20 @@ input[type='range'] {
   }
 }
 
+/* The persistent sidebar leaves too little room for the dashboard hero on tablet-sized screens. */
+@media (max-width: 1180px) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'hero'
+      'enterprise'
+      'workflow'
+      'matrix'
+      'ledger'
+      'audit';
+  }
+}
+
 @media (max-width: 980px) {
   .app-shell,
   .app-shell.is-rail {
