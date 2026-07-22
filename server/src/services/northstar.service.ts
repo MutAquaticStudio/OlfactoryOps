@@ -276,9 +276,11 @@ type CreatePriceListBody = {
 
 type CreateQuoteBody = {
   skuId?: string
+  customerId?: string
   customer?: string
   customerGroup?: PriceListRecord['customerGroup']
   quantityPacks?: number
+  lines?: Array<{ skuId?: string; quantityPacks?: number }>
 }
 
 type CreateSampleRequestBody = {
@@ -301,6 +303,7 @@ type CreateSalesOrderBody = {
   skuId?: string
   customerId?: string
   quantity?: number
+  lines?: Array<{ skuId?: string; quantity?: number }>
   discountPercent?: number
   taxPercent?: number
   shippingCost?: number
@@ -344,6 +347,12 @@ type InventoryReceiptBody = {
   shelfLifeAfterOpeningDays?: number
   container?: string
   packaging?: string
+  documents?: Array<{
+    type?: 'SDS' | 'CoA'
+    fileName?: string
+    fileSizeKb?: number
+    mimeType?: string
+  }>
 }
 
 type InventoryStockTakeBody = {
@@ -2587,14 +2596,47 @@ export class NorthStarService {
 
     this.lots = [lot, ...this.lots]
     this.movements = [movement, ...this.movements]
+    const receiptDocuments = (body.documents ?? [])
+      .filter((item) => item && (item.type === 'SDS' || item.type === 'CoA') && item.fileName?.trim())
+      .slice(0, 2)
+      .map((item, index): DocumentRecord => {
+        const type = item.type as 'SDS' | 'CoA'
+        const fileName = item.fileName!.trim().slice(0, 160)
+        const sizeKb = Math.max(1, Math.min(51_200, Math.round(Number(item.fileSizeKb) || 1)))
+        const linkedTo = type === 'SDS' ? material.id : lot.id
+        const id = `DOC-RCV-${String(this.documentRecords.length + index + 1).padStart(5, '0')}`
+        const safeName = fileName.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || `${type}.pdf`
+        return {
+          id,
+          type,
+          title: `${material.name} ${type} / ${lot.lotNumber}`,
+          linkedTo,
+          version: 'v1',
+          sensitivity: 'Internal',
+          status: 'REVIEW_REQUIRED',
+          issueDate: timestamp.slice(0, 10),
+          lastAccessed: timestamp,
+          downloads: 0,
+          storageKey: `${session.organizationId}/inventory/${lot.id}/${type.toLowerCase()}-${safeName}`,
+          mimeType: item.mimeType?.trim().slice(0, 100) || 'application/octet-stream',
+          sizeKb,
+          checksum: this.documentChecksum(`${lot.id}:${type}:${fileName}:${sizeKb}`),
+          owner: session.userId,
+        }
+      })
+    if (receiptDocuments.length > 0) {
+      this.documentRecords = [...receiptDocuments, ...this.documentRecords]
+      receiptDocuments.forEach((document) => this.recordAudit('inventory.document.attach', document.id, session.userId, 'review'))
+    }
     this.recordAudit('inventory.receive', lot.lotNumber, session.userId, 'allowed')
 
     return {
       data: {
         lot,
         movement,
+        documents: receiptDocuments,
         summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === material.id),
-        invariant: 'inventory receipt creates lot and immutable IN movement',
+        invariant: 'inventory receipt creates a lot, immutable IN movement, and reviewable SDS/CoA evidence when attached',
       },
     }
   }
@@ -4054,6 +4096,9 @@ export class NorthStarService {
     if (batch.consumedGrams > 0) {
       throw new UnprocessableEntityException(`Production batch ${id} has already consumed inventory`)
     }
+    if (batch.status !== 'WEIGHING') {
+      throw new UnprocessableEntityException(`Production batch ${id} must be at WEIGHING before inventory consumption`)
+    }
     const formula = this.formulaForSession(batch.formulaId, session)
     const leaves = resolveFormulaWithCatalog(
       batch.formulaId,
@@ -4119,6 +4164,9 @@ export class NorthStarService {
     if (batch.consumedGrams <= 0) {
       throw new UnprocessableEntityException(`Production batch ${id} must consume inventory before QC`)
     }
+    if (batch.status !== 'QC') {
+      throw new UnprocessableEntityException(`Production batch ${id} must enter QC before recording a QC result`)
+    }
     const timestamp = new Date().toISOString()
     const status = result === 'PASSED' ? 'BOTTLING' : 'HOLD'
     this.productionBatchRecords = this.productionBatchRecords.map((item) =>
@@ -4155,11 +4203,36 @@ export class NorthStarService {
     if (!productionLifecycleStatuses.includes(status)) {
       throw new UnprocessableEntityException(`Production batch status ${status} is not supported`)
     }
-    if (['FILTRATION', 'QC', 'BOTTLING', 'RELEASED'].includes(status) && batch.consumedGrams <= 0) {
+    if (status === batch.status) {
+      return {
+        data: {
+          batch,
+          invariant: 'production lifecycle is already at the requested gate',
+        },
+      }
+    }
+    if (['MACERATION', 'FILTRATION', 'QC', 'BOTTLING', 'RELEASED'].includes(status) && batch.consumedGrams <= 0) {
       throw new UnprocessableEntityException(`Production batch ${id} must consume inventory before ${status}`)
+    }
+    const nextStatus: Partial<Record<ProductionBatchRecord['status'], ProductionBatchRecord['status'][]>> = {
+      PLANNED: ['WEIGHING'],
+      WEIGHING: ['MACERATION', 'HOLD'],
+      MACERATION: ['FILTRATION', 'HOLD'],
+      FILTRATION: ['QC', 'HOLD'],
+      QC: ['BOTTLING', 'HOLD'],
+      BOTTLING: ['RELEASED', 'HOLD'],
+      HOLD: [batch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING'],
+    }
+    if (!nextStatus[batch.status]?.includes(status)) {
+      throw new UnprocessableEntityException(
+        `Production batch ${id} must progress through the next lifecycle gate from ${batch.status}`,
+      )
     }
     if (status === 'RELEASED' && batch.qcStatus !== 'PASSED') {
       throw new UnprocessableEntityException(`Production batch ${id} must pass QC before release`)
+    }
+    if (status === 'BOTTLING' && batch.qcStatus !== 'PASSED') {
+      throw new UnprocessableEntityException(`Production batch ${id} must pass QC before bottling`)
     }
     if (status === 'WEIGHING' && batch.consumedGrams > 0) {
       throw new UnprocessableEntityException(`Production batch ${id} cannot return to weighing after consumption`)
@@ -4524,38 +4597,71 @@ export class NorthStarService {
   createQuote(body: CreateQuoteBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
-    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
-    if (!sku) {
-      throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
+    const requestedLines = body.lines?.length
+      ? body.lines
+      : [{ skuId: body.skuId, quantityPacks: body.quantityPacks }]
+    if (requestedLines.length === 0 || requestedLines.length > 25) {
+      throw new UnprocessableEntityException('Quote must contain between 1 and 25 SKU lines')
     }
-    const customer = body.customer?.trim()
+    const customerRecord = body.customerId ? this.customerRecords.find((item) => item.id === body.customerId) : undefined
+    if (body.customerId && !customerRecord) {
+      throw new NotFoundException(`Customer ${body.customerId} was not found`)
+    }
+    const customer = customerRecord?.name ?? body.customer?.trim()
     if (!customer) {
-      throw new UnprocessableEntityException('Quote customer is required')
+      throw new UnprocessableEntityException('Select an existing customer or provide a customer name')
     }
-    const customerGroup = body.customerGroup ?? sku.tier
+    const customerGroup = customerRecord?.group ?? body.customerGroup ?? 'Studio'
     const priceList =
       this.priceListRecords.find((item) => item.customerGroup === customerGroup && item.status === 'ACTIVE') ??
-      this.priceListRecords.find((item) => item.customerGroup === sku.tier && item.status === 'ACTIVE')
+      this.priceListRecords.find((item) => item.customerGroup === 'Studio' && item.status === 'ACTIVE')
     if (!priceList) {
       throw new NotFoundException(`Active price list for ${customerGroup} was not found`)
     }
-    const quantityPacks = Math.round(Number(body.quantityPacks ?? 1))
-    if (!Number.isFinite(quantityPacks) || quantityPacks <= 0) {
-      throw new UnprocessableEntityException('Quote quantityPacks must be greater than 0')
-    }
-    const availability = skuAvailability([sku], this.lots, this.materialRecords)[0]
-    const unitPrice = Number((sku.price * priceList.multiplier).toFixed(2))
+    const seenSkuIds = new Set<string>()
+    const lines = requestedLines.map((line) => {
+      const skuId = line.skuId?.trim()
+      if (!skuId || seenSkuIds.has(skuId)) {
+        throw new UnprocessableEntityException('Each quote SKU line must be unique')
+      }
+      seenSkuIds.add(skuId)
+      const sku = this.commercialSkuRecords.find((item) => item.id === skuId)
+      if (!sku) {
+        throw new NotFoundException(`SKU ${skuId} was not found`)
+      }
+      if (sku.status !== 'ACTIVE') {
+        throw new UnprocessableEntityException(`SKU ${sku.id} is not active`)
+      }
+      const quantityPacks = Math.round(Number(line.quantityPacks ?? 1))
+      if (!Number.isFinite(quantityPacks) || quantityPacks <= 0) {
+        throw new UnprocessableEntityException(`Quote quantity for ${sku.id} must be greater than 0`)
+      }
+      const unitPrice = Number((sku.price * priceList.multiplier).toFixed(2))
+      return {
+        skuId: sku.id,
+        quantityPacks,
+        unitPrice,
+        lineTotal: Number((unitPrice * quantityPacks).toFixed(2)),
+      }
+    })
+    const availability = skuAvailability(
+      lines.map((line) => this.commercialSkuRecords.find((item) => item.id === line.skuId)!),
+      this.lots,
+      this.materialRecords,
+    )
+    const primaryLine = lines[0]
     const quote: QuoteRecord = {
       id: `QTE-2026-${String(this.quoteRecords.length + 34).padStart(3, '0')}`,
-      skuId: sku.id,
+      skuId: primaryLine.skuId,
       customer,
       customerGroup,
-      quantityPacks,
-      unitPrice,
-      total: Number((unitPrice * quantityPacks).toFixed(2)),
+      quantityPacks: primaryLine.quantityPacks,
+      unitPrice: primaryLine.unitPrice,
+      total: Number(lines.reduce((sum, line) => sum + line.lineTotal, 0).toFixed(2)),
       currency: priceList.currency,
-      status: quantityPacks <= availability.canSellPacks ? 'SENT' : 'REVIEW',
+      status: lines.every((line) => line.quantityPacks <= (availability.find((item) => item.id === line.skuId)?.canSellPacks ?? 0)) ? 'SENT' : 'REVIEW',
       createdAt: new Date().toISOString(),
+      lines,
     }
     this.quoteRecords = [quote, ...this.quoteRecords]
     const audit = this.recordAudit('commerce.quote.create', quote.id, session.userId, quote.status === 'REVIEW' ? 'review' : 'allowed')
@@ -4685,20 +4791,13 @@ export class NorthStarService {
   createOrder(body: CreateSalesOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.reserve')
-    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
-    if (!sku) {
-      throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
-    }
-    if (sku.status !== 'ACTIVE') {
-      throw new UnprocessableEntityException(`SKU ${sku.id} is not active`)
-    }
     const customer = this.customerRecords.find((item) => item.id === body.customerId)
     if (!customer) {
       throw new NotFoundException(`Customer ${body.customerId ?? 'unknown'} was not found`)
     }
-    const quantity = Math.round(Number(body.quantity ?? 1))
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new UnprocessableEntityException('Order quantity must be greater than 0')
+    const requestedLines = body.lines?.length ? body.lines : [{ skuId: body.skuId, quantity: body.quantity }]
+    if (requestedLines.length === 0 || requestedLines.length > 25) {
+      throw new UnprocessableEntityException('Order must contain between 1 and 25 SKU lines')
     }
     const discountPercent = Math.max(0, Math.min(90, Number(body.discountPercent ?? 0)))
     const taxPercent = Math.max(0, Math.min(30, Number(body.taxPercent ?? 0)))
@@ -4706,29 +4805,51 @@ export class NorthStarService {
     const priceList = this.priceListRecords.find(
       (item) => item.customerGroup === customer.group && item.status === 'ACTIVE',
     )
-    const unitPrice = Number((sku.price * (priceList?.multiplier ?? 1)).toFixed(2))
-    const subtotal = unitPrice * quantity
+    const seenSkuIds = new Set<string>()
+    const lines = requestedLines.map((line) => {
+      const skuId = line.skuId?.trim()
+      if (!skuId || seenSkuIds.has(skuId)) {
+        throw new UnprocessableEntityException('Each order SKU line must be unique')
+      }
+      seenSkuIds.add(skuId)
+      const sku = this.commercialSkuRecords.find((item) => item.id === skuId)
+      if (!sku) {
+        throw new NotFoundException(`SKU ${skuId} was not found`)
+      }
+      if (sku.status !== 'ACTIVE') {
+        throw new UnprocessableEntityException(`SKU ${sku.id} is not active`)
+      }
+      const quantity = Math.round(Number(line.quantity ?? 1))
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new UnprocessableEntityException(`Order quantity for ${sku.id} must be greater than 0`)
+      }
+      const unitPrice = Number((sku.price * (priceList?.multiplier ?? 1)).toFixed(2))
+      return { skuId: sku.id, quantity, unitPrice, lineTotal: Number((unitPrice * quantity).toFixed(2)) }
+    })
+    const primaryLine = lines[0]
+    const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0)
     const discounted = subtotal * (1 - discountPercent / 100)
     const taxed = discounted * (1 + taxPercent / 100)
     const total = Number((taxed + shippingCost).toFixed(2))
     const order: SalesOrderRecord = {
       id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
-      skuId: sku.id,
+      skuId: primaryLine.skuId,
       customerId: customer.id,
       customer: customer.name,
-      quantity,
-      unitPrice,
+      quantity: primaryLine.quantity,
+      unitPrice: primaryLine.unitPrice,
       discountPercent,
       taxPercent,
       shippingCost,
       total,
-      currency: body.currency?.trim().toUpperCase() || priceList?.currency || sku.currency,
+      currency: body.currency?.trim().toUpperCase() || priceList?.currency || 'USD',
       reservedGrams: 0,
       fulfilledGrams: 0,
       status: customer.status === 'CREDIT_HOLD' || total > customer.creditLimit ? 'HOLD' : 'CONFIRMED',
       reservationAllocations: [],
       documentIds: [],
       createdAt: new Date().toISOString(),
+      lines,
     }
     this.salesOrderRecords = [order, ...this.salesOrderRecords]
     const audit = this.recordAudit('orders.create', order.id, session.userId, order.status === 'HOLD' ? 'review' : 'allowed')
@@ -4751,12 +4872,17 @@ export class NorthStarService {
     if (!['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status)) {
       throw new UnprocessableEntityException(`Sales order ${id} cannot be reserved from ${order.status}`)
     }
-    const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
-    if (!sku) {
-      throw new NotFoundException(`SKU ${order.skuId} was not found`)
-    }
     const requiredGrams = orderRequiredGrams(order, this.commercialSkuRecords)
-    const allocations = this.pickLotsForMaterial(sku.materialId, requiredGrams, session)
+    const orderLines = order.lines?.length
+      ? order.lines
+      : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+    const allocations = orderLines.flatMap((line) => {
+      const sku = this.commercialSkuRecords.find((item) => item.id === line.skuId)
+      if (!sku) {
+        throw new NotFoundException(`SKU ${line.skuId} was not found`)
+      }
+      return this.pickLotsForMaterial(sku.materialId, sku.packSizeGrams * line.quantity, session)
+    })
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
     allocations.forEach((allocation) => {
       const lot = lotMap.get(allocation.lotId)
@@ -4935,14 +5061,21 @@ export class NorthStarService {
     if (!['RESERVED', 'PACKED', 'SHIPPED'].includes(order.status)) {
       throw new UnprocessableEntityException(`Sales order ${id} must be reserved before fulfillment`)
     }
-    const sku = this.commercialSkuRecords.find((item) => item.id === order.skuId)
-    if (!sku) {
-      throw new NotFoundException(`SKU ${order.skuId} was not found`)
-    }
     const allocations =
       order.reservationAllocations && order.reservationAllocations.length > 0
         ? order.reservationAllocations
-        : this.pickLotsForMaterial(sku.materialId, order.reservedGrams, session, true)
+        : (() => {
+            const orderLines = order.lines?.length
+              ? order.lines
+              : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+            return orderLines.flatMap((line) => {
+              const sku = this.commercialSkuRecords.find((item) => item.id === line.skuId)
+              if (!sku) {
+                throw new NotFoundException(`SKU ${line.skuId} was not found`)
+              }
+              return this.pickLotsForMaterial(sku.materialId, sku.packSizeGrams * line.quantity, session, true)
+            })
+          })()
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
     const movements: InventoryMovement[] = allocations.map((allocation, index) => {
       const lot = lotMap.get(allocation.lotId)

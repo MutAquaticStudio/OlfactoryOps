@@ -94,9 +94,11 @@ type PriceListBody = {
 
 type QuoteBody = {
   skuId?: string
+  customerId?: string
   customer?: string
   customerGroup?: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
   quantityPacks?: number
+  lines?: Array<{ skuId?: string; quantityPacks?: number }>
 }
 
 type SampleRequestBody = {
@@ -129,6 +131,7 @@ type SalesOrderBody = {
   skuId?: string
   customerId?: string
   quantity?: number
+  lines?: Array<{ skuId?: string; quantity?: number }>
   discountPercent?: number
   taxPercent?: number
   shippingCost?: number
@@ -508,6 +511,12 @@ export class NorthStarController {
       shelfLifeAfterOpeningDays?: number
       container?: string
       packaging?: string
+      documents?: Array<{
+        type?: 'SDS' | 'CoA'
+        fileName?: string
+        fileSizeKb?: number
+        mimeType?: string
+      }>
     },
   ) {
     return this.northStar.receiveInventoryReceipt(body)

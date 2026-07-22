@@ -726,13 +726,6 @@ type MaterialMoleculesResponse = {
   invariant: string
 }
 
-type MaterialProvenanceResponse = {
-  materialId: string
-  provenance: Material['provenance']
-  documents: DocumentRecord[]
-  invariant: string
-}
-
 type PubChemFillResponse = MaterialMutationResponse & {
   molecules: MoleculeComponent[]
 }
@@ -974,7 +967,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
 
 const navGroups: { title: string; keys: DomainKey[] }[] = [
   { title: 'Command', keys: ['dashboard', 'platform', 'identity', 'customization'] },
-  { title: 'R&D Spine', keys: ['materials', 'formulas', 'inventory', 'labUsage', 'documents'] },
+  { title: 'R&D Spine', keys: ['materials', 'formulas', 'inventory', 'labUsage'] },
   { title: 'Operations', keys: ['production', 'procurement', 'commerce', 'orders'] },
   { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
 ]
@@ -1257,6 +1250,14 @@ function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
 function domainVisibleForSession(key: DomainKey, session: AuthSession) {
   if (key === 'dashboard') {
     return true
+  }
+
+  if (key === 'documents') {
+    return false
+  }
+
+  if (key === 'costing') {
+    return isInternalAdminSession(session) || session.role === 'Finance'
   }
 
   const domain = domains.find((item) => item.key === key)
@@ -4110,8 +4111,6 @@ function MaterialWorkspace({
   const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
   )
-  const [provenanceRows, setProvenanceRows] = useState<Material['provenance']>(selected.provenance)
-  const [linkedDocuments, setLinkedDocuments] = useState<DocumentRecord[]>([])
 
   useEffect(() => {
     async function loadMaterials() {
@@ -4141,24 +4140,19 @@ function MaterialWorkspace({
       odor: selected.odor.join(', '),
     })
     setMoleculeRows(moleculeComponents.filter((molecule) => molecule.materialId === selected.id))
-    setProvenanceRows(selected.provenance)
-    setLinkedDocuments([])
 
     async function loadIntelligence() {
       try {
-        const [moleculePayload, provenancePayload] = await Promise.all([
-          requestApi<MaterialMoleculesResponse>(`/materials/${encodeURIComponent(selected.id)}/molecules`),
-          requestApi<MaterialProvenanceResponse>(`/materials/${encodeURIComponent(selected.id)}/provenance`),
-        ])
+        const moleculePayload = await requestApi<MaterialMoleculesResponse>(
+          `/materials/${encodeURIComponent(selected.id)}/molecules`,
+        )
         if (!active) {
           return
         }
         setMoleculeRows(moleculePayload.molecules)
-        setProvenanceRows(provenancePayload.provenance)
-        setLinkedDocuments(provenancePayload.documents)
       } catch {
         if (active) {
-          setMaterialStatus('Using local molecule/provenance seed until API is reachable')
+          setMaterialStatus('Using local molecule seed until API is reachable')
         }
       }
     }
@@ -4177,7 +4171,6 @@ function MaterialWorkspace({
         : [nextMaterial, ...materialRecords],
     )
     onSelectMaterial(nextMaterial.id)
-    setProvenanceRows(nextMaterial.provenance)
   }
 
   async function checkCasDuplicate() {
@@ -4528,30 +4521,6 @@ function MaterialWorkspace({
         </div>
       </Panel>
 
-      <Panel className="wide" title="Field Provenance" icon={ClipboardCheck}>
-        <div className="provenance-list">
-          {provenanceRows.map((source, index) => (
-            <div className="provenance-item" key={`${source.field}-${source.version}-${index}`}>
-              <div>
-                <strong>{source.field}</strong>
-                <span>{source.source}</span>
-              </div>
-              <span className="mono-value">{source.version}</span>
-              <span className="mono-small">{index === 0 ? 'latest' : source.date}</span>
-            </div>
-          ))}
-          {linkedDocuments.map((document) => (
-            <div className="provenance-item" key={document.id}>
-              <div>
-                <strong>{document.type} document</strong>
-                <span>{document.title} / {document.sensitivity}</span>
-              </div>
-              <span className="mono-value">{document.version}</span>
-              <StatusBadge status="stable" label="private" />
-            </div>
-          ))}
-        </div>
-      </Panel>
     </div>
   )
 }

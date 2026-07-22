@@ -941,6 +941,14 @@ export interface QuoteRecord {
   currency: string
   status: 'DRAFT' | 'REVIEW' | 'SENT'
   createdAt: string
+  lines?: QuoteLineItem[]
+}
+
+export interface QuoteLineItem {
+  skuId: string
+  quantityPacks: number
+  unitPrice: number
+  lineTotal: number
 }
 
 export interface SampleRequestRecord {
@@ -1027,6 +1035,14 @@ export interface SalesOrderRecord {
   shipmentId?: string
   documentIds?: string[]
   createdAt: string
+  lines?: SalesOrderLineItem[]
+}
+
+export interface SalesOrderLineItem {
+  skuId: string
+  quantity: number
+  unitPrice: number
+  lineTotal: number
 }
 
 export interface BillingPlanRecord {
@@ -3338,8 +3354,13 @@ export function skuAvailability(
 }
 
 export function orderRequiredGrams(order: SalesOrderRecord, skus: CommercialSkuRecord[] = commercialSkus) {
-  const sku = skus.find((item) => item.id === order.skuId)
-  return sku ? sku.packSizeGrams * order.quantity : 0
+  const lines = order.lines?.length
+    ? order.lines
+    : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+  return lines.reduce((total, line) => {
+    const sku = skus.find((item) => item.id === line.skuId)
+    return total + (sku ? sku.packSizeGrams * line.quantity : 0)
+  }, 0)
 }
 
 export const documentSignedUrlTtlSeconds = 300
