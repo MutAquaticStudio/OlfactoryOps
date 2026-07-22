@@ -2477,6 +2477,7 @@ function App() {
             session={currentSession}
             tenantDomain={tenantDomains[currentSession.organizationId]}
             userSettings={activeUserSettings}
+            mobileNavOpen={mobileNavOpen}
             onCommand={openCommandPalette}
             onLogout={() => void logoutWorkspace()}
             onMenu={() => setMobileNavOpen((value) => !value)}
@@ -2963,12 +2964,19 @@ function Sidebar({
             <div className="mono-small">OlfactoryOps OS</div>
           </div>
         )}
-        <button className="icon-button sidebar-toggle" type="button" onClick={onToggle} aria-label="Toggle sidebar">
+        <button
+          className="icon-button sidebar-toggle"
+          type="button"
+          onClick={onToggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-pressed={!collapsed}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        >
           <Menu size={18} />
         </button>
       </div>
 
-      <nav className="nav-stack" aria-label="Main modules">
+      <nav className="nav-stack" id="primary-navigation" aria-label="Main modules">
         {visibleNavGroupsForSession(session).map((group) => (
           <div className="nav-group" key={group.title}>
             {!collapsed && <div className="nav-title">{group.title}</div>}
@@ -3006,6 +3014,7 @@ function Topbar({
   session,
   tenantDomain,
   userSettings,
+  mobileNavOpen,
   onCommand,
   onLogout,
   onMenu,
@@ -3015,6 +3024,7 @@ function Topbar({
   session: AuthSession
   tenantDomain?: string
   userSettings: UserSettingsRecord
+  mobileNavOpen: boolean
   onCommand: () => void
   onLogout: () => void
   onMenu: () => void
@@ -3025,7 +3035,14 @@ function Topbar({
 
   return (
     <header className="topbar glass">
-      <button className="icon-button mobile-menu" type="button" onClick={onMenu} aria-label="Open navigation">
+      <button
+        className="icon-button mobile-menu"
+        type="button"
+        onClick={onMenu}
+        aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+        aria-controls="primary-navigation"
+        aria-expanded={mobileNavOpen}
+      >
         <Menu size={18} />
       </button>
       <div className="topbar-title-block">
