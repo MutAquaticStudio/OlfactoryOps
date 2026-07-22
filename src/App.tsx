@@ -2543,7 +2543,7 @@ function App() {
 
   if (billingOnboarding) {
     return (
-      <PostSignupBillingGate
+      <PostSignupWorkspaceReady
         session={currentSession}
         onComplete={closeBillingGate}
       />
@@ -3469,19 +3469,6 @@ function toWorkspaceDomain(slug: string) {
   return `${toWorkspaceSlug(slug) || 'workspace'}.labofscents.org`
 }
 
-function billingPlanCta(plan: BillingPlanRecord) {
-  if (plan.monthlyPrice === 0) return 'Continue Free'
-  if (plan.id === 'PLAN-MAISON') return 'Start enterprise trial'
-  return 'Start 14-day trial'
-}
-
-function billingPlanAudience(plan: BillingPlanRecord) {
-  if (plan.id === 'PLAN-APPRENTICE') return 'Personal testing'
-  if (plan.id === 'PLAN-ARTISAN') return 'Solo founder'
-  if (plan.id === 'PLAN-MAISON') return 'Large lab'
-  return 'Small brand or lab'
-}
-
 function saasHealthTone(status: SaasHealthStatus): DomainStatus {
   if (status === 'blocked') return 'alert'
   if (status === 'warning') return 'review'
@@ -3585,99 +3572,13 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
   }
 }
 
-function PostSignupBillingGate({
+function PostSignupWorkspaceReady({
   session,
   onComplete,
 }: {
   session: AuthSession
   onComplete: () => void
 }) {
-  const fallback = useMemo<SaasConsoleResponse>(() => ({
-    plans: [clientFallbackPlan],
-    plan: clientFallbackPlan,
-    subscription: {
-      id: 'SUB-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      planId: clientFallbackPlan.id,
-      provider: 'manual',
-      collectionMode: 'manual_invoice',
-      status: 'trialing',
-      currentPeriodStart: 'client-fallback',
-      currentPeriodEnd: 'client-fallback',
-      canWrite: false,
-      canExport: true,
-      nextInvoiceAt: 'client-fallback',
-      updatedAt: 'client-fallback',
-    },
-    usage: {
-      id: 'USG-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      periodStart: 'client-fallback',
-      periodEnd: 'client-fallback',
-      activeSeats: 0,
-      materials: 0,
-      formulas: 0,
-      lots: 0,
-      documents: 0,
-      storageGb: 0,
-      apiCalls: 0,
-      webhooks: 0,
-      auditEvents: 0,
-      lastCalculatedAt: 'client-fallback',
-    },
-    limitChecks: [],
-    invoices: [],
-    sso: clientFallbackSso,
-    apiKeys: [],
-    webhooks: [],
-    webhookDeliveries: [],
-    auditExports: [],
-    readiness: [],
-    invariant: 'client fallback contains no commercial state; API is source of truth',
-  }), [session.organizationId])
-  const [billingData, setBillingData] = useState<SaasConsoleResponse>(fallback)
-  const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
-  const [status, setStatus] = useState('Choose the billing plan for this new workspace.')
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadBilling() {
-      try {
-        const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
-        setBillingData(payload)
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          setStatus(error instanceof Error ? error.message : 'Billing plans are temporarily unavailable')
-        }
-      }
-    }
-
-    void loadBilling()
-
-    return () => controller.abort()
-  }, [])
-
-  async function selectPlan(plan: BillingPlanRecord) {
-    setBusyPlanId(plan.id)
-    setStatus(`Selecting ${plan.name}`)
-    try {
-      await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id, billingCycle: 'monthly' }),
-      })
-      const payload = await requestApi<SaasConsoleResponse>('/billing/console')
-      setBillingData(payload)
-      setStatus(`${payload.plan.name} is ready for ${session.email}`)
-      onComplete()
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Plan selection failed')
-    } finally {
-      setBusyPlanId(null)
-    }
-  }
-
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
@@ -3686,61 +3587,26 @@ function PostSignupBillingGate({
           <div className="billing-onboarding-copy">
             <div className="brand-row">
               <div className="brand-mark">
-                <BadgeDollarSign size={18} />
+                <CheckCircle2 size={18} />
               </div>
               <div>
-                <div className="wordmark">Choose your plan</div>
+                <div className="wordmark">Workspace ready</div>
                 <div className="mono-small">{session.organizationId}</div>
               </div>
             </div>
-            <h1>Start on Free, or unlock a trial now.</h1>
+            <h1>Your beta workspace is ready.</h1>
             <p className="lead">
-              Your workspace is ready. Pick the plan that matches this lab; paid plans begin with a no-card trial and can later connect to Stripe Checkout.
+              Start building with your team now. Subscription options are temporarily hidden while beta access is managed directly by OlfactoryOps.
             </p>
             <div className="tag-row">
               <DataTag icon={ShieldCheck} label="Workspace" value="Ready" tone="green" />
               <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
-              <DataTag icon={CheckCircle2} label="Current" value={billingData.plan.name} tone="amber" />
             </div>
           </div>
-
-          <div className="plan-card-grid">
-            {billingData.plans.map((plan) => {
-              const isCurrent = billingData.subscription.planId === plan.id
-              return (
-                <article className={`plan-card ${isCurrent ? 'is-current' : ''}`} key={plan.id}>
-                  <div>
-                    <span className="mono-small">{billingPlanAudience(plan)}</span>
-                    <h2>{plan.name}</h2>
-                    <div className="price-line">
-                      <strong>{plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
-                      <span>/ month</span>
-                    </div>
-                  </div>
-                  <div className="plan-limits">
-                    <DataTag label="Seats" value={`${plan.seats}`} tone="blue" />
-                    <DataTag label="Storage" value={`${plan.storageGb}GB`} tone="green" />
-                  </div>
-                  <ul className="policy-list compact-policy-list">
-                    {plan.features.slice(0, 4).map((feature) => (
-                      <li key={feature}>{feature}</li>
-                    ))}
-                  </ul>
-                  <button
-                    className={isCurrent ? 'ghost-button full' : 'primary-button full'}
-                    type="button"
-                    onClick={() => void selectPlan(plan)}
-                    disabled={busyPlanId !== null}
-                  >
-                    {busyPlanId === plan.id ? 'Selecting' : billingPlanCta(plan)}
-                  </button>
-                </article>
-              )
-            })}
-          </div>
-          <div className="auth-status">
-            <ShieldCheck size={16} />
-            <span>{status}</span>
+          <div className="action-row">
+            <button className="primary-button" type="button" onClick={onComplete}>
+              Open workspace
+            </button>
           </div>
         </section>
       </main>
@@ -12009,12 +11875,12 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const internalAdminView = isInternalAdminSession(session)
-  const consoleApiLabel = internalAdminView ? 'Commercial console API' : 'Billing console API'
-  const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Billing console synced from live API'
-  const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading billing controls'
+  const consoleApiLabel = internalAdminView ? 'Commercial console API' : 'Workspace access API'
+  const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Workspace access synced from live API'
+  const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading workspace access controls'
   const fallbackMessage = internalAdminView
     ? 'Using local SaaS readiness seed until API is reachable'
-    : 'Using local billing seed until API is reachable'
+    : 'Using local workspace access seed until API is reachable'
   const fallback = useMemo<SaasConsoleResponse>(() => ({
     plans: [clientFallbackPlan],
     plan: clientFallbackPlan,
@@ -12187,25 +12053,6 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : `${action} failed`)
-    } finally {
-      setBillingBusyAction(null)
-    }
-  }
-
-  async function selectBillingPlan(planId: string) {
-    setBillingBusyAction(planId)
-    setStatusMessage(`Selecting ${planId}`)
-    try {
-      const payload = await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, billingCycle: 'monthly' }),
-      })
-      const consolePayload = await refreshSaasConsole()
-      setBillingAction(payload)
-      setStatusMessage(`${consolePayload.plan.name} selected for this workspace`)
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Plan selection failed')
     } finally {
       setBillingBusyAction(null)
     }
@@ -12447,12 +12294,9 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </Panel>
       ) : null}
 
-      <Panel title="Billing & Plan Limits" icon={BadgeDollarSign}>
+      <Panel title="Workspace Access" icon={ShieldCheck}>
         <div className="metric-grid">
-          <Metric label="Plan" value={saasData.plan.name} />
-          <Metric label="Monthly" value={formatCurrency(saasData.plan.monthlyPrice)} />
           <Metric label="Status" value={saasData.subscription.status.toUpperCase()} />
-          <Metric label="Next invoice" value={new Date(saasData.subscription.nextInvoiceAt).toLocaleDateString()} />
           <Metric label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} />
           <Metric label="Storage" value={`${storageUsedGb.toFixed(3)}/${saasData.plan.storageGb}GB`} />
         </div>
@@ -12460,25 +12304,6 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           <span style={{ width: `${Math.min(100, (activeSeats / saasData.plan.seats) * 100)}%` }} />
         </div>
         <div className="action-row">
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => void runBillingAction('checkout', '/billing/checkout', {
-              body: JSON.stringify({ planId: saasData.plan.id, mode: internalAdminView ? 'manual_sales' : 'customer_checkout' }),
-              headers: { 'Content-Type': 'application/json' },
-            })}
-            disabled={billingBusyAction !== null}
-          >
-            {internalAdminView ? 'Start sale' : 'Upgrade plan'}
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => void runBillingAction('portal', '/billing/portal')}
-            disabled={billingBusyAction !== null}
-          >
-            Billing portal
-          </button>
           {internalAdminView && saasData.subscription.canWrite ? (
             <button
               className="ghost-button"
@@ -12492,7 +12317,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
               Freeze workspace
             </button>
           ) : null}
-          {!saasData.subscription.canWrite ? (
+          {internalAdminView && !saasData.subscription.canWrite ? (
             <button
               className="primary-button"
               type="button"
@@ -12504,15 +12329,15 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           ) : null}
         </div>
         <ul className="policy-list">
-          <li>Plan limits are enforced server-side before {internalAdminView ? 'commercial writes' : 'workspace changes'}.</li>
+          <li>Workspace capacity controls remain enforced server-side before {internalAdminView ? 'commercial writes' : 'workspace changes'}.</li>
           <li>
             {internalAdminView
               ? 'Workspace freeze keeps read/export access and blocks create/update operations.'
-              : 'Billing portal and upgrades never bypass workspace-scoped permission checks.'}
+              : 'Subscription changes are temporarily managed by OlfactoryOps during beta.'}
           </li>
           <li>{statusMessage}</li>
         </ul>
-        {billingAction ? (
+        {internalAdminView && billingAction ? (
           <div className="audit-export-card">
             <span className="mono-small">{billingAction.id}</span>
             <strong>{billingAction.mode} / {billingAction.status}</strong>
@@ -12520,31 +12345,6 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <span>{billingAction.invariant}</span>
           </div>
         ) : null}
-      </Panel>
-
-      <Panel title="Plan Catalog" icon={BadgeDollarSign}>
-        <div className="mini-plan-list">
-          {saasData.plans.map((plan) => {
-            const selected = saasData.subscription.planId === plan.id
-            return (
-              <div className={`mini-plan-row ${selected ? 'is-current' : ''}`} key={plan.id}>
-                <div>
-                  <span className="mono-small">{billingPlanAudience(plan)}</span>
-                  <strong>{plan.name} / {plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
-                  <span>{plan.seats} seats / {plan.storageGb}GB / {plan.apiQuota} API calls</span>
-                </div>
-                <button
-                  className={selected ? 'ghost-button small' : 'primary-button small'}
-                  type="button"
-                  onClick={() => void selectBillingPlan(plan.id)}
-                  disabled={billingBusyAction !== null}
-                >
-                  {selected ? 'Current' : 'Select'}
-                </button>
-              </div>
-            )
-          })}
-        </div>
       </Panel>
 
       <Panel title="Usage Enforcement" icon={Gauge}>
