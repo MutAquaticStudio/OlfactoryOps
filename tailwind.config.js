@@ -10,7 +10,7 @@ export default {
       },
       colors: {
         lab: {
-          bg: '#eef2f3',
+          bg: '#070a0b',
           blue: '#0f766e',
           gold: '#9a6700',
           green: '#15803d',
