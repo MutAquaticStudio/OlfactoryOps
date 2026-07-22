@@ -223,6 +223,7 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
 
 const defaultAccentColor = '#0f766e'
 const showMoleculeSplitPanel = false
+const showInventoryLotComplianceReview = false
 
 const accentColorPresets = ['#0f766e', '#0369a1', '#15803d', '#9a6700', '#b42318', '#7c3aed']
 
@@ -7558,6 +7559,11 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   }, [onLotsChange, onMovementsChange, onStorageLocationsChange, session.organizationId])
 
   useEffect(() => {
+    if (!showInventoryLotComplianceReview) {
+      setLotComplianceDocuments([])
+      return
+    }
+
     const controller = new AbortController()
     async function loadComplianceDocuments() {
       try {
@@ -7889,16 +7895,18 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               </select>
             </label>
             <div className="lot-detail-card">
-              <div>
+              <div className="lot-detail-identity">
                 <strong>{selectedLot.lotNumber}</strong>
                 <span>{selectedMaterial?.name ?? selectedLot.materialId}</span>
               </div>
-              <DataTag label="Qty" value={formatGrams(selectedLot.quantityGrams)} />
-              <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
-              <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
-              <DataTag label="Location" value={selectedLot.location} tone="blue" />
-              <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
-              <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
+              <div className="lot-detail-tags">
+                <DataTag label="Qty" value={formatGrams(selectedLot.quantityGrams)} />
+                <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
+                <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
+                <DataTag label="Location" value={selectedLot.location} tone="blue" />
+                <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
+                <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
+              </div>
             </div>
 
             <div className="inventory-form-grid">
@@ -8022,6 +8030,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         </div>
       </Panel>
 
+      {showInventoryLotComplianceReview ? (
       <Panel className="wide" title="SDS / CoA Review" icon={FileLock2}>
         {selectedLot ? (
           <>
@@ -8094,6 +8103,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
           <div className="empty-state compact">Select a lot to review SDS / CoA documents.</div>
         )}
       </Panel>
+      ) : null}
 
       <Panel title="Labels, Genealogy & Shopping List" icon={ShoppingCart}>
         <div className="action-row">

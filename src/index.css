@@ -3046,7 +3046,30 @@ kbd {
 }
 
 .lot-detail-card {
-  grid-template-columns: minmax(0, 1.2fr) repeat(3, max-content);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.lot-detail-identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lot-detail-identity strong,
+.lot-detail-identity span {
+  overflow-wrap: anywhere;
+}
+
+.lot-detail-identity span {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.lot-detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
 }
 
