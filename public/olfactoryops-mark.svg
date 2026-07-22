@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="OlfactoryOps">
+  <rect width="128" height="128" rx="24" fill="#0d1214"/>
+  <path d="M64 24c8 18 27 29 27 51 0 17-12 29-27 29S37 92 37 75c0-22 19-33 27-51Zm0 24c-5 11-13 18-13 28 0 8 6 14 13 14s13-6 13-14c0-10-8-17-13-28Z" fill="#16b56a"/>
+  <circle cx="92" cy="37" r="8" fill="#61a5ff"/>
+</svg>

@@ -89,6 +89,7 @@ import {
   webhookDeliveries,
   type Allocation,
   type ApiKeyRecord,
+  type AppNotificationRecord,
   type AuditEvent,
   type AuditExportJobRecord,
   type AuthSession,
@@ -104,6 +105,8 @@ import {
   type CommercialSkuRecord,
   type CustomerAddress,
   type CustomerRecord,
+  type DataImportIssue,
+  type DataImportJobRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentShareLink,
@@ -117,6 +120,8 @@ import {
   type InventoryLot,
   type InventoryMovement,
   type InventoryReorderSuggestion,
+  type LegalAcceptanceRecord,
+  type LegalDocumentKind,
   type LabUsagePurpose,
   type LabUsageRecord,
   type LabWeighingSession,
@@ -131,6 +136,7 @@ import {
   type OrganizationRecord,
   type PriceHistoryRecord,
   type PriceListRecord,
+  type PrivacyRequestRecord,
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
   type QuoteRecord,
@@ -146,6 +152,7 @@ import {
   type SupplierRecord,
   type TenantSettingsRecord,
   type UserSettingsRecord,
+  type GlobalSearchResult,
   type WebhookRecord,
   type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
@@ -221,6 +228,15 @@ type AuthCredentialRecord = {
   email: string
   passwordHash: string
   passwordSetAt: string
+}
+
+export type PasswordResetRecord = {
+  id: string
+  email: string
+  tokenHash: string
+  createdAt: string
+  expiresAt: string
+  usedAt?: string
 }
 
 export type MfaEnrollmentRecord = {
@@ -628,6 +644,7 @@ export class NorthStarService {
   private brandRecords: BrandRecord[] = structuredClone(brands)
   private membershipRecords: MembershipRecord[] = structuredClone(memberships)
   private authCredentialRecords: AuthCredentialRecord[] = []
+  private passwordResetRecords: PasswordResetRecord[] = []
   private mfaEnrollmentRecords: MfaEnrollmentRecord[] = []
   private readonly mfaEncryptionKey?: Buffer
   private sessions: AuthSession[] = structuredClone(authSessions)
@@ -658,6 +675,10 @@ export class NorthStarService {
   private webhookRecords: WebhookRecord[] = structuredClone(webhooks)
   private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditExportRecords: AuditExportJobRecord[] = structuredClone(auditExportJobs)
+  private notificationRecords: AppNotificationRecord[] = []
+  private importJobRecords: DataImportJobRecord[] = []
+  private legalAcceptanceRecords: LegalAcceptanceRecord[] = []
+  private privacyRequestRecords: PrivacyRequestRecord[] = []
   private inventoryApprovalRequestRecords: InventoryApprovalRequestRecord[] = []
   private operationApprovalRequestRecords: OperationApprovalRequestRecord[] = []
   private auditCounter = auditEvents.length
@@ -2703,6 +2724,16 @@ export class NorthStarService {
       tenantSecurityPolicy.newDeviceAlertEnabled && !knownDevice
         ? this.recordAudit('auth.newDevice', session.deviceId, session.userId, 'review')
         : null
+    if (newDeviceAudit) {
+      this.queueNotification(
+        session.organizationId,
+        session.email,
+        'security',
+        'New sign-in detected',
+        `A new ${session.userAgent} session was created from ${session.location}.`,
+        '/security',
+      )
+    }
     return {
       data: {
         session: this.exposeSession(session),
@@ -3098,6 +3129,84 @@ export class NorthStarService {
     }
   }
 
+  beginPasswordReset(email?: string) {
+    const normalizedEmail = email?.trim().toLowerCase() ?? ''
+    const credential = this.authCredentialRecords.find((item) => item.email === normalizedEmail)
+    if (!credential || !normalizedEmail) {
+      return { data: { accepted: true } }
+    }
+
+    const now = new Date()
+    const token = randomBytes(32).toString('base64url')
+    const reset: PasswordResetRecord = {
+      id: `RESET-${this.shortId()}`,
+      email: normalizedEmail,
+      tokenHash: this.hashSecret(`password-reset:${token}`),
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
+    }
+    this.passwordResetRecords = [
+      reset,
+      ...this.passwordResetRecords.filter((item) => item.email !== normalizedEmail || Boolean(item.usedAt)),
+    ].slice(0, 500)
+    const membership = this.membershipRecords.find((item) => item.email === normalizedEmail && item.status === 'ACTIVE')
+    const notification = membership
+      ? this.queueNotification(
+        membership.organizationId,
+        normalizedEmail,
+        'security',
+        'Password reset requested',
+        'A password reset link was requested for this account. If this was not you, no further action is needed.',
+        '/login',
+        false,
+      )
+      : undefined
+    const audit = this.recordAudit('auth.passwordReset.request', normalizedEmail, 'api:auth', 'allowed')
+    return {
+      data: { accepted: true, audit },
+      delivery: { recipientEmail: normalizedEmail, token, notificationId: notification?.id },
+    }
+  }
+
+  completePasswordReset(body: { token?: string; password?: string } = {}) {
+    const token = typeof body.token === 'string' ? body.token.trim() : ''
+    const password = typeof body.password === 'string' ? body.password : ''
+    this.assertSignupPassword(password)
+    const tokenHash = this.hashSecret(`password-reset:${token}`)
+    const reset = this.passwordResetRecords.find((item) =>
+      item.tokenHash === tokenHash && !item.usedAt && item.expiresAt > new Date().toISOString(),
+    )
+    if (!token || !reset) {
+      throw new ForbiddenException('Password reset link is invalid or expired')
+    }
+    const updatedAt = new Date().toISOString()
+    const credential = this.authCredentialRecords.find((item) => item.email === reset.email)
+    if (!credential) {
+      throw new ForbiddenException('Password reset link is invalid or expired')
+    }
+    this.authCredentialRecords = this.authCredentialRecords.map((item) =>
+      item.email === reset.email
+        ? { ...item, passwordHash: this.passwordHashForEmail(reset.email, password), passwordSetAt: updatedAt }
+        : item,
+    )
+    this.passwordResetRecords = this.passwordResetRecords.map((item) =>
+      item.id === reset.id ? { ...item, usedAt: updatedAt } : item,
+    )
+    this.sessions = this.sessions.map((session) =>
+      session.email === reset.email && session.status === 'ACTIVE'
+        ? { ...session, status: 'REVOKED', revokedAt: updatedAt, revokedReason: 'password reset' }
+        : session,
+    )
+    const audit = this.recordAudit('auth.passwordReset.complete', reset.email, 'api:auth', 'allowed')
+    return {
+      data: {
+        accepted: true,
+        audit,
+        invariant: 'password reset token is single-use, expires after 30 minutes, and revokes active sessions for the account',
+      },
+    }
+  }
+
   memberSummary() {
     const session = this.currentSession()
     if (!this.roleHasPermission(session.role, 'security.viewMembers') && !this.roleHasPermission(session.role, 'security.manageUsers')) {
@@ -3173,6 +3282,14 @@ export class NorthStarService {
     this.membershipRecords = existing
       ? this.membershipRecords.map((item) => (item.id === existing.id ? membership : item))
       : [membership, ...this.membershipRecords]
+    this.queueNotification(
+      session.organizationId,
+      membership.email,
+      'workspace',
+      'You were invited to a workspace',
+      `${session.email} invited you as ${membership.role}. Set your password to activate access.`,
+      '/login',
+    )
     const audit = this.recordAudit('membership.invite', email, session.userId, 'allowed')
     return {
       data: {
@@ -5330,6 +5447,515 @@ export class NorthStarService {
     }
   }
 
+  globalSearch(query = '') {
+    const session = this.currentSession()
+    const normalizedQuery = query.trim().toLowerCase()
+    if (normalizedQuery.length < 2) {
+      return { data: { query: query.trim(), results: [] satisfies GlobalSearchResult[] } }
+    }
+
+    const matches = (values: Array<string | undefined>) =>
+      values.some((value) => value?.toLowerCase().includes(normalizedQuery))
+    const results: GlobalSearchResult[] = []
+    const canView = (permission: string) => this.permissionDecision(session.role, permission).allowed
+
+    if (canView('materials.view')) {
+      this.materialRecords
+        .filter((material) => (material.organizationId || 'org-nxl') === session.organizationId)
+        .filter((material) => matches([material.name, material.cas, material.family, ...material.odor]))
+        .forEach((material) => results.push({
+          id: material.id,
+          kind: 'material',
+          title: material.name,
+          subtitle: `${material.cas} / ${material.family}`,
+          href: '/materials',
+        }))
+    }
+    if (canView('formulas.view')) {
+      this.formulaCatalogForSession(session)
+        .filter((formula) => matches([formula.name, formula.code, formula.project, formula.collection, ...formula.tags]))
+        .forEach((formula) => results.push({
+          id: formula.id,
+          kind: 'formula',
+          title: formula.name,
+          subtitle: `${formula.code} / ${formula.workflowStatus}`,
+          href: '/formulas',
+        }))
+    }
+    if (canView('inventory.view')) {
+      this.lotsForSession(session)
+        .filter((lot) => matches([lot.lotNumber, lot.location, lot.supplierLotRef]))
+        .forEach((lot) => results.push({
+          id: lot.id,
+          kind: 'lot',
+          title: lot.lotNumber,
+          subtitle: `${lot.location} / ${lot.qualityStatus}`,
+          href: '/inventory',
+        }))
+    }
+    if (canView('documents.view')) {
+      this.documentRecords
+        .filter((document) => matches([document.title, document.type, document.linkedTo]))
+        .forEach((document) => results.push({
+          id: document.id,
+          kind: 'document',
+          title: document.title,
+          subtitle: `${document.type} / ${document.status}`,
+          href: '/inventory',
+        }))
+    }
+    if (canView('procurement.view')) {
+      this.supplierRecords
+        .filter((supplier) => matches([supplier.name, supplier.id, supplier.contactEmail]))
+        .forEach((supplier) => results.push({
+          id: supplier.id,
+          kind: 'supplier',
+          title: supplier.name,
+          subtitle: `${supplier.country} / ${supplier.status}`,
+          href: '/procurement',
+        }))
+    }
+
+    return { data: { query: query.trim(), results: results.slice(0, 40) } }
+  }
+
+  notifications() {
+    const session = this.currentSession()
+    const notifications = this.notificationRecords
+      .filter((item) => item.organizationId === session.organizationId && item.recipientEmail === session.email)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    return {
+      data: {
+        notifications,
+        unreadCount: notifications.filter((item) => !item.readAt).length,
+        invariant: 'notification inbox is scoped to the authenticated member and never exposes another workspace activity',
+      },
+    }
+  }
+
+  refreshOperationalNotifications() {
+    const session = this.currentSession()
+    if (!this.permissionDecision(session.role, 'inventory.view').allowed) {
+      return { data: { created: 0, invariant: 'inventory alerts are not generated for roles without inventory visibility' } }
+    }
+    const now = new Date()
+    const since = now.getTime() - 24 * 60 * 60 * 1000
+    const recipient = session.email.toLowerCase()
+    const shouldEmail = this.settingsForSession(session).emailDigest !== 'off'
+    const isRecent = (key: string) => this.notificationRecords.some((notification) =>
+      notification.organizationId === session.organizationId &&
+      notification.recipientEmail === recipient &&
+      notification.href === `/inventory#${key}` &&
+      new Date(notification.createdAt).getTime() >= since,
+    )
+    let created = 0
+    this.inventoryReorderSuggestions().data.suggestions.slice(0, 10).forEach((suggestion) => {
+      const key = `low-stock-${suggestion.materialId}`
+      if (isRecent(key)) return
+      this.queueNotification(
+        session.organizationId,
+        recipient,
+        'inventory',
+        `Low stock: ${suggestion.materialName}`,
+        suggestion.reason,
+        `/inventory#${key}`,
+        shouldEmail,
+      )
+      created += 1
+    })
+    expiryRisk(this.lotsForSession(session), this.materialRecords, now.toISOString().slice(0, 10))
+      .filter((risk) => risk.status === 'HIGH')
+      .slice(0, 10)
+      .forEach((risk) => {
+        const key = `expiry-${risk.lotId}`
+        if (isRecent(key)) return
+        this.queueNotification(
+          session.organizationId,
+          recipient,
+          'inventory',
+          `Expiry attention: ${risk.materialName}`,
+          `${risk.lotNumber} expires in ${risk.daysUntilExpiry} day(s); ${formatGrams(risk.gramsAtRisk)} is at risk.`,
+          `/inventory#${key}`,
+          shouldEmail,
+        )
+        created += 1
+      })
+    const audit = this.recordAudit('notification.operational.refresh', session.organizationId, session.userId, 'allowed')
+    return {
+      data: {
+        created,
+        audit,
+        invariant: 'low-stock and expiry alerts are tenant-scoped, deduplicated for 24 hours, and never change inventory',
+      },
+    }
+  }
+
+  markNotificationRead(id: string) {
+    const session = this.currentSession()
+    const notification = this.notificationRecords.find(
+      (item) => item.id === id && item.organizationId === session.organizationId && item.recipientEmail === session.email,
+    )
+    if (!notification) {
+      throw new NotFoundException(`Notification ${id} was not found`)
+    }
+    const readAt = notification.readAt || new Date().toISOString()
+    this.notificationRecords = this.notificationRecords.map((item) => item.id === id ? { ...item, readAt } : item)
+    return { data: { notification: { ...notification, readAt }, audit: this.recordAudit('notification.read', id, session.userId, 'allowed') } }
+  }
+
+  markAllNotificationsRead() {
+    const session = this.currentSession()
+    const readAt = new Date().toISOString()
+    let updated = 0
+    this.notificationRecords = this.notificationRecords.map((item) => {
+      if (item.organizationId === session.organizationId && item.recipientEmail === session.email && !item.readAt) {
+        updated += 1
+        return { ...item, readAt }
+      }
+      return item
+    })
+    return { data: { updated, audit: this.recordAudit('notification.readAll', session.userId, session.userId, 'allowed') } }
+  }
+
+  notificationEmailOutbox(limit = 10) {
+    return this.notificationRecords
+      .filter((item) => item.emailStatus === 'queued')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .slice(0, Math.max(1, Math.min(limit, 25)))
+  }
+
+  setNotificationEmailStatus(id: string, status: 'sent' | 'failed', error?: string) {
+    this.notificationRecords = this.notificationRecords.map((item) =>
+      item.id === id
+        ? { ...item, emailStatus: status, emailError: error?.slice(0, 180) }
+        : item,
+    )
+  }
+
+  legalStatus() {
+    const session = this.currentSession()
+    const records = this.legalAcceptanceRecords
+      .filter((item) => item.organizationId === session.organizationId && item.userId === session.userId)
+      .sort((left, right) => right.acceptedAt.localeCompare(left.acceptedAt))
+    return {
+      data: {
+        currentVersions: { terms: '2026-07-22', privacy: '2026-07-22', cookies: '2026-07-22' },
+        acceptances: records,
+        invariant: 'legal consent is versioned, user-scoped, and auditable rather than inferred from browser state',
+      },
+    }
+  }
+
+  acceptLegal(body: { document?: LegalDocumentKind; version?: string } = {}) {
+    const session = this.currentSession()
+    const document = body.document
+    if (document !== 'terms' && document !== 'privacy' && document !== 'cookies') {
+      throw new UnprocessableEntityException('A legal document type is required')
+    }
+    const version = body.version?.trim().slice(0, 32) || '2026-07-22'
+    const existing = this.legalAcceptanceRecords.find(
+      (item) => item.organizationId === session.organizationId && item.userId === session.userId && item.document === document && item.version === version,
+    )
+    if (existing) {
+      return { data: { acceptance: existing, idempotent: true } }
+    }
+    const acceptance: LegalAcceptanceRecord = {
+      id: `LEGAL-${this.shortId()}`,
+      organizationId: session.organizationId,
+      userId: session.userId,
+      email: session.email,
+      document,
+      version,
+      acceptedAt: new Date().toISOString(),
+    }
+    this.legalAcceptanceRecords = [acceptance, ...this.legalAcceptanceRecords]
+    const audit = this.recordAudit(`legal.${document}.accept`, version, session.userId, 'allowed')
+    return { data: { acceptance, audit, idempotent: false } }
+  }
+
+  privacyRequests() {
+    const session = this.currentSession()
+    const mayManage = this.permissionDecision(session.role, 'platform.view').allowed
+    const requests = this.privacyRequestRecords.filter((item) =>
+      item.organizationId === session.organizationId && (mayManage || item.requestedBy === session.userId),
+    )
+    return { data: { requests } }
+  }
+
+  requestPrivacyData(body: { type?: 'EXPORT' | 'ERASURE' } = {}) {
+    const session = this.currentSession()
+    const type = body.type === 'ERASURE' ? 'ERASURE' : 'EXPORT'
+    const existing = this.privacyRequestRecords.find(
+      (item) => item.organizationId === session.organizationId && item.requestedBy === session.userId && item.type === type && item.status === 'REQUESTED',
+    )
+    if (existing) {
+      return { data: { request: existing, idempotent: true } }
+    }
+    const request: PrivacyRequestRecord = {
+      id: `DSR-${this.shortId()}`,
+      organizationId: session.organizationId,
+      requestedBy: session.userId,
+      subjectEmail: session.email,
+      type,
+      status: 'REQUESTED',
+      createdAt: new Date().toISOString(),
+    }
+    this.privacyRequestRecords = [request, ...this.privacyRequestRecords]
+    this.queueNotification(session.organizationId, session.email, 'system', `${type === 'EXPORT' ? 'Data export' : 'Account erasure'} request received`, 'Your privacy request is queued for review.', '/settings', false)
+    const audit = this.recordAudit(`privacy.${type.toLowerCase()}.request`, request.id, session.userId, 'review')
+    return { data: { request, audit, idempotent: false } }
+  }
+
+  exportPrivacyData(id: string) {
+    const session = this.currentSession()
+    const mayManage = this.permissionDecision(session.role, 'platform.view').allowed
+    const request = this.privacyRequestRecords.find((item) =>
+      item.id === id && item.organizationId === session.organizationId && (item.requestedBy === session.userId || mayManage),
+    )
+    if (!request || request.type !== 'EXPORT') {
+      throw new NotFoundException(`Privacy export ${id} was not found`)
+    }
+    const completedAt = new Date().toISOString()
+    const completed = { ...request, status: 'COMPLETED' as const, completedAt }
+    this.privacyRequestRecords = this.privacyRequestRecords.map((item) => item.id === id ? completed : item)
+    const membership = this.membershipRecords.find((item) =>
+      item.organizationId === request.organizationId && item.userId === request.requestedBy,
+    )
+    const exportData = {
+      generatedAt: completedAt,
+      subject: {
+        email: request.subjectEmail,
+        membership: membership
+          ? {
+            name: membership.name,
+            role: membership.role,
+            status: membership.status,
+            lastActiveAt: membership.lastActiveAt,
+          }
+          : null,
+      },
+      userSettings: this.userSettingsRecords.filter((item) => item.organizationId === request.organizationId && item.userId === request.requestedBy),
+      legalAcceptances: this.legalAcceptanceRecords.filter((item) => item.organizationId === request.organizationId && item.userId === request.requestedBy),
+      notifications: this.notificationRecords.filter((item) => item.organizationId === request.organizationId && item.recipientEmail === request.subjectEmail),
+      sessions: this.sessions
+        .filter((item) => item.organizationId === request.organizationId && item.userId === request.requestedBy)
+        .map((item) => this.exposeSession(item)),
+    }
+    const audit = this.recordAudit('privacy.export.generate', id, session.userId, 'allowed')
+    return {
+      data: {
+        request: completed,
+        export: exportData,
+        audit,
+        invariant: 'privacy export contains only the requested subject data in the current workspace and excludes passwords, tokens, MFA secrets, and other members',
+      },
+    }
+  }
+
+  previewImport(body: {
+    entity?: 'materials' | 'lots'
+    fileName?: string
+    idempotencyKey?: string
+    rows?: Array<Record<string, unknown>>
+  } = {}) {
+    const session = this.currentSession()
+    const entity = body.entity === 'lots' ? 'lots' : 'materials'
+    this.requirePermission(session.role, entity === 'materials' ? 'materials.create' : 'inventory.receive')
+    const rows = Array.isArray(body.rows) ? body.rows.slice(0, 500).map((row) => ({ ...row })) : []
+    if (rows.length === 0) {
+      throw new UnprocessableEntityException('Import must contain at least one mapped row')
+    }
+    if ((body.rows?.length ?? 0) > 500) {
+      throw new UnprocessableEntityException('Import is limited to 500 rows per job')
+    }
+    const fileName = body.fileName?.trim().slice(0, 160) || `${entity}.csv`
+    const idempotencyKey = body.idempotencyKey?.trim().slice(0, 160) || this.importChecksum(entity, rows)
+    const existing = this.importJobRecords.find(
+      (item) => item.organizationId === session.organizationId && item.idempotencyKey === idempotencyKey,
+    )
+    if (existing) {
+      return { data: { job: existing, idempotent: true } }
+    }
+    const errors = entity === 'materials'
+      ? this.materialImportIssues(rows, session.organizationId)
+      : this.lotImportIssues(rows, session)
+    const invalidRows = new Set(errors.map((issue) => issue.row)).size
+    const now = new Date().toISOString()
+    const job: DataImportJobRecord = {
+      id: `IMP-${this.shortId()}`,
+      organizationId: session.organizationId,
+      requestedBy: session.userId,
+      entity,
+      fileName,
+      idempotencyKey,
+      status: errors.length > 0 ? 'DRAFT' : 'VALIDATED',
+      totalRows: rows.length,
+      validRows: rows.length - invalidRows,
+      invalidRows,
+      errors,
+      rows,
+      createdAt: now,
+    }
+    this.importJobRecords = [job, ...this.importJobRecords]
+    const audit = this.recordAudit('import.preview', `${entity}:${job.id}`, session.userId, errors.length ? 'review' : 'allowed')
+    return { data: { job, audit, idempotent: false } }
+  }
+
+  commitImport(id: string) {
+    const session = this.currentSession()
+    const job = this.importJobRecords.find((item) => item.id === id && item.organizationId === session.organizationId)
+    if (!job) {
+      throw new NotFoundException(`Import job ${id} was not found`)
+    }
+    this.requirePermission(session.role, job.entity === 'materials' ? 'materials.create' : 'inventory.receive')
+    if (job.status === 'COMPLETED') {
+      return { data: { job, created: 0, idempotent: true } }
+    }
+    const errors = job.entity === 'materials'
+      ? this.materialImportIssues(job.rows, session.organizationId)
+      : this.lotImportIssues(job.rows, session)
+    if (errors.length > 0) {
+      const failed = { ...job, status: 'FAILED' as const, errors, invalidRows: new Set(errors.map((issue) => issue.row)).size }
+      this.upsertImportJob(failed)
+      throw new UnprocessableEntityException({ message: 'Import data changed since preview', errors })
+    }
+    let created = 0
+    for (const row of job.rows) {
+      if (job.entity === 'materials') {
+        this.createMaterial({
+          name: this.importString(row.name),
+          cas: this.importString(row.cas),
+          family: this.importString(row.family),
+          tier: this.importTier(row.tier),
+          ifraLimit: this.importNumber(row.ifraLimit, 100),
+          costPerGram: this.importNumber(row.costPerGram, 0.05),
+          odor: this.importString(row.odor).split(',').map((value) => value.trim()).filter(Boolean),
+          source: `Import ${job.fileName}`,
+          version: 'import-v1',
+        })
+      } else {
+        const material = this.importMaterialForLot(row, session.organizationId)
+        if (!material) {
+          throw new UnprocessableEntityException('Imported lot material could not be matched')
+        }
+        this.receiveInventoryReceipt({
+          materialId: material.id,
+          lotNumber: this.importString(row.lotNumber),
+          quantityGrams: this.importNumber(row.quantityGrams, 0),
+          expiryDate: this.importString(row.expiryDate),
+          location: this.importString(row.location) || 'Lab A',
+          qualityStatus: this.importLotQualityStatus(row.qualityStatus),
+          supplierLotRef: this.importString(row.supplierLotRef),
+        })
+      }
+      created += 1
+    }
+    const completed = { ...job, status: 'COMPLETED' as const, committedAt: new Date().toISOString() }
+    this.upsertImportJob(completed)
+    this.queueNotification(session.organizationId, session.email, 'workspace', `${created} ${job.entity} imported`, `${job.fileName} was committed without duplicate rows.`, job.entity === 'materials' ? '/materials' : '/inventory', false)
+    const audit = this.recordAudit('import.commit', `${job.entity}:${job.id}`, session.userId, 'allowed')
+    return { data: { job: completed, created, audit, idempotent: false } }
+  }
+
+  private queueNotification(
+    organizationId: string,
+    recipientEmail: string,
+    category: AppNotificationRecord['category'],
+    title: string,
+    body: string,
+    href?: string,
+    shouldEmail = true,
+  ) {
+    const notification: AppNotificationRecord = {
+      id: `NTF-${this.shortId()}`,
+      organizationId,
+      recipientEmail: recipientEmail.toLowerCase(),
+      category,
+      title: title.slice(0, 140),
+      body: body.slice(0, 500),
+      href,
+      createdAt: new Date().toISOString(),
+      emailStatus: shouldEmail ? 'queued' : 'in_app',
+    }
+    this.notificationRecords = [notification, ...this.notificationRecords]
+    return notification
+  }
+
+  private materialImportIssues(rows: Array<Record<string, unknown>>, organizationId: string) {
+    const errors: DataImportIssue[] = []
+    const seenCas = new Set<string>()
+    rows.forEach((row, index) => {
+      const line = index + 2
+      const name = this.importString(row.name)
+      const cas = this.importString(row.cas)
+      if (!name) errors.push({ row: line, field: 'name', message: 'Material name is required' })
+      if (!cas || !/^[0-9-]+$/.test(cas)) errors.push({ row: line, field: 'cas', message: 'CAS must contain digits and hyphens' })
+      const normalizedCas = cas.toLowerCase()
+      if (normalizedCas && seenCas.has(normalizedCas)) errors.push({ row: line, field: 'cas', message: 'CAS is duplicated in this file' })
+      seenCas.add(normalizedCas)
+      if (this.materialRecords.some((material) => (material.organizationId || 'org-nxl') === organizationId && material.cas.toLowerCase() === normalizedCas)) {
+        errors.push({ row: line, field: 'cas', message: 'CAS already exists in this workspace' })
+      }
+      if (this.importNumber(row.costPerGram, -1) < 0) errors.push({ row: line, field: 'costPerGram', message: 'Cost per gram cannot be negative' })
+      if (this.importNumber(row.ifraLimit, 100) < 0 || this.importNumber(row.ifraLimit, 100) > 100) errors.push({ row: line, field: 'ifraLimit', message: 'IFRA limit must be between 0 and 100' })
+    })
+    return errors
+  }
+
+  private lotImportIssues(rows: Array<Record<string, unknown>>, session: AuthSession) {
+    const errors: DataImportIssue[] = []
+    const seenLots = new Set<string>()
+    rows.forEach((row, index) => {
+      const line = index + 2
+      const lotNumber = this.importString(row.lotNumber)
+      if (!lotNumber) errors.push({ row: line, field: 'lotNumber', message: 'Lot number is required' })
+      if (lotNumber && seenLots.has(lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number is duplicated in this file' })
+      seenLots.add(lotNumber.toLowerCase())
+      if (this.lotsForSession(session).some((lot) => lot.lotNumber.toLowerCase() === lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number already exists in this workspace' })
+      if (!this.importMaterialForLot(row, session.organizationId, false)) errors.push({ row: line, field: 'material', message: 'Material ID, CAS, or name could not be matched' })
+      if (this.importNumber(row.quantityGrams, 0) <= 0) errors.push({ row: line, field: 'quantityGrams', message: 'Quantity grams must be greater than 0' })
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(this.importString(row.expiryDate))) errors.push({ row: line, field: 'expiryDate', message: 'Expiry date must use YYYY-MM-DD' })
+    })
+    return errors
+  }
+
+  private importMaterialForLot(row: Record<string, unknown>, organizationId: string, throwIfMissing = true) {
+    const materialId = this.importString(row.materialId)
+    const materialCas = this.importString(row.materialCas || row.cas)
+    const materialName = this.importString(row.materialName || row.material)
+    const material = this.materialRecords.find((candidate) =>
+      (candidate.organizationId || 'org-nxl') === organizationId &&
+      (candidate.id === materialId || candidate.cas.toLowerCase() === materialCas.toLowerCase() || candidate.name.toLowerCase() === materialName.toLowerCase()),
+    )
+    if (!material && throwIfMissing) throw new UnprocessableEntityException('Imported lot material could not be matched')
+    return material
+  }
+
+  private importString(value: unknown) {
+    return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
+  }
+
+  private importNumber(value: unknown, fallback: number) {
+    const number = Number(value)
+    return Number.isFinite(number) ? number : fallback
+  }
+
+  private importTier(value: unknown): Material['tier'] {
+    return value === 'Top' || value === 'Heart' || value === 'Base' ? value : 'Base'
+  }
+
+  private importLotQualityStatus(value: unknown): LotQualityStatus {
+    return value === 'QUARANTINE' || value === 'REJECTED' || value === 'APPROVED' ? value : 'QUARANTINE'
+  }
+
+  private importChecksum(entity: string, rows: Array<Record<string, unknown>>) {
+    return createHash('sha256').update(JSON.stringify({ entity, rows })).digest('hex')
+  }
+
+  private upsertImportJob(job: DataImportJobRecord) {
+    this.importJobRecords = [job, ...this.importJobRecords.filter((item) => item.id !== job.id)]
+  }
+
   billingPlan() {
     return { data: this.planForSubscription(this.currentSubscription()) }
   }
@@ -5376,6 +6002,193 @@ export class NorthStarService {
   billingInvoices() {
     const subscription = this.currentSubscription()
     return { data: this.invoicesForSubscription(subscription.id) }
+  }
+
+  stripeCheckoutContext(body: { planId?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const subscription = this.currentSubscription()
+    const plan = this.billingPlanForId(body.planId?.trim() || subscription.planId)
+    if (plan.monthlyPrice <= 0) {
+      throw new UnprocessableEntityException('Free plans do not require Stripe checkout')
+    }
+    const organization = this.organizationRecords.find((item) => item.id === session.organizationId)
+    const audit = this.recordAudit('billing.stripe.checkout.start', plan.id, session.userId, 'allowed')
+    return {
+      data: {
+        subscription,
+        plan,
+        organizationId: session.organizationId,
+        organizationName: organization?.name || session.organizationId,
+        customerEmail: session.email,
+        audit,
+      },
+    }
+  }
+
+  stripePortalContext() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'billing.manage')
+    const subscription = this.currentSubscription()
+    if (!subscription.providerCustomerId) {
+      throw new UnprocessableEntityException('A Stripe customer is required before opening the billing portal')
+    }
+    const audit = this.recordAudit('billing.stripe.portal.open', subscription.id, session.userId, 'allowed')
+    return { data: { subscription, audit } }
+  }
+
+  cloudflareSaasProvisioningContext(body: { hostname?: string } = {}) {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can provision a custom domain')
+    }
+    const hostname = this.normalizeDomain(body.hostname, '')
+    if (!hostname) {
+      throw new UnprocessableEntityException('Custom domain hostname is required')
+    }
+    const collision = this.organizationRecords.find(
+      (organization) => organization.customDomain?.toLowerCase() === hostname && organization.id !== session.organizationId,
+    )
+    if (collision) {
+      throw new UnprocessableEntityException('Custom domain is already assigned to another workspace')
+    }
+    return { data: { hostname, organizationId: session.organizationId, requestedBy: session.userId } }
+  }
+
+  completeCloudflareSaasProvisioning(hostname: string, providerId: string, validation: Record<string, string>) {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can provision a custom domain')
+    }
+    const organization = this.organizationRecords.find((item) => item.id === session.organizationId)
+    if (!organization) {
+      throw new NotFoundException('Workspace organization was not found')
+    }
+    const updated = { ...organization, customDomain: hostname }
+    this.organizationRecords = [updated, ...this.organizationRecords.filter((item) => item.id !== updated.id)]
+    this.queueNotification(
+      session.organizationId,
+      session.email,
+      'workspace',
+      'Custom domain provisioning started',
+      `Cloudflare accepted ${hostname}. Complete DNS validation before the hostname becomes active.`,
+      '/customization',
+    )
+    const audit = this.recordAudit('saas.customDomain.provision', `${hostname}:${providerId}`, session.userId, 'review')
+    return {
+      data: {
+        organization: updated,
+        hostname,
+        providerId,
+        validation,
+        audit,
+        invariant: 'custom domain is recorded only after Cloudflare for SaaS accepts the tenant hostname request',
+      },
+    }
+  }
+
+  applyStripeWebhook(event: Record<string, unknown>) {
+    const eventType = typeof event.type === 'string' ? event.type : 'unknown'
+    const eventId = typeof event.id === 'string' ? event.id : this.shortId()
+    const eventData = event.data
+    const object = eventData && typeof eventData === 'object' && !Array.isArray(eventData)
+      ? (eventData as Record<string, unknown>).object
+      : undefined
+    if (!object || typeof object !== 'object' || Array.isArray(object)) {
+      const audit = this.recordAudit('billing.stripe.webhook.ignored', eventId, 'api:stripe', 'review')
+      return { data: { eventId, eventType, applied: false, audit } }
+    }
+    const payload = object as Record<string, unknown>
+    const metadata = payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
+      ? payload.metadata as Record<string, unknown>
+      : {}
+    const organizationId = typeof metadata.organizationId === 'string' ? metadata.organizationId : ''
+    const providerSubscriptionId = this.stripeString(payload.subscription) || this.stripeString(payload.id)
+    const subscription = this.subscriptionRecords.find((item) =>
+      (organizationId && item.organizationId === organizationId) ||
+      (providerSubscriptionId && item.providerSubscriptionId === providerSubscriptionId),
+    )
+    if (!subscription) {
+      const audit = this.recordAudit('billing.stripe.webhook.unmatched', eventId, 'api:stripe', 'review')
+      return { data: { eventId, eventType, applied: false, audit } }
+    }
+
+    const now = new Date().toISOString()
+    const providerStatus = this.stripeString(payload.status)
+    const nextStatus = this.mapStripeSubscriptionStatus(providerStatus, subscription.status)
+    const customerId = this.stripeString(payload.customer) || subscription.providerCustomerId
+    const requestedPlanId = this.stripeString(metadata.planId)
+    const planId = billingPlans.some((plan) => plan.id === requestedPlanId) ? requestedPlanId : subscription.planId
+    const nextSubscriptionId = eventType.startsWith('customer.subscription.')
+      ? this.stripeString(payload.id) || subscription.providerSubscriptionId
+      : subscription.providerSubscriptionId
+    const updated: BillingSubscriptionRecord = {
+      ...subscription,
+      provider: 'stripe',
+      collectionMode: 'hosted_checkout',
+      planId,
+      providerCustomerId: customerId,
+      providerSubscriptionId: nextSubscriptionId,
+      status: nextStatus,
+      currentPeriodStart: this.stripeTimestamp(payload.current_period_start) || subscription.currentPeriodStart,
+      currentPeriodEnd: this.stripeTimestamp(payload.current_period_end) || subscription.currentPeriodEnd,
+      canWrite: nextStatus === 'active' || nextStatus === 'trialing',
+      canExport: nextStatus !== 'canceled',
+      updatedAt: now,
+    }
+    this.upsertSubscription(updated)
+
+    if (eventType.startsWith('invoice.')) {
+      const invoiceId = this.stripeString(payload.id)
+      if (invoiceId) {
+        const invoiceStatus = this.mapStripeInvoiceStatus(this.stripeString(payload.status), eventType)
+        const amountDue = Number(payload.amount_due)
+        const invoice: BillingInvoiceRecord = {
+          id: `INV-STRIPE-${invoiceId}`,
+          subscriptionId: updated.id,
+          number: this.stripeString(payload.number) || invoiceId,
+          status: invoiceStatus,
+          amountDue: Number.isFinite(amountDue) ? amountDue / 100 : 0,
+          currency: this.stripeString(payload.currency).toUpperCase() || 'USD',
+          dueAt: this.stripeTimestamp(payload.due_date) || now,
+          paidAt: invoiceStatus === 'paid' ? now : undefined,
+          hostedInvoiceUrl: this.stripeString(payload.hosted_invoice_url),
+          providerInvoiceId: invoiceId,
+        }
+        this.invoiceRecords = [invoice, ...this.invoiceRecords.filter((item) => item.providerInvoiceId !== invoiceId)]
+      }
+    }
+    if (nextStatus === 'past_due') {
+      const organization = this.organizationRecords.find((item) => item.id === updated.organizationId)
+      if (organization?.primaryContact) {
+        this.queueNotification(updated.organizationId, organization.primaryContact, 'billing', 'Subscription payment needs attention', 'Your subscription is past due. Update the payment method to keep workspace writes available.', '/saas')
+      }
+    }
+    const audit = this.recordAudit('billing.stripe.webhook.apply', `${eventType}:${eventId}`, 'api:stripe', nextStatus === 'past_due' ? 'review' : 'allowed')
+    return { data: { eventId, eventType, applied: true, subscription: updated, audit } }
+  }
+
+  private stripeString(value: unknown) {
+    return typeof value === 'string' ? value.trim() : ''
+  }
+
+  private stripeTimestamp(value: unknown) {
+    const seconds = Number(value)
+    return Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : ''
+  }
+
+  private mapStripeSubscriptionStatus(value: string, fallback: BillingSubscriptionRecord['status']) {
+    if (value === 'active' || value === 'trialing' || value === 'past_due' || value === 'canceled') return value
+    if (value === 'unpaid') return 'grace'
+    return fallback
+  }
+
+  private mapStripeInvoiceStatus(value: string, eventType: string): BillingInvoiceRecord['status'] {
+    if (eventType === 'invoice.paid' || value === 'paid') return 'paid'
+    if (eventType === 'invoice.payment_failed' || value === 'uncollectible') return 'uncollectible'
+    if (value === 'void') return 'void'
+    if (value === 'draft') return 'draft'
+    return 'open'
   }
 
   selectBillingPlan(body: { planId?: string; billingCycle?: 'monthly' | 'annual' } = {}) {

@@ -86,6 +86,49 @@ Use a cryptographically random value of at least 32 bytes. Never place this key 
 
 Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP secrets are stored as AES-256-GCM ciphertext and recovery codes are stored only as hashes. A recovery code can verify a fresh session only after TOTP enrollment is complete, and its hash is removed atomically after the first successful use.
 
+### Configure Billing, Transactional Email, And Cloudflare For SaaS
+
+Apply every migration, including `migrations/0019_billing_provider_events.sql` and `migrations/0020_runtime_observability.sql`, before enabling billing webhooks. For the test Worker:
+
+```bash
+npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
+```
+
+Set provider values as Worker secrets. Never add them to Pages, Vercel, a `VITE_` variable, or a committed environment file:
+
+```bash
+npx wrangler secret put STRIPE_SECRET_KEY --config wrangler.test.toml
+npx wrangler secret put STRIPE_WEBHOOK_SECRET --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_ARTISAN --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_ATELIER --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_MAISON --config wrangler.test.toml
+npx wrangler secret put BILLING_RETURN_URL --config wrangler.test.toml
+npx wrangler secret put RESEND_API_KEY --config wrangler.test.toml
+npx wrangler secret put EMAIL_FROM --config wrangler.test.toml
+npx wrangler secret put SENTRY_DSN --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_SAAS_ZONE_ID --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_SAAS_ORIGIN --config wrangler.test.toml
+```
+
+Configure Stripe's webhook endpoint as:
+
+```text
+https://<worker-host>/api/v1/billing/stripe/webhook
+```
+
+Subscribe it to at least `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, and `invoice.payment_failed`. The Worker verifies the signed raw payload, rejects signatures older than five minutes, and atomically claims each provider event ID in D1 before applying a subscription or invoice change.
+
+The Worker creates Stripe Checkout Sessions in subscription mode, uses Stripe Price IDs instead of client-provided amounts, passes tenant metadata only from server state, enables Stripe automatic tax, and opens the Customer Portal from the stored Stripe customer ID. Upgrade/downgrade proration and retry/dunning behavior are configured in the Stripe Billing Dashboard and reflected through the same verified webhook flow.
+
+Set `BILLING_RETURN_URL` to the deployed frontend origin, not the Worker hostname, so Checkout and the Customer Portal return the user to the application. `SENTRY_DSN` is optional; when it is present, the Worker sends only route, HTTP status, and duration for 5xx events. It never sends request bodies, credentials, cookies, or tenant data. The public health endpoint is `GET /api/v1/status`; it reports D1 availability and the last 15-minute error/slow-request counters after `migrations/0020_runtime_observability.sql` has been applied.
+
+For Cloudflare for SaaS, the token needs the zone permission `SSL and Certificates Write`. The custom-domain endpoint posts to Cloudflare Custom Hostnames only after an Owner or Admin request. It returns the required TXT/DCV record to the caller; Cloudflare hostname/certificate activation remains asynchronous and must be checked before calling the customer domain live.
+
+For Resend, verify the sending domain that is used in `EMAIL_FROM`. Delivery failures are recorded on the notification outbox and do not roll back a business mutation. The current outbox covers workspace invitations, new-device security events, billing payment alerts, and privacy requests.
+
+Password reset is a separate transactional flow: `POST /api/v1/auth/password-reset/request` always returns a generic result, hashes the one-time token in D1 snapshot persistence, and sends the only raw token in the Resend email. `POST /api/v1/auth/password-reset/confirm` accepts the link token and a strong new password, expires tokens after 30 minutes, and revokes all active sessions for that account.
+
 ## 3. Deploy Worker API
 
 `wrangler.toml` is configured for the Lab of Scent domain:

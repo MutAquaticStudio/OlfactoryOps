@@ -105,6 +105,7 @@ import {
   suppliers,
   type Allocation,
   type ApiKeyRecord,
+  type AppNotificationRecord,
   type AuditEvent,
   type AuditExportJobRecord,
   type AuthSession,
@@ -119,6 +120,7 @@ import {
   type CommercialSkuRecord,
   type CostingOverview,
   type CustomerRecord,
+  type DataImportJobRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type FormulaEvaluationRecord,
@@ -139,10 +141,13 @@ import {
   type FormulaType,
   type FormulaVersionRecord,
   type FormulaWorkspacePreferences,
+  type GlobalSearchResult,
   type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
   type LabWeighingSession,
+  type LegalAcceptanceRecord,
+  type PrivacyRequestRecord,
   type LabUsagePurpose,
   type LabUsageRecord,
   type LotLabelPayload,
@@ -1115,6 +1120,81 @@ function openPrintDocument(title: string, content: string) {
   return true
 }
 
+const materialImportFields = [
+  { key: 'name', label: 'Material name' },
+  { key: 'cas', label: 'CAS' },
+  { key: 'family', label: 'Family' },
+  { key: 'tier', label: 'Tier' },
+  { key: 'ifraLimit', label: 'IFRA limit %' },
+  { key: 'costPerGram', label: 'Cost / gram' },
+  { key: 'odor', label: 'Odor tags' },
+] as const
+
+function buildMaterialImportMapping(headers: string[]) {
+  const mapping: Record<string, string> = {}
+  for (const field of materialImportFields) {
+    const header = headers.find((candidate) => {
+      const value = candidate.toLowerCase().replace(/[^a-z0-9]/g, '')
+      if (field.key === 'name') return value === 'name' || value === 'materialname'
+      if (field.key === 'cas') return value === 'cas' || value === 'casnumber'
+      if (field.key === 'family') return value === 'family' || value === 'olfactoryfamily'
+      if (field.key === 'tier') return value === 'tier' || value === 'note' || value === 'pyramidnote'
+      if (field.key === 'ifraLimit') return value === 'ifralimit' || value === 'ifralimitpercent' || value === 'ifra'
+      if (field.key === 'costPerGram') return value === 'costpergram' || value === 'costg' || value === 'unitcost'
+      return value === 'odor' || value === 'odortags' || value === 'tags'
+    })
+    if (header) mapping[field.key] = header
+  }
+  return mapping
+}
+
+function importCellText(value: unknown) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10)
+  return value === null || value === undefined ? '' : String(value).trim()
+}
+
+function parseCsvCells(source: string) {
+  const rows: string[][] = []
+  let row: string[] = []
+  let value = ''
+  let quoted = false
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]
+    const next = source[index + 1]
+    if (character === '"' && quoted && next === '"') {
+      value += '"'
+      index += 1
+      continue
+    }
+    if (character === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (character === ',' && !quoted) {
+      row.push(value.trim())
+      value = ''
+      continue
+    }
+    if ((character === '\n' || character === '\r') && !quoted) {
+      if (character === '\r' && next === '\n') index += 1
+      row.push(value.trim())
+      if (row.some(Boolean)) rows.push(row)
+      row = []
+      value = ''
+      continue
+    }
+    value += character
+  }
+  row.push(value.trim())
+  if (row.some(Boolean)) rows.push(row)
+  return rows
+}
+
+async function digestImportRows(rows: Array<Record<string, unknown>>) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(rows)))
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 let csrfToken: string | null = null
 
 async function requestApi<T>(path: string, init?: RequestInit) {
@@ -1309,10 +1389,10 @@ function sessionHasAnyPermission(session: AuthSession, permissions: string[]) {
 
 function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
   if (domain.key !== 'saas' || isInternalAdminSession(session)) {
-    return domain
+    return localizeDomainDisplay(domain)
   }
 
-  return {
+  return localizeDomainDisplay({
     ...domain,
     name: 'Billing & Trust',
     shortName: 'Billing',
@@ -1322,7 +1402,7 @@ function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
     screens: ['Billing', 'Plan usage', 'API keys', 'Webhooks', 'Audit exports'],
     activity:
       'Billing console enforces plan limits, queues invoices/actions, rotates credentials, retries webhooks, and exports workspace-scoped evidence',
-  }
+  })
 }
 
 function domainVisibleForSession(key: DomainKey, session: AuthSession) {
@@ -1630,6 +1710,8 @@ function App() {
   const [billingOnboarding, setBillingOnboarding] = useState(false)
   const [approvalNotice, setApprovalNotice] = useState<string | null>(null)
   const [commandOpen, setCommandOpen] = useState(false)
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
+  const [, setLocaleVersion] = useState(0)
   const [modal, setModal] = useState<ModalKind>(null)
   const [auditExporting, setAuditExporting] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -1669,6 +1751,27 @@ function App() {
   const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
   const [transferLotId, setTransferLotId] = useState('')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
+
+  useEffect(() => {
+    const applyLocale = (candidate?: string) => {
+      const locale: UiLocale = candidate === 'vi-VN' ? 'vi-VN' : 'en-US'
+      window.localStorage.setItem(localeStorageKey, locale)
+      document.documentElement.lang = locale
+      setLocaleVersion((current) => current + 1)
+    }
+    applyLocale(window.localStorage.getItem(localeStorageKey) ?? undefined)
+    const handleLocaleChange = (event: Event) => applyLocale((event as CustomEvent<UiLocale>).detail)
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === localeStorageKey) applyLocale(event.newValue ?? undefined)
+    }
+    window.addEventListener(localeChangeEvent, handleLocaleChange)
+    window.addEventListener('storage', handleStorage)
+    return () => {
+      window.removeEventListener(localeChangeEvent, handleLocaleChange)
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
+
   const activeUserSettings = userSettingsRecord ?? userSettingsForSession(currentSession)
   const shellAccentStyle = useMemo(
     () => accentStyleForColor(activeUserSettings.accentColor),
@@ -2521,6 +2624,22 @@ function App() {
     return payload
   }
 
+  async function requestPasswordReset(email: string) {
+    await requestApi<{ accepted: boolean }>('/auth/password-reset/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    })
+  }
+
+  async function completePasswordReset(token: string, password: string) {
+    await requestApi<{ accepted: boolean }>('/auth/password-reset/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password }),
+    })
+  }
+
   async function logoutWorkspace() {
     try {
       await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
@@ -2547,6 +2666,8 @@ function App() {
           notice={authNotice}
           onLogin={loginToWorkspace}
           onSignup={signupWorkspace}
+          onRequestPasswordReset={requestPasswordReset}
+          onCompletePasswordReset={completePasswordReset}
         />
     )
   }
@@ -2596,6 +2717,7 @@ function App() {
             onLogout={() => void logoutWorkspace()}
             onMenu={() => setMobileNavOpen((value) => !value)}
             onOpenUserSettings={openUserSettingsModal}
+            onToggleNotifications={() => setNotificationCenterOpen((value) => !value)}
           />
           {approvalNotice ? (
             <div className="approval-notice glass">
@@ -2700,6 +2822,15 @@ function App() {
           onClose={closeCommandPalette}
           onNavigate={navigateToDomain}
           onCommit={() => setModal('commit')}
+        />
+
+        <NotificationCenter
+          open={notificationCenterOpen}
+          onClose={() => setNotificationCenterOpen(false)}
+          onNavigate={(key) => {
+            navigateToDomain(key)
+            setNotificationCenterOpen(false)
+          }}
         />
 
         <BlackPopup
@@ -3116,7 +3247,7 @@ function Sidebar({
             {!collapsed && (
               <div>
                 <div className="wordmark">{brandName}</div>
-                <div className="mono-small">{isSystemBrand ? 'OlfactoryOps OS' : 'Powered by OlfactoryOps'}</div>
+                <div className="mono-small">{isSystemBrand ? 'OlfactoryOps OS' : uiText('Powered by OlfactoryOps')}</div>
               </div>
             )}
           </>
@@ -3125,23 +3256,23 @@ function Sidebar({
           className="icon-button sidebar-toggle"
           type="button"
           onClick={onToggle}
-          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? uiText('Expand sidebar') : uiText('Collapse sidebar')}
           aria-pressed={!collapsed}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={collapsed ? uiText('Expand sidebar') : uiText('Collapse sidebar')}
         >
           <Menu size={18} />
         </button>
       </div>
 
-      <nav className="nav-stack" id="primary-navigation" aria-label="Main modules">
+      <nav className="nav-stack" id="primary-navigation" aria-label={uiText('Main modules')}>
         {visibleNavGroupsForSession(session).map((group) => (
           <div className="nav-group" key={group.title}>
-            {!collapsed && <div className="nav-title">{group.title}</div>}
+            {!collapsed && <div className="nav-title">{uiText(group.title)}</div>}
             {group.keys.map((key) => {
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
               const displayDomain = domain ? domainDisplayForSession(domain, session) : undefined
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? 'OlfactoryOps Console' : displayDomain?.shortName ?? key
+              const label = key === 'dashboard' ? uiText('OlfactoryOps Console') : displayDomain?.shortName ?? key
               const isActive = activeKey === key
               return (
                 <button
@@ -3176,6 +3307,7 @@ function Topbar({
   onLogout,
   onMenu,
   onOpenUserSettings,
+  onToggleNotifications,
 }: {
   activeDomain?: DomainModule
   session: AuthSession
@@ -3186,6 +3318,7 @@ function Topbar({
   onLogout: () => void
   onMenu: () => void
   onOpenUserSettings: () => void
+  onToggleNotifications: () => void
 }) {
   const tenantDisplay = tenantDisplayForSession(session, tenantDomain)
   const displayDomain = activeDomain ? domainDisplayForSession(activeDomain, session) : undefined
@@ -3196,7 +3329,7 @@ function Topbar({
         className="icon-button mobile-menu"
         type="button"
         onClick={onMenu}
-        aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+        aria-label={mobileNavOpen ? uiText('Close navigation') : uiText('Open navigation')}
         aria-controls="primary-navigation"
         aria-expanded={mobileNavOpen}
       >
@@ -3204,18 +3337,18 @@ function Topbar({
       </button>
       <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
-        <h1>{displayDomain ? displayDomain.name : 'OlfactoryOps Console'}</h1>
+        <h1>{displayDomain ? displayDomain.name : uiText('OlfactoryOps Console')}</h1>
       </div>
       <button className="command-button" type="button" onClick={onCommand}>
         <Search size={17} />
-        <span>Search modules, records, actions</span>
+        <span>{uiText('Search modules, records, actions')}</span>
         <kbd>Ctrl K</kbd>
       </button>
       <div className="topbar-actions">
         {isInternalAdminSession(session) ? (
           <DataTag icon={ShieldCheck} label="Workspace guard" value="On" tone="green" />
         ) : null}
-        <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label="Open user settings">
+        <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label={uiText('Open user settings')}>
           <span className="user-avatar">{userSettings.displayName.slice(0, 1).toUpperCase()}</span>
           <span>
             <strong>{userSettings.displayName}</strong>
@@ -3224,17 +3357,126 @@ function Topbar({
             </small>
           </span>
         </button>
-        <button className="icon-button" type="button" aria-label="User settings" onClick={onOpenUserSettings}>
+        <button className="icon-button" type="button" aria-label={uiText('User settings')} onClick={onOpenUserSettings}>
           <Settings size={18} />
         </button>
-        <button className="icon-button" type="button" aria-label="Notifications">
+        <button className="icon-button" type="button" aria-label={uiText('Notifications')} onClick={onToggleNotifications}>
           <Bell size={18} />
         </button>
         <button className="ghost-button small" type="button" onClick={onLogout}>
-          Logout
+          {uiText('Logout')}
         </button>
       </div>
     </header>
+  )
+}
+
+function LegalPrivacyControls() {
+  const [acceptances, setAcceptances] = useState<LegalAcceptanceRecord[]>([])
+  const [requests, setRequests] = useState<PrivacyRequestRecord[]>([])
+  const [status, setStatus] = useState('Loading legal status...')
+
+  const load = useCallback(async () => {
+    try {
+      const [legal, privacy] = await Promise.all([
+        requestApi<{ acceptances: LegalAcceptanceRecord[] }>('/legal/status'),
+        requestApi<{ requests: PrivacyRequestRecord[] }>('/privacy/requests'),
+      ])
+      setAcceptances(legal.acceptances)
+      setRequests(privacy.requests)
+      setStatus('')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Legal status could not be loaded')
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  async function accept(document: 'terms' | 'privacy' | 'cookies') {
+    try {
+      const payload = await requestApi<{ acceptance: LegalAcceptanceRecord }>('/legal/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document, version: '2026-07-22' }),
+      })
+      setAcceptances((current) => [payload.acceptance, ...current.filter((item) => item.id !== payload.acceptance.id)])
+      setStatus(`${document} acceptance recorded.`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Acceptance could not be recorded')
+    }
+  }
+
+  async function requestData(type: 'EXPORT' | 'ERASURE') {
+    try {
+      const payload = await requestApi<{ request: PrivacyRequestRecord }>('/privacy/requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      })
+      setRequests((current) => [payload.request, ...current.filter((item) => item.id !== payload.request.id)])
+      setStatus(`${type === 'EXPORT' ? 'Data export' : 'Erasure'} request submitted for review.`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Privacy request could not be submitted')
+    }
+  }
+
+  async function downloadPrivacyExport(request: PrivacyRequestRecord) {
+    try {
+      const payload = await requestApi<{ request: PrivacyRequestRecord; export: Record<string, unknown> }>(
+        `/privacy/requests/${encodeURIComponent(request.id)}/export`,
+        { method: 'POST' },
+      )
+      const blob = new Blob([JSON.stringify(payload.export, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `olfactoryops-data-export-${request.id}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setRequests((current) => current.map((item) => item.id === payload.request.id ? payload.request : item))
+      setStatus('Personal data export downloaded.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Data export could not be generated')
+    }
+  }
+
+  const accepted = (document: LegalAcceptanceRecord['document']) =>
+    acceptances.some((item) => item.document === document && item.version === '2026-07-22')
+  const latestExportRequest = requests.find((item) => item.type === 'EXPORT')
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-heading">
+        <strong>Legal & Privacy</strong>
+        <span>Versioned consent and data-subject requests for this account.</span>
+      </div>
+      <div className="legal-actions">
+        {(['terms', 'privacy', 'cookies'] as const).map((document) => (
+          <button
+            className="ghost-button small"
+            key={document}
+            type="button"
+            onClick={() => void accept(document)}
+            disabled={accepted(document)}
+          >
+            {accepted(document) ? `${document} accepted` : `Accept ${document}`}
+          </button>
+        ))}
+      </div>
+      <div className="legal-actions">
+        <button className="ghost-button small" type="button" onClick={() => void requestData('EXPORT')}>Request data export</button>
+        <button className="ghost-button small" type="button" onClick={() => void requestData('ERASURE')}>Request erasure review</button>
+        {latestExportRequest ? (
+          <button className="ghost-button small" type="button" onClick={() => void downloadPrivacyExport(latestExportRequest)}>
+            Download data export
+          </button>
+        ) : null}
+      </div>
+      {requests.length > 0 ? <span className="mono-small">Latest request: {requests[0]?.type} / {requests[0]?.status}</span> : null}
+      {status ? <span className="mono-small">{status}</span> : null}
+    </section>
   )
 }
 
@@ -3456,6 +3698,8 @@ function UserSettingsForm({
         </div>
       </section>
 
+      <LegalPrivacyControls />
+
       <div className="settings-save-row">
         <span className="mono-small">{status}</span>
         <button
@@ -3628,6 +3872,8 @@ function AuthGateway({
   notice,
   onLogin,
   onSignup,
+  onRequestPasswordReset,
+  onCompletePasswordReset,
 }: {
   notice?: string | null
   onLogin: (email: string, password?: string) => Promise<LoginResponse>
@@ -3639,8 +3885,13 @@ function AuthGateway({
     password: string
     customDomain: string
   }) => Promise<SignupResponse>
+  onRequestPasswordReset: (email: string) => Promise<void>
+  onCompletePasswordReset: (token: string, password: string) => Promise<void>
 }) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
+  const resetToken = new URLSearchParams(window.location.search).get('reset')?.trim() ?? ''
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm'>(
+    resetToken ? 'reset-confirm' : 'login',
+  )
   const [email, setEmail] = useState('admin@labofscents.org')
   const [name, setName] = useState('Thuan Le Minh')
   const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
@@ -3665,12 +3916,20 @@ function AuthGateway({
 
   async function submitAuth() {
     setBusy(true)
-    setStatus(mode === 'login' ? 'Checking workspace account' : 'Creating your lab workspace')
+    setStatus(
+      mode === 'login'
+        ? 'Checking workspace account'
+        : mode === 'signup'
+          ? 'Creating your lab workspace'
+          : mode === 'reset-request'
+            ? 'Requesting password reset'
+            : 'Resetting password',
+    )
     try {
       if (mode === 'login') {
         const result = await onLogin(email, password)
         setStatus(`${result.session.email} signed in with ${result.session.role} role`)
-      } else {
+      } else if (mode === 'signup') {
         if (!signupPasswordReady) {
           setStatus('Password must be at least 12 characters and include letters and numbers.')
           return
@@ -3681,6 +3940,21 @@ function AuthGateway({
         }
         const result = await onSignup({ organizationName, workspaceSlug, email, name, password, customDomain: workspaceDomain })
         setStatus(`${result.organization.name} provisioned at ${result.organization.customDomain ?? result.sso.domain}`)
+      } else if (mode === 'reset-request') {
+        await onRequestPasswordReset(email)
+        setStatus('If the account exists, a one-time reset link has been sent. Check your inbox.')
+        setMode('login')
+      } else {
+        if (!signupPasswordReady || password !== confirmPassword) {
+          setStatus('Use a matching password with at least 12 characters, letters, and numbers.')
+          return
+        }
+        await onCompletePasswordReset(resetToken, password)
+        window.history.replaceState({}, document.title, window.location.pathname)
+        setPassword('')
+        setConfirmPassword('')
+        setMode('login')
+        setStatus('Password reset complete. Sign in with your new password.')
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Authentication failed')
@@ -3738,18 +4012,32 @@ function AuthGateway({
                 <div className="mono-small">OlfactoryOps OS</div>
               </div>
             </div>
-            <h1>{mode === 'login' ? 'Sign in to your lab workspace' : 'Create your lab workspace'}</h1>
+            <h1>
+              {uiText(mode === 'login'
+                ? 'Sign in to your lab workspace'
+                : mode === 'signup'
+                  ? 'Create your lab workspace'
+                  : mode === 'reset-request'
+                    ? 'Reset your password'
+                    : 'Choose a new password')}
+            </h1>
             <p className="lead">
               Secure access starts here. We confirm your account, role, and workspace settings before opening OlfactoryOps.
             </p>
-            <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
-              <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
-                Login
+            {mode === 'login' || mode === 'signup' ? (
+              <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+                <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
+                  {uiText('Login')}
+                </button>
+                <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
+                  {uiText('Sign up')}
+                </button>
+              </div>
+            ) : (
+              <button className="ghost-button small" type="button" onClick={() => switchMode('login')}>
+                {uiText('Back to login')}
               </button>
-              <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
-                Sign up
-              </button>
-            </div>
+            )}
           </div>
 
           <div className="auth-form">
@@ -3786,19 +4074,22 @@ function AuthGateway({
                 </label>
               </>
             )}
-            <label className="field-row">
-              <span>Email</span>
+            {mode !== 'reset-confirm' ? (
+              <label className="field-row">
+                <span>Email</span>
+                <input
+                  aria-label={mode === 'login' ? 'Login email' : mode === 'signup' ? 'Signup email' : 'Password reset email'}
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </label>
+            ) : null}
+            {mode !== 'reset-request' ? (
+              <label className="field-row">
+              <span>{mode === 'reset-confirm' ? 'New password' : 'Password'}</span>
               <input
-                aria-label={mode === 'login' ? 'Login email' : 'Signup email'}
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </label>
-            <label className="field-row">
-              <span>{mode === 'login' ? 'Password' : 'Password'}</span>
-              <input
-                aria-label={mode === 'login' ? 'Login password' : 'Signup password'}
+                aria-label={mode === 'login' ? 'Login password' : mode === 'signup' ? 'Signup password' : 'New password'}
                 type="password"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 value={password}
@@ -3806,12 +4097,13 @@ function AuthGateway({
                 onChange={(event) => setPassword(event.target.value)}
               />
               {mode === 'login' ? <small className="field-hint">Admin and workspace accounts require a password.</small> : null}
-            </label>
-            {mode === 'signup' && (
+              </label>
+            ) : null}
+            {(mode === 'signup' || mode === 'reset-confirm') && (
               <label className="field-row">
-                <span>Confirm password</span>
+                <span>Confirm new password</span>
                 <input
-                  aria-label="Confirm signup password"
+                  aria-label="Confirm password"
                   type="password"
                   autoComplete="new-password"
                   value={confirmPassword}
@@ -3827,10 +4119,28 @@ function AuthGateway({
               className="primary-button full"
               type="button"
               onClick={() => void submitAuth()}
-              disabled={busy || !email.trim() || (mode === 'signup' && !signupReady)}
+              disabled={
+                busy ||
+                (mode === 'reset-confirm'
+                  ? !resetToken || !signupPasswordReady || password !== confirmPassword
+                  : !email.trim() || (mode === 'signup' && !signupReady))
+              }
             >
-              {busy ? 'Working' : mode === 'login' ? 'Login' : 'Create workspace'}
+              {busy
+                ? 'Working'
+                : mode === 'login'
+                  ? 'Login'
+                  : mode === 'signup'
+                    ? 'Create workspace'
+                    : mode === 'reset-request'
+                      ? uiText('Send reset link')
+                      : uiText('Reset password')}
             </button>
+            {mode === 'login' ? (
+              <button className="ghost-button small" type="button" onClick={() => setMode('reset-request')}>
+                {uiText('Forgot password?')}
+              </button>
+            ) : null}
             <div className="auth-status">
               <ShieldCheck size={16} />
               <span>{status}</span>
@@ -4329,6 +4639,21 @@ function MaterialWorkspace({
   const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
   )
+  const [importHeaders, setImportHeaders] = useState<string[]>([])
+  const [importRows, setImportRows] = useState<Array<Record<string, unknown>>>([])
+  const [importMapping, setImportMapping] = useState<Record<string, string>>({})
+  const [importJob, setImportJob] = useState<DataImportJobRecord | null>(null)
+  const [importStatus, setImportStatus] = useState('Choose a CSV or XLSX file to start a dry-run.')
+  const [importBusy, setImportBusy] = useState(false)
+
+  const mappedImportRows = useMemo(
+    () => importRows.map((row) => Object.fromEntries(
+      Object.entries(importMapping)
+        .filter(([, source]) => source)
+        .map(([field, source]) => [field, row[source]]),
+    )),
+    [importMapping, importRows],
+  )
 
   useEffect(() => {
     async function loadMaterials() {
@@ -4437,6 +4762,90 @@ function MaterialWorkspace({
       setMaterialStatus(
         error instanceof Error ? error.message : 'Material create blocked; check required fields or duplicate CAS',
       )
+    }
+  }
+
+  async function loadMaterialImport(file: File | null) {
+    if (!file) {
+      return
+    }
+    setImportBusy(true)
+    setImportStatus(`Reading ${file.name}...`)
+    try {
+      const cells = file.name.toLowerCase().endsWith('.csv')
+        ? parseCsvCells(await file.text())
+        : await (await import('read-excel-file/browser')).readSheet(file)
+      const [headerRow, ...dataRows] = cells
+      const headers = (headerRow ?? []).map((value) => importCellText(value)).filter(Boolean)
+      if (headers.length === 0) {
+        throw new Error('The selected sheet has no header row or data rows')
+      }
+      const rows = dataRows
+        .filter((row) => row.some((value) => importCellText(value)))
+        .slice(0, 500)
+        .map((row) => Object.fromEntries(headers.map((header, index) => [header, importCellText(row[index])])) as Record<string, unknown>)
+      const defaultMapping = buildMaterialImportMapping(headers)
+      setImportHeaders(headers)
+      setImportRows(rows)
+      setImportMapping(defaultMapping)
+      setImportJob(null)
+      setImportStatus(`${rows.length} rows loaded. Confirm column mapping, then run dry-run.`)
+    } catch (error) {
+      setImportHeaders([])
+      setImportRows([])
+      setImportMapping({})
+      setImportStatus(error instanceof Error ? error.message : 'Could not parse the import file')
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  async function previewMaterialImport() {
+    if (!canCreateMaterials || mappedImportRows.length === 0) {
+      return
+    }
+    setImportBusy(true)
+    try {
+      const payload = await requestApi<{ job: DataImportJobRecord; idempotent: boolean }>('/imports/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity: 'materials',
+          fileName: 'material-import',
+          idempotencyKey: await digestImportRows(mappedImportRows),
+          rows: mappedImportRows,
+        }),
+      })
+      setImportJob(payload.job)
+      setImportStatus(
+        payload.job.invalidRows > 0
+          ? `Dry-run found ${payload.job.errors.length} issue(s) across ${payload.job.invalidRows} row(s).`
+          : `Dry-run passed for ${payload.job.validRows} material row(s).`,
+      )
+    } catch (error) {
+      setImportStatus(error instanceof Error ? error.message : 'Import dry-run failed')
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  async function commitMaterialImport() {
+    if (!importJob || importJob.status !== 'VALIDATED') {
+      return
+    }
+    setImportBusy(true)
+    try {
+      const payload = await requestApi<{ job: DataImportJobRecord; created: number }>(`/imports/${encodeURIComponent(importJob.id)}/commit`, {
+        method: 'POST',
+      })
+      const refreshed = await requestApi<Material[]>('/materials')
+      onMaterialsChange(refreshed)
+      setImportJob(payload.job)
+      setImportStatus(`Imported ${payload.created} material record(s).`)
+    } catch (error) {
+      setImportStatus(error instanceof Error ? error.message : 'Import commit failed')
+    } finally {
+      setImportBusy(false)
     }
   }
 
@@ -4579,6 +4988,58 @@ function MaterialWorkspace({
             Create material
           </button>
         </div>
+        <section className="import-panel" aria-label="Material import">
+          <div className="section-heading compact-heading">
+            <div>
+              <span className="eyebrow">Data import</span>
+              <strong>CSV / XLSX material import</strong>
+            </div>
+            <DataTag label="Rows" value={String(importRows.length)} tone="blue" />
+          </div>
+          <label className="field-row wide-field">
+            <span>Source file</span>
+            <input
+              accept=".csv,.xlsx,.xls"
+              aria-label="Material import source file"
+              type="file"
+              disabled={!canCreateMaterials || importBusy}
+              onChange={(event) => void loadMaterialImport(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          {importHeaders.length > 0 ? (
+            <div className="import-mapping-grid">
+              {materialImportFields.map((field) => (
+                <label className="field-row" key={field.key}>
+                  <span>{field.label}</span>
+                  <select
+                    aria-label={`Map ${field.label}`}
+                    value={importMapping[field.key] ?? ''}
+                    onChange={(event) => setImportMapping((current) => ({ ...current, [field.key]: event.target.value }))}
+                  >
+                    <option value="">Do not import</option>
+                    {importHeaders.map((header) => <option key={header} value={header}>{header}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          <div className="action-row">
+            <button className="ghost-button small" type="button" disabled={!canCreateMaterials || importBusy || mappedImportRows.length === 0} onClick={() => void previewMaterialImport()}>
+              {importBusy ? 'Working...' : 'Dry-run import'}
+            </button>
+            <button className="primary-button small" type="button" disabled={importBusy || importJob?.status !== 'VALIDATED'} onClick={() => void commitMaterialImport()}>
+              Commit valid rows
+            </button>
+          </div>
+          <p className="muted-copy">{importStatus}</p>
+          {importJob?.errors.length ? (
+            <div className="import-errors" role="status">
+              {importJob.errors.slice(0, 6).map((issue, index) => (
+                <span key={`${issue.row}-${issue.field ?? 'row'}-${index}`}>Row {issue.row}{issue.field ? ` / ${issue.field}` : ''}: {issue.message}</span>
+              ))}
+            </div>
+          ) : null}
+        </section>
         <ul className="policy-list">
           <li>{materialStatus}</li>
           <li>Material master changes do not create stock. Lots and movements stay in Inventory.</li>
@@ -7614,6 +8075,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   const [stockTakeReason, setStockTakeReason] = useState('Cycle count reconciliation')
   const [stockTakeRecords, setStockTakeRecords] = useState<StockTakeRecord[]>([])
   const [labelPayload, setLabelPayload] = useState<LotLabelPayload | null>(null)
+  const [scannerOpen, setScannerOpen] = useState(false)
   const [genealogy, setGenealogy] = useState<LotGenealogyResponse | null>(null)
   const [reorderSuggestions, setReorderSuggestions] = useState<InventoryReorderSuggestion[]>([])
   const [newLocationName, setNewLocationName] = useState('Retest Bin 1')
@@ -7922,6 +8384,19 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
     }
   }
 
+  const selectScannedLot = useCallback((value: string) => {
+    const parts = value.split('|')
+    const lotId = parts[0] === 'OLFOPS' && parts[1] === 'LOT' ? parts[2] : value.trim()
+    const lot = lots.find((candidate) => candidate.id === lotId || candidate.lotNumber === lotId)
+    if (!lot) {
+      setInventoryStatus('This QR value does not match a lot in the current workspace')
+      return
+    }
+    setSelectedLotId(lot.id)
+    setInventoryStatus(`Scanned ${lot.lotNumber}`)
+    setScannerOpen(false)
+  }, [lots])
+
   function printWeightSheet() {
     if (!selectedLot || !selectedMaterial) {
       return
@@ -8094,6 +8569,9 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               <button className="ghost-button small" type="button" onClick={() => void printLotLabel()}>
                 Print QR Label
               </button>
+              <button className="ghost-button small" type="button" onClick={() => setScannerOpen(true)}>
+                Scan QR
+              </button>
               <button className="ghost-button small" type="button" onClick={printWeightSheet}>
                 Print Weight Sheet
               </button>
@@ -8157,6 +8635,12 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
           })}
         </div>
       </Panel>
+
+      <QrLotScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScan={selectScannedLot}
+      />
 
       {showInventoryLotComplianceReview ? (
       <Panel className="wide" title="SDS / CoA Review" icon={FileLock2}>
@@ -8969,6 +9453,83 @@ const productionLifecycle: ProductionBatchRecord['status'][] = [
   'BOTTLING',
   'RELEASED',
 ]
+
+type UiLocale = 'en-US' | 'vi-VN'
+
+const localeChangeEvent = 'olfactoryops.locale.change'
+const localeStorageKey = 'olfactoryops.locale'
+
+const vietnameseUiText: Record<string, string> = {
+  Command: 'Điều hành',
+  'R&D Spine': 'Nghiên cứu',
+  Operations: 'Vận hành',
+  Enterprise: 'Doanh nghiệp',
+  'OlfactoryOps Console': 'Bảng điều hành OlfactoryOps',
+  'Search modules, records, actions': 'Tìm module, dữ liệu, thao tác',
+  Logout: 'Đăng xuất',
+  'Open user settings': 'Mở cài đặt người dùng',
+  'User settings': 'Cài đặt người dùng',
+  Notifications: 'Thông báo',
+  'Workspace inbox': 'Hộp thư workspace',
+  'Mark all read': 'Đánh dấu đã đọc',
+  'Close notifications': 'Đóng thông báo',
+  'No notifications yet.': 'Chưa có thông báo.',
+  'Loading notifications...': 'Đang tải thông báo...',
+  Login: 'Đăng nhập',
+  'Sign up': 'Đăng ký',
+  'Forgot password?': 'Quên mật khẩu?',
+  'Back to login': 'Quay lại đăng nhập',
+  'Send reset link': 'Gửi liên kết đặt lại',
+  'Reset password': 'Đặt lại mật khẩu',
+  'Reset your password': 'Đặt lại mật khẩu của bạn',
+  'Choose a new password': 'Chọn mật khẩu mới',
+  'Create workspace': 'Tạo workspace',
+  'Create your lab workspace': 'Tạo workspace phòng thí nghiệm',
+  'Sign in to your lab workspace': 'Đăng nhập vào workspace phòng thí nghiệm',
+  'Powered by OlfactoryOps': 'Được vận hành bởi OlfactoryOps',
+  'Expand sidebar': 'Mở thanh điều hướng',
+  'Collapse sidebar': 'Thu gọn thanh điều hướng',
+  'Main modules': 'Các module chính',
+  'Open navigation': 'Mở điều hướng',
+  'Close navigation': 'Đóng điều hướng',
+}
+
+const vietnameseDomainNames: Partial<Record<DomainKey, { name: string; shortName: string }>> = {
+  dashboard: { name: 'Bảng điều hành OlfactoryOps', shortName: 'Điều hành' },
+  platform: { name: 'Nền tảng', shortName: 'Nền tảng' },
+  identity: { name: 'Định danh & Bảo mật', shortName: 'Bảo mật' },
+  customization: { name: 'Tùy chỉnh', shortName: 'Tùy chỉnh' },
+  materials: { name: 'Nguyên liệu', shortName: 'Nguyên liệu' },
+  formulas: { name: 'Công thức R&D', shortName: 'Công thức' },
+  inventory: { name: 'Kho phòng thí nghiệm', shortName: 'Kho' },
+  labUsage: { name: 'Sử dụng phòng lab', shortName: 'Sử dụng lab' },
+  production: { name: 'Sản xuất', shortName: 'Sản xuất' },
+  procurement: { name: 'Thu mua', shortName: 'Thu mua' },
+  commerce: { name: 'Thương mại', shortName: 'Thương mại' },
+  orders: { name: 'Đơn hàng & Fulfillment', shortName: 'Đơn hàng' },
+  costing: { name: 'Giá thành & Tài chính', shortName: 'Giá thành' },
+  analytics: { name: 'Phân tích', shortName: 'Phân tích' },
+  saas: { name: 'Thanh toán & Tin cậy', shortName: 'Thanh toán' },
+}
+
+function activeUiLocale(): UiLocale {
+  if (typeof document !== 'undefined' && document.documentElement.lang.toLowerCase().startsWith('vi')) {
+    return 'vi-VN'
+  }
+  if (typeof window !== 'undefined' && window.localStorage.getItem(localeStorageKey) === 'vi-VN') {
+    return 'vi-VN'
+  }
+  return 'en-US'
+}
+
+function uiText(value: string) {
+  return activeUiLocale() === 'vi-VN' ? vietnameseUiText[value] ?? value : value
+}
+
+function localizeDomainDisplay(domain: DomainModule) {
+  const localized = activeUiLocale() === 'vi-VN' ? vietnameseDomainNames[domain.key] : undefined
+  return localized ? { ...domain, ...localized } : domain
+}
 
 const productionLifecycleLabels: Record<ProductionBatchRecord['status'], string> = {
   PLANNED: 'Planned',
@@ -12047,11 +12608,18 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     url: 'https://hooks.example.test/olfactoryops',
     events: 'order.fulfilled,document.downloaded,audit.export.ready',
   })
+  const [customDomainDraft, setCustomDomainDraft] = useState('')
+  const [customDomainProvisioning, setCustomDomainProvisioning] = useState<{
+    hostname: string
+    providerId: string
+    validation: Record<string, string>
+  } | null>(null)
   const activeSeats = saasData.usage.activeSeats
   const storageUsedGb = saasData.usage.storageGb
   const apiUsage = saasData.usage.apiCalls
   const saasHealth = useMemo(() => buildSaasHealthSummary(saasData), [saasData])
   const saasHealthSource = statusMessage.toLowerCase().includes('fallback') ? 'Local seed' : 'Live API'
+  const canProvisionCustomDomain = session.role === 'Owner' || session.role === 'Admin'
 
   function syncSsoDraft(next: SsoConfigRecord) {
     setSsoDraft({
@@ -12330,6 +12898,27 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  async function provisionCustomDomain() {
+    setTrustBusyAction('custom-domain')
+    try {
+      const payload = await requestApi<{
+        hostname: string
+        providerId: string
+        validation: Record<string, string>
+      }>('/saas/custom-domains/provision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostname: customDomainDraft.trim().toLowerCase() }),
+      })
+      setCustomDomainProvisioning(payload)
+      setStatusMessage(`Cloudflare accepted ${payload.hostname}; complete the DNS/DCV record before going live`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Custom domain provisioning failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
   return (
     <div className="workspace-grid saas-grid">
       {internalAdminView ? (
@@ -12469,6 +13058,41 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           ))}
         </div>
       </Panel>
+
+      {canProvisionCustomDomain ? (
+        <Panel title="Custom Domain" icon={Globe2}>
+          <p className="caveat">Provision a customer-owned hostname through Cloudflare for SaaS. The hostname stays pending until its DNS/DCV record validates.</p>
+          <label className="field-row">
+            <span>Hostname</span>
+            <input
+              value={customDomainDraft}
+              placeholder="app.customer-domain.com"
+              onChange={(event) => setCustomDomainDraft(event.target.value)}
+            />
+          </label>
+          <div className="action-row">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={trustBusyAction !== null || !customDomainDraft.trim()}
+              onClick={() => void provisionCustomDomain()}
+            >
+              {trustBusyAction === 'custom-domain' ? 'Provisioning' : 'Provision hostname'}
+            </button>
+          </div>
+          {customDomainProvisioning ? (
+            <div className="audit-export-card">
+              <span className="mono-small">Cloudflare hostname {customDomainProvisioning.providerId}</span>
+              <strong>{customDomainProvisioning.hostname}</strong>
+              {Object.keys(customDomainProvisioning.validation).length > 0 ? (
+                Object.entries(customDomainProvisioning.validation).map(([key, value]) => <span key={key}>{key}: {value}</span>)
+              ) : (
+                <span>Cloudflare did not require an additional DNS record for this hostname.</span>
+              )}
+            </div>
+          ) : null}
+        </Panel>
+      ) : null}
 
       {trustSecret ? (
         <Panel className="wide" title="One-Time Secret Reveal" icon={FileLock2}>
@@ -12880,6 +13504,10 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
         audit: addAudit(current.audit, payload.audit),
       }))
       setSettingsDraft(payload.settings)
+      const locale: UiLocale = payload.settings.locale === 'vi-VN' ? 'vi-VN' : 'en-US'
+      window.localStorage.setItem(localeStorageKey, locale)
+      document.documentElement.lang = locale
+      window.dispatchEvent(new CustomEvent<UiLocale>(localeChangeEvent, { detail: locale }))
       setCustomizationStatus('Workspace settings saved with audit evidence')
     } catch {
       setCustomizationStatus('Settings update blocked by customization policy')
@@ -13041,11 +13669,14 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
         <div className="customization-form-grid">
           <label className="field-row">
             <span>Locale</span>
-            <input
+            <select
               aria-label="Customization locale"
               value={settingsDraft.locale}
               onChange={(event) => setSettingsDraft((current) => ({ ...current, locale: event.target.value }))}
-            />
+            >
+              <option value="en-US">English</option>
+              <option value="vi-VN">Tieng Viet</option>
+            </select>
           </label>
           <label className="field-row">
             <span>Timezone</span>
@@ -14336,6 +14967,227 @@ function UsagePreview({
   )
 }
 
+function QrLotScanner({
+  open,
+  onClose,
+  onScan,
+}: {
+  open: boolean
+  onClose: () => void
+  onScan: (value: string) => void
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [status, setStatus] = useState('Allow camera access to scan an OlfactoryOps lot label.')
+  const [manualValue, setManualValue] = useState('')
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    let stream: MediaStream | undefined
+    let interval: number | undefined
+    let stopped = false
+    let scanning = false
+    const detectorConstructor = (window as unknown as {
+      BarcodeDetector?: new (options?: { formats?: string[] }) => {
+        detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>
+      }
+    }).BarcodeDetector
+
+    async function startCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus('Camera access is unavailable in this browser. Paste the label value below instead.')
+        return
+      }
+      if (!detectorConstructor) {
+        setStatus('This browser does not expose a QR detector. Paste the label value below instead.')
+        return
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        const video = videoRef.current
+        if (!video || stopped) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        video.srcObject = stream
+        await video.play()
+        const detector = new detectorConstructor({ formats: ['qr_code'] })
+        setStatus('Point the camera at an OlfactoryOps QR lot label.')
+        interval = window.setInterval(async () => {
+          if (scanning || stopped || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return
+          }
+          scanning = true
+          try {
+            const detected = await detector.detect(video)
+            const value = detected[0]?.rawValue
+            if (value) {
+              onScan(value)
+            }
+          } catch {
+            // Keep scanning; transient detector frames are expected.
+          } finally {
+            scanning = false
+          }
+        }, 320)
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Camera access was not granted')
+      }
+    }
+
+    void startCamera()
+    return () => {
+      stopped = true
+      if (interval) window.clearInterval(interval)
+      stream?.getTracks().forEach((track) => track.stop())
+    }
+  }, [onScan, open])
+
+  return (
+    <BlackPopup
+      open={open}
+      title="Scan inventory QR"
+      description="The scanner only selects a lot in the current workspace. It never changes stock."
+      actionLabel="Close"
+      onClose={onClose}
+      onAction={onClose}
+    >
+      <div className="qr-scanner">
+        <video className="qr-scanner-video" ref={videoRef} muted playsInline />
+        <p className="muted-copy">{status}</p>
+        <label className="field-row">
+          <span>Manual label value</span>
+          <input value={manualValue} onChange={(event) => setManualValue(event.target.value)} placeholder="OLFOPS|LOT|lot-id|..." />
+        </label>
+        <button className="ghost-button small" type="button" disabled={!manualValue.trim()} onClick={() => onScan(manualValue)}>
+          Select scanned lot
+        </button>
+      </div>
+    </BlackPopup>
+  )
+}
+
+function NotificationCenter({
+  open,
+  onClose,
+  onNavigate,
+}: {
+  open: boolean
+  onClose: () => void
+  onNavigate: (key: DomainKey) => void
+}) {
+  const [notifications, setNotifications] = useState<AppNotificationRecord[]>([])
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('')
+
+  const loadNotifications = useCallback(async () => {
+    setLoading(true)
+    try {
+      await requestApi<{ created: number }>('/notifications/refresh', { method: 'POST' })
+      const payload = await requestApi<{ notifications: AppNotificationRecord[]; unreadCount: number }>('/notifications')
+      setNotifications(payload.notifications)
+      setStatus(payload.notifications.length === 0 ? 'No notifications yet.' : '')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not load notifications')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) {
+      void loadNotifications()
+    }
+  }, [loadNotifications, open])
+
+  async function openNotification(notification: AppNotificationRecord) {
+    if (!notification.readAt) {
+      try {
+        await requestApi(`/notifications/${encodeURIComponent(notification.id)}/read`, { method: 'POST' })
+        setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item))
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Could not mark notification as read')
+      }
+    }
+    const key = domainKeyForHref(notification.href)
+    if (key) {
+      onNavigate(key)
+    }
+  }
+
+  async function markAllRead() {
+    try {
+      await requestApi('/notifications/read-all', { method: 'POST' })
+      setNotifications((current) => current.map((item) => item.readAt ? item : { ...item, readAt: new Date().toISOString() }))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not update notifications')
+    }
+  }
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <motion.section
+          className="notification-center glass"
+          aria-label="Notification center"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+        >
+          <div className="notification-center-header">
+            <div>
+              <span className="eyebrow">Workspace inbox</span>
+              <strong>{uiText('Notifications')}</strong>
+            </div>
+            <div className="notification-center-actions">
+              <button className="ghost-button tiny" type="button" onClick={() => void markAllRead()} disabled={notifications.every((item) => item.readAt)}>
+                {uiText('Mark all read')}
+              </button>
+              <button className="icon-button" type="button" onClick={onClose} aria-label={uiText('Close notifications')}>
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+          <div className="notification-center-list" aria-live="polite">
+            {loading ? <span className="muted-copy">{uiText('Loading notifications...')}</span> : null}
+            {!loading && status ? <span className="muted-copy">{uiText(status)}</span> : null}
+            {!loading && !status ? notifications.map((notification) => (
+              <button
+                className={`notification-item ${notification.readAt ? '' : 'is-unread'}`}
+                key={notification.id}
+                type="button"
+                onClick={() => void openNotification(notification)}
+              >
+                <span className={`notification-dot notification-${notification.category}`} />
+                <span>
+                  <strong>{notification.title}</strong>
+                  <small>{notification.body}</small>
+                </span>
+              </button>
+            )) : null}
+          </div>
+        </motion.section>
+      ) : null}
+    </AnimatePresence>
+  )
+}
+
+function domainKeyForHref(href?: string): DomainKey | null {
+  const normalized = href?.split('?')[0]
+  const map: Record<string, DomainKey> = {
+    '/materials': 'materials',
+    '/formulas': 'formulas',
+    '/inventory': 'inventory',
+    '/procurement': 'procurement',
+    '/security': 'identity',
+    '/settings': 'customization',
+    '/customization': 'customization',
+    '/saas': 'saas',
+  }
+  return normalized ? map[normalized] ?? null : null
+}
+
 function CommandPalette({
   open,
   session,
@@ -14351,6 +15203,7 @@ function CommandPalette({
 }) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [globalResults, setGlobalResults] = useState<GlobalSearchResult[]>([])
   const internalAdminView = isInternalAdminSession(session)
   const commandDomains = useMemo(() => visibleDomainsForSession(session), [session])
   const canCommitLabUsage = sessionHasPermission(session, 'inventory.commitLabUsage')
@@ -14382,7 +15235,21 @@ function CommandPalette({
     ],
     [canCommitLabUsage, canReviewAuditExport, commandDomains, internalAdminView, onCommit, onNavigate, session],
   )
-  const filtered = commands.filter((command) =>
+  const remoteCommands = useMemo(
+    () => globalResults
+      .map((result) => {
+        const key = domainKeyForHref(result.href)
+        if (!key) return null
+        return {
+          label: result.title,
+          detail: `${result.kind.toUpperCase()} / ${result.subtitle}`,
+          action: () => onNavigate(key),
+        }
+      })
+      .filter((command): command is { label: string; detail: string; action: () => void } => command !== null),
+    [globalResults, onNavigate],
+  )
+  const filtered = [...commands, ...remoteCommands].filter((command) =>
     `${command.label} ${command.detail}`.toLowerCase().includes(query.toLowerCase()),
   )
 
@@ -14390,8 +15257,26 @@ function CommandPalette({
     if (open) {
       setQuery('')
       setSelectedIndex(0)
+      setGlobalResults([])
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || query.trim().length < 2) {
+      setGlobalResults([])
+      return
+    }
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => {
+      void requestApi<{ query: string; results: GlobalSearchResult[] }>(`/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal })
+        .then((payload) => setGlobalResults(payload.results))
+        .catch(() => setGlobalResults([]))
+    }, 180)
+    return () => {
+      controller.abort()
+      window.clearTimeout(timeout)
+    }
+  }, [open, query])
 
   function run(index: number) {
     filtered[index]?.action()

@@ -126,6 +126,26 @@ describe('NorthStarService', () => {
     expect(credentialForEmail(service, adminEmail)?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
   })
 
+  it('resets a password with a one-time expiring token and revokes active sessions', () => {
+    const service = createTestService()
+    const active = service.login(adminEmail, adminPassword).data.session
+    const requested = service.beginPasswordReset(adminEmail)
+
+    expect(requested.data.accepted).toBe(true)
+    expect(requested.delivery?.token).toHaveLength(43)
+
+    const completed = service.completePasswordReset({
+      token: requested.delivery?.token,
+      password: 'ReplacedAdminPassword2026!',
+    }).data
+
+    expect(completed.accepted).toBe(true)
+    expect(() => service.authenticateSession(active.id)).toThrow(UnauthorizedException)
+    expect(() => service.login(adminEmail, adminPassword)).toThrow(ForbiddenException)
+    expect(service.login(adminEmail, 'ReplacedAdminPassword2026!').data.session.email).toBe(adminEmail)
+    expect(() => service.completePasswordReset({ token: requested.delivery?.token, password: 'AnotherPassword2026!' })).toThrow(ForbiddenException)
+  })
+
   it('blocks active memberships that have not completed password setup', () => {
     const service = createTestService()
 
@@ -2037,6 +2057,76 @@ describe('NorthStarService', () => {
     expect(retry.delivery.status).toBe('delivered')
     expect(retry.delivery.idempotencyKey).toBe('whd_document_downloaded_DOC-121')
     expect(consoleState.webhookDeliveries.find((delivery) => delivery.id === 'WHD-0002')?.attempts).toBe(3)
+  })
+
+  it('supports tenant-scoped search, legal requests, and idempotent material imports', () => {
+    const service = createAuthenticatedService()
+
+    const search = service.globalSearch('Bergamot').data
+    expect(search.results.some((result) => result.kind === 'material' && result.title === 'Bergamot FCF')).toBe(true)
+
+    const legal = service.acceptLegal({ document: 'privacy', version: '2026-07-22' }).data
+    expect(legal.idempotent).toBe(false)
+    expect(service.acceptLegal({ document: 'privacy', version: '2026-07-22' }).data.idempotent).toBe(true)
+
+    const privacyRequest = service.requestPrivacyData({ type: 'EXPORT' }).data
+    expect(privacyRequest.request.type).toBe('EXPORT')
+    expect(service.notifications().data.notifications.some((notification) => notification.title.includes('Data export'))).toBe(true)
+    const privacyExport = service.exportPrivacyData(privacyRequest.request.id).data
+    expect(privacyExport.request.status).toBe('COMPLETED')
+    expect(privacyExport.export.subject.email).toBe(adminEmail)
+    expect(JSON.stringify(privacyExport.export)).not.toContain(adminPassword)
+
+    const importBody = {
+      entity: 'materials' as const,
+      fileName: 'materials.xlsx',
+      idempotencyKey: 'import-material-test-1',
+      rows: [
+        {
+          name: 'Test Import Material',
+          cas: '9000-00-1',
+          family: 'Test family',
+          tier: 'Base',
+          ifraLimit: 85,
+          costPerGram: 0.42,
+          odor: 'clean, test',
+        },
+      ],
+    }
+    const preview = service.previewImport(importBody).data
+    expect(preview.job.status).toBe('VALIDATED')
+    expect(service.previewImport(importBody).data.idempotent).toBe(true)
+
+    const commit = service.commitImport(preview.job.id).data
+    expect(commit.created).toBe(1)
+    expect(service.commitImport(preview.job.id).data.idempotent).toBe(true)
+    expect(service.materials().data.some((material) => material.cas === '9000-00-1')).toBe(true)
+  })
+
+  it('prepares Stripe checkout state and applies a verified-provider subscription event', () => {
+    const service = createAuthenticatedService()
+    const checkout = service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' }).data
+
+    expect(checkout.plan.id).toBe('PLAN-ARTISAN')
+    const webhook = service.applyStripeWebhook({
+      id: 'evt_test_subscription_active',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_test_123',
+          customer: 'cus_test_123',
+          status: 'active',
+          current_period_start: 1_783_734_400,
+          current_period_end: 1_786_324_800,
+          metadata: { organizationId: checkout.organizationId, planId: 'PLAN-ARTISAN' },
+        },
+      },
+    }).data
+
+    expect(webhook.applied).toBe(true)
+    expect(service.billingSubscription().data.provider).toBe('stripe')
+    expect(service.billingSubscription().data.providerSubscriptionId).toBe('sub_test_123')
+    expect(service.billingSubscription().data.status).toBe('active')
   })
 })
 

@@ -1,4 +1,4 @@
-import { NorthStarService, type MfaEnrollmentRecord } from '../server/src/services/northstar.service.js'
+import { NorthStarService, type MfaEnrollmentRecord, type PasswordResetRecord } from '../server/src/services/northstar.service.js'
 import {
   PayloadTooLargeException,
   ForbiddenException,
@@ -14,6 +14,7 @@ import {
   rolePolicies as seedRolePolicies,
   userSettings as seedUserSettings,
   type ApiKeyRecord,
+  type AppNotificationRecord,
   type AuditEvent,
   type AuditExportJobRecord,
   type AuthSession,
@@ -55,7 +56,10 @@ import {
   type WebhookRecord,
   type WebhookDeliveryRecord,
   type CustomerRecord,
+  type DataImportJobRecord,
   type DomainStatus,
+  type LegalAcceptanceRecord,
+  type PrivacyRequestRecord,
 } from '../src/data/northStar.js'
 
 type Env = {
@@ -63,6 +67,18 @@ type Env = {
   CORS_ORIGINS?: string
   SEEDED_ADMIN_PASSWORD_HASH?: string
   MFA_ENCRYPTION_KEY?: string
+  STRIPE_SECRET_KEY?: string
+  STRIPE_WEBHOOK_SECRET?: string
+  STRIPE_PRICE_ARTISAN?: string
+  STRIPE_PRICE_ATELIER?: string
+  STRIPE_PRICE_MAISON?: string
+  BILLING_RETURN_URL?: string
+  RESEND_API_KEY?: string
+  EMAIL_FROM?: string
+  SENTRY_DSN?: string
+  CLOUDFLARE_API_TOKEN?: string
+  CLOUDFLARE_SAAS_ZONE_ID?: string
+  CLOUDFLARE_SAAS_ORIGIN?: string
 }
 
 type RouteContext = {
@@ -70,6 +86,9 @@ type RouteContext = {
   params: Record<string, string>
   query: URLSearchParams
   body: Record<string, unknown>
+  rawBody?: string
+  env: Env
+  request: Request
 }
 
 type Route = {
@@ -83,6 +102,7 @@ type Route = {
   limitKey?: 'seats' | 'materials' | 'formulas' | 'lots' | 'documents' | 'webhooks'
   writeGate?: boolean
   persistScope?: 'userSettings' | 'mfaVerification'
+  rawBody?: boolean
   handler: (context: RouteContext) => unknown
 }
 
@@ -92,7 +112,7 @@ type AuthCredential = {
 }
 
 type RateLimitPolicy = {
-  key: 'auth-login' | 'auth-signup' | 'authenticated-mutation' | 'sensitive-mutation'
+  key: 'auth-login' | 'auth-signup' | 'auth-reset' | 'authenticated-mutation' | 'sensitive-mutation'
   scope: 'client-email' | 'client' | 'session'
   limit: number
   windowSeconds: number
@@ -115,6 +135,7 @@ type SnapshotKey =
   | 'brandRecords'
   | 'membershipRecords'
   | 'authCredentialRecords'
+  | 'passwordResetRecords'
   | 'mfaEnrollmentRecords'
   | 'sessions'
   | 'userSettingsRecords'
@@ -144,6 +165,10 @@ type SnapshotKey =
   | 'webhookRecords'
   | 'webhookDeliveryRecords'
   | 'auditExportRecords'
+  | 'notificationRecords'
+  | 'importJobRecords'
+  | 'legalAcceptanceRecords'
+  | 'privacyRequestRecords'
   | 'inventoryApprovalRequestRecords'
   | 'operationApprovalRequestRecords'
   | 'auditCounter'
@@ -156,6 +181,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   brandRecords: BrandRecord[]
   membershipRecords: MembershipRecord[]
   authCredentialRecords: Array<Record<string, unknown>>
+  passwordResetRecords: PasswordResetRecord[]
   mfaEnrollmentRecords: MfaEnrollmentRecord[]
   rolePolicyRecords: RolePolicy[]
   materialRecords: Material[]
@@ -190,6 +216,10 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   webhookRecords: WebhookRecord[]
   webhookDeliveryRecords: WebhookDeliveryRecord[]
   auditExportRecords: AuditExportJobRecord[]
+  notificationRecords: AppNotificationRecord[]
+  importJobRecords: DataImportJobRecord[]
+  legalAcceptanceRecords: LegalAcceptanceRecord[]
+  privacyRequestRecords: PrivacyRequestRecord[]
   inventoryApprovalRequestRecords: Array<Record<string, unknown>>
   operationApprovalRequestRecords: Array<Record<string, unknown>>
   lots: InventoryLot[]
@@ -290,6 +320,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'brandRecords',
   'membershipRecords',
   'authCredentialRecords',
+  'passwordResetRecords',
   'mfaEnrollmentRecords',
   'sessions',
   'userSettingsRecords',
@@ -319,6 +350,10 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'webhookRecords',
   'webhookDeliveryRecords',
   'auditExportRecords',
+  'notificationRecords',
+  'importJobRecords',
+  'legalAcceptanceRecords',
+  'privacyRequestRecords',
   'inventoryApprovalRequestRecords',
   'operationApprovalRequestRecords',
   'auditCounter',
@@ -378,6 +413,7 @@ const NORMALIZED_TABLES = [
 
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
+  { method: 'GET', pattern: '/status', public: true, hydrateState: false, handler: ({ env }) => publicStatus(env) },
   { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
   { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: NORMALIZED_TABLES }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
@@ -392,6 +428,8 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials/:id/molecules', handler: ({ service, params }) => service.materialMolecules(params.id) },
   { method: 'GET', pattern: '/materials/:id/provenance', handler: ({ service, params }) => service.materialProvenance(params.id) },
   { method: 'GET', pattern: '/materials/:id/price-history', handler: ({ service, params }) => service.materialPriceHistory(params.id) },
+  { method: 'POST', pattern: '/imports/preview', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.previewImport(body) },
+  { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
   { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
@@ -437,12 +475,24 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/approval-requests/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveOperationApprovalRequest(params.id, body) },
   { method: 'POST', pattern: '/approval-requests/:id/reject', mutates: true, handler: ({ service, params, body }) => service.rejectOperationApprovalRequest(params.id, body) },
   { method: 'POST', pattern: '/auth/login', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-login', scope: 'client-email', limit: 8, windowSeconds: 10 * 60, message: 'Authentication rate limit exceeded' }, handler: ({ service, body }) => service.login(typeof body.email === 'string' ? body.email : undefined, typeof body.password === 'string' ? body.password : undefined) },
+  { method: 'POST', pattern: '/auth/password-reset/request', public: true, mutates: true, writeGate: false, rateLimit: { key: 'auth-reset', scope: 'client-email', limit: 5, windowSeconds: 60 * 60, message: 'Password reset rate limit exceeded' }, handler: ({ service, body, env, request }) => startPasswordReset(service, body, env, request) },
+  { method: 'POST', pattern: '/auth/password-reset/confirm', public: true, mutates: true, writeGate: false, rateLimit: { key: 'auth-reset', scope: 'client', limit: 8, windowSeconds: 60 * 60, message: 'Password reset rate limit exceeded' }, handler: ({ service, body }) => service.completePasswordReset({ token: typeof body.token === 'string' ? body.token : undefined, password: typeof body.password === 'string' ? body.password : undefined }) },
   { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', scope: 'client', limit: 4, windowSeconds: 60 * 60, message: 'Signup rate limit exceeded' }, handler: ({ service, body }) => service.signup(body) },
   { method: 'GET', pattern: '/auth/mfa/status', writeGate: false, handler: ({ service }) => service.mfaStatus() },
   { method: 'POST', pattern: '/auth/mfa/enroll', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.beginMfaEnrollment(body) },
   { method: 'POST', pattern: '/auth/mfa/verify', mutates: true, writeGate: false, persistScope: 'mfaVerification', rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.verifyMfa(body) },
   { method: 'POST', pattern: '/auth/logout', sessionCookie: 'clear', mutates: true, writeGate: false, handler: ({ service }) => service.logout() },
   { method: 'GET', pattern: '/me', handler: ({ service }) => service.me() },
+  { method: 'GET', pattern: '/search', handler: ({ service, query }) => service.globalSearch(query.get('q') ?? '') },
+  { method: 'GET', pattern: '/notifications', handler: ({ service }) => service.notifications() },
+  { method: 'POST', pattern: '/notifications/refresh', mutates: true, writeGate: false, handler: ({ service }) => service.refreshOperationalNotifications() },
+  { method: 'POST', pattern: '/notifications/read-all', mutates: true, writeGate: false, handler: ({ service }) => service.markAllNotificationsRead() },
+  { method: 'POST', pattern: '/notifications/:id/read', mutates: true, writeGate: false, handler: ({ service, params }) => service.markNotificationRead(params.id) },
+  { method: 'GET', pattern: '/legal/status', handler: ({ service }) => service.legalStatus() },
+  { method: 'POST', pattern: '/legal/accept', mutates: true, writeGate: false, handler: ({ service, body }) => service.acceptLegal(body) },
+  { method: 'GET', pattern: '/privacy/requests', handler: ({ service }) => service.privacyRequests() },
+  { method: 'POST', pattern: '/privacy/requests', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.requestPrivacyData(body) },
+  { method: 'POST', pattern: '/privacy/requests/:id/export', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.exportPrivacyData(params.id) },
   { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
   { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, persistScope: 'userSettings', handler: ({ service, body }) => service.updateUserSettings(body) },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
@@ -527,17 +577,19 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/analytics/inventory', handler: ({ service }) => service.analyticsInventory() },
   { method: 'GET', pattern: '/analytics/reports', handler: ({ service }) => service.analyticsReports() },
   { method: 'POST', pattern: '/analytics/reports/:id/run', mutates: true, handler: ({ service, params }) => service.runAnalyticsReport(params.id) },
+  { method: 'POST', pattern: '/billing/stripe/webhook', public: true, rawBody: true, mutates: true, writeGate: false, handler: ({ service, env, request, rawBody }) => handleStripeWebhook(service, env, request, rawBody ?? '') },
   { method: 'GET', pattern: '/billing/plan', handler: ({ service }) => service.billingPlan() },
   { method: 'GET', pattern: '/billing/plans', handler: ({ service }) => service.billingPlans() },
   { method: 'GET', pattern: '/billing/console', handler: ({ service }) => service.billingConsole() },
   { method: 'GET', pattern: '/billing/subscription', handler: ({ service }) => service.billingSubscription() },
   { method: 'GET', pattern: '/billing/usage', handler: ({ service }) => service.billingUsage() },
   { method: 'GET', pattern: '/billing/invoices', handler: ({ service }) => service.billingInvoices() },
-  { method: 'POST', pattern: '/billing/checkout', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.startBillingCheckout(body) },
+  { method: 'POST', pattern: '/billing/checkout', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body, env, request }) => startStripeCheckout(service, body, env, request) },
   { method: 'POST', pattern: '/billing/subscription/select-plan', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.selectBillingPlan(body) },
-  { method: 'POST', pattern: '/billing/portal', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.openBillingPortal() },
+  { method: 'POST', pattern: '/billing/portal', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, env, request }) => startStripePortal(service, env, request) },
   { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
   { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
+  { method: 'POST', pattern: '/saas/custom-domains/provision', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body, env }) => provisionCloudflareCustomDomain(service, body, env) },
   { method: 'GET', pattern: '/sso-config', handler: ({ service }) => service.ssoConfig() },
   { method: 'PATCH', pattern: '/sso-config', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.updateSsoConfig(body) },
   { method: 'POST', pattern: '/sso-config/scim-token/rotate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.rotateScimToken() },
@@ -556,7 +608,9 @@ const routes: Route[] = [
 ]
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const startedAt = Date.now()
+    let routeLabel = 'unmatched'
     const origin = request.headers.get('Origin')
     const corsHeaders = buildCorsHeaders(origin, env.CORS_ORIGINS)
     let service: NorthStarService | undefined
@@ -578,9 +632,11 @@ export default {
       if (!match) {
         return json({ message: `Route ${request.method} ${path} was not found` }, 404, corsHeaders)
       }
+      routeLabel = `${request.method} ${match.route.pattern}`
       mfaVerificationRequest = match.route.persistScope === 'mfaVerification'
 
-      const body = await readJsonBody(request)
+      const rawBody = match.route.rawBody ? await readRawBody(request) : undefined
+      const body = rawBody === undefined ? await readJsonBody(request) : {}
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -624,7 +680,18 @@ export default {
         match.route.persistScope === 'mfaVerification'
           ? structuredClone((service as unknown as ServiceState).mfaEnrollmentRecords)
           : undefined
-      const result = await match.route.handler({ service, params: match.params, query: url.searchParams, body })
+      const result = await match.route.handler({
+        service,
+        params: match.params,
+        query: url.searchParams,
+        body,
+        rawBody,
+        env,
+        request,
+      })
+      if (match.route.mutates) {
+        await deliverNotificationOutbox(service, env)
+      }
       let refreshSnapshotCache = false
 
       if (match.route.mutates || service.hasSecurityStateChanges()) {
@@ -649,7 +716,12 @@ export default {
         refreshWorkspaceBrandingCache(service, credential.sessionId)
       }
 
-      return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
+      const response = json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
+      const durationMs = Date.now() - startedAt
+      if (durationMs >= 1200) {
+        ctx.waitUntil(recordRuntimeEvent(env.DB, { route: routeLabel, status: response.status, durationMs, category: 'latency' }))
+      }
+      return response
     } catch (error) {
       const candidate = error as {
         getStatus?: () => number
@@ -666,9 +738,441 @@ export default {
           : persistSecurityState(env.DB, service)
         await persistFailureState.catch((persistError) => console.error(persistError))
       }
+      const durationMs = Date.now() - startedAt
+      if (status >= 500) {
+        ctx.waitUntil(
+          Promise.all([
+            recordRuntimeEvent(env.DB, { route: routeLabel, status, durationMs, category: 'error' }),
+            captureSentryRuntimeError(env, { route: routeLabel, status, durationMs }),
+          ]),
+        )
+      }
       return errorJson(error, corsHeaders)
     }
   },
+}
+
+async function publicStatus(env: Env) {
+  const checkedAt = new Date().toISOString()
+  try {
+    await env.DB.prepare('SELECT 1 AS healthy').first<{ healthy: number }>()
+    const telemetry = await env.DB
+      .prepare(
+        `SELECT
+          SUM(CASE WHEN category = 'error' THEN 1 ELSE 0 END) AS error_count,
+          SUM(CASE WHEN category = 'latency' THEN 1 ELSE 0 END) AS slow_count
+         FROM runtime_events
+         WHERE occurred_at >= datetime('now', '-15 minutes')`,
+      )
+      .first<{ error_count: number | null; slow_count: number | null }>()
+    const errorCount = Number(telemetry?.error_count ?? 0)
+    const slowCount = Number(telemetry?.slow_count ?? 0)
+    const apiStatus = errorCount > 0 ? 'degraded' : 'operational'
+    return {
+      data: {
+        status: apiStatus,
+        checkedAt,
+        components: [
+          { name: 'API', status: apiStatus },
+          { name: 'D1 persistence', status: 'operational' },
+        ],
+        telemetry: { windowMinutes: 15, errorCount, slowCount },
+      },
+    }
+  } catch {
+    return {
+      data: {
+        status: 'degraded',
+        checkedAt,
+        components: [
+          { name: 'API', status: 'operational' },
+          { name: 'D1 persistence', status: 'degraded' },
+        ],
+      },
+    }
+  }
+}
+
+async function deliverNotificationOutbox(service: NorthStarService, env: Env) {
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
+    return
+  }
+  const notifications = service.notificationEmailOutbox()
+  for (const notification of notifications) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: env.EMAIL_FROM,
+          to: [notification.recipientEmail],
+          subject: notification.title,
+          text: notification.href ? `${notification.body}\n\nOpen OlfactoryOps: ${notification.href}` : notification.body,
+        }),
+      })
+      if (!response.ok) {
+        const message = (await response.text()).slice(0, 180)
+        service.setNotificationEmailStatus(notification.id, 'failed', message || `Resend returned ${response.status}`)
+        continue
+      }
+      service.setNotificationEmailStatus(notification.id, 'sent')
+    } catch (error) {
+      service.setNotificationEmailStatus(
+        notification.id,
+        'failed',
+        error instanceof Error ? error.message : 'Notification provider request failed',
+      )
+    }
+  }
+}
+
+async function startStripeCheckout(
+  service: NorthStarService,
+  body: Record<string, unknown>,
+  env: Env,
+  request: Request,
+) {
+  const planId = typeof body.planId === 'string' ? body.planId : undefined
+  const prepared = service.stripeCheckoutContext({ planId }).data
+  const priceId = stripePriceForPlan(env, prepared.plan.id)
+  if (!env.STRIPE_SECRET_KEY || !priceId) {
+    throw new UnprocessableEntityException('Stripe billing is not configured for this plan')
+  }
+  const origin = billingReturnOrigin(request, env)
+  const form = new URLSearchParams({
+    mode: 'subscription',
+    success_url: `${origin}/?billing=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${origin}/?billing=cancelled`,
+    client_reference_id: prepared.organizationId,
+    'line_items[0][price]': priceId,
+    'line_items[0][quantity]': '1',
+    'automatic_tax[enabled]': 'true',
+    allow_promotion_codes: 'true',
+    'metadata[organizationId]': prepared.organizationId,
+    'metadata[planId]': prepared.plan.id,
+    'subscription_data[metadata][organizationId]': prepared.organizationId,
+    'subscription_data[metadata][planId]': prepared.plan.id,
+  })
+  if (prepared.subscription.providerCustomerId) {
+    form.set('customer', prepared.subscription.providerCustomerId)
+  } else {
+    form.set('customer_email', prepared.customerEmail)
+  }
+  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: form,
+  })
+  const payload = await readProviderJson(response)
+  if (!response.ok || typeof payload.url !== 'string') {
+    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Stripe could not create a Checkout session'))
+  }
+  return {
+    data: {
+      id: `BILL-ACT-${prepared.audit.id}`,
+      mode: 'checkout' as const,
+      status: 'ready' as const,
+      url: payload.url,
+      audit: prepared.audit,
+      invariant: 'Stripe Checkout is created server-side with plan metadata; payment state changes only after a verified webhook',
+    },
+  }
+}
+
+async function startPasswordReset(
+  service: NorthStarService,
+  body: Record<string, unknown>,
+  env: Env,
+  request: Request,
+) {
+  const prepared = service.beginPasswordReset(typeof body.email === 'string' ? body.email : undefined)
+  if (prepared.delivery && env.RESEND_API_KEY && env.EMAIL_FROM) {
+    const resetUrl = new URL('/', billingReturnOrigin(request, env))
+    resetUrl.searchParams.set('reset', prepared.delivery.token)
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: env.EMAIL_FROM,
+          to: [prepared.delivery.recipientEmail],
+          subject: 'Reset your OlfactoryOps password',
+          text: `A password reset was requested for your OlfactoryOps account. This link expires in 30 minutes and can be used once:\n\n${resetUrl.toString()}`,
+        }),
+      })
+      service.setNotificationEmailStatus(
+        prepared.delivery.notificationId ?? '',
+        response.ok ? 'sent' : 'failed',
+        response.ok ? undefined : `Resend returned ${response.status}`,
+      )
+    } catch (error) {
+      service.setNotificationEmailStatus(
+        prepared.delivery.notificationId ?? '',
+        'failed',
+        error instanceof Error ? error.message : 'Password reset email failed',
+      )
+    }
+  }
+  return { data: prepared.data }
+}
+
+async function startStripePortal(service: NorthStarService, env: Env, request: Request) {
+  const prepared = service.stripePortalContext().data
+  if (!env.STRIPE_SECRET_KEY) {
+    throw new UnprocessableEntityException('Stripe billing portal is not configured')
+  }
+  const form = new URLSearchParams({
+    customer: prepared.subscription.providerCustomerId || '',
+    return_url: billingReturnOrigin(request, env),
+  })
+  const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: form,
+  })
+  const payload = await readProviderJson(response)
+  if (!response.ok || typeof payload.url !== 'string') {
+    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Stripe could not open the billing portal'))
+  }
+  return {
+    data: {
+      id: `BILL-ACT-${prepared.audit.id}`,
+      mode: 'portal' as const,
+      status: 'ready' as const,
+      url: payload.url,
+      audit: prepared.audit,
+      invariant: 'Billing portal customer identity is resolved from the server-side subscription record',
+    },
+  }
+}
+
+function billingReturnOrigin(request: Request, env: Env) {
+  const configured = env.BILLING_RETURN_URL?.trim()
+  const candidate = configured || request.headers.get('Origin') || request.url
+  try {
+    const url = new URL(candidate)
+    const localHttp = url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+    if (url.protocol !== 'https:' && !localHttp) {
+      throw new Error('Billing return URL must use HTTPS outside local development')
+    }
+    return url.origin
+  } catch {
+    return new URL(request.url).origin
+  }
+}
+
+type RuntimeEvent = {
+  route: string
+  status: number
+  durationMs: number
+  category: 'error' | 'latency'
+}
+
+async function recordRuntimeEvent(db: D1Database, event: RuntimeEvent) {
+  await db
+    .prepare(
+      `INSERT INTO runtime_events (id, occurred_at, route, status, duration_ms, category)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(crypto.randomUUID(), new Date().toISOString(), event.route.slice(0, 180), event.status, event.durationMs, event.category)
+    .run()
+    .catch((error) => console.error('Unable to persist runtime event', error))
+}
+
+async function captureSentryRuntimeError(env: Env, event: Omit<RuntimeEvent, 'category'>) {
+  const dsn = env.SENTRY_DSN?.trim()
+  if (!dsn) return
+  try {
+    const parsed = new URL(dsn)
+    const projectId = parsed.pathname.split('/').filter(Boolean).pop()
+    if (!parsed.username || !projectId) return
+    const eventId = crypto.randomUUID().replaceAll('-', '')
+    const endpoint = `${parsed.protocol}//${parsed.host}/api/${encodeURIComponent(projectId)}/envelope/`
+    const envelope = [
+      JSON.stringify({ event_id: eventId, dsn }),
+      JSON.stringify({ type: 'event', content_type: 'application/json' }),
+      JSON.stringify({
+        event_id: eventId,
+        timestamp: new Date().toISOString(),
+        platform: 'javascript',
+        level: 'error',
+        logger: 'olfactoryops.worker',
+        message: `Worker ${event.status} on ${event.route}`,
+        tags: { route: event.route, status: String(event.status) },
+        extra: { durationMs: event.durationMs },
+      }),
+      '',
+    ].join('\n')
+    await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-sentry-envelope' },
+      body: envelope,
+    })
+  } catch (error) {
+    console.error('Unable to send runtime event to Sentry', error)
+  }
+}
+
+function stripePriceForPlan(env: Env, planId: string) {
+  if (planId === 'PLAN-ARTISAN') return env.STRIPE_PRICE_ARTISAN?.trim()
+  if (planId === 'PLAN-ATELIER') return env.STRIPE_PRICE_ATELIER?.trim()
+  if (planId === 'PLAN-MAISON') return env.STRIPE_PRICE_MAISON?.trim()
+  return undefined
+}
+
+async function provisionCloudflareCustomDomain(
+  service: NorthStarService,
+  body: Record<string, unknown>,
+  env: Env,
+) {
+  const hostname = typeof body.hostname === 'string' ? body.hostname : undefined
+  const context = service.cloudflareSaasProvisioningContext({ hostname }).data
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_SAAS_ZONE_ID) {
+    throw new UnprocessableEntityException('Cloudflare for SaaS is not configured for this environment')
+  }
+  const requestBody: Record<string, unknown> = {
+    hostname: context.hostname,
+    custom_metadata: {
+      organizationId: context.organizationId,
+      requestedBy: context.requestedBy,
+    },
+    ssl: { method: 'txt', type: 'dv' },
+  }
+  if (env.CLOUDFLARE_SAAS_ORIGIN?.trim()) {
+    requestBody.custom_origin_server = env.CLOUDFLARE_SAAS_ORIGIN.trim()
+    requestBody.custom_origin_sni = env.CLOUDFLARE_SAAS_ORIGIN.trim()
+  }
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    },
+  )
+  const payload = await readProviderJson(response)
+  const result = isRecord(payload.result) ? payload.result : undefined
+  if (!response.ok || !result || typeof result.id !== 'string') {
+    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Cloudflare could not provision the custom hostname'))
+  }
+  return service.completeCloudflareSaasProvisioning(
+    context.hostname,
+    result.id,
+    cloudflareValidation(result),
+  )
+}
+
+function cloudflareValidation(result: Record<string, unknown>) {
+  const validation: Record<string, string> = {}
+  const ownership = isRecord(result.ownership_verification) ? result.ownership_verification : undefined
+  if (ownership && typeof ownership.name === 'string' && typeof ownership.value === 'string') {
+    validation.type = typeof ownership.type === 'string' ? ownership.type.toUpperCase() : 'TXT'
+    validation.name = ownership.name
+    validation.value = ownership.value
+  }
+  const validationRecords = Array.isArray(result.validation_records) ? result.validation_records : []
+  const txtRecord = validationRecords.find((entry) => isRecord(entry) && typeof entry.txt_name === 'string')
+  if (isRecord(txtRecord)) {
+    validation.type = 'TXT'
+    validation.name = typeof txtRecord.txt_name === 'string' ? txtRecord.txt_name : validation.name || ''
+    validation.value = typeof txtRecord.txt_value === 'string'
+      ? txtRecord.txt_value
+      : typeof txtRecord.txt_record === 'string' ? txtRecord.txt_record : validation.value || ''
+  }
+  return validation
+}
+
+async function handleStripeWebhook(service: NorthStarService, env: Env, request: Request, rawBody: string) {
+  const signature = request.headers.get('Stripe-Signature')
+  if (!env.STRIPE_WEBHOOK_SECRET || !signature || !(await verifyStripeSignature(rawBody, signature, env.STRIPE_WEBHOOK_SECRET))) {
+    throw new ForbiddenException('Stripe webhook signature is invalid')
+  }
+  let event: unknown
+  try {
+    event = JSON.parse(rawBody)
+  } catch {
+    throw new UnprocessableEntityException('Stripe webhook payload must be valid JSON')
+  }
+  if (!isRecord(event) || typeof event.id !== 'string') {
+    throw new UnprocessableEntityException('Stripe webhook event id is required')
+  }
+  const claimed = await claimBillingWebhookEvent(env.DB, 'stripe', event.id)
+  if (!claimed) {
+    return { data: { received: true, idempotent: true, eventId: event.id } }
+  }
+  return service.applyStripeWebhook(event)
+}
+
+async function verifyStripeSignature(rawBody: string, header: string, secret: string) {
+  const values = header.split(',').reduce<Record<string, string[]>>((result, part) => {
+    const separator = part.indexOf('=')
+    if (separator < 1) return result
+    const key = part.slice(0, separator).trim()
+    const value = part.slice(separator + 1).trim()
+    if (key && value) result[key] = [...(result[key] ?? []), value]
+    return result
+  }, {})
+  const timestamp = Number(values.t?.[0])
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > 300) {
+    return false
+  }
+  const signedPayload = `${timestamp}.${rawBody}`
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))
+  const expected = hex(signature)
+  return (values.v1 ?? []).some((candidate) => secureEqual(candidate, expected))
+}
+
+function secureEqual(left: string, right: string) {
+  if (left.length !== right.length) return false
+  let mismatch = 0
+  for (let index = 0; index < left.length; index += 1) mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  return mismatch === 0
+}
+
+function hex(buffer: ArrayBuffer) {
+  return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function claimBillingWebhookEvent(db: D1Database, provider: string, eventId: string) {
+  const result = await db
+    .prepare(
+      `INSERT OR IGNORE INTO billing_provider_events (provider, event_id, received_at)
+       VALUES (?1, ?2, ?3)`,
+    )
+    .bind(provider, eventId, new Date().toISOString())
+    .run()
+  return (result.meta.changes ?? 0) > 0
+}
+
+async function readProviderJson(response: Response) {
+  try {
+    const payload: unknown = await response.json()
+    return isRecord(payload) ? payload : {}
+  } catch {
+    return {}
+  }
+}
+
+function providerErrorMessage(payload: Record<string, unknown>, fallback: string) {
+  const error = payload.error
+  if (isRecord(error) && typeof error.message === 'string') return error.message.slice(0, 300)
+  return fallback
 }
 
 function resolveRateLimitPolicy(route: Route) {
@@ -730,8 +1234,25 @@ function matchPattern(pattern: string, path: string) {
 }
 
 async function readJsonBody(request: Request) {
-  if (request.method === 'GET' || request.method === 'HEAD') {
+  const text = await readRawBody(request)
+  if (!text.trim()) {
     return {}
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new UnprocessableEntityException('Request body must contain valid JSON')
+  }
+  if (!isRecord(parsed)) {
+    throw new UnprocessableEntityException('Request body must be a JSON object')
+  }
+  return parsed
+}
+
+async function readRawBody(request: Request) {
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    return ''
   }
   const declaredLength = Number(request.headers.get('Content-Length'))
   if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BODY_BYTES) {
@@ -748,19 +1269,7 @@ async function readJsonBody(request: Request) {
       maxBytes: MAX_JSON_BODY_BYTES,
     })
   }
-  if (!text.trim()) {
-    return {}
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    throw new UnprocessableEntityException('Request body must contain valid JSON')
-  }
-  if (!isRecord(parsed)) {
-    throw new UnprocessableEntityException('Request body must be a JSON object')
-  }
-  return parsed
+  return text
 }
 
 function readString(value: unknown, fallback: string) {

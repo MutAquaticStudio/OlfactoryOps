@@ -1200,6 +1200,77 @@ export interface BillingActionResponse {
   invariant: string
 }
 
+export type NotificationCategory = 'security' | 'billing' | 'inventory' | 'workspace' | 'system'
+export type NotificationDeliveryStatus = 'in_app' | 'queued' | 'sent' | 'failed'
+
+export interface AppNotificationRecord {
+  id: string
+  organizationId: string
+  recipientEmail: string
+  category: NotificationCategory
+  title: string
+  body: string
+  href?: string
+  createdAt: string
+  readAt?: string
+  emailStatus: NotificationDeliveryStatus
+  emailError?: string
+}
+
+export interface DataImportIssue {
+  row: number
+  field?: string
+  message: string
+}
+
+export interface DataImportJobRecord {
+  id: string
+  organizationId: string
+  requestedBy: string
+  entity: 'materials' | 'lots'
+  fileName: string
+  idempotencyKey: string
+  status: 'DRAFT' | 'VALIDATED' | 'COMPLETED' | 'FAILED'
+  totalRows: number
+  validRows: number
+  invalidRows: number
+  errors: DataImportIssue[]
+  rows: Array<Record<string, unknown>>
+  createdAt: string
+  committedAt?: string
+}
+
+export type LegalDocumentKind = 'terms' | 'privacy' | 'cookies'
+
+export interface LegalAcceptanceRecord {
+  id: string
+  organizationId: string
+  userId: string
+  email: string
+  document: LegalDocumentKind
+  version: string
+  acceptedAt: string
+}
+
+export interface PrivacyRequestRecord {
+  id: string
+  organizationId: string
+  requestedBy: string
+  subjectEmail: string
+  type: 'EXPORT' | 'ERASURE'
+  status: 'REQUESTED' | 'PROCESSING' | 'COMPLETED' | 'REJECTED'
+  createdAt: string
+  completedAt?: string
+}
+
+export interface GlobalSearchResult {
+  id: string
+  kind: 'material' | 'formula' | 'lot' | 'document' | 'supplier'
+  title: string
+  subtitle: string
+  href: string
+}
+
 export interface BillingConsoleResponse {
   plans: BillingPlanRecord[]
   plan: BillingPlanRecord
