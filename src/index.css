@@ -4141,6 +4141,11 @@ input[type='range'] {
       'ledger'
       'audit';
   }
+
+  /* The fixed sidebar narrows two-column analytics cards before the mobile rail takes over. */
+  .analytics-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 980px) {
