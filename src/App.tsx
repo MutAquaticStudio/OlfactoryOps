@@ -11287,14 +11287,6 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         )}
       </Panel>
 
-      <Panel title="Orders Guardrails" icon={ShieldCheck}>
-        <ul className="policy-list">
-          <li>Order creation prices SKU packs but does not reserve or move inventory.</li>
-          <li>Reservation reduces available stock only and creates no InventoryMovement.</li>
-          <li>Cancel releases reserved grams without writing a movement row.</li>
-          <li>Fulfillment creates OUT movements and keeps shipment lot traceability plus invoice/COA evidence.</li>
-        </ul>
-      </Panel>
     </div>
   )
 }
