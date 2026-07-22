@@ -821,6 +821,15 @@ describe('NorthStarService', () => {
       displayName: 'Atelier Owner',
       preferredLanding: 'dashboard',
     })
+    expect(service.memberSummary().data).toMatchObject({
+      totalMembers: 1,
+      activeMembers: 1,
+      invitedMembers: 0,
+      deactivatedMembers: 0,
+      activeSessions: 1,
+      roleCounts: [{ role: 'Owner', count: 1 }],
+    })
+    expect(service.memberSummary().data).not.toHaveProperty('memberships')
     expect(() => service.tenantConsole()).toThrow(ForbiddenException)
     expect(service.billingConsole().data.subscription.organizationId).toBe(result.organization.id)
     expect(service.billingConsole().data.sso.domain).toBe('atelier-smoke.labofscents.org')

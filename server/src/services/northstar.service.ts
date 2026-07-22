@@ -3098,6 +3098,34 @@ export class NorthStarService {
     }
   }
 
+  memberSummary() {
+    const session = this.currentSession()
+    if (!this.roleHasPermission(session.role, 'security.viewMembers') && !this.roleHasPermission(session.role, 'security.manageUsers')) {
+      throw new ForbiddenException(`Role ${session.role} cannot perform security.viewMembers`)
+    }
+
+    const memberships = this.membershipRecords.filter((item) => item.organizationId === session.organizationId)
+    const roleCounts = Array.from(
+      memberships.reduce((counts, membership) => counts.set(membership.role, (counts.get(membership.role) ?? 0) + 1), new Map<string, number>()),
+    )
+      .sort(([leftRole], [rightRole]) => leftRole.localeCompare(rightRole))
+      .map(([role, count]) => ({ role, count }))
+
+    return {
+      data: {
+        totalMembers: memberships.length,
+        activeMembers: memberships.filter((membership) => membership.status === 'ACTIVE').length,
+        invitedMembers: memberships.filter((membership) => membership.status === 'INVITED').length,
+        deactivatedMembers: memberships.filter((membership) => membership.status === 'DEACTIVATED').length,
+        activeSessions: this.sessions.filter(
+          (candidate) => candidate.organizationId === session.organizationId && candidate.status === 'ACTIVE',
+        ).length,
+        roleCounts,
+        invariant: 'member summary is tenant-scoped and omits member identities',
+      },
+    }
+  }
+
   inviteMember(body: { email?: string; name?: string; role?: string; brandIds?: string[] }) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'security.manageUsers')

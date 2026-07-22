@@ -448,6 +448,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
+  { method: 'GET', pattern: '/security/member-summary', handler: ({ service }) => service.memberSummary() },
   { method: 'POST', pattern: '/security/members/invite', mutates: true, rateLimit: sensitiveMutationRateLimit, limitKey: 'seats', handler: ({ service, body }) => service.inviteMember(body) },
   { method: 'PATCH', pattern: '/security/members/:id/status', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params, body }) => service.setMembershipStatus(params.id, body.status === 'ACTIVE' ? 'ACTIVE' : 'DEACTIVATED') },
   { method: 'POST', pattern: '/security/sessions/:id/revoke', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.revokeSession(params.id) },
@@ -2205,7 +2206,21 @@ async function hydrateTenantCoreState(db: D1Database, serviceState: ServiceState
     .all<RolePolicyRow>()
   const rolePolicies = (roleRows.results ?? []).map(rolePolicyFromRow)
   if (rolePolicies.length > 0) {
-    serviceState.rolePolicyRecords = rolePolicies
+    const ownerDefault = seedRolePolicies.find((policy) => policy.scope === 'organization' && policy.role === 'Owner')
+    const ownerPolicy = rolePolicies.find((policy) => policy.scope === 'organization' && policy.role === 'Owner')
+    const ownerNeedsMemberSummary = Boolean(
+      ownerDefault?.permissions.includes('security.viewMembers') && !ownerPolicy?.permissions.includes('security.viewMembers'),
+    )
+    serviceState.rolePolicyRecords = ownerNeedsMemberSummary
+      ? rolePolicies.map((policy) =>
+          policy.scope === 'organization' && policy.role === 'Owner'
+            ? { ...policy, permissions: [...policy.permissions, 'security.viewMembers'] }
+            : policy,
+        )
+      : rolePolicies
+    if (ownerNeedsMemberSummary) {
+      await persistRolePolicies(db, serviceState.rolePolicyRecords, new Date().toISOString())
+    }
   } else if (Array.isArray(serviceState.rolePolicyRecords) && serviceState.rolePolicyRecords.length > 0) {
     await persistRolePolicies(db, serviceState.rolePolicyRecords, new Date().toISOString())
   }

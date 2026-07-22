@@ -2335,6 +2335,7 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the workspace-scoped OlfactoryOps console.' },
   { key: 'audit.view', label: 'View audit trail', category: 'Audit', scope: 'organization', risk: 'medium', description: 'Read tenant audit events and security evidence.' },
   { key: 'audit.export', label: 'Export audit evidence', category: 'Audit', scope: 'organization', risk: 'high', description: 'Export regulated tenant audit data.' },
+  { key: 'security.viewMembers', label: 'View member summary', category: 'Security', scope: 'organization', risk: 'medium', description: 'View workspace member totals, role distribution, and active session count without member identities.' },
   { key: 'security.manageUsers', label: 'Manage members', category: 'Security', scope: 'organization', risk: 'critical', description: 'Invite, activate, deactivate, and assign tenant roles.' },
   { key: 'security.viewAuditLog', label: 'View security audit', category: 'Security', scope: 'organization', risk: 'high', description: 'Inspect security-sensitive tenant events.' },
   { key: 'security.policy.manage', label: 'Manage security policy', category: 'Security', scope: 'organization', risk: 'critical', description: 'Change MFA, session timeout, and IP allowlist policy.' },

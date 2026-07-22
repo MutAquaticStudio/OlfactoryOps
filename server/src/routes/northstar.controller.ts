@@ -637,6 +637,11 @@ export class NorthStarController {
     return this.northStar.tenantConsole()
   }
 
+  @Get('security/member-summary')
+  memberSummary() {
+    return this.northStar.memberSummary()
+  }
+
   @Post('security/members/invite')
   inviteMember(@Body() body: { email?: string; name?: string; role?: string; brandIds?: string[] }) {
     return this.northStar.inviteMember(body)

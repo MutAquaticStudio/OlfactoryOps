@@ -764,6 +764,16 @@ type FormulaMutationResponse = {
   invariant: string
 }
 
+type MemberSummaryResponse = {
+  totalMembers: number
+  activeMembers: number
+  invitedMembers: number
+  deactivatedMembers: number
+  activeSessions: number
+  roleCounts: Array<{ role: string; count: number }>
+  invariant: string
+}
+
 type FormulaVersionListResponse = {
   formula: Formula
   versions: FormulaVersionRecord[]
@@ -3856,7 +3866,8 @@ const Dashboard = memo(function Dashboard({
   const canViewMovementLedger = domainVisibleForSession('inventory', session)
   const canViewEnterpriseReadiness = internalAdminView && domainVisibleForSession('saas', session)
   const canViewUserOverview =
-    (internalAdminView || session.role === 'Owner') && sessionHasPermission(session, 'security.manageUsers')
+    (internalAdminView || session.role === 'Owner') &&
+    sessionHasAnyPermission(session, ['security.viewMembers', 'security.manageUsers'])
   const visibleWorkflowNodes = visibleWorkflowNodesForSession(session)
 
   return (
@@ -3938,18 +3949,19 @@ function OwnerUserOverview({
   session: AuthSession
   onNavigate: (key: DomainKey) => void
 }) {
-  const [tenantData, setTenantData] = useState<Pick<TenantConsoleResponse, 'memberships' | 'sessions'> | null>(null)
+  const [memberSummary, setMemberSummary] = useState<MemberSummaryResponse | null>(null)
   const [status, setStatus] = useState('Syncing workspace members')
+  const canManageUsers = sessionHasPermission(session, 'security.manageUsers')
 
   useEffect(() => {
     const controller = new AbortController()
 
-    void requestApi<Pick<TenantConsoleResponse, 'memberships' | 'sessions'>>('/security/tenant-console', {
+    void requestApi<MemberSummaryResponse>('/security/member-summary', {
       signal: controller.signal,
     })
       .then((payload) => {
         if (!controller.signal.aborted) {
-          setTenantData(payload)
+          setMemberSummary(payload)
           setStatus('Live workspace data')
         }
       })
@@ -3962,37 +3974,32 @@ function OwnerUserOverview({
     return () => controller.abort()
   }, [session.id, session.organizationId])
 
-  const memberships = tenantData?.memberships ?? []
-  const activeMembers = memberships.filter((member) => member.status === 'ACTIVE').length
-  const invitedMembers = memberships.filter((member) => member.status === 'INVITED').length
-  const deactivatedMembers = memberships.filter((member) => member.status === 'DEACTIVATED').length
-  const activeSessions = (tenantData?.sessions ?? []).filter((item) => item.status === 'ACTIVE').length
-  const roleCounts = Array.from(
-    memberships.reduce((counts, member) => counts.set(member.role, (counts.get(member.role) ?? 0) + 1), new Map<string, number>()),
-  ).sort(([leftRole], [rightRole]) => leftRole.localeCompare(rightRole))
+  const roleCounts = memberSummary?.roleCounts ?? []
 
   return (
     <Panel
       className="owner-users-panel"
       title="User Overview"
       icon={UsersRound}
-      right={<StatusBadge status={tenantData ? 'active' : 'review'} label="Owner" />}
+      right={<StatusBadge status={memberSummary ? 'active' : 'review'} label={canManageUsers ? 'Admin' : 'Owner'} />}
     >
       <div className="owner-user-summary">
         <div className="owner-user-metrics">
-          <Metric label="Total users" value={String(memberships.length)} />
-          <Metric label="Active" value={String(activeMembers)} />
-          <Metric label="Pending invites" value={String(invitedMembers)} />
-          <Metric label="Active sessions" value={String(activeSessions)} />
+          <Metric label="Total users" value={String(memberSummary?.totalMembers ?? 0)} />
+          <Metric label="Active" value={String(memberSummary?.activeMembers ?? 0)} />
+          <Metric label="Pending invites" value={String(memberSummary?.invitedMembers ?? 0)} />
+          <Metric label="Active sessions" value={String(memberSummary?.activeSessions ?? 0)} />
         </div>
         <div className="owner-user-roles">
           <span className="mono-small">Role distribution</span>
           {roleCounts.length > 0 ? (
             <div className="tag-row">
-              {roleCounts.map(([role, count]) => (
+              {roleCounts.map(({ role, count }) => (
                 <DataTag key={role} label={role} value={String(count)} tone="blue" />
               ))}
-              {deactivatedMembers > 0 ? <DataTag label="Deactivated" value={String(deactivatedMembers)} tone="amber" /> : null}
+              {(memberSummary?.deactivatedMembers ?? 0) > 0 ? (
+                <DataTag label="Deactivated" value={String(memberSummary?.deactivatedMembers)} tone="amber" />
+              ) : null}
             </div>
           ) : (
             <span className="muted-copy">No member records available yet.</span>
@@ -4001,9 +4008,11 @@ function OwnerUserOverview({
       </div>
       <div className="action-row owner-user-actions">
         <span className="mono-small">{status}</span>
-        <button className="ghost-button small" type="button" onClick={() => onNavigate('identity')}>
-          Manage users
-        </button>
+        {canManageUsers ? (
+          <button className="ghost-button small" type="button" onClick={() => onNavigate('identity')}>
+            Manage users
+          </button>
+        ) : null}
       </div>
     </Panel>
   )

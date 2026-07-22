@@ -4272,8 +4272,8 @@ input[type='range'] {
   .dashboard-grid.has-owner-user-overview {
     grid-template-areas:
       'hero'
-      'enterprise'
       'owner-users'
+      'enterprise'
       'workflow'
       'matrix'
       'ledger'
