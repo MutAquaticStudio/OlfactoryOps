@@ -4112,7 +4112,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
       )}
       {domain.key === 'documents' && <DocumentsWorkspace />}
       {domain.key === 'production' && (
-        <ProductionWorkspace formulaRecords={formulaRecords} materialRecords={materialRecords} />
+        <ProductionWorkspace formulaRecords={formulaRecords} materialRecords={materialRecords} session={session} />
       )}
       {domain.key === 'procurement' && (
         <ProcurementWorkspace
@@ -8791,6 +8791,17 @@ const productionLifecycle: ProductionBatchRecord['status'][] = [
   'RELEASED',
 ]
 
+const productionLifecycleLabels: Record<ProductionBatchRecord['status'], string> = {
+  PLANNED: 'Planned',
+  WEIGHING: 'Weighing',
+  MACERATION: 'Maceration',
+  FILTRATION: 'Filtration',
+  QC: 'Quality control',
+  BOTTLING: 'Bottling',
+  RELEASED: 'Released',
+  HOLD: 'On hold',
+}
+
 const productionConsumptionRequiredStatuses = new Set<ProductionBatchRecord['status']>([
   'MACERATION',
   'FILTRATION',
@@ -8988,9 +8999,11 @@ function applyProductionConsumeLocal(batch: ProductionBatchRecord): ProductionCo
 function ProductionWorkspace({
   formulaRecords,
   materialRecords,
+  session,
 }: {
   formulaRecords: Formula[]
   materialRecords: Material[]
+  session: AuthSession
 }) {
   const approvedFormulas = useMemo(
     () => formulaRecords.filter((formula) => formula.workflowStatus === 'APPROVED'),
@@ -9003,7 +9016,10 @@ function ProductionWorkspace({
   const [busyId, setBusyId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [lastMovements, setLastMovements] = useState<InventoryMovement[]>([])
-  const activeBatch = batches[0]
+  const [activeBatchId, setActiveBatchId] = useState('')
+  const activeBatch = batches.find((batch) => batch.id === activeBatchId) ?? batches[0]
+  const canManageProduction = sessionHasPermission(session, 'production.consume')
+  const canRecordProductionQc = sessionHasPermission(session, 'production.qc')
 
   const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
     const leaves = resolveFormulaWithCatalog(batch.formulaId, formulaRecords, materialRecords)
@@ -9035,6 +9051,12 @@ function ProductionWorkspace({
     )
   }, [approvedFormulas])
 
+  useEffect(() => {
+    setActiveBatchId((current) =>
+      current && batches.some((batch) => batch.id === current) ? current : (batches[0]?.id ?? ''),
+    )
+  }, [batches])
+
   async function createBatch() {
     if (!selectedFormulaId) {
       setStatusMessage('Approve a formula in this workspace before creating a production batch')
@@ -9049,6 +9071,7 @@ function ProductionWorkspace({
         body: JSON.stringify({ formulaId: selectedFormulaId, targetGrams }),
       })
       setBatches((current) => [batch, ...current])
+      setActiveBatchId(batch.id)
       setStatusMessage(`${batch.id} created from ${batch.formulaCode}`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Production batch creation failed')
@@ -9164,48 +9187,202 @@ function ProductionWorkspace({
             className="primary-button"
             type="button"
             onClick={() => void createBatch()}
-            disabled={creating || targetGrams <= 0 || !selectedFormulaId}
+            disabled={creating || targetGrams <= 0 || !selectedFormulaId || !canManageProduction}
+            title={canManageProduction ? undefined : 'Your role cannot create production batches'}
           >
             {creating ? 'Creating' : 'Create batch'}
           </button>
         </div>
         <ul className="policy-list">
           <li>Only formulas with an approved version snapshot can enter production.</li>
-          <li>Batch consumption writes PRODUCTION_CONSUMPTION, never LAB_CONSUMPTION.</li>
+          <li>Raw materials are issued to this batch at weighing, separately from R&amp;D sample usage.</li>
           <li>{statusMessage}</li>
         </ul>
       </Panel>
 
       <Panel title="Lifecycle Gate" icon={ClipboardCheck}>
         {activeBatch ? (
-          <div className="production-timeline">
-            {productionLifecycle.map((status) => (
-              <button
-                className={`timeline-step ${activeBatch.status === status ? 'is-current' : ''} ${productionLifecycle.indexOf(activeBatch.status) > productionLifecycle.indexOf(status) ? 'is-done' : ''}`}
-                key={status}
-                type="button"
-                onClick={() => void moveBatch(activeBatch.id, status)}
-                disabled={busyId === activeBatch.id || !canMoveProductionBatch(activeBatch, status)}
-              >
-                <span>{status}</span>
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="production-gate-picker">
+              <label className="field-row">
+                <span>Active batch</span>
+                <select value={activeBatch.id} onChange={(event) => setActiveBatchId(event.target.value)}>
+                  {batches.map((batch) => (
+                    <option value={batch.id} key={batch.id}>
+                      {batch.id} / {batch.formulaCode} / {productionLifecycleLabels[batch.status]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <StatusBadge status={productionStatusTone[activeBatch.status]} label={productionLifecycleLabels[activeBatch.status]} />
+            </div>
+            <div className="production-timeline" aria-label="Production lifecycle">
+              {productionLifecycle.map((status, index) => (
+                <div
+                  className={`timeline-step ${activeBatch.status === status ? 'is-current' : ''} ${productionLifecycle.indexOf(activeBatch.status) > index ? 'is-done' : ''}`}
+                  key={status}
+                >
+                  <span className="timeline-step-index">{index + 1}</span>
+                  <span>{productionLifecycleLabels[status]}</span>
+                </div>
+              ))}
+            </div>
+            <div className="production-gate-action">
+              <div>
+                <span className="production-gate-kicker">Next required action</span>
+                {activeBatch.status === 'WEIGHING' ? (
+                  <>
+                    <strong>Issue raw materials</strong>
+                    <p>Confirm the weighing plan. Inventory is issued to this batch, then maceration begins.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'MACERATION' ? (
+                  <>
+                    <strong>Complete maceration</strong>
+                    <p>Record the completed hold before moving the batch to filtration.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'FILTRATION' ? (
+                  <>
+                    <strong>Send batch to quality control</strong>
+                    <p>Filtration must be completed before QC can record a pass or place the batch on hold.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'QC' ? (
+                  <>
+                    <strong>Record QC outcome</strong>
+                    <p>A passed QC result unlocks bottling. A failed result places the batch on hold for review.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'BOTTLING' ? (
+                  <>
+                    <strong>Release finished batch</strong>
+                    <p>Release creates the output lot and keeps its genealogy linked to the issued materials.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'HOLD' ? (
+                  <>
+                    <strong>Resume batch</strong>
+                    <p>Resume returns the batch to the appropriate operational step while retaining its QC history.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'RELEASED' ? (
+                  <>
+                    <strong>Batch released</strong>
+                    <p>The finished output lot is available with its production genealogy and QC evidence.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'PLANNED' ? (
+                  <>
+                    <strong>Start weighing</strong>
+                    <p>Open the work order and prepare the approved formula for material issue.</p>
+                  </>
+                ) : null}
+              </div>
+              <div className="document-actions production-gate-actions">
+                {activeBatch.status === 'PLANNED' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'WEIGHING')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'WEIGHING')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Start weighing
+                  </button>
+                ) : null}
+                {activeBatch.status === 'WEIGHING' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void consumeBatch(activeBatch.id)}
+                    disabled={busyId === activeBatch.id || !canManageProduction || activeBatch.consumedGrams > 0}
+                    title={canManageProduction ? undefined : 'Your role cannot issue production inventory'}
+                  >
+                    Issue inventory
+                  </button>
+                ) : null}
+                {activeBatch.status === 'MACERATION' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'FILTRATION')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'FILTRATION')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Complete maceration
+                  </button>
+                ) : null}
+                {activeBatch.status === 'FILTRATION' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'QC')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'QC')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Send to QC
+                  </button>
+                ) : null}
+                {activeBatch.status === 'QC' ? (
+                  <>
+                    <button
+                      className="primary-button small"
+                      type="button"
+                      onClick={() => void recordQc(activeBatch.id, 'PASSED')}
+                      disabled={busyId === activeBatch.id || !canRecordProductionQc || activeBatch.qcStatus === 'PASSED'}
+                      title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                    >
+                      Pass QC
+                    </button>
+                    <button
+                      className="ghost-button small"
+                      type="button"
+                      onClick={() => void recordQc(activeBatch.id, 'FAILED')}
+                      disabled={busyId === activeBatch.id || !canRecordProductionQc}
+                      title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                    >
+                      Place on hold
+                    </button>
+                  </>
+                ) : null}
+                {activeBatch.status === 'BOTTLING' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'RELEASED')}
+                    disabled={busyId === activeBatch.id || !canRecordProductionQc || !canMoveProductionBatch(activeBatch, 'RELEASED')}
+                    title={canRecordProductionQc ? undefined : 'Your role cannot release production batches'}
+                  >
+                    Release batch
+                  </button>
+                ) : null}
+                {activeBatch.status === 'HOLD' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, activeBatch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING')}
+                    disabled={busyId === activeBatch.id || !canManageProduction}
+                    title={canManageProduction ? undefined : 'Your role cannot resume production batches'}
+                  >
+                    Resume batch
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </>
         ) : (
           <div className="empty-state compact">No batch created yet.</div>
         )}
         {activeBatch && <div className="status-strip">{statusMessage}</div>}
         {activeBatch && (
-          <div className="metric-grid">
-            <Metric label="Active batch" value={activeBatch.id} />
-            <Metric label="Status" value={activeBatch.status} />
+          <div className="metric-grid production-gate-metrics">
+            <Metric label="Formula" value={activeBatch.formulaCode} />
+            <Metric label="Target" value={formatGrams(activeBatch.targetGrams)} />
+            <Metric label="Inventory issued" value={activeBatch.consumedGrams > 0 ? formatGrams(activeBatch.consumedGrams) : 'Not issued'} />
             <Metric label="QC" value={activeBatch.qcStatus} />
             <Metric label="Cost basis" value={formatCurrency(batchCostBasis(activeBatch))} />
             <Metric label="Output lot" value={activeBatch.outputLot?.lotNumber ?? 'Pending release'} />
-            <Metric
-              label="Yield"
-              value={activeBatch.yieldGrams ? `${formatGrams(activeBatch.yieldGrams)} / ${activeBatch.yieldVariancePercent}%` : 'Pending'}
-            />
           </div>
         )}
       </Panel>
@@ -9270,58 +9447,10 @@ function ProductionWorkspace({
                 <button
                   className="primary-button small"
                   type="button"
-                  onClick={() => void consumeBatch(batch.id)}
-                  disabled={busyId === batch.id || batch.consumedGrams > 0 || batch.status !== 'WEIGHING'}
+                  onClick={() => setActiveBatchId(batch.id)}
+                  aria-pressed={activeBatch?.id === batch.id}
                 >
-                  Consume
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'FILTRATION')}
-                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'FILTRATION')}
-                >
-                  Filtration
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'QC')}
-                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'QC')}
-                >
-                  QC ready
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void recordQc(batch.id, 'PASSED')}
-                  disabled={busyId === batch.id || batch.status !== 'QC' || batch.qcStatus === 'PASSED'}
-                >
-                  QC pass
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void recordQc(batch.id, 'FAILED')}
-                  disabled={busyId === batch.id || batch.status !== 'QC'}
-                >
-                  Hold
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, batch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING')}
-                  disabled={busyId === batch.id || batch.status !== 'HOLD'}
-                >
-                  Resume
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'RELEASED')}
-                  disabled={busyId === batch.id || !canMoveProductionBatch(batch, 'RELEASED')}
-                >
-                  Release
+                  {activeBatch?.id === batch.id ? 'Viewing lifecycle' : 'Open lifecycle'}
                 </button>
               </div>
             </div>
