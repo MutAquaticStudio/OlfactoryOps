@@ -3855,10 +3855,12 @@ const Dashboard = memo(function Dashboard({
   const canViewAudit = internalAdminView && sessionHasAnyPermission(session, ['audit.view', 'security.viewAuditLog', 'audit.export'])
   const canViewMovementLedger = domainVisibleForSession('inventory', session)
   const canViewEnterpriseReadiness = internalAdminView && domainVisibleForSession('saas', session)
+  const canViewUserOverview =
+    (internalAdminView || session.role === 'Owner') && sessionHasPermission(session, 'security.manageUsers')
   const visibleWorkflowNodes = visibleWorkflowNodesForSession(session)
 
   return (
-    <div className="dashboard-grid">
+    <div className={`dashboard-grid${canViewUserOverview ? ' has-owner-user-overview' : ''}`}>
       <Panel
         className="hero-panel"
         title="OlfactoryOps Console"
@@ -3900,6 +3902,8 @@ const Dashboard = memo(function Dashboard({
         </div>
       </Panel>
 
+      {canViewUserOverview ? <OwnerUserOverview session={session} onNavigate={onNavigate} /> : null}
+
       {visibleWorkflowNodes.length > 0 ? (
         <Panel className="workflow-panel" title="Operating Value Stream" icon={Activity}>
           <WorkflowGraph nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
@@ -3926,6 +3930,84 @@ const Dashboard = memo(function Dashboard({
     </div>
   )
 })
+
+function OwnerUserOverview({
+  session,
+  onNavigate,
+}: {
+  session: AuthSession
+  onNavigate: (key: DomainKey) => void
+}) {
+  const [tenantData, setTenantData] = useState<Pick<TenantConsoleResponse, 'memberships' | 'sessions'> | null>(null)
+  const [status, setStatus] = useState('Syncing workspace members')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    void requestApi<Pick<TenantConsoleResponse, 'memberships' | 'sessions'>>('/security/tenant-console', {
+      signal: controller.signal,
+    })
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setTenantData(payload)
+          setStatus('Live workspace data')
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setStatus(error instanceof Error ? error.message : 'Member data is temporarily unavailable')
+        }
+      })
+
+    return () => controller.abort()
+  }, [session.id, session.organizationId])
+
+  const memberships = tenantData?.memberships ?? []
+  const activeMembers = memberships.filter((member) => member.status === 'ACTIVE').length
+  const invitedMembers = memberships.filter((member) => member.status === 'INVITED').length
+  const deactivatedMembers = memberships.filter((member) => member.status === 'DEACTIVATED').length
+  const activeSessions = (tenantData?.sessions ?? []).filter((item) => item.status === 'ACTIVE').length
+  const roleCounts = Array.from(
+    memberships.reduce((counts, member) => counts.set(member.role, (counts.get(member.role) ?? 0) + 1), new Map<string, number>()),
+  ).sort(([leftRole], [rightRole]) => leftRole.localeCompare(rightRole))
+
+  return (
+    <Panel
+      className="owner-users-panel"
+      title="User Overview"
+      icon={UsersRound}
+      right={<StatusBadge status={tenantData ? 'active' : 'review'} label="Owner" />}
+    >
+      <div className="owner-user-summary">
+        <div className="owner-user-metrics">
+          <Metric label="Total users" value={String(memberships.length)} />
+          <Metric label="Active" value={String(activeMembers)} />
+          <Metric label="Pending invites" value={String(invitedMembers)} />
+          <Metric label="Active sessions" value={String(activeSessions)} />
+        </div>
+        <div className="owner-user-roles">
+          <span className="mono-small">Role distribution</span>
+          {roleCounts.length > 0 ? (
+            <div className="tag-row">
+              {roleCounts.map(([role, count]) => (
+                <DataTag key={role} label={role} value={String(count)} tone="blue" />
+              ))}
+              {deactivatedMembers > 0 ? <DataTag label="Deactivated" value={String(deactivatedMembers)} tone="amber" /> : null}
+            </div>
+          ) : (
+            <span className="muted-copy">No member records available yet.</span>
+          )}
+        </div>
+      </div>
+      <div className="action-row owner-user-actions">
+        <span className="mono-small">{status}</span>
+        <button className="ghost-button small" type="button" onClick={() => onNavigate('identity')}>
+          Manage users
+        </button>
+      </div>
+    </Panel>
+  )
+}
 
 const DomainWorkspace = memo(function DomainWorkspace({
   domain,

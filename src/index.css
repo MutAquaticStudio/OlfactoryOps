@@ -700,6 +700,47 @@ kbd {
   grid-area: audit;
 }
 
+.dashboard-grid.has-owner-user-overview {
+  grid-template-areas:
+    'hero hero enterprise'
+    'owner-users owner-users enterprise'
+    'workflow matrix enterprise'
+    'ledger ledger audit';
+}
+
+.owner-users-panel {
+  grid-area: owner-users;
+}
+
+.owner-user-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.owner-user-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.owner-user-roles {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.owner-user-actions {
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
 .panel {
   min-width: 0;
   padding: 16px;
@@ -4194,6 +4235,15 @@ input[type='range'] {
       'hero enterprise'
       'workflow workflow'
       'matrix matrix'
+       'ledger audit';
+  }
+
+  .dashboard-grid.has-owner-user-overview {
+    grid-template-areas:
+      'hero enterprise'
+      'owner-users enterprise'
+      'workflow workflow'
+      'matrix matrix'
       'ledger audit';
   }
 
@@ -4217,6 +4267,21 @@ input[type='range'] {
       'matrix'
       'ledger'
       'audit';
+  }
+
+  .dashboard-grid.has-owner-user-overview {
+    grid-template-areas:
+      'hero'
+      'enterprise'
+      'owner-users'
+      'workflow'
+      'matrix'
+      'ledger'
+      'audit';
+  }
+
+  .owner-user-summary {
+    grid-template-columns: 1fr;
   }
 
   /* The fixed sidebar narrows two-column analytics cards before the mobile rail takes over. */
@@ -4344,6 +4409,7 @@ input[type='range'] {
   }
 
   .hero-metrics,
+  .owner-user-metrics,
   .stock-grid,
   .record-grid,
   .plan-card-grid,
@@ -4377,6 +4443,10 @@ input[type='range'] {
   .user-chip {
     width: auto;
     max-width: min(270px, 100%);
+  }
+
+  .owner-user-actions {
+    align-items: stretch;
   }
 
   .settings-save-row {
