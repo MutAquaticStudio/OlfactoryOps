@@ -4197,7 +4197,7 @@ input[type='range'] {
   }
 
   .topbar-actions {
-    justify-content: flex-start;
+    justify-content: flex-end;
     flex-wrap: wrap;
   }
 
@@ -4273,8 +4273,8 @@ input[type='range'] {
   }
 
   .user-chip {
-    max-width: 100%;
-    width: 100%;
+    width: auto;
+    max-width: min(270px, 100%);
   }
 
   .settings-save-row {
