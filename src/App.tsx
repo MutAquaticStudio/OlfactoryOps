@@ -221,6 +221,7 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
 }
 
 const defaultAccentColor = '#0f766e'
+const showMoleculeSplitPanel = false
 
 const accentColorPresets = ['#0f766e', '#0369a1', '#15803d', '#9a6700', '#b42318', '#7c3aed']
 
@@ -4590,31 +4591,33 @@ function MaterialWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Molecule Split" icon={Layers3}>
-        <div className="tag-row">
-          <DataTag label="Components" value={String(moleculeRows.length)} />
-          <DataTag label="Total" value={`${moleculeRows.reduce((sum, molecule) => sum + molecule.percent, 0).toFixed(1)}%`} tone="blue" />
-        </div>
-        <div className="provenance-list">
-          {moleculeRows.length > 0 ? (
-            moleculeRows.map((molecule) => (
-              <div className="provenance-item" key={molecule.id}>
-                <div>
-                  <strong>{molecule.name}</strong>
-                  <span>{molecule.cas} / {molecule.source}</span>
+      {showMoleculeSplitPanel ? (
+        <Panel title="Molecule Split" icon={Layers3}>
+          <div className="tag-row">
+            <DataTag label="Components" value={String(moleculeRows.length)} />
+            <DataTag label="Total" value={`${moleculeRows.reduce((sum, molecule) => sum + molecule.percent, 0).toFixed(1)}%`} tone="blue" />
+          </div>
+          <div className="provenance-list">
+            {moleculeRows.length > 0 ? (
+              moleculeRows.map((molecule) => (
+                <div className="provenance-item" key={molecule.id}>
+                  <div>
+                    <strong>{molecule.name}</strong>
+                    <span>{molecule.cas} / {molecule.source}</span>
+                  </div>
+                  <DataTag label="Pct" value={`${molecule.percent}%`} tone="green" />
+                  <StatusBadge status={molecule.status === 'VERIFIED' ? 'stable' : 'review'} label={molecule.status} />
                 </div>
-                <DataTag label="Pct" value={`${molecule.percent}%`} tone="green" />
-                <StatusBadge status={molecule.status === 'VERIFIED' ? 'stable' : 'review'} label={molecule.status} />
+              ))
+            ) : (
+              <div className="empty-state">
+                <strong>No molecule split yet.</strong>
+                <span>Run PubChem fill or approve SDS section 3 extraction to seed components.</span>
               </div>
-            ))
-          ) : (
-            <div className="empty-state">
-              <strong>No molecule split yet.</strong>
-              <span>Run PubChem fill or approve SDS section 3 extraction to seed components.</span>
-            </div>
-          )}
-        </div>
-      </Panel>
+            )}
+          </div>
+        </Panel>
+      ) : null}
 
     </div>
   )
