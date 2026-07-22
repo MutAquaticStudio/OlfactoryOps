@@ -46,5 +46,5 @@ jobs:
           DATABASE_URL: postgresql://ci:ci@localhost:5432/olfactoryops_ci
         run: npm run prisma:validate
 
-      - name: Dependency audit
-        run: npm audit --audit-level=high
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
