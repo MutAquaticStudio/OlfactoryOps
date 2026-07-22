@@ -574,7 +574,40 @@ export interface UserSettingsRecord {
   reduceMotion: boolean
   emailDigest: 'off' | 'daily' | 'weekly'
   accentColor: string
+  formulaWorkspace: FormulaWorkspacePreferences
   updatedAt: string
+}
+
+export interface FormulaWorkspacePreferences {
+  library: boolean
+  summary: boolean
+  ifra: boolean
+  evaporation: boolean
+}
+
+export function createDefaultFormulaWorkspacePreferences(): FormulaWorkspacePreferences {
+  return {
+    library: true,
+    summary: true,
+    ifra: true,
+    evaporation: true,
+  }
+}
+
+export function normalizeFormulaWorkspacePreferences(
+  value: unknown,
+  fallback: FormulaWorkspacePreferences = createDefaultFormulaWorkspacePreferences(),
+): FormulaWorkspacePreferences {
+  const candidate = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+
+  return {
+    library: typeof candidate?.library === 'boolean' ? candidate.library : fallback.library,
+    summary: typeof candidate?.summary === 'boolean' ? candidate.summary : fallback.summary,
+    ifra: typeof candidate?.ifra === 'boolean' ? candidate.ifra : fallback.ifra,
+    evaporation: typeof candidate?.evaporation === 'boolean' ? candidate.evaporation : fallback.evaporation,
+  }
 }
 
 export interface TenantSettingsRecord {
@@ -2611,6 +2644,7 @@ export const userSettings: UserSettingsRecord[] = [
     reduceMotion: false,
     emailDigest: 'weekly',
     accentColor: '#0f766e',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2624,6 +2658,7 @@ export const userSettings: UserSettingsRecord[] = [
     reduceMotion: false,
     emailDigest: 'weekly',
     accentColor: '#0f766e',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2637,6 +2672,7 @@ export const userSettings: UserSettingsRecord[] = [
     reduceMotion: false,
     emailDigest: 'daily',
     accentColor: '#15803d',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
 ]

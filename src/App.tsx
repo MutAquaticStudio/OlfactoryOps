@@ -71,6 +71,7 @@ import {
 import {
   auditEvents,
   commercialSkus,
+  createDefaultFormulaWorkspacePreferences,
   domains,
   evaporationCurve,
   formatCurrency,
@@ -82,6 +83,7 @@ import {
   isLotEligibleForInventory,
   materials,
   moleculeComponents,
+  normalizeFormulaWorkspacePreferences,
   orderRequiredGrams,
   permissionCatalog,
   planLabUsage,
@@ -132,6 +134,7 @@ import {
   type FormulaPyramidNote,
   type FormulaType,
   type FormulaVersionRecord,
+  type FormulaWorkspacePreferences,
   type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
@@ -234,6 +237,7 @@ const clientFallbackUserSettings: UserSettingsRecord = {
   reduceMotion: false,
   emailDigest: 'weekly',
   accentColor: defaultAccentColor,
+  formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
   updatedAt: 'client-fallback',
 }
 
@@ -2563,6 +2567,8 @@ function App() {
                   onAdjustStock={() => setModal('inventoryAdjustment')}
                   onTransferStock={() => setModal('inventoryTransfer')}
                   onRequestInventoryApproval={submitInventoryApprovalRequest}
+                  userSettings={activeUserSettings}
+                  onUserSettingsChange={applyUserSettings}
                 />
               </motion.div>
             ) : null}
@@ -3117,6 +3123,7 @@ function UserSettingsForm({
           reduceMotion: draft.reduceMotion,
           emailDigest: draft.emailDigest,
           accentColor: safeDraftAccentColor,
+          formulaWorkspace: draft.formulaWorkspace,
         }),
       })
       setStatus('Preferences saved.')
@@ -3962,6 +3969,8 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onAdjustStock,
   onTransferStock,
   onRequestInventoryApproval,
+  userSettings,
+  onUserSettingsChange,
 }: {
   domain: DomainModule
   session: AuthSession
@@ -4017,6 +4026,8 @@ const DomainWorkspace = memo(function DomainWorkspace({
     payload: Record<string, unknown>,
     reason: string,
   ) => Promise<InventoryApprovalRequestResponse>
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
 }) {
   const displayDomain = domainDisplayForSession(domain, session)
 
@@ -4050,6 +4061,8 @@ const DomainWorkspace = memo(function DomainWorkspace({
           onSelectMaterial={setSelectedMaterialId}
           onNewFormula={onNewFormula}
           onAddLine={onAddFormulaLine}
+          userSettings={userSettings}
+          onUserSettingsChange={onUserSettingsChange}
         />
       )}
       {domain.key === 'inventory' && (
@@ -4630,6 +4643,8 @@ type FormulaWorkspaceProps = {
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
 }
 
 type FormulaLabTab = 'sketch' | 'material' | 'details'
@@ -4900,6 +4915,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  userSettings,
+  onUserSettingsChange,
 }: FormulaWorkspaceProps) {
   const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0]!
   const canEditFormula = sessionHasPermission(session, 'formulas.edit')
@@ -4948,8 +4965,19 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   const [evaluationStability, setEvaluationStability] = useState<FormulaEvaluationRecord['stability']>('PASS')
   const [evaluationRating, setEvaluationRating] = useState(4)
   const [metadataSaving, setMetadataSaving] = useState(false)
+  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false)
+  const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState<FormulaWorkspacePreferences>(() =>
+    normalizeFormulaWorkspacePreferences(userSettings.formulaWorkspace, createDefaultFormulaWorkspacePreferences()),
+  )
+  const [workspaceSettingsSaving, setWorkspaceSettingsSaving] = useState(false)
+  const [workspaceSettingsStatus, setWorkspaceSettingsStatus] = useState('These views are saved for your account.')
   const metadataSaveInFlightRef = useRef(false)
   const metadataChangeCounterRef = useRef(0)
+  const formulaDetailDockRef = useRef<HTMLElement | null>(null)
+  const formulaWorkspaceViews = useMemo(
+    () => normalizeFormulaWorkspacePreferences(userSettings.formulaWorkspace, createDefaultFormulaWorkspacePreferences()),
+    [userSettings.formulaWorkspace],
+  )
   const materialById = useMemo(
     () => new Map(materialRecords.map((material) => [material.id, material])),
     [materialRecords],
@@ -5490,6 +5518,38 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     void loadScalePlan({ targetGrams: formula.targetGrams, incrementGrams: 0.01 })
   }
 
+  function showFormulaDetailTab(tab: FormulaLabTab) {
+    setActiveLabTab(tab)
+    window.requestAnimationFrame(() => {
+      formulaDetailDockRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  function openWorkspaceSettings() {
+    setWorkspaceSettingsDraft(formulaWorkspaceViews)
+    setWorkspaceSettingsStatus('These views are saved for your account.')
+    setWorkspaceSettingsOpen(true)
+  }
+
+  async function saveWorkspaceSettings() {
+    setWorkspaceSettingsSaving(true)
+    setWorkspaceSettingsStatus('Saving workspace…')
+    try {
+      const payload = await requestApi<UserSettingsUpdateResponse>('/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formulaWorkspace: workspaceSettingsDraft }),
+      })
+      onUserSettingsChange(payload.settings)
+      setWorkspaceSettingsStatus('Workspace saved.')
+      setWorkspaceSettingsOpen(false)
+    } catch (error) {
+      setWorkspaceSettingsStatus(error instanceof Error ? error.message : 'Could not save workspace settings')
+    } finally {
+      setWorkspaceSettingsSaving(false)
+    }
+  }
+
   async function loadVersionDiff() {
     if (!diffFromVersion || !diffToVersion || diffFromVersion === diffToVersion) {
       setFormulaStatus('Select two different versions to compare')
@@ -5748,7 +5808,12 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   }
 
   return (
-    <div className="formula-labspace">
+    <div
+      className={`formula-labspace ${formulaWorkspaceViews.library ? '' : 'is-library-hidden'} ${
+        formulaWorkspaceViews.summary ? '' : 'is-summary-hidden'
+      }`}
+    >
+      {formulaWorkspaceViews.library ? (
       <aside className="formula-lab-library glass">
         <div className="formula-rail-head">
           <div>
@@ -5792,14 +5857,19 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           })}
         </div>
       </aside>
+      ) : null}
 
       <main className="formula-lab-editor glass">
         <div className="formula-lab-topbar">
-          <button className="ghost-button icon-only" type="button" aria-label="Open formula details" onClick={() => setActiveLabTab('details')}>
+          <button className="ghost-button icon-only" type="button" aria-label="Open formula details" onClick={() => showFormulaDetailTab('details')}>
             <Menu size={18} />
           </button>
           <h2>{formula.name}</h2>
           <div className="formula-topbar-actions">
+            <button className="ghost-button small" type="button" onClick={openWorkspaceSettings}>
+              <SlidersHorizontal size={14} />
+              Workspace
+            </button>
             {formulaEditable && canEditFormula && (
               <button className="ghost-button small" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
                 <Save size={14} />
@@ -5882,7 +5952,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <span>r{formula.draftRevision}</span>
             <SlidersHorizontal size={14} aria-hidden="true" />
           </button>
-          <button className="ghost-button icon-only" type="button" aria-label="Edit formula tags" title="Metadata and tags" onClick={() => setActiveLabTab('details')}>
+          <button className="ghost-button icon-only" type="button" aria-label="Edit formula tags" title="Metadata and tags" onClick={() => showFormulaDetailTab('details')}>
             <Tag size={15} />
           </button>
           <button className="ghost-button icon-only" type="button" aria-label="Export formula" title="Export with audit" onClick={() => void exportFormulaRecord()} disabled={!canExportFormula || formula.lines.length === 0}>
@@ -5987,7 +6057,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
               className={activeLabTab === tab ? 'is-active' : ''}
               key={tab}
               type="button"
-              onClick={() => setActiveLabTab(tab)}
+              onClick={() => showFormulaDetailTab(tab)}
             >
               {tab === 'sketch' && <NotebookTabs size={16} />}
               {tab === 'material' && <Beaker size={16} />}
@@ -5998,7 +6068,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
         </div>
       </main>
 
-      <aside className="formula-lab-inspector glass">
+      {formulaWorkspaceViews.summary ? (
+      <aside className="formula-lab-inspector formula-lab-summary glass">
         <div className="formula-inspector-status">
           <span>{formulaStatus}</span>
         </div>
@@ -6033,8 +6104,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 : `${Math.abs(finalPercentGap).toFixed(2)}% over target; rebalance before approval.`}
           </p>
         </section>
+      </aside>
+      ) : null}
 
-        <section className={`formula-inspector-card formula-ifra-panel ${!formulaFinalReady ? 'is-pending' : ifraFailCount > 0 ? 'is-fail' : 'is-pass'}`}>
+      {formulaWorkspaceViews.ifra ? (
+        <section className={`formula-lab-analysis-card formula-inspector-card formula-ifra-panel glass ${!formulaFinalReady ? 'is-pending' : ifraFailCount > 0 ? 'is-fail' : 'is-pass'}`}>
           <div className="formula-card-head">
             <div>
               <span>IFRA final product</span>
@@ -6062,7 +6136,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                   type="button"
                   onClick={() => {
                     setFocusedMaterialId(row.material.id)
-                    setActiveLabTab('material')
+                    showFormulaDetailTab('material')
                     onSelectMaterial(row.material.id)
                   }}
                 >
@@ -6083,14 +6157,16 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             </div>
           )}
         </section>
+      ) : null}
 
+      <section className="formula-lab-details-dock glass" ref={formulaDetailDockRef} aria-label="Formula details">
         <div className="formula-inspector-tabs">
           {(['details', 'material', 'sketch'] as FormulaLabTab[]).map((tab) => (
             <button
               className={activeLabTab === tab ? 'is-active' : ''}
               key={`inspector-${tab}`}
               type="button"
-              onClick={() => setActiveLabTab(tab)}
+              onClick={() => showFormulaDetailTab(tab)}
             >
               {tab === 'details' ? 'Details' : tab === 'material' ? 'Material' : 'Create'}
             </button>
@@ -6384,8 +6460,10 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <span className="mono-small">{currentVersionRecord ? `Current version captured ${currentVersionRecord.status}` : 'Current draft has no matching snapshot'}</span>
           </div>
         )}
+      </section>
 
-        <section className="formula-inspector-card">
+      {formulaWorkspaceViews.evaporation ? (
+        <section className="formula-lab-analysis-card formula-inspector-card glass">
           <div className="formula-card-head">
             <div>
               <span>Evaporation simulation</span>
@@ -6405,7 +6483,51 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             </div>
           )}
         </section>
-      </aside>
+      ) : null}
+
+      {workspaceSettingsOpen && (
+        <div className="formula-sheet-backdrop" role="presentation">
+          <section className="formula-sheet workspace-settings-sheet glass" role="dialog" aria-modal="true" aria-label="Customize Formula Workspace">
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkspaceSettingsOpen(false)}>
+              <X size={18} />
+            </button>
+            <h3>Customize Formula Workspace</h3>
+            <p>Keep the panels that support your work. The formula editor always remains available.</p>
+            <div className="formula-workspace-view-list">
+              {([
+                { key: 'library', label: 'Formula Library', detail: 'Browse, search, and create formulas.' },
+                { key: 'summary', label: 'Formula Snapshot', detail: 'Scale, workflow, and finished-product summary.' },
+                { key: 'ifra', label: 'IFRA Final Product', detail: 'Finished-product limits after the formula reaches 100%.' },
+                { key: 'evaporation', label: 'Evaporation Simulation', detail: 'Directional volatility curve for the resolved formula.' },
+              ] as const).map((view) => (
+                <label className="formula-workspace-view-option" key={view.key}>
+                  <input
+                    checked={workspaceSettingsDraft[view.key]}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setWorkspaceSettingsDraft((current) => ({ ...current, [view.key]: event.target.checked }))
+                    }
+                  />
+                  <span>
+                    <strong>{view.label}</strong>
+                    <small>{view.detail}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="settings-save-row">
+              <span className="mono-small">{workspaceSettingsStatus}</span>
+              <div className="action-row">
+                <button className="ghost-button" type="button" onClick={() => setWorkspaceSettingsOpen(false)} disabled={workspaceSettingsSaving}>Cancel</button>
+                <button className="primary-button" type="button" onClick={() => void saveWorkspaceSettings()} disabled={workspaceSettingsSaving}>
+                  {workspaceSettingsSaving ? 'Saving...' : 'Save workspace'}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
 
       {workflowDialog && (
         <div className="formula-sheet-backdrop" role="presentation">
@@ -6840,6 +6962,8 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  userSettings,
+  onUserSettingsChange,
 }: {
   session: AuthSession
   formulaRecords: Formula[]
@@ -6855,6 +6979,8 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
 }) {
   if (formulaRecords.length === 0) {
     return (
@@ -6893,6 +7019,8 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
       onSelectMaterial={onSelectMaterial}
       onNewFormula={onNewFormula}
       onAddLine={onAddLine}
+      userSettings={userSettings}
+      onUserSettingsChange={onUserSettingsChange}
     />
   )
   /*

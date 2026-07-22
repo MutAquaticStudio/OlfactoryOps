@@ -161,6 +161,7 @@ describe('NorthStarService', () => {
     expect(initial.organizationId).toBe('org-nxl')
     expect(initial.sidebarMode).toBe('expanded')
     expect(initial.accentColor).toBe('#0f766e')
+    expect(initial.formulaWorkspace).toEqual({ library: true, summary: true, ifra: true, evaporation: true })
 
     const updated = service.updateUserSettings({
       displayName: 'Maison Owner',
@@ -170,6 +171,7 @@ describe('NorthStarService', () => {
       reduceMotion: true,
       emailDigest: 'daily',
       accentColor: '#F5B04C',
+      formulaWorkspace: { library: false, summary: true, ifra: true, evaporation: false },
       organizationId: 'org-other',
     }).data
     const tenantSettings = service.customizationConsole().data.settings
@@ -182,6 +184,7 @@ describe('NorthStarService', () => {
     expect(updated.settings.reduceMotion).toBe(true)
     expect(updated.settings.emailDigest).toBe('daily')
     expect(updated.settings.accentColor).toBe('#f5b04c')
+    expect(updated.settings.formulaWorkspace).toEqual({ library: false, summary: true, ifra: true, evaporation: false })
     expect(updated.settings.organizationId).toBe('org-nxl')
     expect(updated.audit.action).toBe('user.settings.update')
     expect(updated.invariant).toContain('scoped to the authenticated user')
@@ -195,6 +198,7 @@ describe('NorthStarService', () => {
       sidebarMode: 'floating',
       emailDigest: 'hourly',
       accentColor: 'url(javascript:alert(1))',
+      formulaWorkspace: { library: 'hide', summary: 'show' },
     }).data.settings
 
     expect(invalid.preferredLanding).toBe('inventory')
@@ -202,6 +206,7 @@ describe('NorthStarService', () => {
     expect(invalid.sidebarMode).toBe('rail')
     expect(invalid.emailDigest).toBe('daily')
     expect(invalid.accentColor).toBe('#f5b04c')
+    expect(invalid.formulaWorkspace).toEqual({ library: false, summary: true, ifra: true, evaporation: false })
   })
 
   it('commits lab usage through OUT movements and reverses by compensation', () => {

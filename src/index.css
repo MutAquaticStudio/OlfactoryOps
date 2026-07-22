@@ -5119,3 +5119,122 @@ kbd {
     padding: 13px;
   }
 }
+
+/* Formula Lab keeps creation in the center and lets each user choose supporting views. */
+.formula-labspace > .formula-lab-analysis-card,
+.formula-labspace > .formula-lab-details-dock {
+  grid-column: 1 / -1;
+}
+
+.formula-labspace.is-library-hidden:not(.is-summary-hidden) {
+  grid-template-columns: minmax(520px, 1.45fr) minmax(310px, 0.8fr);
+}
+
+.formula-labspace.is-summary-hidden:not(.is-library-hidden) {
+  grid-template-columns: minmax(230px, 0.7fr) minmax(520px, 1.65fr);
+}
+
+.formula-labspace.is-library-hidden.is-summary-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.formula-lab-summary {
+  align-self: start;
+}
+
+.formula-lab-details-dock {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.formula-lab-details-dock .formula-inspector-stack {
+  min-width: 0;
+}
+
+.formula-lab-analysis-card {
+  align-self: start;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.formula-lab-analysis-card .formula-ifra-list {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.formula-workspace-view-list {
+  display: grid;
+  gap: 8px;
+}
+
+.formula-workspace-view-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.formula-workspace-view-option:hover {
+  border-color: rgb(var(--accent-rgb) / 0.44);
+  background: rgb(var(--accent-rgb) / 0.05);
+}
+
+.formula-workspace-view-option input {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  accent-color: var(--blue);
+}
+
+.formula-workspace-view-option span {
+  display: grid;
+  gap: 3px;
+}
+
+.formula-workspace-view-option small {
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.workspace-settings-sheet {
+  width: min(540px, calc(100vw - 28px));
+}
+
+@media (max-width: 1180px) {
+  .formula-labspace.is-library-hidden:not(.is-summary-hidden),
+  .formula-labspace.is-summary-hidden:not(.is-library-hidden),
+  .formula-labspace.is-library-hidden.is-summary-hidden {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .formula-lab-library,
+  .formula-lab-summary {
+    order: 2;
+  }
+
+  .formula-lab-analysis-card {
+    order: 3;
+  }
+
+  .formula-lab-details-dock {
+    order: 4;
+    padding: 12px;
+  }
+
+  .formula-lab-analysis-card .formula-ifra-list {
+    grid-template-columns: 1fr;
+  }
+}

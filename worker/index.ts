@@ -8,6 +8,8 @@ import {
 } from '../server/src/shared/http-error.js'
 import {
   memberships as seedMemberships,
+  createDefaultFormulaWorkspacePreferences,
+  normalizeFormulaWorkspacePreferences,
   organizations as seedOrganizations,
   rolePolicies as seedRolePolicies,
   userSettings as seedUserSettings,
@@ -1168,6 +1170,7 @@ type UserSettingsRow = {
   reduce_motion: number
   email_digest: string
   accent_color: string
+  formula_workspace_json: string | null
   updated_at: string
 }
 
@@ -1694,7 +1697,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   const userSettingsRows = await db
     .prepare(
       `SELECT user_id, organization_id, email, display_name, preferred_landing, ui_density,
-        sidebar_mode, reduce_motion, email_digest, accent_color, updated_at
+        sidebar_mode, reduce_motion, email_digest, accent_color, formula_workspace_json, updated_at
        FROM user_settings
        ORDER BY organization_id ASC, email ASC`,
     )
@@ -1870,9 +1873,9 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
         .prepare(
           `INSERT INTO user_settings (
             user_id, organization_id, email, display_name, preferred_landing,
-            ui_density, sidebar_mode, reduce_motion, email_digest, accent_color, updated_at
+            ui_density, sidebar_mode, reduce_motion, email_digest, accent_color, formula_workspace_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
           ON CONFLICT(user_id, organization_id) DO UPDATE SET
             email = excluded.email,
             display_name = excluded.display_name,
@@ -1882,6 +1885,7 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
             reduce_motion = excluded.reduce_motion,
             email_digest = excluded.email_digest,
             accent_color = excluded.accent_color,
+            formula_workspace_json = excluded.formula_workspace_json,
             updated_at = excluded.updated_at`,
         )
         .bind(
@@ -1895,6 +1899,7 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
           record.reduceMotion ? 1 : 0,
           record.emailDigest,
           readAccentColor(record.accentColor),
+          JSON.stringify(normalizeFormulaWorkspacePreferences(record.formulaWorkspace, createDefaultFormulaWorkspacePreferences())),
           updatedAt,
         ),
     ),
@@ -4436,6 +4441,7 @@ function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
     reduceMotion: row.reduce_motion === 1,
     emailDigest: readEmailDigest(row.email_digest),
     accentColor: readAccentColor(row.accent_color),
+    formulaWorkspace: readFormulaWorkspacePreferences(row.formula_workspace_json),
     updatedAt: row.updated_at,
   }
 }
@@ -5088,6 +5094,17 @@ function readEmailDigest(value: string): UserSettingsRecord['emailDigest'] {
     return value
   }
   return 'weekly'
+}
+
+function readFormulaWorkspacePreferences(value: string | null | undefined) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return createDefaultFormulaWorkspacePreferences()
+  }
+  try {
+    return normalizeFormulaWorkspacePreferences(JSON.parse(value), createDefaultFormulaWorkspacePreferences())
+  } catch {
+    return createDefaultFormulaWorkspacePreferences()
+  }
 }
 
 function readAccentColor(value: string | null | undefined) {

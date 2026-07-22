@@ -22,6 +22,7 @@ import {
   batchCostReport,
   canDownloadDocument,
   commercialSkus,
+  createDefaultFormulaWorkspacePreferences,
   costRanking,
   costingOverview,
   createDocumentShareLink,
@@ -67,6 +68,7 @@ import {
   purchaseOrders,
   quotes,
   resolveFormulaWithCatalog,
+  normalizeFormulaWorkspacePreferences,
   rolePolicies,
   sampleRequests,
   salesOrders,
@@ -3019,6 +3021,7 @@ export class NorthStarService {
       reduceMotion: typeof patch.reduceMotion === 'boolean' ? patch.reduceMotion : current.reduceMotion,
       emailDigest,
       accentColor,
+      formulaWorkspace: normalizeFormulaWorkspacePreferences(patch.formulaWorkspace, current.formulaWorkspace),
       updatedAt: new Date().toISOString(),
     }
     this.upsertUserSettings(updated)
@@ -5857,6 +5860,7 @@ export class NorthStarService {
       reduceMotion: false,
       emailDigest: membership.role === 'Owner' ? 'weekly' : 'daily',
       accentColor: membership.role === 'Lab Manager' ? '#15803d' : '#0f766e',
+      formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
       updatedAt,
     }
   }
