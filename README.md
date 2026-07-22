@@ -118,6 +118,8 @@ The application keeps provider secrets in the Cloudflare Worker only. No `STRIPE
 - **Notification and legal operations**: the member inbox supports invitation, security, billing, low-stock and expiry events. Password-reset tokens are one-time and hashed in persistence; legal consent is versioned; a member can download a scoped JSON personal-data export or request erasure review.
 - **Observability and language**: `GET /api/v1/status` reports D1 and recent slow/error event counts. Optional Sentry receives only route, status, and duration for Worker 5xx errors. The tenant locale supports English and Vietnamese in the shared shell, navigation, authentication, and notification surfaces while technical fragrance data remains language-neutral.
 
+The public status page is available at `/status.html` on the test Pages, Vercel beta, or production frontend host. It polls only the public health endpoint and does not reveal workspace data.
+
 ## Project Layout
 
 ```text

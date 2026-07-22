@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>OlfactoryOps Status</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #070a0b; color: #edf3f1; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; box-sizing: border-box; }
+      main { width: min(560px, 100%); border: 1px solid #253335; border-radius: 8px; background: #0c1112; padding: 28px; box-sizing: border-box; }
+      header, .component, .metrics { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      h1 { margin: 0; font-size: 1.3rem; } p { color: #a5b3b4; line-height: 1.55; } .component { margin-top: 12px; padding: 14px; border: 1px solid #253335; border-radius: 6px; }
+      .badge { border-radius: 999px; padding: 5px 9px; font-size: .74rem; font-weight: 700; background: #173f2b; color: #8ce1a7; } .badge.degraded { background: #51331e; color: #ffc47c; }
+      .metrics { margin-top: 18px; color: #a5b3b4; font-size: .84rem; } time { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><h1>OlfactoryOps Status</h1><span id="overall" class="badge">CHECKING</span></header>
+      <p>Public availability for the application API and its persistence layer. No tenant or customer data is exposed here.</p>
+      <section id="components" aria-live="polite"></section>
+      <div class="metrics"><span id="telemetry">Checking recent telemetry...</span><time id="checked">-</time></div>
+    </main>
+    <script>
+      const host = window.location.hostname;
+      const testHosts = ['test.labofscents.pages.dev', 'olfactoryops-beta.vercel.app', 'beta.labofscents.org'];
+      const apiBase = testHosts.includes(host) || host.endsWith('.pages.dev')
+        ? 'https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1'
+        : 'https://api.labofscents.org/api/v1';
+      const overall = document.querySelector('#overall');
+      const components = document.querySelector('#components');
+      const telemetry = document.querySelector('#telemetry');
+      const checked = document.querySelector('#checked');
+      async function refresh() {
+        try {
+          const response = await fetch(`${apiBase}/status`, { cache: 'no-store' });
+          if (!response.ok) throw new Error('Status endpoint unavailable');
+          const payload = await response.json();
+          const status = payload.data.status;
+          overall.textContent = status.toUpperCase();
+          overall.className = `badge${status === 'operational' ? '' : ' degraded'}`;
+          components.replaceChildren(...payload.data.components.map((component) => {
+            const row = document.createElement('div'); row.className = 'component';
+            const name = document.createElement('strong'); name.textContent = component.name;
+            const value = document.createElement('span'); value.className = `badge${component.status === 'operational' ? '' : ' degraded'}`; value.textContent = component.status.toUpperCase();
+            row.append(name, value); return row;
+          }));
+          const data = payload.data.telemetry || {};
+          telemetry.textContent = `${data.errorCount || 0} errors and ${data.slowCount || 0} slow requests in the last ${data.windowMinutes || 15} minutes`;
+          checked.textContent = new Date(payload.data.checkedAt).toLocaleString();
+        } catch {
+          overall.textContent = 'DEGRADED'; overall.className = 'badge degraded';
+          components.textContent = 'Status information is temporarily unavailable.'; telemetry.textContent = 'Unable to reach the status API.'; checked.textContent = new Date().toLocaleString();
+        }
+      }
+      refresh(); setInterval(refresh, 30000);
+    </script>
+  </body>
+</html>
