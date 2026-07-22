@@ -2466,6 +2466,14 @@ function App() {
           sidebarCollapsed ? 'is-rail' : ''
         } ${mobileNavOpen ? 'is-mobile-nav-open' : ''}`}
       >
+        {mobileNavOpen ? (
+          <button
+            className="mobile-nav-scrim"
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        ) : null}
         <Sidebar
           activeKey={activeKey}
           collapsed={sidebarCollapsed && !mobileNavOpen}

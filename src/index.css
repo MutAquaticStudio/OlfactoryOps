@@ -5341,3 +5341,181 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+
+/* Small screens keep the work surface full-width and make transient UI easy to dismiss. */
+.mobile-nav-scrim {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .app-shell.is-rail .workspace {
+    margin-left: 0;
+  }
+
+  .app-shell.is-rail .sidebar {
+    width: min(304px, calc(100vw - 16px));
+    overflow: auto;
+    transform: none;
+  }
+
+  .app-shell.is-rail:not(.is-mobile-nav-open) .sidebar {
+    left: calc(-1 * min(304px, 100vw));
+    transform: translateX(-16px);
+  }
+
+  .app-shell.is-mobile-nav-open .sidebar,
+  .app-shell.is-rail.is-mobile-nav-open .sidebar {
+    left: 8px;
+    width: min(304px, calc(100vw - 16px));
+    transform: none !important;
+  }
+
+  .app-shell.is-rail.is-mobile-nav-open .wordmark,
+  .app-shell.is-rail.is-mobile-nav-open .brand-row .mono-small,
+  .app-shell.is-rail.is-mobile-nav-open .nav-title,
+  .app-shell.is-rail.is-mobile-nav-open .nav-item span:nth-child(2) {
+    display: block;
+  }
+
+  .mobile-nav-scrim {
+    position: fixed;
+    z-index: 30;
+    inset: 0;
+    display: block;
+    padding: 0;
+    border: 0;
+    background: rgb(0 0 0 / 0.48);
+    cursor: pointer;
+  }
+
+  .sidebar {
+    z-index: 40;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .topbar-title-block .mono-small {
+    font-size: 0.6rem;
+  }
+
+  .topbar-title-block h1 {
+    font-size: 1.14rem;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .topbar .mobile-menu,
+  .topbar-actions .icon-button,
+  .topbar-actions .user-chip {
+    width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .topbar-actions .user-chip {
+    max-width: none;
+    justify-content: center;
+    padding: 4px;
+  }
+
+  .command-button {
+    min-height: 40px;
+  }
+
+  .command-button kbd {
+    display: none;
+  }
+
+  .command-button > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .approval-notice,
+  .panel-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .approval-notice .ghost-button {
+    margin-left: auto;
+  }
+
+  .formula-lab-topbar,
+  .formula-lab-tools,
+  .formula-rail-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .formula-lab-topbar h2 {
+    max-width: 100%;
+  }
+
+  .formula-topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .formula-lab-stats {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px 10px;
+  }
+
+  .formula-lab-breadcrumb {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    white-space: nowrap;
+  }
+
+  .formula-lab-hero {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .formula-bottle-art {
+    width: 46px;
+    height: 46px;
+  }
+
+  .modal-scrim {
+    align-items: end;
+    padding: 8px;
+  }
+
+  .black-popup,
+  .command-palette {
+    width: 100%;
+    max-height: calc(100dvh - 16px);
+    padding: 14px;
+  }
+
+  .popup-actions {
+    flex-wrap: wrap;
+  }
+
+  .popup-actions > button {
+    flex: 1 1 132px;
+  }
+
+  .command-result {
+    align-items: flex-start;
+  }
+
+  .command-result span:last-child {
+    display: none;
+  }
+}
