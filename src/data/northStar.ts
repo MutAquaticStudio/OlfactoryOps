@@ -183,9 +183,16 @@ export interface FormulaIfraEvaluation {
 
 export interface FormulaEvaporationPoint {
   hour: number
-  Top: number
-  Heart: number
-  Base: number
+  materials: FormulaEvaporationMaterialPoint[]
+}
+
+export interface FormulaEvaporationMaterialPoint {
+  materialId: string
+  materialName: string
+  tier: MaterialTier
+  initialPercent: number
+  remainingPercent: number
+  vaporPressure: number
 }
 
 export interface FormulaScaleLine {
@@ -3828,8 +3835,24 @@ export function diffFormulaVersions(before: FormulaVersionRecord, after: Formula
       change,
     }
   })
-  const beforeEvaporation = before.evaporation[before.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
-  const afterEvaporation = after.evaporation[after.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
+  const evaporationByTier = (point: FormulaEvaporationPoint | undefined): Record<MaterialTier, number> => {
+    const totals: Record<MaterialTier, { initial: number; remaining: number }> = {
+      Top: { initial: 0, remaining: 0 },
+      Heart: { initial: 0, remaining: 0 },
+      Base: { initial: 0, remaining: 0 },
+    }
+    point?.materials.forEach((material) => {
+      totals[material.tier].initial += material.initialPercent
+      totals[material.tier].remaining += material.initialPercent * material.remainingPercent
+    })
+    return {
+      Top: totals.Top.initial ? Number((totals.Top.remaining / totals.Top.initial).toFixed(1)) : 0,
+      Heart: totals.Heart.initial ? Number((totals.Heart.remaining / totals.Heart.initial).toFixed(1)) : 0,
+      Base: totals.Base.initial ? Number((totals.Base.remaining / totals.Base.initial).toFixed(1)) : 0,
+    }
+  }
+  const beforeEvaporation = evaporationByTier(before.evaporation[before.evaporation.length - 1])
+  const afterEvaporation = evaporationByTier(after.evaporation[after.evaporation.length - 1])
   return {
     formulaId: after.formulaId,
     beforeVersion: before.version,
@@ -4392,24 +4415,29 @@ export function analyticsDashboardReport(
 
 export function evaporationCurve(leaves: ResolvedLeaf[]) {
   const timepoints = [0, 1, 2, 4, 8, 12, 18, 24]
-  const initialByTier: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
+  const materialsById = new Map<string, Omit<FormulaEvaporationMaterialPoint, 'remainingPercent'>>()
   leaves.forEach((leaf) => {
-    initialByTier[leaf.tier] += leaf.activePercent
+    const existing = materialsById.get(leaf.materialId)
+    materialsById.set(leaf.materialId, {
+      materialId: leaf.materialId,
+      materialName: leaf.materialName,
+      tier: leaf.tier,
+      initialPercent: Number(((existing?.initialPercent ?? 0) + leaf.activePercent).toFixed(4)),
+      vaporPressure: leaf.vaporPressure,
+    })
   })
+  const materialSeries = Array.from(materialsById.values()).sort((left, right) => right.initialPercent - left.initialPercent)
 
   return timepoints.map((hour) => {
-    const remaining: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
-    leaves.forEach((leaf) => {
-      const tau = Math.max(0.7, 7 / Math.sqrt(Math.max(leaf.vaporPressure, 0.0001)))
-      const amount = leaf.activePercent * Math.exp(-hour / tau)
-      remaining[leaf.tier] += amount
-    })
-
     return {
       hour,
-      Top: initialByTier.Top ? Math.round((remaining.Top / initialByTier.Top) * 100) : 0,
-      Heart: initialByTier.Heart ? Math.round((remaining.Heart / initialByTier.Heart) * 100) : 0,
-      Base: initialByTier.Base ? Math.round((remaining.Base / initialByTier.Base) * 100) : 0,
+      materials: materialSeries.map((material) => {
+        const tau = Math.max(0.7, 7 / Math.sqrt(Math.max(material.vaporPressure, 0.0001)))
+        return {
+          ...material,
+          remainingPercent: Number((100 * Math.exp(-hour / tau)).toFixed(1)),
+        }
+      }),
     }
   })
 }

@@ -60,18 +60,23 @@ describe('OlfactoryOps domain invariants', () => {
     expect(rose?.available).toBeCloseTo(6)
   })
 
-  it('produces bounded directional evaporation curves', () => {
+  it('produces a material-level directional evaporation curve', () => {
     const curve = evaporationCurve(resolveFormula('frm-0421'))
 
     expect(curve).toHaveLength(8)
     curve.forEach((point) => {
-      expect(point.Top).toBeGreaterThanOrEqual(0)
-      expect(point.Top).toBeLessThanOrEqual(100)
-      expect(point.Heart).toBeGreaterThanOrEqual(0)
-      expect(point.Heart).toBeLessThanOrEqual(100)
-      expect(point.Base).toBeGreaterThanOrEqual(0)
-      expect(point.Base).toBeLessThanOrEqual(100)
+      expect(point.materials.length).toBeGreaterThan(0)
+      point.materials.forEach((material) => {
+        expect(material.remainingPercent).toBeGreaterThanOrEqual(0)
+        expect(material.remainingPercent).toBeLessThanOrEqual(100)
+      })
     })
+
+    const initialBergamot = curve[0]?.materials.find((material) => material.materialId === 'mat-bergamot')
+    const finalBergamot = curve.at(-1)?.materials.find((material) => material.materialId === 'mat-bergamot')
+    const finalIsoESuper = curve.at(-1)?.materials.find((material) => material.materialId === 'mat-iso')
+    expect(initialBergamot?.remainingPercent).toBe(100)
+    expect(finalBergamot?.remainingPercent).toBeLessThan(finalIsoESuper?.remainingPercent ?? 0)
   })
 
   it('propagates active concentration through nested accords', () => {

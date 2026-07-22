@@ -7920,7 +7920,10 @@ export class NorthStarService {
       evaluations: Array.isArray(version.evaluations) ? version.evaluations : [],
       resolvedLeaves: Array.isArray(version.resolvedLeaves) ? version.resolvedLeaves : evidence.leaves,
       ifraEvaluation: version.ifraEvaluation || evidence.ifra,
-      evaporation: Array.isArray(version.evaporation) ? version.evaporation : evidence.evaporation,
+      evaporation:
+        Array.isArray(version.evaporation) && version.evaporation.every((point) => Array.isArray(point?.materials))
+          ? version.evaporation
+          : evidence.evaporation,
     }
   }
 

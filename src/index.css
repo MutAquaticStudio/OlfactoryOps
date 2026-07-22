@@ -3345,6 +3345,63 @@ kbd {
   min-height: 250px;
 }
 
+.evaporation-chart {
+  display: grid;
+  gap: 12px;
+}
+
+.evaporation-material-list {
+  display: grid;
+  gap: 7px;
+}
+
+.evaporation-material-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(72px, auto));
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 0.78rem;
+}
+
+.evaporation-material-row > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto);
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.evaporation-material-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.evaporation-material-row > div > span:last-child {
+  grid-column: 2;
+  color: var(--text-3);
+}
+
+.evaporation-material-row > span {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.evaporation-material-row > span b {
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.evaporation-swatch {
+  grid-row: 1 / span 2;
+  width: 8px;
+  height: 30px;
+  border-radius: 999px;
+}
+
 .caveat {
   margin-top: 8px;
   color: var(--text-3);
@@ -4252,6 +4309,11 @@ input[type='range'] {
 
   .production-timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .evaporation-material-row {
+    grid-template-columns: 1fr;
+    align-items: start;
   }
 
   .cost-sheet-controls {

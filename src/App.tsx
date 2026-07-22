@@ -63,6 +63,9 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14024,26 +14027,32 @@ function EnterpriseReadiness({
   )
 }
 
+const evaporationSeriesColors = ['#38bdf8', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#f97316', '#22c55e']
+
 function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve> }) {
+  const materialSeries = curve[0]?.materials ?? []
+  const materialNameById = new Map(materialSeries.map((material) => [material.materialId, material.materialName]))
+  const curveData = curve.map((point) => ({
+    hour: point.hour,
+    ...Object.fromEntries(point.materials.map((material) => [material.materialId, material.remainingPercent])),
+  }))
+  const checkpoints = [4, 12, 24]
+  const pointByHour = new Map(curve.map((point) => [point.hour, point]))
+
   return (
-    <div className="chart-wrap">
+    <div className="chart-wrap evaporation-chart">
       <ResponsiveContainer width="100%" height={250}>
-        <AreaChart data={curve} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
-          <defs>
-            <linearGradient id="topGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#0f766e" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#0f766e" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="heartGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#9a6700" stopOpacity={0.32} />
-              <stop offset="95%" stopColor="#9a6700" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+        <LineChart data={curveData} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
           <CartesianGrid stroke="rgba(255,255,255,.06)" vertical={false} />
           <XAxis dataKey="hour" stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} />
-          <YAxis stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} />
+          <YAxis domain={[0, 100]} stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
           <Tooltip
             cursor={{ stroke: 'rgba(77,155,255,.32)' }}
+            labelFormatter={(hour) => `After ${hour}h`}
+            formatter={(value, materialId) => [
+              `${Number(value).toFixed(1)}% remaining`,
+              materialNameById.get(String(materialId)) ?? String(materialId),
+            ]}
             contentStyle={{
               background: 'rgba(9,10,13,.92)',
               border: '1px solid rgba(255,255,255,.1)',
@@ -14051,11 +14060,39 @@ function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve
               color: 'rgba(233,236,243,.92)',
             }}
           />
-          <Area type="monotone" dataKey="Top" stroke="#0f766e" fill="url(#topGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Heart" stroke="#9a6700" fill="url(#heartGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Base" stroke="#15803d" fill="transparent" strokeWidth={2} strokeDasharray="5 5" />
-        </AreaChart>
+          <Legend formatter={(materialId) => materialNameById.get(String(materialId)) ?? String(materialId)} />
+          {materialSeries.map((material, index) => (
+            <Line
+              key={material.materialId}
+              type="monotone"
+              dataKey={material.materialId}
+              name={material.materialId}
+              stroke={evaporationSeriesColors[index % evaporationSeriesColors.length]}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          ))}
+        </LineChart>
       </ResponsiveContainer>
+      <div className="evaporation-material-list" aria-label="Material evaporation breakdown">
+        {materialSeries.map((material, index) => (
+          <div className="evaporation-material-row" key={material.materialId}>
+            <div>
+              <span
+                className="evaporation-swatch"
+                style={{ backgroundColor: evaporationSeriesColors[index % evaporationSeriesColors.length] }}
+              />
+              <strong>{material.materialName}</strong>
+              <span>{material.tier} / {material.initialPercent.toFixed(2)}% of formula</span>
+            </div>
+            {checkpoints.map((hour) => {
+              const remaining = pointByHour.get(hour)?.materials.find((item) => item.materialId === material.materialId)?.remainingPercent ?? 0
+              return <span key={hour}><b>{hour}h</b> {remaining.toFixed(1)}%</span>
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

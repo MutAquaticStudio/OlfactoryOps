@@ -2439,7 +2439,10 @@ export function normalizeFormulaVersionPersistenceRecord(
     checksum: version.checksum || formulaVersionPersistenceChecksum(version),
     evaluations: Array.isArray(version.evaluations) ? version.evaluations : [],
     resolvedLeaves: Array.isArray(version.resolvedLeaves) ? version.resolvedLeaves : [],
-    evaporation: Array.isArray(version.evaporation) ? version.evaporation : [],
+    evaporation:
+      Array.isArray(version.evaporation) && version.evaporation.every((point) => Array.isArray(point?.materials))
+        ? version.evaporation
+        : [],
     lines: Array.isArray(version.lines) ? version.lines : [],
   }
 }
@@ -4608,7 +4611,10 @@ function formulaVersionFromRow(row: FormulaVersionRecordRow): FormulaVersionReco
     checksum: row.checksum,
     evaluations: Array.isArray(record.evaluations) ? record.evaluations : [],
     resolvedLeaves: Array.isArray(record.resolvedLeaves) ? record.resolvedLeaves : [],
-    evaporation: Array.isArray(record.evaporation) ? record.evaporation : [],
+    evaporation:
+      Array.isArray(record.evaporation) && record.evaporation.every((point) => Array.isArray(point?.materials))
+        ? record.evaporation
+        : [],
     lines: record.lines,
   }
 }
