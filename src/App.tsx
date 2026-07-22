@@ -5003,6 +5003,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   const formulaEditable = formula.workflowStatus === 'DRAFT' || formula.workflowStatus === 'CHANGES_REQUESTED'
   const activeFormulaType = formulaTypeForFormula(formula)
   const activeFormulaTypeMeta = formulaTypeMeta[activeFormulaType]
+  const productConcentrationLabel = `${formula.finalProductConcentrationPercent.toFixed(1)}% concentrate`
   const selectableChildFormulas = useMemo(
     () => formulaRecords.filter((item) => item.id !== formula.id),
     [formula.id, formulaRecords],
@@ -6005,7 +6006,14 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           </div>
           <div>
             <h1>{formula.name}</h1>
-            <p>{activeFormulaTypeMeta.label} / {formula.brief || 'Add the creative brief in Details.'}</p>
+            <p>
+              {activeFormulaTypeMeta.label}
+              {formula.formulaType === 'FINE_FRAGRANCE' ? ` / ${formula.concentrationType}` : ''}
+              {' / '}
+              {productConcentrationLabel}
+              {' / '}
+              {formula.brief || 'Add the creative brief in Details.'}
+            </p>
           </div>
         </section>
 
@@ -6053,6 +6061,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                   section.lines.map(({ line, material, childFormula, sourceLot, sourceAvailableGrams, odorType, tags }) => {
                     const sourceLotNumber = sourceLot?.lotNumber ?? line.sourceLotNumber
                     const sourceLocation = sourceLot?.location ?? line.sourceLocation
+                    const lineConcentrationPercent = formulaLineConcentrationFraction(line) * 100
                     return (
                       <div
                         className="formula-ledger-line"
@@ -6091,7 +6100,10 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                         </div>
                         <div className="formula-ledger-amount">
                           <strong>{formatGrams(line.grams)}</strong>
-                          <span>{formatFormulaPercent(line.grams, formula.targetGrams)}</span>
+                          <span>{formatFormulaPercent(line.grams, formula.targetGrams)} of formula</span>
+                          <span className="formula-ledger-concentration" title="Raw-material concentration used for this formula line">
+                            Conc. {lineConcentrationPercent.toFixed(1)}%
+                          </span>
                         </div>
                       </div>
                     )
