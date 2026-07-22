@@ -2,8 +2,6 @@ import { AnimatePresence, motion } from 'framer-motion'
 import QRCode from 'qrcode'
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
   Atom,
   BadgeDollarSign,
   BarChart3,
@@ -5637,23 +5635,6 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     }
   }
 
-  async function moveLine(line: FormulaLine, direction: 'up' | 'down') {
-    try {
-      const payload = await requestApi<FormulaMutationResponse>(
-        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}/move`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ direction }),
-        },
-      )
-      acceptFormulaMutation(payload.formula)
-      setFormulaStatus(`${line.label} reordered`)
-    } catch (error) {
-      setFormulaStatus(error instanceof Error ? error.message : 'Formula line reorder failed')
-    }
-  }
-
   async function addMaterialToFormula(material: Material, sourceLot?: InventoryLot) {
     const grams = clampPositiveNumber(Number(pickerGrams), 1)
     const availableGrams = sourceLot ? availableLotGrams(sourceLot) : undefined
@@ -5923,7 +5904,6 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 </div>
                 {section.lines.length > 0 ? (
                   section.lines.map(({ line, material, childFormula, sourceLot, sourceAvailableGrams, odorType, tags }) => {
-                    const lineIndex = formula.lines.findIndex((item) => item.id === line.id)
                     const sourceLotNumber = sourceLot?.lotNumber ?? line.sourceLotNumber
                     const sourceLocation = sourceLot?.location ?? line.sourceLocation
                     return (
@@ -5965,28 +5945,6 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                         <div className="formula-ledger-amount">
                           <strong>{formatGrams(line.grams)}</strong>
                           <span>{formatFormulaPercent(line.grams, formula.targetGrams)}</span>
-                        </div>
-                        <div className="formula-row-actions" onClick={(event) => event.stopPropagation()}>
-                          <button
-                            className="ghost-button tiny"
-                            type="button"
-                            aria-label={`Move ${line.label} up`}
-                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex <= 0 ? 'Already first in the formula' : `Move ${line.label} up`}
-                            onClick={() => void moveLine(line, 'up')}
-                            disabled={!formulaEditable || !canEditFormula || lineIndex <= 0}
-                          >
-                            <ArrowUp size={12} />
-                          </button>
-                          <button
-                            className="ghost-button tiny"
-                            type="button"
-                            aria-label={`Move ${line.label} down`}
-                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex >= formula.lines.length - 1 ? 'Already last in the formula' : `Move ${line.label} down`}
-                            onClick={() => void moveLine(line, 'down')}
-                            disabled={!formulaEditable || !canEditFormula || lineIndex >= formula.lines.length - 1}
-                          >
-                            <ArrowDown size={12} />
-                          </button>
                         </div>
                       </div>
                     )

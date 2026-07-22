@@ -2151,11 +2151,6 @@ kbd {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-.formula-row-actions {
-  display: flex;
-  gap: 5px;
-}
-
 .formula-ledger-empty {
   padding: 13px 14px;
   color: var(--text-3);
@@ -4180,7 +4175,6 @@ input[type='range'] {
   }
 
   .formula-ledger-amount,
-  .formula-row-actions,
   .formula-picker-card > .data-tag,
   .formula-picker-card > .status-badge,
   .formula-ifra-row > .mono-value,
