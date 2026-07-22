@@ -160,7 +160,7 @@ describe('NorthStarService', () => {
     expect(initial.displayName).toBe('Thuan Le Minh')
     expect(initial.organizationId).toBe('org-nxl')
     expect(initial.sidebarMode).toBe('expanded')
-    expect(initial.accentColor).toBe('#4d9bff')
+    expect(initial.accentColor).toBe('#0f766e')
 
     const updated = service.updateUserSettings({
       displayName: 'Maison Owner',

@@ -1,31 +1,29 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg: #050507;
-  --panel: rgba(12, 13, 18, 0.5);
-  --panel-solid: #0b0c10;
-  --border: rgba(255, 255, 255, 0.06);
-  --border-strong: rgba(255, 255, 255, 0.13);
-  --text: rgba(233, 236, 243, 0.92);
-  --text-2: rgba(158, 166, 180, 0.82);
-  --text-3: rgba(110, 118, 132, 0.62);
-  --blue: #4d9bff;
-  --blue-bright: #74b2ff;
-  --blue-deep: #2f6dff;
-  --accent-rgb: 77 155 255;
-  --gold: #c4a86a;
-  --green: #37d6a0;
-  --amber: #f5b04c;
-  --red: #f2585f;
-  --radius: 18px;
-  font-family: Inter, system-ui, sans-serif;
+  --bg: #eef2f3;
+  --panel: #ffffff;
+  --panel-solid: #ffffff;
+  --border: #d9e1e4;
+  --border-strong: #b9c5ca;
+  --text: #172127;
+  --text-2: #52636b;
+  --text-3: #7a8990;
+  --blue: #0f766e;
+  --blue-bright: #16877e;
+  --blue-deep: #0b5c56;
+  --accent-rgb: 15 118 110;
+  --gold: #9a6700;
+  --green: #15803d;
+  --amber: #b45309;
+  --red: #b42318;
+  --radius: 8px;
+  font-family: "Segoe UI Variable", "Aptos", "Helvetica Neue", Arial, sans-serif;
   color: var(--text);
   background: var(--bg);
-  color-scheme: dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -68,7 +66,7 @@ p {
 h1,
 h2,
 .wordmark {
-  font-family: Fraunces, serif;
+  font-family: "Segoe UI Variable", "Aptos Display", "Helvetica Neue", Arial, sans-serif;
   letter-spacing: 0;
 }
 
@@ -2088,7 +2086,7 @@ kbd {
   border-radius: 50%;
   background: linear-gradient(135deg, rgba(196, 168, 106, 0.32), rgba(77, 155, 255, 0.18));
   color: var(--text);
-  font-family: Fraunces, serif;
+  font-family: "Segoe UI Variable", "Aptos", "Helvetica Neue", Arial, sans-serif;
 }
 
 .formula-ledger-main {
@@ -2500,7 +2498,7 @@ kbd {
 .formula-sheet h3 {
   justify-self: center;
   padding-top: 18px;
-  font-family: Fraunces, serif;
+  font-family: "Segoe UI Variable", "Aptos Display", "Helvetica Neue", Arial, sans-serif;
   font-size: 1.2rem;
 }
 
@@ -4307,4 +4305,815 @@ input[type='range'] {
 .app-shell.is-mobile-nav-open > .sidebar {
   left: 10px;
   transform: none !important;
+}
+
+/* Operational UI redesign: calm, high-density lab workspace. */
+:root {
+  --surface-raised: #ffffff;
+  --surface-muted: #f7f9f9;
+  --surface-subtle: #f2f6f6;
+  --sidebar: #18252b;
+  --sidebar-2: #213139;
+  --sidebar-text: #eef5f5;
+  --sidebar-muted: #9fb0b5;
+  --shadow-sm: 0 1px 2px rgb(23 33 39 / 0.06);
+  --shadow-md: 0 10px 28px rgb(23 33 39 / 0.07);
+}
+
+html,
+body {
+  background: var(--bg);
+}
+
+h1,
+h2,
+h3,
+.wordmark {
+  letter-spacing: 0;
+}
+
+h1 {
+  font-size: clamp(1.4rem, 2vw, 1.85rem);
+  font-weight: 650;
+  line-height: 1.12;
+}
+
+h2 {
+  font-size: 0.96rem;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.lab-backdrop {
+  background: var(--bg);
+}
+
+.orb,
+.molecule-linework,
+.flask-linework,
+.scanline {
+  display: none;
+}
+
+.blueprint-grid {
+  opacity: 1;
+  background-image:
+    linear-gradient(#dfe7e8 1px, transparent 1px),
+    linear-gradient(90deg, #dfe7e8 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.glass {
+  overflow: visible;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.glass::before,
+.glass::after {
+  display: none;
+}
+
+.glass-hover:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  transform: none;
+}
+
+.app-shell,
+.app-shell.density-compact {
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 0;
+  min-height: 100svh;
+  padding: 0;
+}
+
+.app-shell.is-rail {
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
+.sidebar {
+  top: 0;
+  height: 100svh;
+  padding: 14px 10px;
+  color: var(--sidebar-text);
+  border: 0;
+  border-right: 1px solid #31444c;
+  border-radius: 0;
+  background: var(--sidebar);
+  box-shadow: none;
+}
+
+.sidebar .brand-row {
+  min-height: 50px;
+  padding: 0 4px 12px;
+  border-bottom: 1px solid rgb(238 245 245 / 0.13);
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  color: #effaf8;
+  border: 1px solid rgb(238 245 245 / 0.18);
+  border-radius: 8px;
+  background: rgb(var(--accent-rgb) / 0.72);
+}
+
+.icon-chip {
+  width: 30px;
+  height: 30px;
+  color: var(--blue-deep);
+  border: 1px solid rgb(var(--accent-rgb) / 0.2);
+  border-radius: 7px;
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.wordmark {
+  color: var(--sidebar-text);
+  font-size: 0.98rem;
+  font-weight: 720;
+}
+
+.mono-small,
+.mono-value,
+kbd,
+.metric strong,
+.formula-lab-stats,
+.formula-ledger-amount,
+.price-line strong {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+}
+
+.sidebar .mono-small,
+.sidebar .nav-title {
+  color: var(--sidebar-muted);
+}
+
+.sidebar .icon-button {
+  color: var(--sidebar-muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+.sidebar .icon-button:hover {
+  color: var(--sidebar-text);
+  border-color: rgb(238 245 245 / 0.18);
+  background: rgb(238 245 245 / 0.08);
+}
+
+.nav-stack {
+  gap: 14px;
+  margin-top: 14px;
+  padding-right: 0;
+}
+
+.nav-group {
+  gap: 3px;
+}
+
+.nav-title {
+  margin: 0 0 5px 10px;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.nav-item {
+  min-height: 36px;
+  padding: 8px 10px;
+  color: var(--sidebar-muted);
+  border-color: transparent;
+  border-radius: 6px;
+  font-size: 0.84rem;
+}
+
+.nav-item:hover {
+  color: var(--sidebar-text);
+  border-color: transparent;
+  background: rgb(238 245 245 / 0.08);
+}
+
+.nav-item.is-active {
+  color: #ffffff;
+  border-color: rgb(var(--accent-rgb) / 0.46);
+  background: rgb(var(--accent-rgb) / 0.64);
+}
+
+.workspace {
+  gap: 0;
+  background: var(--bg);
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: 68px;
+  padding: 11px 24px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: rgb(255 255 255 / 0.94);
+  box-shadow: none;
+}
+
+.topbar .mono-small {
+  color: var(--text-3);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.command-button,
+.icon-button,
+.ghost-button {
+  color: var(--text-2);
+  border-color: var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+
+.command-button {
+  min-height: 38px;
+  padding: 7px 9px 7px 11px;
+  background: var(--surface-muted);
+}
+
+.command-button:hover,
+.ghost-button:hover,
+.icon-button:hover {
+  color: var(--text);
+  border-color: rgb(var(--accent-rgb) / 0.45);
+  background: rgb(var(--accent-rgb) / 0.07);
+  transform: none;
+}
+
+kbd {
+  color: var(--text-2);
+  border-color: var(--border);
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.user-chip {
+  min-height: 36px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.user-chip:hover {
+  border-color: var(--border);
+  background: var(--surface-muted);
+  transform: none;
+}
+
+.user-avatar {
+  color: #ffffff;
+  border-radius: 6px;
+  background: var(--blue);
+}
+
+.dashboard-grid,
+.domain-page {
+  gap: 16px;
+  padding: 20px 24px 32px;
+}
+
+.workspace-grid {
+  gap: 16px;
+}
+
+.panel,
+.domain-header {
+  padding: 16px;
+}
+
+.panel-header {
+  min-height: 30px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-title-row {
+  gap: 8px;
+}
+
+.lead {
+  max-width: 780px;
+  color: var(--text-2);
+  font-size: 0.91rem;
+  line-height: 1.55;
+}
+
+.primary-button,
+.ghost-button {
+  min-height: 36px;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.primary-button {
+  color: #ffffff;
+  border-color: var(--blue);
+  background: var(--blue);
+  box-shadow: none;
+}
+
+.primary-button:hover {
+  border-color: var(--blue-deep);
+  background: var(--blue-deep);
+  transform: none;
+}
+
+.primary-button:focus-visible,
+.ghost-button:focus-visible,
+.icon-button:focus-visible,
+.command-button:focus-visible,
+.nav-item:focus-visible,
+.field-row input:focus-visible,
+.field-row select:focus-visible,
+.field-row textarea:focus-visible {
+  outline: 3px solid rgb(var(--accent-rgb) / 0.22);
+  outline-offset: 2px;
+}
+
+.primary-button:disabled,
+.ghost-button:disabled {
+  opacity: 0.48;
+}
+
+.approval-notice,
+.status-strip {
+  margin: 16px 24px 0;
+  color: var(--text-2);
+  border-color: rgb(var(--accent-rgb) / 0.28);
+  border-radius: 6px;
+  background: rgb(var(--accent-rgb) / 0.07);
+}
+
+.field-row span,
+.field-hint,
+.formula-lab-breadcrumb,
+.formula-inspector-status,
+.line-sheet-label {
+  color: var(--text-2);
+}
+
+.field-row input,
+.field-row select,
+.field-row textarea {
+  color: var(--text);
+  border-color: var(--border-strong);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 1px rgb(23 33 39 / 0.03);
+}
+
+.field-row input[readonly],
+.field-row input:disabled,
+.field-row select:disabled,
+.field-row textarea:disabled {
+  color: var(--text-2);
+  background: var(--surface-subtle);
+}
+
+.field-row input:focus,
+.field-row select:focus,
+.field-row textarea:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.12);
+}
+
+.metric,
+.risk-card,
+.settings-section,
+.formula-inspector-card,
+.formula-ledger-section,
+.formula-ifra-row,
+.plan-card,
+.auth-form,
+.audit-export-card,
+.empty-state {
+  border-color: var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+
+.stock-card,
+.record-card,
+.lot-detail-card,
+.label-preview-card,
+.genealogy-row,
+.shopping-row,
+.tenant-summary,
+.entry-column,
+.timeline-step,
+.permission-role-card,
+.permission-row-card,
+.sequence-preview,
+.branding-preview {
+  border-color: var(--border);
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.stock-card {
+  min-height: 112px;
+  align-content: start;
+}
+
+.stock-card > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.stock-card strong {
+  font-size: 0.89rem;
+  line-height: 1.25;
+}
+
+.stock-card .mono-value {
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.metric {
+  gap: 4px;
+  padding: 11px;
+}
+
+.metric strong {
+  color: var(--text);
+}
+
+.data-tag,
+.status-badge,
+.formula-type-pill,
+.formula-tag-row span,
+.formula-inventory-link {
+  border-radius: 999px;
+}
+
+.data-tag {
+  color: var(--text-2);
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.data-tag.tone-green {
+  color: #166534;
+  border-color: #bbdfc5;
+  background: #edf8f0;
+}
+
+.data-tag.tone-amber {
+  color: #92400e;
+  border-color: #f2d4a4;
+  background: #fff7e8;
+}
+
+.data-tag.tone-blue {
+  color: var(--blue-deep);
+  border-color: rgb(var(--accent-rgb) / 0.28);
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.readiness-item,
+.audit-row,
+.movement-row,
+.document-row,
+.formula-card,
+.formula-line,
+.lot-row,
+.material-row,
+.workflow-step,
+.domain-cell,
+.resolved-row,
+.text-card,
+.mono-card {
+  border-color: var(--border);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.material-row.is-active,
+.formula-card.is-active,
+.resolved-row.is-active,
+.workflow-step:hover,
+.formula-card:hover,
+.material-row:hover {
+  border-color: rgb(var(--accent-rgb) / 0.48);
+  background: rgb(var(--accent-rgb) / 0.06);
+}
+
+.formula-labspace {
+  gap: 16px;
+}
+
+.formula-lab-library,
+.formula-lab-editor,
+.formula-lab-inspector {
+  border-color: var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.formula-lab-library,
+.formula-lab-inspector {
+  gap: 14px;
+  padding: 14px;
+}
+
+.formula-rail-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.formula-lab-topbar {
+  padding: 13px 16px;
+  border-bottom-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.formula-lab-hero {
+  padding: 16px;
+}
+
+.formula-bottle-art {
+  width: 58px;
+  height: 58px;
+  color: var(--blue-deep);
+  border-color: rgb(var(--accent-rgb) / 0.25);
+  border-radius: 8px;
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.formula-lab-hero h1 {
+  font-size: 1.18rem;
+}
+
+.formula-lab-hero p {
+  color: var(--text-2);
+  font-style: normal;
+}
+
+.formula-search-box,
+.formula-picker-card,
+.formula-source-panel,
+.formula-detail-section,
+.formula-diff-summary,
+.formula-notebook-list,
+.formula-scale-row {
+  border-color: var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.formula-search-box {
+  background: #ffffff;
+}
+
+.formula-ledger-section {
+  overflow: hidden;
+}
+
+.formula-ledger-section.note-top,
+.formula-ledger-section.note-middle,
+.formula-ledger-section.note-base,
+.formula-ledger-section.note-solvent {
+  border-color: var(--border);
+}
+
+.formula-ledger-section-head {
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
+.formula-ledger-section.note-top .formula-ledger-section-head,
+.formula-ledger-section.note-middle .formula-ledger-section-head,
+.formula-ledger-section.note-base .formula-ledger-section-head {
+  background: var(--surface-subtle);
+}
+
+.formula-ledger-line {
+  border-top-color: var(--border);
+}
+
+.formula-ledger-line:hover {
+  background: rgb(var(--accent-rgb) / 0.05);
+}
+
+.formula-material-avatar {
+  width: 38px;
+  height: 38px;
+  color: var(--blue-deep);
+  border-radius: 8px;
+  background: rgb(var(--accent-rgb) / 0.1);
+  font-family: "Segoe UI Variable", "Aptos", sans-serif;
+  font-weight: 700;
+}
+
+.formula-tag-row span,
+.formula-inventory-link {
+  color: #166534;
+  border-color: #bbdfc5;
+  background: #edf8f0;
+}
+
+.formula-bottom-tabs button,
+.formula-segmented button,
+.formula-picker-source-tabs button,
+.formula-inspector-tabs button {
+  color: var(--text-2);
+  border-color: var(--border);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.formula-bottom-tabs button.is-active,
+.formula-segmented button.is-active,
+.formula-picker-source-tabs button.is-active,
+.formula-inspector-tabs button.is-active {
+  color: var(--blue-deep);
+  border-color: rgb(var(--accent-rgb) / 0.42);
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.formula-progress-track {
+  border-color: var(--border);
+  background: #e3eaeb;
+}
+
+.formula-progress-track span {
+  background: var(--blue);
+}
+
+.formula-ifra-row:hover {
+  border-color: rgb(var(--accent-rgb) / 0.4);
+  background: rgb(var(--accent-rgb) / 0.05);
+}
+
+.formula-floating-add {
+  color: #ffffff;
+  border-color: var(--blue);
+  border-radius: 8px;
+  background: var(--blue);
+  box-shadow: var(--shadow-md);
+}
+
+.formula-scale-summary:hover,
+.formula-scale-summary:focus-visible {
+  color: var(--blue-deep);
+  border-color: rgb(var(--accent-rgb) / 0.38);
+  background: rgb(var(--accent-rgb) / 0.07);
+}
+
+.modal-scrim {
+  background: rgb(15 23 28 / 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.black-popup,
+.command-palette {
+  overflow: hidden;
+  color: var(--text);
+  border-color: var(--border-strong);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 64px rgb(15 23 28 / 0.22);
+}
+
+.popup-header,
+.popup-actions {
+  border-color: var(--border);
+}
+
+.command-input-row {
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.command-input-row input {
+  color: var(--text);
+}
+
+.command-result {
+  color: var(--text-2);
+  border-radius: 5px;
+}
+
+.command-result.is-selected,
+.command-result:hover {
+  color: var(--text);
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.auth-shell,
+.billing-onboarding {
+  background: var(--bg);
+}
+
+.auth-panel,
+.billing-onboarding {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow-md);
+}
+
+.auth-copy .wordmark {
+  color: var(--text);
+}
+
+.auth-copy .mono-small {
+  color: var(--text-3);
+}
+
+.auth-mode-switch {
+  border-color: var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+}
+
+.auth-mode-switch button.is-active {
+  color: #ffffff;
+  border-radius: 5px;
+  background: var(--blue);
+}
+
+.plan-card.is-current,
+.mini-plan-row.is-current {
+  border-color: rgb(var(--accent-rgb) / 0.44);
+  background: rgb(var(--accent-rgb) / 0.06);
+}
+
+@media (max-width: 960px) {
+  .app-shell,
+  .app-shell.density-compact,
+  .app-shell.is-rail {
+    display: block;
+  }
+
+  .topbar {
+    padding: 10px 16px;
+  }
+
+  .dashboard-grid,
+  .domain-page {
+    padding: 16px;
+  }
+
+  .approval-notice,
+  .status-strip {
+    margin-inline: 16px;
+  }
+
+  .sidebar {
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    min-height: 62px;
+  }
+
+  .topbar-actions .data-tag,
+  .user-chip > span:last-child,
+  .topbar-actions > .ghost-button {
+    display: none;
+  }
+
+  .dashboard-grid,
+  .domain-page {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .approval-notice,
+  .status-strip {
+    margin: 12px 12px 0;
+  }
+
+  .panel,
+  .domain-header {
+    padding: 13px;
+  }
 }

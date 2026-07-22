@@ -3518,7 +3518,7 @@ export class NorthStarService {
     this.requirePermission(session.role, 'customization.manage')
     const accentColor = patch.accentColor?.trim() ?? this.brandingRecord.accentColor
     if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
-      throw new UnprocessableEntityException('Accent color must be a hex color like #4d9bff')
+      throw new UnprocessableEntityException('Accent color must be a hex color like #0f766e')
     }
     this.brandingRecord = {
       ...this.brandingRecord,
@@ -5856,7 +5856,7 @@ export class NorthStarService {
       sidebarMode: membership.role === 'Lab Manager' ? 'rail' : 'expanded',
       reduceMotion: false,
       emailDigest: membership.role === 'Owner' ? 'weekly' : 'daily',
-      accentColor: membership.role === 'Lab Manager' ? '#37d6a0' : '#4d9bff',
+      accentColor: membership.role === 'Lab Manager' ? '#15803d' : '#0f766e',
       updatedAt,
     }
   }

@@ -1317,12 +1317,12 @@ export interface LabUsageRecord {
 }
 
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
-  active: { label: 'Active', color: '#4d9bff' },
-  stable: { label: 'Stable', color: '#37d6a0' },
-  testing: { label: 'Testing', color: '#f5b04c' },
-  review: { label: 'Review', color: '#c4a86a' },
+  active: { label: 'Active', color: '#0f766e' },
+  stable: { label: 'Stable', color: '#15803d' },
+  testing: { label: 'Testing', color: '#b45309' },
+  review: { label: 'Review', color: '#9a6700' },
   draft: { label: 'Draft', color: 'rgba(110,118,132,0.72)' },
-  alert: { label: 'Alert', color: '#f2585f' },
+  alert: { label: 'Alert', color: '#b42318' },
 }
 
 export const domains: DomainModule[] = [
@@ -2610,7 +2610,7 @@ export const userSettings: UserSettingsRecord[] = [
     sidebarMode: 'expanded',
     reduceMotion: false,
     emailDigest: 'weekly',
-    accentColor: '#4d9bff',
+    accentColor: '#0f766e',
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2623,7 +2623,7 @@ export const userSettings: UserSettingsRecord[] = [
     sidebarMode: 'expanded',
     reduceMotion: false,
     emailDigest: 'weekly',
-    accentColor: '#4d9bff',
+    accentColor: '#0f766e',
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2636,7 +2636,7 @@ export const userSettings: UserSettingsRecord[] = [
     sidebarMode: 'rail',
     reduceMotion: false,
     emailDigest: 'daily',
-    accentColor: '#37d6a0',
+    accentColor: '#15803d',
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
 ]
@@ -2690,7 +2690,7 @@ export const customFields: CustomFieldDefinition[] = [
 export const brandingConfig: BrandingConfig = {
   organizationId: 'org-nxl',
   displayName: 'NOXELIS Lab',
-  accentColor: '#4d9bff',
+  accentColor: '#0f766e',
   documentFooter: 'Confidential formula and inventory record - NOXELIS',
   labelTemplate: 'NOX-{brand}-{sequence}',
   logoMode: 'wordmark',

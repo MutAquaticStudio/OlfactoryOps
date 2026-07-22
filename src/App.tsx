@@ -220,9 +220,9 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
   passwordPolicy: 'server-managed',
 }
 
-const defaultAccentColor = '#4d9bff'
+const defaultAccentColor = '#0f766e'
 
-const accentColorPresets = ['#4d9bff', '#37d6a0', '#c4a86a', '#f5b04c', '#f2585f', '#8b5cf6']
+const accentColorPresets = ['#0f766e', '#0369a1', '#15803d', '#9a6700', '#b42318', '#7c3aed']
 
 const clientFallbackUserSettings: UserSettingsRecord = {
   userId: 'client-fallback',
@@ -307,7 +307,7 @@ const clientFallbackTenantSettings: TenantSettingsRecord = {
 const clientFallbackBranding: BrandingConfig = {
   organizationId: clientFallbackOrganization.id,
   displayName: 'OlfactoryOps',
-  accentColor: '#4d9bff',
+  accentColor: '#0f766e',
   documentFooter: 'API managed branding',
   labelTemplate: 'OLF-{sequence}',
   logoMode: 'wordmark',
@@ -11307,15 +11307,15 @@ function AnalyticsWorkspace() {
             <AreaChart data={burnChart}>
               <defs>
                 <linearGradient id="burnUsage" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#4d9bff" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#4d9bff" stopOpacity={0.02} />
+                  <stop offset="5%" stopColor="#0f766e" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#0f766e" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
               <XAxis dataKey="name" stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
               <YAxis stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
               <Tooltip contentStyle={{ background: '#111827', border: '1px solid rgba(255,255,255,0.12)' }} />
-              <Area type="monotone" dataKey="usage" stroke="#4d9bff" fill="url(#burnUsage)" />
+              <Area type="monotone" dataKey="usage" stroke="#0f766e" fill="url(#burnUsage)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -13663,12 +13663,12 @@ function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve
         <AreaChart data={curve} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
           <defs>
             <linearGradient id="topGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#4d9bff" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#4d9bff" stopOpacity={0} />
+              <stop offset="5%" stopColor="#0f766e" stopOpacity={0.4} />
+              <stop offset="95%" stopColor="#0f766e" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="heartGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#c4a86a" stopOpacity={0.32} />
-              <stop offset="95%" stopColor="#c4a86a" stopOpacity={0} />
+              <stop offset="5%" stopColor="#9a6700" stopOpacity={0.32} />
+              <stop offset="95%" stopColor="#9a6700" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid stroke="rgba(255,255,255,.06)" vertical={false} />
@@ -13683,9 +13683,9 @@ function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve
               color: 'rgba(233,236,243,.92)',
             }}
           />
-          <Area type="monotone" dataKey="Top" stroke="#4d9bff" fill="url(#topGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Heart" stroke="#c4a86a" fill="url(#heartGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Base" stroke="#37d6a0" fill="transparent" strokeWidth={2} strokeDasharray="5 5" />
+          <Area type="monotone" dataKey="Top" stroke="#0f766e" fill="url(#topGradient)" strokeWidth={2} />
+          <Area type="monotone" dataKey="Heart" stroke="#9a6700" fill="url(#heartGradient)" strokeWidth={2} />
+          <Area type="monotone" dataKey="Base" stroke="#15803d" fill="transparent" strokeWidth={2} strokeDasharray="5 5" />
         </AreaChart>
       </ResponsiveContainer>
     </div>

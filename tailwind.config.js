@@ -4,18 +4,18 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['Fraunces', 'serif'],
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+        display: ['Segoe UI Variable', 'Aptos Display', 'Helvetica Neue', 'Arial', 'sans-serif'],
+        sans: ['Segoe UI Variable', 'Aptos', 'Helvetica Neue', 'Arial', 'sans-serif'],
+        mono: ['Cascadia Mono', 'SFMono-Regular', 'Consolas', 'ui-monospace', 'monospace'],
       },
       colors: {
         lab: {
-          bg: '#050507',
-          blue: '#4d9bff',
-          gold: '#c4a86a',
-          green: '#37d6a0',
-          amber: '#f5b04c',
-          red: '#f2585f',
+          bg: '#eef2f3',
+          blue: '#0f766e',
+          gold: '#9a6700',
+          green: '#15803d',
+          amber: '#b45309',
+          red: '#b42318',
         },
       },
     },
