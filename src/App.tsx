@@ -4024,7 +4024,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
 
   return (
     <div className="domain-page">
-      <DomainHeader domain={displayDomain} session={session} onOpenModal={onOpenModal} />
+      <DomainHeader domain={displayDomain} session={session} />
 
       {domain.key === 'materials' && (
         <MaterialWorkspace
@@ -4142,11 +4142,9 @@ const DomainWorkspace = memo(function DomainWorkspace({
 function DomainHeader({
   domain,
   session,
-  onOpenModal,
 }: {
   domain: DomainModule
   session: AuthSession
-  onOpenModal: (modal: ModalKind) => void
 }) {
   const Icon = domainIcons[domain.key]
   const internalAdminView = isInternalAdminSession(session)
@@ -4157,29 +4155,8 @@ function DomainHeader({
       icon={Icon}
       right={internalAdminView ? <StatusBadge status={domain.status} /> : undefined}
     >
-      <div className="domain-header-grid">
-        <div>
-          <p className="lead">{domain.responsibility}</p>
-          {internalAdminView ? (
-            <div className="tag-row">
-              <DataTag icon={UsersRound} label="Owner" value={domain.owner} />
-              <DataTag icon={Gauge} label="Health" value={`${domain.health}%`} tone={domain.health > 70 ? 'green' : 'amber'} />
-            </div>
-          ) : null}
-        </div>
-        {internalAdminView ? (
-          <div className="risk-card">
-            <div className="mono-small">Current gate</div>
-            <strong>{domain.risk}</strong>
-            <button
-              className="ghost-button small"
-              type="button"
-              onClick={() => onOpenModal(domain.key === 'saas' || domain.key === 'identity' ? 'ssoPolicy' : 'auditExport')}
-            >
-              Review controls
-            </button>
-          </div>
-        ) : null}
+      <div className="domain-header-summary">
+        <p>{domain.responsibility}</p>
       </div>
     </Panel>
   )
