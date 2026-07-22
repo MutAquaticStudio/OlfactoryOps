@@ -321,6 +321,13 @@ const clientFallbackBranding: BrandingConfig = {
   logoMode: 'wordmark',
 }
 
+function workspaceBrandingFallback(organizationId?: string): BrandingConfig {
+  return {
+    ...clientFallbackBranding,
+    organizationId: organizationId ?? clientFallbackBranding.organizationId,
+  }
+}
+
 const clientFallbackCosting: CostingOverview = {
   valuation: {
     asOf: 'client-fallback',
@@ -1593,6 +1600,7 @@ function App() {
   const [authNotice, setAuthNotice] = useState<string | null>(null)
   const [resumeKey, setResumeKey] = useState<DomainKey | null>(null)
   const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
+  const [workspaceBranding, setWorkspaceBranding] = useState<BrandingConfig>(() => workspaceBrandingFallback())
   const [tenantDomains, setTenantDomains] = useState<Record<string, string>>({})
   const [billingOnboarding, setBillingOnboarding] = useState(false)
   const [approvalNotice, setApprovalNotice] = useState<string | null>(null)
@@ -2409,6 +2417,29 @@ function App() {
     void syncTenantDomain(currentOrganizationId)
   }, [currentOrganizationId])
 
+  useEffect(() => {
+    if (!currentSession || !currentOrganizationId) {
+      setWorkspaceBranding(workspaceBrandingFallback())
+      return
+    }
+
+    let cancelled = false
+    setWorkspaceBranding(workspaceBrandingFallback(currentOrganizationId))
+    void requestApi<BrandingConfig>('/branding')
+      .then((branding) => {
+        if (!cancelled) {
+          setWorkspaceBranding(branding)
+        }
+      })
+      .catch(() => {
+        // Keep the system default when a workspace does not have a saved brand yet.
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentOrganizationId, currentSessionId])
+
   async function syncUserSettings(session: AuthSession) {
     try {
       const settings = await requestApi<UserSettingsRecord>('/user/settings')
@@ -2524,6 +2555,7 @@ function App() {
         ) : null}
         <Sidebar
           activeKey={activeKey}
+          branding={workspaceBranding}
           collapsed={sidebarCollapsed && !mobileNavOpen}
           mobileOpen={mobileNavOpen}
           session={currentSession}
@@ -2631,6 +2663,7 @@ function App() {
                   onRequestInventoryApproval={submitInventoryApprovalRequest}
                   userSettings={activeUserSettings}
                   onUserSettingsChange={applyUserSettings}
+                  onWorkspaceBrandingChange={setWorkspaceBranding}
                 />
               </motion.div>
             ) : null}
@@ -2649,7 +2682,7 @@ function App() {
         <BlackPopup
           open={modal === 'userSettings'}
           title="User Settings"
-          description="Personal preferences for this signed-in user. Company branding, roles, and workspace policy stay separate."
+          description="Personal preferences for this signed-in user. Workspace admins can also manage the shared navigation brand."
           actionLabel="Close"
           onClose={closeCurrentModal}
           onAction={closeCurrentModal}
@@ -2657,6 +2690,8 @@ function App() {
         <UserSettingsForm
           settings={activeUserSettings}
           session={currentSession}
+          branding={workspaceBranding}
+          onBrandingSaved={setWorkspaceBranding}
           onSaved={(settings) => {
             applyUserSettings(settings)
             setActiveKey(safeLandingForSession(settings.preferredLanding, currentSession))
@@ -3005,6 +3040,7 @@ function App() {
 
 function Sidebar({
   activeKey,
+  branding,
   collapsed,
   mobileOpen,
   session,
@@ -3012,22 +3048,36 @@ function Sidebar({
   onToggle,
 }: {
   activeKey: DomainKey
+  branding: BrandingConfig
   collapsed: boolean
   mobileOpen: boolean
   session: AuthSession
   onNavigate: (key: DomainKey) => void
   onToggle: () => void
 }) {
+  const brandName = branding.displayName.trim() || 'OlfactoryOps'
+  const brandInitials = brandName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.slice(0, 1).toUpperCase())
+    .join('')
+  const isSystemBrand = brandName === 'OlfactoryOps'
+
   return (
     <aside className="sidebar glass" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
       <div className="brand-row">
-        <div className="brand-mark">
-          <Sparkles size={18} />
+        <div
+          className={`brand-mark ${branding.logoMode === 'monogram' ? 'is-monogram' : ''}`}
+          style={{ background: branding.accentColor }}
+          title={`${brandName} workspace brand`}
+        >
+          {branding.logoMode === 'monogram' ? brandInitials || 'O' : <Sparkles size={18} />}
         </div>
         {!collapsed && (
           <div>
-            <div className="wordmark">OlfactoryOps</div>
-            <div className="mono-small">OlfactoryOps OS</div>
+            <div className="wordmark">{brandName}</div>
+            <div className="mono-small">{isSystemBrand ? 'OlfactoryOps OS' : 'Powered by OlfactoryOps'}</div>
           </div>
         )}
         <button
@@ -3150,25 +3200,40 @@ function Topbar({
 function UserSettingsForm({
   settings,
   session,
+  branding,
+  onBrandingSaved,
   onSaved,
 }: {
   settings: UserSettingsRecord
   session: AuthSession
+  branding: BrandingConfig
+  onBrandingSaved: (branding: BrandingConfig) => void
   onSaved: (settings: UserSettingsRecord) => void
 }) {
   const [draft, setDraft] = useState<UserSettingsRecord>(settings)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Changes apply to your account only.')
+  const [brandingDraft, setBrandingDraft] = useState<BrandingConfig>(branding)
+  const [brandingBusy, setBrandingBusy] = useState(false)
+  const [brandingStatus, setBrandingStatus] = useState('Workspace branding is shared with every member.')
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
   const safeDraftAccentColor = normalizedDraftAccentColor ?? defaultAccentColor
+  const normalizedBrandAccentColor = normalizeHexColor(brandingDraft.accentColor)
+  const safeBrandAccentColor = normalizedBrandAccentColor ?? clientFallbackBranding.accentColor
   const accentPreviewStyle = useMemo(() => accentStyleForColor(safeDraftAccentColor), [safeDraftAccentColor])
   const landingDomains = useMemo(() => visibleDomainsForSession(session), [session])
   const draftPreferredLanding = safeLandingForSession(draft.preferredLanding, session)
+  const canManageBranding = sessionHasPermission(session, 'customization.manage')
 
   useEffect(() => {
     setDraft({ ...settings, preferredLanding: safeLandingForSession(settings.preferredLanding, session) })
     setStatus('Changes apply to your account only.')
   }, [settings, session])
+
+  useEffect(() => {
+    setBrandingDraft(branding)
+    setBrandingStatus('Workspace branding is shared with every member.')
+  }, [branding])
 
   async function saveSettings() {
     setBusy(true)
@@ -3194,6 +3259,35 @@ function UserSettingsForm({
       setStatus(error instanceof Error ? error.message : 'Could not save user settings')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function saveWorkspaceBranding() {
+    const displayName = brandingDraft.displayName.trim()
+    if (displayName.length < 2) {
+      setBrandingStatus('Workspace name must have at least 2 characters.')
+      return
+    }
+
+    setBrandingBusy(true)
+    setBrandingStatus('Saving workspace branding...')
+    try {
+      const payload = await requestApi<BrandingUpdateResponse>('/branding', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          displayName,
+          accentColor: safeBrandAccentColor,
+          logoMode: brandingDraft.logoMode,
+        }),
+      })
+      setBrandingDraft(payload.branding)
+      onBrandingSaved(payload.branding)
+      setBrandingStatus('Workspace branding saved for all members.')
+    } catch (error) {
+      setBrandingStatus(error instanceof Error ? error.message : 'Could not save workspace branding')
+    } finally {
+      setBrandingBusy(false)
     }
   }
 
@@ -3364,6 +3458,90 @@ function UserSettingsForm({
           </label>
         </div>
       </section>
+
+      {canManageBranding ? (
+        <section className="settings-section">
+          <div className="settings-section-heading">
+            <strong>Workspace Branding</strong>
+            <span>Shown in the shared sidebar and used by workspace documents.</span>
+          </div>
+          <div className="settings-form-grid">
+            <label className="field-row">
+              <span>Workspace name</span>
+              <input
+                aria-label="Workspace branding name"
+                maxLength={64}
+                value={brandingDraft.displayName}
+                onChange={(event) => setBrandingDraft((current) => ({ ...current, displayName: event.target.value }))}
+              />
+            </label>
+            <label className="field-row">
+              <span>Brand mark</span>
+              <select
+                aria-label="Workspace branding mark"
+                value={brandingDraft.logoMode}
+                onChange={(event) =>
+                  setBrandingDraft((current) => ({
+                    ...current,
+                    logoMode: event.target.value === 'monogram' ? 'monogram' : 'wordmark',
+                  }))
+                }
+              >
+                <option value="wordmark">System mark</option>
+                <option value="monogram">Workspace initials</option>
+              </select>
+            </label>
+            <label className="field-row color-field">
+              <span>Brand color</span>
+              <div className="color-control">
+                <input
+                  aria-label="Workspace branding color picker"
+                  type="color"
+                  value={safeBrandAccentColor}
+                  onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: event.target.value }))}
+                />
+                <input
+                  aria-label="Workspace branding color hex"
+                  value={brandingDraft.accentColor}
+                  onBlur={() =>
+                    setBrandingDraft((current) => ({
+                      ...current,
+                      accentColor: normalizeHexColor(current.accentColor) ?? current.accentColor,
+                    }))
+                  }
+                  onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: event.target.value }))}
+                />
+              </div>
+            </label>
+          </div>
+          <div className="settings-save-row">
+            <span className="mono-small">{brandingStatus}</span>
+            <div className="action-row">
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={() =>
+                  setBrandingDraft((current) => ({
+                    ...current,
+                    displayName: 'OlfactoryOps',
+                    logoMode: 'wordmark',
+                  }))
+                }
+              >
+                Use OlfactoryOps default
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void saveWorkspaceBranding()}
+                disabled={brandingBusy || !brandingDraft.displayName.trim() || !normalizedBrandAccentColor}
+              >
+                {brandingBusy ? 'Saving...' : 'Save Workspace Brand'}
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="settings-save-row">
         <span className="mono-small">{status}</span>
@@ -4038,6 +4216,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onRequestInventoryApproval,
   userSettings,
   onUserSettingsChange,
+  onWorkspaceBrandingChange,
 }: {
   domain: DomainModule
   session: AuthSession
@@ -4100,6 +4279,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   ) => Promise<InventoryApprovalRequestResponse>
   userSettings: UserSettingsRecord
   onUserSettingsChange: (settings: UserSettingsRecord) => void
+  onWorkspaceBrandingChange: (branding: BrandingConfig) => void
 }) {
   const displayDomain = domainDisplayForSession(domain, session)
 
@@ -4204,7 +4384,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
       {domain.key === 'analytics' && <AnalyticsWorkspace />}
       {domain.key === 'saas' && <SaasWorkspace session={session} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
-      {domain.key === 'customization' && <CustomizationWorkspace />}
+      {domain.key === 'customization' && <CustomizationWorkspace onBrandingSaved={onWorkspaceBrandingChange} />}
       {![
         'identity',
         'customization',
@@ -12830,7 +13010,7 @@ function fieldStatus(status: CustomFieldDefinition['status']): DomainStatus {
   return status === 'ACTIVE' ? 'stable' : 'draft'
 }
 
-function CustomizationWorkspace() {
+function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (branding: BrandingConfig) => void }) {
   const fallbackCustomization = useMemo(buildCustomizationFallback, [])
   const initialSequence = fallbackCustomization.numberingSequences[0]!
   const [customizationData, setCustomizationData] = useState<CustomizationConsoleResponse>(fallbackCustomization)
@@ -13035,7 +13215,8 @@ function CustomizationWorkspace() {
         audit: addAudit(current.audit, payload.audit),
       }))
       setBrandingDraft(payload.branding)
-      setCustomizationStatus('Export branding saved as workspace configuration')
+      onBrandingSaved(payload.branding)
+      setCustomizationStatus('Workspace branding saved as shared configuration')
     } catch {
       setCustomizationStatus('Branding update blocked; accent color must be hex')
     }
@@ -13307,7 +13488,7 @@ function CustomizationWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="Export Branding" icon={Sparkles}>
+      <Panel title="Workspace & Export Branding" icon={Sparkles}>
         <div className="customization-form-grid">
           <label className="field-row">
             <span>Display name</span>
@@ -13360,13 +13541,26 @@ function CustomizationWorkspace() {
               }
             />
           </label>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() =>
+              setBrandingDraft((current) => ({
+                ...current,
+                displayName: 'OlfactoryOps',
+                logoMode: 'wordmark',
+              }))
+            }
+          >
+            Use OlfactoryOps default
+          </button>
           <button className="primary-button" type="button" onClick={() => void saveBranding()}>
-            Save branding
+            Save workspace branding
           </button>
         </div>
         <div className="branding-preview" style={{ borderColor: `${brandingDraft.accentColor}66` }}>
           <div>
-            <span className="mono-small">Export preview</span>
+            <span className="mono-small">Workspace & export preview</span>
             <strong style={{ color: brandingDraft.accentColor }}>{brandingDraft.displayName}</strong>
             <span>{brandingDraft.documentFooter}</span>
           </div>

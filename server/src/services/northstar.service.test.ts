@@ -1048,6 +1048,16 @@ describe('NorthStarService', () => {
     expect(branding.audit.action).toBe('customization.branding.update')
   })
 
+  it('exposes workspace branding to signed-in members and validates shared names', () => {
+    const service = createAuthenticatedService()
+
+    const branding = service.workspaceBranding().data
+
+    expect(branding.organizationId).toBe('org-nxl')
+    expect(branding.displayName).toBe('NOXELIS Lab')
+    expect(() => service.updateBranding({ displayName: 'x' })).toThrow(UnprocessableEntityException)
+  })
+
   it('blocks unsafe customization changes', () => {
     const service = createAuthenticatedService()
 

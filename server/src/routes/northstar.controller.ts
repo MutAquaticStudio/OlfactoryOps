@@ -706,6 +706,11 @@ export class NorthStarController {
     return this.northStar.customizationConsole()
   }
 
+  @Get('branding')
+  workspaceBranding() {
+    return this.northStar.workspaceBranding()
+  }
+
   @Get('feature-flags')
   featureFlags() {
     return this.northStar.featureFlags()

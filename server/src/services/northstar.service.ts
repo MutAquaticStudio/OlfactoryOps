@@ -3408,13 +3408,18 @@ export class NorthStarService {
         featureFlags: this.flagRecords,
         numberingSequences: this.sequences,
         customFields: this.customFieldRecords,
-        branding: this.brandingRecord,
+        branding: this.workspaceBrandingForOrganization(session.organizationId),
         audit: this.auditEvents
           .filter((event) => event.action.startsWith('customization.'))
           .slice(0, 8),
         invariant: 'tenant customization is config-driven and audit logged',
       },
     }
+  }
+
+  workspaceBranding() {
+    const session = this.currentSession()
+    return { data: this.workspaceBrandingForOrganization(session.organizationId) }
   }
 
   updateFeatureFlag(key: string, enabled: boolean) {
@@ -3519,16 +3524,22 @@ export class NorthStarService {
   updateBranding(patch: Partial<BrandingConfig>) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    const accentColor = patch.accentColor?.trim() ?? this.brandingRecord.accentColor
+    const currentBranding = this.workspaceBrandingForOrganization(session.organizationId)
+    const displayName = patch.displayName?.trim() ?? currentBranding.displayName
+    if (displayName.length < 2 || displayName.length > 64) {
+      throw new UnprocessableEntityException('Workspace branding name must be between 2 and 64 characters')
+    }
+    const accentColor = patch.accentColor?.trim() ?? currentBranding.accentColor
     if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
       throw new UnprocessableEntityException('Accent color must be a hex color like #0f766e')
     }
     this.brandingRecord = {
-      ...this.brandingRecord,
+      ...currentBranding,
       ...patch,
-      organizationId: this.brandingRecord.organizationId,
+      organizationId: session.organizationId,
+      displayName,
       accentColor,
-      logoMode: patch.logoMode === 'monogram' || patch.logoMode === 'wordmark' ? patch.logoMode : this.brandingRecord.logoMode,
+      logoMode: patch.logoMode === 'monogram' || patch.logoMode === 'wordmark' ? patch.logoMode : currentBranding.logoMode,
     }
     const audit = this.recordAudit('customization.branding.update', this.brandingRecord.organizationId, session.userId, 'allowed')
     return { data: { branding: this.brandingRecord, audit, invariant: 'branding changes are tenant config only' } }
@@ -7379,6 +7390,21 @@ export class NorthStarService {
       throw new UnauthorizedException('Invalid or expired session')
     }
     return securedSession
+  }
+
+  private workspaceBrandingForOrganization(organizationId: string): BrandingConfig {
+    if (this.brandingRecord.organizationId === organizationId) {
+      return this.brandingRecord
+    }
+
+    return {
+      organizationId,
+      displayName: 'OlfactoryOps',
+      accentColor: '#0f766e',
+      documentFooter: 'Confidential workspace record',
+      labelTemplate: 'OLF-{sequence}',
+      logoMode: 'wordmark',
+    }
   }
 
   private publicSecurityPolicyForSession(session: AuthSession) {

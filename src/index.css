@@ -326,6 +326,12 @@ strong {
   height: 38px;
 }
 
+.brand-mark.is-monogram {
+  font-size: 0.74rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
 .icon-chip {
   width: 32px;
   height: 32px;

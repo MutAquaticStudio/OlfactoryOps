@@ -216,9 +216,11 @@ const sensitiveMutationRateLimit: RateLimitPolicy = {
 }
 const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
 const SNAPSHOT_CACHE_TTL_MS = 2_000
+const WORKSPACE_BRANDING_CACHE_TTL_MS = 2_000
 let persistenceReadyPromise: Promise<void> | undefined
 let snapshotCacheFlight: Promise<CachedSnapshotState> | null = null
 let snapshotCache: CachedSnapshotState | null = null
+const workspaceBrandingCache = new Map<string, { loadedAt: number; branding: BrandingConfig }>()
 
 type CachedSnapshotState = {
   loadedAt: number
@@ -458,6 +460,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/settings', handler: ({ service }) => service.settings() },
   { method: 'PATCH', pattern: '/settings', mutates: true, handler: ({ service, body }) => service.updateSettings(body) },
   { method: 'GET', pattern: '/customization-console', handler: ({ service }) => service.customizationConsole() },
+  { method: 'GET', pattern: '/branding', handler: ({ service }) => service.workspaceBranding() },
   { method: 'GET', pattern: '/feature-flags', handler: ({ service }) => service.featureFlags() },
   { method: 'PATCH', pattern: '/feature-flags/:key', mutates: true, handler: ({ service, params, body }) => service.updateFeatureFlag(params.key, body.enabled === true) },
   { method: 'GET', pattern: '/numbering-sequences', handler: ({ service }) => service.numberingSequences() },
@@ -597,7 +600,11 @@ export default {
         await hydrateSnapshots(env.DB, service, env)
       }
       if (!match.route.public) {
+        if (!credential.sessionId) {
+          throw new UnauthorizedException('Authentication required')
+        }
         service.authenticateSession(credential.sessionId)
+        await hydrateWorkspaceBranding(env.DB, service, credential.sessionId)
       }
       if (match.route.mutates && !match.route.public && credential.source === 'cookie') {
         service.assertValidCsrfToken(request.headers.get('X-CSRF-Token'))
@@ -638,6 +645,7 @@ export default {
       }
       if (refreshSnapshotCache) {
         refreshCachedSnapshotState(service)
+        refreshWorkspaceBrandingCache(service, credential.sessionId)
       }
 
       return json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
@@ -958,6 +966,57 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: 
     ;(serviceState as Record<SnapshotKey, ServiceState[SnapshotKey]>)[key] = structuredClone(cachedValue)
   }
   return
+}
+
+async function hydrateWorkspaceBranding(db: D1Database, service: NorthStarService, sessionId: string) {
+  const serviceState = service as unknown as ServiceState
+  const session = serviceState.sessions.find((candidate) => candidate.id === sessionId)
+  if (!session) {
+    return
+  }
+
+  const cached = workspaceBrandingCache.get(session.organizationId)
+  if (cached && Date.now() - cached.loadedAt <= WORKSPACE_BRANDING_CACHE_TTL_MS) {
+    serviceState.brandingRecord = structuredClone(cached.branding)
+    return
+  }
+
+  const branding = await db
+    .prepare(
+      `SELECT organization_id, display_name, accent_color, document_footer, label_template, logo_mode
+       FROM tenant_branding
+       WHERE organization_id = ?1`,
+    )
+    .bind(session.organizationId)
+    .first<BrandingRow>()
+
+  const resolvedBranding: BrandingConfig = branding
+    ? brandingFromRow(branding)
+    : {
+        organizationId: session.organizationId,
+        displayName: 'OlfactoryOps',
+        accentColor: '#0f766e',
+        documentFooter: 'Confidential workspace record',
+        labelTemplate: 'OLF-{sequence}',
+        logoMode: 'wordmark',
+      }
+  serviceState.brandingRecord = resolvedBranding
+  workspaceBrandingCache.set(session.organizationId, { loadedAt: Date.now(), branding: structuredClone(resolvedBranding) })
+}
+
+function refreshWorkspaceBrandingCache(service: NorthStarService, sessionId?: string) {
+  if (!sessionId) {
+    return
+  }
+  const serviceState = service as unknown as ServiceState
+  const session = serviceState.sessions.find((candidate) => candidate.id === sessionId)
+  if (!session) {
+    return
+  }
+  workspaceBrandingCache.set(session.organizationId, {
+    loadedAt: Date.now(),
+    branding: structuredClone(serviceState.brandingRecord),
+  })
 }
 
 function isSnapshotCacheFresh(state: CachedSnapshotState | null): state is CachedSnapshotState {
