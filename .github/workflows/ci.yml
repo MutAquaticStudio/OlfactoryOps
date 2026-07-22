@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   verify:
@@ -34,7 +35,15 @@ jobs:
       - name: API build
         run: npm run build:api
 
+      - name: Worker typecheck
+        run: npm run typecheck:worker
+
+      - name: Client bundle secret scan
+        run: npm run security:client-bundle
+
       - name: Prisma schema validation
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/olfactoryops_ci
         run: npm run prisma:validate
 
       - name: Dependency audit

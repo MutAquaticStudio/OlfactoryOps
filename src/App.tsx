@@ -2247,7 +2247,6 @@ function App() {
     }
   }, [
     canReceiveInventory,
-    formatGrams,
     isPermissionError,
     materialRecords,
     receiveExpiryDate,
@@ -2320,7 +2319,6 @@ function App() {
     adjustmentQuantityGrams,
     adjustmentReason,
     canAdjustInventory,
-    formatGrams,
     isPermissionError,
     lots,
     submitInventoryApprovalRequest,
@@ -2453,7 +2451,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [currentOrganizationId, currentSessionId])
+  }, [currentOrganizationId, currentSession, currentSessionId])
 
   async function syncUserSettings(session: AuthSession) {
     try {
