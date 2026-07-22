@@ -1395,6 +1395,27 @@ kbd {
   margin-top: 12px;
 }
 
+.cost-sheet-controls,
+.pricing-scenario-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.cost-sheet-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.cost-sheet-tags {
+  justify-content: flex-end;
+}
+
+.pricing-scenario-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
 .trace-strip span {
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -4135,14 +4156,15 @@ input[type='range'] {
   .stock-grid,
   .record-grid,
   .plan-card-grid,
-    .metric-grid,
-    .commerce-evidence-grid,
-    .order-entry-grid,
-    .order-evidence-grid,
-    .analytics-widget-grid,
-    .inspector-grid,
-    .settings-form-grid,
-    .saas-health-summary {
+  .pricing-scenario-grid,
+  .metric-grid,
+  .commerce-evidence-grid,
+  .order-entry-grid,
+  .order-evidence-grid,
+  .analytics-widget-grid,
+  .inspector-grid,
+  .settings-form-grid,
+  .saas-health-summary {
     grid-template-columns: 1fr;
   }
 
@@ -4230,6 +4252,14 @@ input[type='range'] {
 
   .production-timeline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cost-sheet-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-sheet-tags {
+    justify-content: flex-start;
   }
 
   .production-gate-action {

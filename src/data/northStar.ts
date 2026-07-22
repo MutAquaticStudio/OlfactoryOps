@@ -788,6 +788,10 @@ export interface BatchCostReport {
   batchId: string
   formulaId: string
   targetGrams: number
+  outputGrams: number
+  yieldVariancePercent: number
+  costingBasis: 'RELEASED_OUTPUT' | 'TARGET_ESTIMATE'
+  materialCostBasis: 'ACTUAL_LOT_CONSUMPTION' | 'FORMULA_ESTIMATE'
   materialCost: number
   laborCost: number
   overheadCost: number
@@ -3976,27 +3980,56 @@ export function batchCostReport(
   materialCatalog: Material[] = materials,
   lots: InventoryLot[] = initialLots,
   history: PriceHistoryRecord[] = priceHistory,
+  movements: InventoryMovement[] = initialMovements,
 ): BatchCostReport {
   const batch = batchCatalog.find((item) => item.id === batchId)
   const sourceFormulaCost = formulaCostReport(batch?.formulaId ?? formulaCatalog[0]?.id ?? '', formulaCatalog, materialCatalog, lots, history)
   const formula = formulaCatalog.find((item) => item.id === sourceFormulaCost.formulaId)
   const targetGrams = batch?.targetGrams ?? formula?.targetGrams ?? sourceFormulaCost.totalGrams
   const scale = formula && formula.targetGrams > 0 ? targetGrams / formula.targetGrams : 1
-  const materialCost = sourceFormulaCost.totalCost * scale
+  const inputMovements = batch
+    ? movements.filter((movement) => movement.type === 'PRODUCTION_CONSUMPTION' && movement.ref === batch.id)
+    : []
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  const lotById = new Map(lots.map((lot) => [lot.id, lot]))
+  const actualMaterialCost = inputMovements.reduce((sum, movement) => {
+    const material = materialById.get(movement.materialId)
+    const lot = lotById.get(movement.lotId)
+    const policy = material ? costPolicyForMaterial(material.id) : undefined
+    const landed = material ? landedCostForMaterial(material.id) : undefined
+    const landedMultiplier = landed ? 1 + (landed.freightPercent + landed.dutyPercent + landed.insurancePercent) / 100 : 1
+    const overheadMultiplier = policy ? 1 + policy.overheadPercent / 100 : 1
+    const unitCost = lot?.unitCost ?? material?.costPerGram ?? 0
+    return sum + movement.quantityGrams * unitCost * landedMultiplier * overheadMultiplier
+  }, 0)
+  const materialCostBasis = inputMovements.length > 0 ? 'ACTUAL_LOT_CONSUMPTION' as const : 'FORMULA_ESTIMATE' as const
+  const materialCost = materialCostBasis === 'ACTUAL_LOT_CONSUMPTION' ? actualMaterialCost : sourceFormulaCost.totalCost * scale
   const laborCost = targetGrams * 0.018
   const overheadCost = materialCost * 0.12
   const totalCost = materialCost + laborCost + overheadCost
+  const releasedOutput = batch?.status === 'RELEASED'
+    ? batch.outputLot?.quantityGrams ?? batch.yieldGrams ?? targetGrams
+    : targetGrams
+  const costingBasis = batch?.status === 'RELEASED' && Boolean(batch.outputLot) ? 'RELEASED_OUTPUT' as const : 'TARGET_ESTIMATE' as const
+  const roundedTotalCost = Number(totalCost.toFixed(2))
   return {
     batchId,
     formulaId: sourceFormulaCost.formulaId,
     targetGrams,
+    outputGrams: Number(releasedOutput.toFixed(3)),
+    yieldVariancePercent: Number((batch?.yieldVariancePercent ?? 0).toFixed(2)),
+    costingBasis,
+    materialCostBasis,
     materialCost: Number(materialCost.toFixed(2)),
     laborCost: Number(laborCost.toFixed(2)),
     overheadCost: Number(overheadCost.toFixed(2)),
-    totalCost: Number(totalCost.toFixed(2)),
-    costPerGram: targetGrams > 0 ? Number((totalCost / targetGrams).toFixed(4)) : 0,
+    totalCost: roundedTotalCost,
+    costPerGram: releasedOutput > 0 ? Number((roundedTotalCost / releasedOutput).toFixed(4)) : 0,
     sourceFormulaCost,
-    invariant: 'batch cost scales resolved formula cost and adds labor plus overhead without mutating production',
+    invariant:
+      costingBasis === 'RELEASED_OUTPUT'
+        ? 'released cost sheet uses consumed lot costs and finished output yield without mutating production'
+        : 'batch cost is a target estimate until the production batch is released',
   }
 }
 

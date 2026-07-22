@@ -1582,6 +1582,7 @@ describe('NorthStarService', () => {
 
     const batch = service.createProductionBatch('frm-0421', 25).data
     expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/must consume inventory/)
+    expect(() => service.costingBatch(batch.id)).toThrow(/must be released/)
 
     service.consumeProductionBatch(batch.id)
     const filtration = service.updateProductionBatchStatus(batch.id, 'FILTRATION').data
@@ -1600,6 +1601,12 @@ describe('NorthStarService', () => {
     expect(released.batch.genealogy.outputLotId).toBe(released.batch.outputLot?.id)
     expect(released.batch.yieldVariancePercent).toBeLessThan(0)
     expect(released.invariant).toContain('audited and gated')
+
+    const costSheet = service.costingBatch(batch.id).data
+    expect(costSheet.costingBasis).toBe('RELEASED_OUTPUT')
+    expect(costSheet.materialCostBasis).toBe('ACTUAL_LOT_CONSUMPTION')
+    expect(costSheet.outputGrams).toBe(released.batch.outputLot?.quantityGrams)
+    expect(costSheet.costPerGram).toBeCloseTo(costSheet.totalCost / costSheet.outputGrams, 4)
   })
 
   it('receives purchase orders into inventory through lot and IN movement', () => {
@@ -1785,10 +1792,16 @@ describe('NorthStarService', () => {
 
   it('builds costing read models from formula, batch, SKU margin, valuation, and COGS', () => {
     const service = createAuthenticatedService()
-    const beforeMovements = service.inventoryMovements().data.length
+    const releasedBatch = service.createProductionBatch('frm-0421', 25).data
+    service.consumeProductionBatch(releasedBatch.id)
+    service.updateProductionBatchStatus(releasedBatch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(releasedBatch.id, 'QC')
+    service.qcProductionBatch(releasedBatch.id, 'PASSED')
+    service.updateProductionBatchStatus(releasedBatch.id, 'RELEASED')
+    const beforeCostingMovements = service.inventoryMovements().data.length
     const overview = service.costingOverview().data
     const formula = service.costingFormula('frm-0421').data
-    const batch = service.costingBatch('BTH-2025-118').data
+    const batch = service.costingBatch(releasedBatch.id).data
     const sku = service.costingSku('SKU-ISO-050').data
     const valuation = service.costingValuation().data
 
@@ -1799,11 +1812,12 @@ describe('NorthStarService', () => {
     expect(formula.costPerGram).toBeGreaterThan(0)
     expect(formula.mostExpensiveMaterial).not.toBe('n/a')
     expect(batch.sourceFormulaCost.formulaId).toBe('frm-0421')
+    expect(batch.costingBasis).toBe('RELEASED_OUTPUT')
     expect(batch.totalCost).toBeGreaterThan(batch.materialCost)
     expect(sku.marginPercent).toBeGreaterThan(0)
     expect(valuation.totalValue).toBeGreaterThan(0)
     expect(valuation.invariant).toContain('reconciles')
-    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+    expect(service.inventoryMovements().data).toHaveLength(beforeCostingMovements)
   })
 
   it('serves analytics read models and report runs without mutating the movement ledger', () => {

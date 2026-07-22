@@ -5189,6 +5189,9 @@ export class NorthStarService {
     if (!batch) {
       throw new NotFoundException(`Production batch ${id} was not found`)
     }
+    if (batch.status !== 'RELEASED' || !batch.outputLot) {
+      throw new UnprocessableEntityException(`Production batch ${id} must be released before a finished-product cost sheet is available`)
+    }
     this.formulaForSession(batch.formulaId, session)
     const formulas = this.formulaCatalogForSession(session)
     return {
@@ -5199,6 +5202,7 @@ export class NorthStarService {
         this.materialRecords,
         this.lots,
         this.priceHistoryRecords,
+        this.movements,
       ),
     }
   }

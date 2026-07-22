@@ -120,6 +120,7 @@ import {
   type DocumentRecord,
   type FormulaEvaluationRecord,
   type FormulaIfraEvaluation,
+  type FormulaCostReport,
   type FormulaScalePlan,
   type FormulaVersionDiff,
   type DocumentComplianceDashboard,
@@ -350,6 +351,10 @@ const clientFallbackBatchCost: BatchCostReport = {
   batchId: 'API',
   formulaId: '',
   targetGrams: 0,
+  outputGrams: 0,
+  yieldVariancePercent: 0,
+  costingBasis: 'TARGET_ESTIMATE',
+  materialCostBasis: 'FORMULA_ESTIMATE',
   materialCost: 0,
   laborCost: 0,
   overheadCost: 0,
@@ -11293,71 +11298,230 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
 
 function CostingWorkspace() {
   const [costingData, setCostingData] = useState<CostingOverview>(clientFallbackCosting)
+  const [formulaCost, setFormulaCost] = useState<FormulaCostReport>(clientFallbackCosting.formula)
   const [batchCost, setBatchCost] = useState<BatchCostReport>(clientFallbackBatchCost)
-  const [statusMessage, setStatusMessage] = useState('Loading costing read models')
-  const cogsTotal = costingData.cogs.reduce((sum, line) => sum + line.cogs, 0)
+  const [releasedBatches, setReleasedBatches] = useState<ProductionBatchRecord[]>([])
+  const [selectedBatchId, setSelectedBatchId] = useState('')
+  const selectedBatchIdRef = useRef('')
+  const [statusMessage, setStatusMessage] = useState('Loading released production cost sheets')
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [packSizeGrams, setPackSizeGrams] = useState(50)
+  const [targetMarginPercent, setTargetMarginPercent] = useState(58)
+
+  const selectedBatch = releasedBatches.find((batch) => batch.id === selectedBatchId)
+  const selectedBatchCogs = useMemo(
+    () => costingData.cogs.filter((line) => line.ref === selectedBatchId && line.type === 'PRODUCTION_CONSUMPTION'),
+    [costingData.cogs, selectedBatchId],
+  )
+  const selectedBatchCogsTotal = selectedBatchCogs.reduce((sum, line) => sum + line.cogs, 0)
+  const materialNames = useMemo(
+    () => new Map(formulaCost.lines.map((line) => [line.materialId, line.materialName])),
+    [formulaCost.lines],
+  )
+  const relevantPolicies = costingData.methodPolicies.filter((policy) => materialNames.has(policy.materialId))
+  const safeMarginPercent = Math.min(95, Math.max(0, targetMarginPercent))
+  const packCost = batchCost.costPerGram * packSizeGrams
+  const recommendedPrice = packCost > 0 ? packCost / (1 - safeMarginPercent / 100) : 0
+  const finishedPacks = packSizeGrams > 0 ? Math.floor(batchCost.outputGrams / packSizeGrams) : 0
+
+  const refreshCosting = useCallback(async (requestedBatchId?: string, signal?: AbortSignal) => {
+    setIsRefreshing(true)
+    try {
+      const [overview, batches] = await Promise.all([
+        requestApi<CostingOverview>('/costing/overview', { signal }),
+        requestApi<ProductionBatchRecord[]>('/production/batches', { signal }),
+      ])
+      if (signal?.aborted) {
+        return
+      }
+
+      const nextReleasedBatches = batches.filter((batch) => batch.status === 'RELEASED' && Boolean(batch.outputLot))
+      const preferredBatchId = requestedBatchId ?? selectedBatchIdRef.current
+      const nextBatchId = nextReleasedBatches.some((batch) => batch.id === preferredBatchId)
+        ? preferredBatchId
+        : nextReleasedBatches[0]?.id ?? ''
+
+      setCostingData(overview)
+      setReleasedBatches(nextReleasedBatches)
+      selectedBatchIdRef.current = nextBatchId
+      setSelectedBatchId(nextBatchId)
+
+      if (!nextBatchId) {
+        setFormulaCost(overview.formula)
+        setBatchCost(clientFallbackBatchCost)
+        setStatusMessage('No released production batch is ready for costing')
+        return
+      }
+
+      const selected = nextReleasedBatches.find((batch) => batch.id === nextBatchId)
+      if (!selected) {
+        return
+      }
+      const [nextFormulaCost, nextBatchCost] = await Promise.all([
+        requestApi<FormulaCostReport>(`/costing/formulas/${encodeURIComponent(selected.formulaId)}`, { signal }),
+        requestApi<BatchCostReport>(`/costing/batches/${encodeURIComponent(selected.id)}`, { signal }),
+      ])
+      if (signal?.aborted) {
+        return
+      }
+      setFormulaCost(nextFormulaCost)
+      setBatchCost(nextBatchCost)
+      setStatusMessage(`Cost sheet ready for ${selected.id}`)
+    } catch {
+      if (!signal?.aborted) {
+        setStatusMessage('Could not refresh costing data')
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsRefreshing(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
-
-    async function loadCosting() {
-      try {
-        const [overview, batch] = await Promise.all([
-          requestApi<CostingOverview>('/costing/overview', { signal: controller.signal }),
-          requestApi<BatchCostReport>('/costing/batches/BTH-2025-118', { signal: controller.signal }),
-        ])
-        setCostingData(overview)
-        setBatchCost(batch)
-        setStatusMessage('Costing synced from live API')
-      } catch {
-        if (!controller.signal.aborted) {
-          setStatusMessage('Using local costing seed until API is reachable')
-        }
-      }
-    }
-
-    void loadCosting()
-
+    void refreshCosting(undefined, controller.signal)
     return () => controller.abort()
-  }, [])
+  }, [refreshCosting])
 
   return (
     <div className="workspace-grid costing-grid">
-      <Panel title="Cost Trace" icon={BadgeDollarSign} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+      <Panel
+        title="Released Production Cost Sheet"
+        icon={BadgeDollarSign}
+        right={
+          <div className="action-row">
+            <DataTag label="Status" value={statusMessage} tone="blue" />
+            <button className="ghost-button tiny" type="button" onClick={() => void refreshCosting(selectedBatchId)} disabled={isRefreshing}>
+              {isRefreshing ? 'Refreshing' : 'Refresh'}
+            </button>
+          </div>
+        }
+      >
+        <div className="cost-sheet-controls">
+          <label className="field-row">
+            <span>Released production batch</span>
+            <select
+              value={selectedBatchId}
+              onChange={(event) => {
+                const nextBatchId = event.target.value
+                selectedBatchIdRef.current = nextBatchId
+                setSelectedBatchId(nextBatchId)
+                void refreshCosting(nextBatchId)
+              }}
+              disabled={releasedBatches.length === 0 || isRefreshing}
+            >
+              {releasedBatches.length === 0 ? <option value="">No released batches</option> : null}
+              {releasedBatches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.id} / {batch.formulaCode} / {formatGrams(batch.outputLot?.quantityGrams ?? 0)} output
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedBatch ? (
+            <div className="tag-row cost-sheet-tags">
+              <DataTag label="Formula" value={selectedBatch.formulaCode} tone="green" />
+              <DataTag label="Output lot" value={selectedBatch.outputLot?.lotNumber ?? 'Pending'} tone="blue" />
+              <DataTag label="Released" value="Ready" tone="green" />
+            </div>
+          ) : null}
+        </div>
+
+        {selectedBatch ? (
+          <>
+            <div className="metric-grid costing-metrics">
+              <Metric label="Finished output" value={formatGrams(batchCost.outputGrams)} />
+              <Metric label="Target batch" value={formatGrams(batchCost.targetGrams)} />
+              <Metric label="Yield variance" value={`${batchCost.yieldVariancePercent.toFixed(2)}%`} />
+              <Metric label="Finished cost / gram" value={formatCurrency(batchCost.costPerGram)} />
+              <Metric label="Batch cost" value={formatCurrency(batchCost.totalCost)} />
+              <Metric label="Input basis" value={batchCost.materialCostBasis === 'ACTUAL_LOT_CONSUMPTION' ? 'Actual lots' : 'Formula estimate'} />
+            </div>
+            <p className="caveat">{batchCost.invariant}</p>
+          </>
+        ) : (
+          <div className="empty-state compact">
+            Complete QC and release a production batch to create a finished-product cost sheet here.
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Finished Product Pricing" icon={ShoppingCart}>
+        {selectedBatch ? (
+          <>
+            <div className="pricing-scenario-grid">
+              <label className="field-row">
+                <span>Pack size (g)</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={packSizeGrams}
+                  onChange={(event) => setPackSizeGrams(Math.max(1, Number(event.target.value) || 1))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Target margin (%)</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="95"
+                  step="1"
+                  value={targetMarginPercent}
+                  onChange={(event) => setTargetMarginPercent(Math.min(95, Math.max(0, Number(event.target.value) || 0)))}
+                />
+              </label>
+            </div>
+            <div className="metric-grid">
+              <Metric label="Pack cost" value={formatCurrency(packCost)} />
+              <Metric label="Suggested sell price" value={formatCurrency(recommendedPrice)} />
+              <Metric label="Gross profit / pack" value={formatCurrency(recommendedPrice - packCost)} />
+              <Metric label="Finished packs" value={String(finishedPacks)} />
+            </div>
+            <p className="caveat">This pricing scenario is calculated from the selected released batch and does not change your catalogue price list.</p>
+          </>
+        ) : (
+          <div className="empty-state compact">Choose a released production batch to calculate pack cost and pricing.</div>
+        )}
+      </Panel>
+
+      <Panel title="Formula Cost Trace" icon={FlaskConical}>
         <div className="metric-grid costing-metrics">
-          <Metric label={`${costingData.formula.formulaCode} total`} value={formatCurrency(costingData.formula.totalCost)} />
-          <Metric label="Formula cost / gram" value={formatCurrency(costingData.formula.costPerGram)} />
-          <Metric label="50g bottle" value={formatCurrency(costingData.formula.costPerBottle)} />
-          <Metric label="Inventory valuation" value={formatCurrency(costingData.valuation.totalValue)} />
-          <Metric label="COGS captured" value={formatCurrency(cogsTotal)} />
-          <Metric label="Most expensive" value={costingData.formula.mostExpensiveMaterial} />
+          <Metric label={`${formulaCost.formulaCode} composition`} value={formatCurrency(formulaCost.totalCost)} />
+          <Metric label="Formula cost / gram" value={formatCurrency(formulaCost.costPerGram)} />
+          <Metric label="50g formula reference" value={formatCurrency(formulaCost.costPerBottle)} />
+          <Metric label="Most expensive" value={formulaCost.mostExpensiveMaterial} />
         </div>
         <div className="trace-strip">
-          {costingData.formula.trace.slice(0, 4).map((trace) => (
+          {formulaCost.trace.slice(0, 4).map((trace) => (
             <span key={trace}>{trace}</span>
           ))}
         </div>
       </Panel>
 
-      <Panel title="Batch Cost" icon={FlaskConical}>
-        <div className="metric-grid">
-          <Metric label={batchCost.batchId} value={formatCurrency(batchCost.totalCost)} />
-          <Metric label="Cost / gram" value={formatCurrency(batchCost.costPerGram)} />
-          <Metric label="Material" value={formatCurrency(batchCost.materialCost)} />
-          <Metric label="Labor + overhead" value={formatCurrency(batchCost.laborCost + batchCost.overheadCost)} />
-        </div>
-        <p className="caveat">{batchCost.invariant}</p>
+      <Panel title="Batch Cost Breakdown" icon={Layers3}>
+        {selectedBatch ? (
+          <div className="metric-grid">
+            <Metric label="Raw material" value={formatCurrency(batchCost.materialCost)} />
+            <Metric label="Labor" value={formatCurrency(batchCost.laborCost)} />
+            <Metric label="Overhead" value={formatCurrency(batchCost.overheadCost)} />
+            <Metric label="Total" value={formatCurrency(batchCost.totalCost)} />
+          </div>
+        ) : (
+          <div className="empty-state compact">Batch cost appears when a released batch is selected.</div>
+        )}
       </Panel>
 
-      <Panel title="Cost Methods & Landed Cost" icon={Database}>
+      <Panel title="Cost Method & Landed Cost" icon={Database}>
         <div className="cost-policy-list">
-          {costingData.methodPolicies.map((policy) => {
+          {relevantPolicies.map((policy) => {
             const landed = costingData.landedCosts.find((profile) => profile.materialId === policy.materialId)
             return (
               <div className="cost-policy-row" key={policy.materialId}>
                 <div>
-                  <strong>{policy.materialId}</strong>
-                  <span>{policy.method}</span>
+                  <strong>{materialNames.get(policy.materialId) ?? policy.materialId}</strong>
+                  <span>{policy.method.replaceAll('_', ' ')}</span>
                 </div>
                 <DataTag label="Overhead" value={`${policy.overheadPercent}%`} tone="amber" />
                 <DataTag
@@ -11368,12 +11532,13 @@ function CostingWorkspace() {
               </div>
             )
           })}
+          {relevantPolicies.length === 0 ? <div className="empty-state compact">Material costing policies will appear with the selected formula.</div> : null}
         </div>
       </Panel>
 
       <Panel title="Formula Cost Breakdown" icon={Layers3}>
         <div className="cost-breakdown-list">
-          {costingData.formula.lines.map((line) => (
+          {formulaCost.lines.map((line) => (
             <div className="cost-breakdown-row" key={`${line.materialId}-${line.sourcePath}`}>
               <div>
                 <strong>{line.materialName}</strong>
@@ -11387,23 +11552,29 @@ function CostingWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="SKU Margin & Price List" icon={ShoppingCart}>
-        <div className="cost-breakdown-list">
-          {costingData.skuMargins.map((sku) => (
-            <div className="margin-row" key={sku.skuId}>
-              <div>
-                <strong>{sku.skuName}</strong>
-                <span>{sku.trace.join(' / ')}</span>
-              </div>
-              <DataTag label="Pack cost" value={formatCurrency(sku.packCost)} />
-              <DataTag label="Margin" value={`${sku.marginPercent.toFixed(1)}%`} tone={sku.marginPercent > 40 ? 'green' : 'amber'} />
-              <DataTag label="Target price" value={formatCurrency(sku.recommendedPrice)} tone="blue" />
+      <Panel title="Production Input COGS" icon={ClipboardCheck}>
+        {selectedBatchCogs.length > 0 ? (
+          <>
+            <div className="cost-breakdown-list compact-list">
+              {selectedBatchCogs.map((line) => (
+                <div className="valuation-row" key={line.movementId}>
+                  <div>
+                    <strong>{line.materialName}</strong>
+                    <span>{formatGrams(line.quantityGrams)} from the issued production lot</span>
+                  </div>
+                  <span>{formatCurrency(line.unitCost)}/g</span>
+                  <strong>{formatCurrency(line.cogs)}</strong>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            <p className="caveat">Issued input COGS: {formatCurrency(selectedBatchCogsTotal)}</p>
+          </>
+        ) : (
+          <div className="empty-state compact">Production input cost entries will appear after the batch consumes inventory.</div>
+        )}
       </Panel>
 
-      <Panel title="Valuation Report" icon={Boxes}>
+      <Panel title="Inventory Valuation" icon={Boxes}>
         <div className="cost-breakdown-list compact-list">
           {costingData.valuation.lines.slice(0, 6).map((line) => (
             <div className="valuation-row" key={line.materialId}>
@@ -11411,36 +11582,11 @@ function CostingWorkspace() {
                 <strong>{line.materialName}</strong>
                 <span>{line.method} / {line.locationBreakdown.map((item) => item.location).join(', ')}</span>
               </div>
-              <span>{formatGrams(line.currentGrams)}</span>
               <span>{formatGrams(line.availableGrams)} available</span>
               <strong>{formatCurrency(line.value)}</strong>
             </div>
           ))}
         </div>
-      </Panel>
-
-      <Panel title="COGS Trace" icon={ClipboardCheck}>
-        <div className="cost-breakdown-list compact-list">
-          {costingData.cogs.map((line) => (
-            <div className="valuation-row" key={line.movementId}>
-              <div>
-                <strong>{line.materialName}</strong>
-                <span>{line.type} / {line.ref}</span>
-              </div>
-              <span>{formatGrams(line.quantityGrams)}</span>
-              <span>{formatCurrency(line.unitCost)}/g</span>
-              <strong>{formatCurrency(line.cogs)}</strong>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title="Finance Guardrails" icon={ShieldCheck}>
-        <ul className="policy-list">
-          <li>Costing is a read model over formula resolve, lot cost, landed cost, and movement COGS.</li>
-          <li>Margin is guarded by costing.view and finance.viewMargin role permissions.</li>
-          <li>Formula, valuation, and COGS traces are source-backed snapshots, not accounting journal posts.</li>
-        </ul>
       </Panel>
     </div>
   )
