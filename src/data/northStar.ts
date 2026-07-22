@@ -657,7 +657,8 @@ export interface BrandingConfig {
   accentColor: string
   documentFooter: string
   labelTemplate: string
-  logoMode: 'wordmark' | 'monogram'
+  logoMode: 'wordmark' | 'monogram' | 'image'
+  logoImageUrl?: string
 }
 
 export interface ProductionWorkOrderStep {

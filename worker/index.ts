@@ -983,7 +983,7 @@ async function hydrateWorkspaceBranding(db: D1Database, service: NorthStarServic
 
   const branding = await db
     .prepare(
-      `SELECT organization_id, display_name, accent_color, document_footer, label_template, logo_mode
+      `SELECT organization_id, display_name, accent_color, document_footer, label_template, logo_mode, logo_image_url
        FROM tenant_branding
        WHERE organization_id = ?1`,
     )
@@ -1344,6 +1344,7 @@ type BrandingRow = {
   document_footer: string
   label_template: string
   logo_mode: string
+  logo_image_url?: string | null
 }
 
 type FormulaRecordRow = {
@@ -2798,15 +2799,16 @@ async function persistBranding(db: D1Database, branding: BrandingConfig, updated
   await db
     .prepare(
       `INSERT INTO tenant_branding (
-        organization_id, display_name, accent_color, document_footer, label_template, logo_mode, updated_at
+        organization_id, display_name, accent_color, document_footer, label_template, logo_mode, logo_image_url, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
       ON CONFLICT(organization_id) DO UPDATE SET
         display_name = excluded.display_name,
         accent_color = excluded.accent_color,
         document_footer = excluded.document_footer,
         label_template = excluded.label_template,
         logo_mode = excluded.logo_mode,
+        logo_image_url = excluded.logo_image_url,
         updated_at = excluded.updated_at`,
     )
     .bind(
@@ -2816,6 +2818,7 @@ async function persistBranding(db: D1Database, branding: BrandingConfig, updated
       branding.documentFooter,
       branding.labelTemplate,
       branding.logoMode,
+      branding.logoImageUrl ?? null,
       updatedAt,
     )
     .run()
@@ -4619,7 +4622,8 @@ function brandingFromRow(row: BrandingRow): BrandingConfig {
     accentColor: row.accent_color,
     documentFooter: row.document_footer,
     labelTemplate: row.label_template,
-    logoMode: row.logo_mode === 'monogram' ? 'monogram' : 'wordmark',
+    logoMode: row.logo_mode === 'monogram' || row.logo_mode === 'image' ? row.logo_mode : 'wordmark',
+    logoImageUrl: row.logo_image_url?.trim() || undefined,
   }
 }
 

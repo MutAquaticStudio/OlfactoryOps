@@ -3533,13 +3533,22 @@ export class NorthStarService {
     if (!/^#[0-9a-f]{6}$/i.test(accentColor)) {
       throw new UnprocessableEntityException('Accent color must be a hex color like #0f766e')
     }
+    const logoMode =
+      patch.logoMode === 'monogram' || patch.logoMode === 'wordmark' || patch.logoMode === 'image'
+        ? patch.logoMode
+        : currentBranding.logoMode
+    const logoImageUrl = this.normalizeOptionalBrandLogoUrl(patch.logoImageUrl, currentBranding.logoImageUrl)
+    if (logoMode === 'image' && !logoImageUrl) {
+      throw new UnprocessableEntityException('Logo image mode requires a valid HTTPS image URL')
+    }
     this.brandingRecord = {
       ...currentBranding,
       ...patch,
       organizationId: session.organizationId,
       displayName,
       accentColor,
-      logoMode: patch.logoMode === 'monogram' || patch.logoMode === 'wordmark' ? patch.logoMode : currentBranding.logoMode,
+      logoMode,
+      logoImageUrl,
     }
     const audit = this.recordAudit('customization.branding.update', this.brandingRecord.organizationId, session.userId, 'allowed')
     return { data: { branding: this.brandingRecord, audit, invariant: 'branding changes are tenant config only' } }
@@ -7390,6 +7399,27 @@ export class NorthStarService {
       throw new UnauthorizedException('Invalid or expired session')
     }
     return securedSession
+  }
+
+  private normalizeOptionalBrandLogoUrl(value: unknown, fallback?: string) {
+    if (value === undefined) {
+      return fallback
+    }
+    if (typeof value !== 'string' || !value.trim()) {
+      return undefined
+    }
+    if (value.length > 2048) {
+      throw new UnprocessableEntityException('Logo image URL must be 2048 characters or fewer')
+    }
+    try {
+      const url = new URL(value.trim())
+      if (url.protocol !== 'https:' || url.username || url.password) {
+        throw new Error('unsafe-logo-url')
+      }
+      return url.toString()
+    } catch {
+      throw new UnprocessableEntityException('Logo image URL must be a valid HTTPS URL')
+    }
   }
 
   private workspaceBrandingForOrganization(organizationId: string): BrandingConfig {

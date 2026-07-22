@@ -1032,7 +1032,12 @@ describe('NorthStarService', () => {
       fieldType: 'date',
       required: true,
     }).data
-    const branding = service.updateBranding({ accentColor: '#37d6a0', displayName: 'NOXELIS Atelier' }).data
+    const branding = service.updateBranding({
+      accentColor: '#37d6a0',
+      displayName: 'NOXELIS Atelier',
+      logoMode: 'image',
+      logoImageUrl: 'https://assets.example.test/noxelis-atelier.svg',
+    }).data
 
     expect(consoleState.customFields.length).toBeGreaterThan(0)
     expect(consoleState.branding.displayName).toBe('NOXELIS Lab')
@@ -1045,6 +1050,8 @@ describe('NorthStarService', () => {
     expect(field.customField.key).toBe('ifra_review_date')
     expect(field.audit.action).toBe('customization.customField.create')
     expect(branding.branding.accentColor).toBe('#37d6a0')
+    expect(branding.branding.logoMode).toBe('image')
+    expect(branding.branding.logoImageUrl).toBe('https://assets.example.test/noxelis-atelier.svg')
     expect(branding.audit.action).toBe('customization.branding.update')
   })
 
@@ -1056,6 +1063,13 @@ describe('NorthStarService', () => {
     expect(branding.organizationId).toBe('org-nxl')
     expect(branding.displayName).toBe('NOXELIS Lab')
     expect(() => service.updateBranding({ displayName: 'x' })).toThrow(UnprocessableEntityException)
+    expect(() => service.updateBranding({ logoMode: 'image' })).toThrow(UnprocessableEntityException)
+    expect(() => service.updateBranding({ logoMode: 'image', logoImageUrl: 'http://assets.example.test/logo.png' })).toThrow(
+      UnprocessableEntityException,
+    )
+    expect(() => service.updateBranding({ logoMode: 'image', logoImageUrl: 'https://user:pass@assets.example.test/logo.png' })).toThrow(
+      UnprocessableEntityException,
+    )
   })
 
   it('blocks unsafe customization changes', () => {

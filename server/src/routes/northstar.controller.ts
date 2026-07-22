@@ -767,7 +767,8 @@ export class NorthStarController {
       accentColor?: string
       documentFooter?: string
       labelTemplate?: string
-      logoMode?: 'wordmark' | 'monogram'
+      logoMode?: 'wordmark' | 'monogram' | 'image'
+      logoImageUrl?: string
     },
   ) {
     return this.northStar.updateBranding(body)
