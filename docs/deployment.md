@@ -193,6 +193,22 @@ Remove-Item Env:FORMULA_TEST_URL
 
 Use a disposable test-tenant owner with MFA not yet enrolled. The harness never writes the TOTP setup key or recovery codes to its JSON report.
 
+## Beta: Vercel Frontend With Cloudflare API
+
+The beta can use Vercel for the Vite frontend while Cloudflare remains the API and persistence boundary:
+
+- `https://olfactoryops-beta.vercel.app`: Vercel beta frontend, built with `npm run build:test`.
+- `https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1`: Cloudflare Worker test API backed by the isolated `olfactoryops-test` D1 database.
+- `https://beta.labofscents.org`: recommended customer-facing beta hostname after it is added to the Vercel project and its DNS CNAME is created in the Cloudflare zone.
+
+`vercel.json` supplies SPA fallback and the same browser security headers used by Pages. The test Worker allowlists only the named Vercel and beta origins; do not allow `*.vercel.app`, because credentialed CORS must remain restricted to trusted frontend hosts.
+
+Keep the beta hostname under `labofscents.org` when possible. It is same-site with `api.labofscents.org`, which makes the secure session cookie more reliable than using an unrelated `vercel.app` hostname.
+
+### Supabase Boundary
+
+Supabase is not connected to the live beta write path yet. Cloudflare D1 is the canonical store for tenant, formula, inventory, approval, and audit state. Do not configure a second live writer or a duplicate authentication system without a reviewed migration and cutover plan. A Supabase project can be provisioned later for a defined purpose such as Postgres reporting or document storage, then linked with `supabase link` and migrated with `supabase db push`.
+
 ## Notes
 
 - D1 is SQLite-compatible, not Postgres. Sell-ready Formula and operational state use normalized D1 tables including `formula_records`, `formula_version_records`, `mfa_enrollments`, `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `material_records`, `molecule_components`, `storage_locations`, `stock_take_records`, `tenant_settings`, `feature_flags`, `numbering_sequences`, `custom_fields`, `tenant_branding`, `document_records`, `production_batches`, `suppliers`, `purchase_orders`, `price_history`, `commercial_skus`, `price_lists`, `quotes`, `sample_requests`, `customers`, `sales_orders`, `order_shipments`, `order_documents`, `scheduled_reports`, `billing_subscriptions`, `billing_invoices`, `sso_configs`, `api_keys`, `webhooks`, `webhook_deliveries`, `audit_export_jobs`, `inventory_lots`, `inventory_movements`, and `lab_usage_records`.
