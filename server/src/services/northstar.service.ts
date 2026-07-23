@@ -105,6 +105,7 @@ import {
   type CommercialSkuRecord,
   type CustomerAddress,
   type CustomerRecord,
+  type SaasCustomDomainRecord,
   type DataImportIssue,
   type DataImportJobRecord,
   type CustomFieldDefinition,
@@ -679,6 +680,7 @@ export class NorthStarService {
   private importJobRecords: DataImportJobRecord[] = []
   private legalAcceptanceRecords: LegalAcceptanceRecord[] = []
   private privacyRequestRecords: PrivacyRequestRecord[] = []
+  private customDomainRecords: SaasCustomDomainRecord[] = []
   private inventoryApprovalRequestRecords: InventoryApprovalRequestRecord[] = []
   private operationApprovalRequestRecords: OperationApprovalRequestRecord[] = []
   private auditCounter = auditEvents.length
@@ -6048,6 +6050,8 @@ export class NorthStarService {
     }
     const collision = this.organizationRecords.find(
       (organization) => organization.customDomain?.toLowerCase() === hostname && organization.id !== session.organizationId,
+    ) || this.customDomainRecords.find(
+      (domain) => domain.hostname.toLowerCase() === hostname && domain.organizationId !== session.organizationId,
     )
     if (collision) {
       throw new UnprocessableEntityException('Custom domain is already assigned to another workspace')
@@ -6064,8 +6068,24 @@ export class NorthStarService {
     if (!organization) {
       throw new NotFoundException('Workspace organization was not found')
     }
-    const updated = { ...organization, customDomain: hostname }
-    this.organizationRecords = [updated, ...this.organizationRecords.filter((item) => item.id !== updated.id)]
+    const now = new Date().toISOString()
+    const existing = this.customDomainRecords.find(
+      (domain) => domain.organizationId === session.organizationId && domain.providerId === providerId,
+    )
+    const domain: SaasCustomDomainRecord = {
+      id: existing?.id ?? `DOM-${this.shortId()}`,
+      organizationId: session.organizationId,
+      hostname,
+      providerId,
+      status: 'pending_validation',
+      providerStatus: 'pending',
+      validation,
+      verificationErrors: [],
+      requestedBy: session.userId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    this.customDomainRecords = [domain, ...this.customDomainRecords.filter((item) => item.id !== domain.id)]
     this.queueNotification(
       session.organizationId,
       session.email,
@@ -6077,14 +6097,96 @@ export class NorthStarService {
     const audit = this.recordAudit('saas.customDomain.provision', `${hostname}:${providerId}`, session.userId, 'review')
     return {
       data: {
-        organization: updated,
-        hostname,
-        providerId,
-        validation,
+        organization,
+        domain,
         audit,
-        invariant: 'custom domain is recorded only after Cloudflare for SaaS accepts the tenant hostname request',
+        invariant: 'the workspace domain changes only after Cloudflare reports the hostname active',
       },
     }
+  }
+
+  customDomains() {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can view custom domain provisioning')
+    }
+    return {
+      data: {
+        domains: this.customDomainRecords
+          .filter((domain) => domain.organizationId === session.organizationId)
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+      },
+    }
+  }
+
+  cloudflareSaasRefreshContext(id: string) {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can refresh custom domain provisioning')
+    }
+    const domain = this.customDomainRecords.find((candidate) => candidate.id === id && candidate.organizationId === session.organizationId)
+    if (!domain) {
+      throw new NotFoundException(`Custom domain ${id} was not found`)
+    }
+    return { data: { domain } }
+  }
+
+  applyCloudflareSaasRefresh(id: string, provider: {
+    providerStatus?: string
+    sslStatus?: string
+    validation?: Record<string, string>
+    verificationErrors?: string[]
+  }) {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can refresh custom domain provisioning')
+    }
+    const existing = this.customDomainRecords.find((candidate) => candidate.id === id && candidate.organizationId === session.organizationId)
+    if (!existing) {
+      throw new NotFoundException(`Custom domain ${id} was not found`)
+    }
+    const now = new Date().toISOString()
+    const status = this.cloudflareDomainStatus(provider.providerStatus, provider.sslStatus, provider.verificationErrors)
+    const domain: SaasCustomDomainRecord = {
+      ...existing,
+      status,
+      providerStatus: provider.providerStatus || existing.providerStatus,
+      sslStatus: provider.sslStatus || existing.sslStatus,
+      validation: Object.keys(provider.validation ?? {}).length > 0 ? provider.validation ?? {} : existing.validation,
+      verificationErrors: provider.verificationErrors ?? [],
+      updatedAt: now,
+      lastCheckedAt: now,
+      activatedAt: status === 'active' ? existing.activatedAt ?? now : existing.activatedAt,
+    }
+    this.customDomainRecords = [domain, ...this.customDomainRecords.filter((candidate) => candidate.id !== domain.id)]
+    let organization = this.organizationRecords.find((candidate) => candidate.id === session.organizationId)
+    if (!organization) {
+      throw new NotFoundException('Workspace organization was not found')
+    }
+    if (status === 'active' && organization.customDomain !== domain.hostname) {
+      organization = { ...organization, customDomain: domain.hostname }
+      this.organizationRecords = [organization, ...this.organizationRecords.filter((candidate) => candidate.id !== organization?.id)]
+      this.queueNotification(
+        session.organizationId,
+        session.email,
+        'workspace',
+        'Custom domain is active',
+        `${domain.hostname} is validated by Cloudflare and is now the workspace hostname.`,
+        '/customization',
+      )
+    }
+    const audit = this.recordAudit('saas.customDomain.refresh', `${domain.hostname}:${domain.providerId}:${status}`, session.userId, status === 'failed' ? 'review' : 'allowed')
+    return { data: { domain, organization, audit } }
+  }
+
+  private cloudflareDomainStatus(providerStatus?: string, sslStatus?: string, verificationErrors: string[] = []): SaasCustomDomainRecord['status'] {
+    if (providerStatus === 'active' && (!sslStatus || sslStatus === 'active')) {
+      return 'active'
+    }
+    const terminalFailure = new Set(['blocked', 'deleted', 'expired', 'test_failed', 'validation_timed_out', 'issuance_timed_out', 'deployment_timed_out'])
+    return verificationErrors.length > 0 || terminalFailure.has(providerStatus || '') || terminalFailure.has(sslStatus || '')
+      ? 'failed'
+      : 'pending_validation'
   }
 
   applyStripeWebhook(event: Record<string, unknown>) {

@@ -165,6 +165,7 @@ import {
   type QuoteRecord,
   type ResolvedLeaf,
   type RolePolicy,
+  type SaasCustomDomainRecord,
   type SampleRequestRecord,
   type SalesOrderRecord,
   type ScheduledReportRecord,
@@ -1130,6 +1131,18 @@ const materialImportFields = [
   { key: 'odor', label: 'Odor tags' },
 ] as const
 
+const lotImportFields = [
+  { key: 'materialId', label: 'Material ID' },
+  { key: 'materialCas', label: 'Material CAS' },
+  { key: 'materialName', label: 'Material name' },
+  { key: 'lotNumber', label: 'Lot number' },
+  { key: 'quantityGrams', label: 'Quantity (g)' },
+  { key: 'expiryDate', label: 'Expiry date' },
+  { key: 'location', label: 'Storage location' },
+  { key: 'qualityStatus', label: 'QC status' },
+  { key: 'supplierLotRef', label: 'Supplier lot ref.' },
+] as const
+
 function buildMaterialImportMapping(headers: string[]) {
   const mapping: Record<string, string> = {}
   for (const field of materialImportFields) {
@@ -1142,6 +1155,26 @@ function buildMaterialImportMapping(headers: string[]) {
       if (field.key === 'ifraLimit') return value === 'ifralimit' || value === 'ifralimitpercent' || value === 'ifra'
       if (field.key === 'costPerGram') return value === 'costpergram' || value === 'costg' || value === 'unitcost'
       return value === 'odor' || value === 'odortags' || value === 'tags'
+    })
+    if (header) mapping[field.key] = header
+  }
+  return mapping
+}
+
+function buildLotImportMapping(headers: string[]) {
+  const mapping: Record<string, string> = {}
+  for (const field of lotImportFields) {
+    const header = headers.find((candidate) => {
+      const value = candidate.toLowerCase().replace(/[^a-z0-9]/g, '')
+      if (field.key === 'materialId') return value === 'materialid' || value === 'id'
+      if (field.key === 'materialCas') return value === 'materialcas' || value === 'cas' || value === 'casnumber'
+      if (field.key === 'materialName') return value === 'materialname' || value === 'material' || value === 'name'
+      if (field.key === 'lotNumber') return value === 'lotnumber' || value === 'lot' || value === 'batchnumber'
+      if (field.key === 'quantityGrams') return value === 'quantitygrams' || value === 'quantityg' || value === 'quantity' || value === 'grams'
+      if (field.key === 'expiryDate') return value === 'expirydate' || value === 'expiry' || value === 'expirationdate'
+      if (field.key === 'location') return value === 'location' || value === 'storagelocation' || value === 'warehouse'
+      if (field.key === 'qualityStatus') return value === 'qualitystatus' || value === 'qcstatus' || value === 'status'
+      return value === 'supplierlotref' || value === 'supplierlot' || value === 'supplierbatch'
     })
     if (header) mapping[field.key] = header
   }
@@ -4642,9 +4675,13 @@ function MaterialWorkspace({
   const [importHeaders, setImportHeaders] = useState<string[]>([])
   const [importRows, setImportRows] = useState<Array<Record<string, unknown>>>([])
   const [importMapping, setImportMapping] = useState<Record<string, string>>({})
+  const [importEntity, setImportEntity] = useState<'materials' | 'lots'>('materials')
   const [importJob, setImportJob] = useState<DataImportJobRecord | null>(null)
   const [importStatus, setImportStatus] = useState('Choose a CSV or XLSX file to start a dry-run.')
   const [importBusy, setImportBusy] = useState(false)
+  const canReceiveInventory = sessionHasPermission(session, 'inventory.receive')
+  const canRunImport = importEntity === 'materials' ? canCreateMaterials : canReceiveInventory
+  const activeImportFields = importEntity === 'materials' ? materialImportFields : lotImportFields
 
   const mappedImportRows = useMemo(
     () => importRows.map((row) => Object.fromEntries(
@@ -4765,7 +4802,17 @@ function MaterialWorkspace({
     }
   }
 
-  async function loadMaterialImport(file: File | null) {
+  function selectImportEntity(entity: 'materials' | 'lots') {
+    if (entity === importEntity) return
+    setImportEntity(entity)
+    setImportHeaders([])
+    setImportRows([])
+    setImportMapping({})
+    setImportJob(null)
+    setImportStatus(`Choose a CSV or XLSX file to dry-run ${entity === 'materials' ? 'materials' : 'inventory lots'}.`)
+  }
+
+  async function loadDataImport(file: File | null) {
     if (!file) {
       return
     }
@@ -4784,12 +4831,12 @@ function MaterialWorkspace({
         .filter((row) => row.some((value) => importCellText(value)))
         .slice(0, 500)
         .map((row) => Object.fromEntries(headers.map((header, index) => [header, importCellText(row[index])])) as Record<string, unknown>)
-      const defaultMapping = buildMaterialImportMapping(headers)
+      const defaultMapping = importEntity === 'materials' ? buildMaterialImportMapping(headers) : buildLotImportMapping(headers)
       setImportHeaders(headers)
       setImportRows(rows)
       setImportMapping(defaultMapping)
       setImportJob(null)
-      setImportStatus(`${rows.length} rows loaded. Confirm column mapping, then run dry-run.`)
+      setImportStatus(`${rows.length} ${importEntity === 'materials' ? 'material' : 'lot'} row(s) loaded. Confirm column mapping, then run dry-run.`)
     } catch (error) {
       setImportHeaders([])
       setImportRows([])
@@ -4800,8 +4847,8 @@ function MaterialWorkspace({
     }
   }
 
-  async function previewMaterialImport() {
-    if (!canCreateMaterials || mappedImportRows.length === 0) {
+  async function previewDataImport() {
+    if (!canRunImport || mappedImportRows.length === 0) {
       return
     }
     setImportBusy(true)
@@ -4810,9 +4857,9 @@ function MaterialWorkspace({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          entity: 'materials',
-          fileName: 'material-import',
-          idempotencyKey: await digestImportRows(mappedImportRows),
+          entity: importEntity,
+          fileName: `${importEntity}-import`,
+          idempotencyKey: await digestImportRows([{ entity: importEntity }, ...mappedImportRows]),
           rows: mappedImportRows,
         }),
       })
@@ -4820,7 +4867,7 @@ function MaterialWorkspace({
       setImportStatus(
         payload.job.invalidRows > 0
           ? `Dry-run found ${payload.job.errors.length} issue(s) across ${payload.job.invalidRows} row(s).`
-          : `Dry-run passed for ${payload.job.validRows} material row(s).`,
+          : `Dry-run passed for ${payload.job.validRows} ${importEntity === 'materials' ? 'material' : 'lot'} row(s).`,
       )
     } catch (error) {
       setImportStatus(error instanceof Error ? error.message : 'Import dry-run failed')
@@ -4829,7 +4876,7 @@ function MaterialWorkspace({
     }
   }
 
-  async function commitMaterialImport() {
+  async function commitDataImport() {
     if (!importJob || importJob.status !== 'VALIDATED') {
       return
     }
@@ -4841,7 +4888,7 @@ function MaterialWorkspace({
       const refreshed = await requestApi<Material[]>('/materials')
       onMaterialsChange(refreshed)
       setImportJob(payload.job)
-      setImportStatus(`Imported ${payload.created} material record(s).`)
+      setImportStatus(`Imported ${payload.created} ${importEntity === 'materials' ? 'material' : 'inventory lot'} record(s).`)
     } catch (error) {
       setImportStatus(error instanceof Error ? error.message : 'Import commit failed')
     } finally {
@@ -4988,27 +5035,35 @@ function MaterialWorkspace({
             Create material
           </button>
         </div>
-        <section className="import-panel" aria-label="Material import">
+        <section className="import-panel" aria-label="Data import">
           <div className="section-heading compact-heading">
             <div>
               <span className="eyebrow">Data import</span>
-              <strong>CSV / XLSX material import</strong>
+              <strong>CSV / XLSX import</strong>
             </div>
             <DataTag label="Rows" value={String(importRows.length)} tone="blue" />
+          </div>
+          <div className="segmented-control" aria-label="Import data type">
+            <button className={importEntity === 'materials' ? 'is-active' : ''} type="button" onClick={() => selectImportEntity('materials')}>
+              Materials
+            </button>
+            <button className={importEntity === 'lots' ? 'is-active' : ''} type="button" onClick={() => selectImportEntity('lots')}>
+              Inventory lots
+            </button>
           </div>
           <label className="field-row wide-field">
             <span>Source file</span>
             <input
               accept=".csv,.xlsx,.xls"
-              aria-label="Material import source file"
+              aria-label="Import source file"
               type="file"
-              disabled={!canCreateMaterials || importBusy}
-              onChange={(event) => void loadMaterialImport(event.target.files?.[0] ?? null)}
+              disabled={!canRunImport || importBusy}
+              onChange={(event) => void loadDataImport(event.target.files?.[0] ?? null)}
             />
           </label>
           {importHeaders.length > 0 ? (
             <div className="import-mapping-grid">
-              {materialImportFields.map((field) => (
+              {activeImportFields.map((field) => (
                 <label className="field-row" key={field.key}>
                   <span>{field.label}</span>
                   <select
@@ -5024,14 +5079,15 @@ function MaterialWorkspace({
             </div>
           ) : null}
           <div className="action-row">
-            <button className="ghost-button small" type="button" disabled={!canCreateMaterials || importBusy || mappedImportRows.length === 0} onClick={() => void previewMaterialImport()}>
+            <button className="ghost-button small" type="button" disabled={!canRunImport || importBusy || mappedImportRows.length === 0} onClick={() => void previewDataImport()}>
               {importBusy ? 'Working...' : 'Dry-run import'}
             </button>
-            <button className="primary-button small" type="button" disabled={importBusy || importJob?.status !== 'VALIDATED'} onClick={() => void commitMaterialImport()}>
+            <button className="primary-button small" type="button" disabled={importBusy || importJob?.status !== 'VALIDATED'} onClick={() => void commitDataImport()}>
               Commit valid rows
             </button>
           </div>
           <p className="muted-copy">{importStatus}</p>
+          {importEntity === 'lots' ? <p className="muted-copy">Map one material identifier: Material ID, CAS, or material name. Expiry must be YYYY-MM-DD; QC status defaults to QUARANTINE.</p> : null}
           {importJob?.errors.length ? (
             <div className="import-errors" role="status">
               {importJob.errors.slice(0, 6).map((issue, index) => (
@@ -9522,13 +9578,26 @@ function activeUiLocale(): UiLocale {
   return 'en-US'
 }
 
+function decodeVietnameseMojibake(value: string) {
+  if (!/[\u00c3\u00c4\u00c6]/.test(value)) {
+    return value
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(value, (character) => character.charCodeAt(0)))
+  } catch {
+    return value
+  }
+}
+
 function uiText(value: string) {
-  return activeUiLocale() === 'vi-VN' ? vietnameseUiText[value] ?? value : value
+  return activeUiLocale() === 'vi-VN' ? decodeVietnameseMojibake(vietnameseUiText[value] ?? value) : value
 }
 
 function localizeDomainDisplay(domain: DomainModule) {
   const localized = activeUiLocale() === 'vi-VN' ? vietnameseDomainNames[domain.key] : undefined
-  return localized ? { ...domain, ...localized } : domain
+  return localized
+    ? { ...domain, name: decodeVietnameseMojibake(localized.name), shortName: decodeVietnameseMojibake(localized.shortName) }
+    : domain
 }
 
 const productionLifecycleLabels: Record<ProductionBatchRecord['status'], string> = {
@@ -12609,11 +12678,8 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     events: 'order.fulfilled,document.downloaded,audit.export.ready',
   })
   const [customDomainDraft, setCustomDomainDraft] = useState('')
-  const [customDomainProvisioning, setCustomDomainProvisioning] = useState<{
-    hostname: string
-    providerId: string
-    validation: Record<string, string>
-  } | null>(null)
+  const [customDomainProvisioning, setCustomDomainProvisioning] = useState<SaasCustomDomainRecord | null>(null)
+  const [customDomains, setCustomDomains] = useState<SaasCustomDomainRecord[]>([])
   const activeSeats = saasData.usage.activeSeats
   const storageUsedGb = saasData.usage.storageGb
   const apiUsage = saasData.usage.apiCalls
@@ -12633,6 +12699,16 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     })
   }
 
+  const loadCustomDomains = useCallback(async (signal?: AbortSignal) => {
+    if (!canProvisionCustomDomain) {
+      setCustomDomains([])
+      return []
+    }
+    const payload = await requestApi<{ domains: SaasCustomDomainRecord[] }>('/saas/custom-domains', { signal })
+    setCustomDomains(payload.domains)
+    return payload.domains
+  }, [canProvisionCustomDomain])
+
   useEffect(() => {
     const controller = new AbortController()
 
@@ -12641,6 +12717,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
         setSaasData(payload)
         syncSsoDraft(payload.sso)
+        await loadCustomDomains(controller.signal)
         setStatusMessage(syncedMessage)
       } catch {
         if (!controller.signal.aborted) {
@@ -12652,12 +12729,13 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     void loadSaasConsole()
 
     return () => controller.abort()
-  }, [fallbackMessage, syncedMessage])
+  }, [fallbackMessage, loadCustomDomains, syncedMessage])
 
   async function refreshSaasConsole(status?: string) {
     const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
     setSaasData(consolePayload)
     syncSsoDraft(consolePayload.sso)
+    await loadCustomDomains()
     if (status) {
       setStatusMessage(status)
     }
@@ -12901,19 +12979,33 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   async function provisionCustomDomain() {
     setTrustBusyAction('custom-domain')
     try {
-      const payload = await requestApi<{
-        hostname: string
-        providerId: string
-        validation: Record<string, string>
-      }>('/saas/custom-domains/provision', {
+      const payload = await requestApi<{ domain: SaasCustomDomainRecord }>('/saas/custom-domains/provision', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ hostname: customDomainDraft.trim().toLowerCase() }),
       })
-      setCustomDomainProvisioning(payload)
-      setStatusMessage(`Cloudflare accepted ${payload.hostname}; complete the DNS/DCV record before going live`)
+      setCustomDomainProvisioning(payload.domain)
+      setCustomDomains((current) => [payload.domain, ...current.filter((domain) => domain.id !== payload.domain.id)])
+      setCustomDomainDraft('')
+      setStatusMessage(`Cloudflare accepted ${payload.domain.hostname}; complete the DNS/DCV record before going live`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Custom domain provisioning failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function refreshCustomDomain(domain: SaasCustomDomainRecord) {
+    setTrustBusyAction(domain.id)
+    try {
+      const payload = await requestApi<{ domain: SaasCustomDomainRecord }>(`/saas/custom-domains/${encodeURIComponent(domain.id)}/refresh`, {
+        method: 'POST',
+      })
+      setCustomDomainProvisioning(payload.domain)
+      setCustomDomains((current) => current.map((candidate) => candidate.id === payload.domain.id ? payload.domain : candidate))
+      await refreshSaasConsole(`${payload.domain.hostname} is ${payload.domain.status.replace('_', ' ')}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Custom domain status refresh failed')
     } finally {
       setTrustBusyAction(null)
     }
@@ -13061,7 +13153,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
 
       {canProvisionCustomDomain ? (
         <Panel title="Custom Domain" icon={Globe2}>
-          <p className="caveat">Provision a customer-owned hostname through Cloudflare for SaaS. The hostname stays pending until its DNS/DCV record validates.</p>
+          <p className="caveat">Provision a customer-owned hostname through Cloudflare for SaaS. It becomes the workspace hostname only after Cloudflare reports it active.</p>
           <label className="field-row">
             <span>Hostname</span>
             <input
@@ -13084,11 +13176,37 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <div className="audit-export-card">
               <span className="mono-small">Cloudflare hostname {customDomainProvisioning.providerId}</span>
               <strong>{customDomainProvisioning.hostname}</strong>
+              <StatusBadge
+                status={customDomainProvisioning.status === 'active' ? 'stable' : customDomainProvisioning.status === 'failed' ? 'alert' : 'review'}
+                label={customDomainProvisioning.status.replace('_', ' ').toUpperCase()}
+              />
               {Object.keys(customDomainProvisioning.validation).length > 0 ? (
                 Object.entries(customDomainProvisioning.validation).map(([key, value]) => <span key={key}>{key}: {value}</span>)
               ) : (
                 <span>Cloudflare did not require an additional DNS record for this hostname.</span>
               )}
+            </div>
+          ) : null}
+          {customDomains.length > 0 ? (
+            <div className="document-list compact-list">
+              {customDomains.map((domain) => (
+                <div className="document-row" key={domain.id}>
+                  <div>
+                    <strong>{domain.hostname}</strong>
+                    <span>Cloudflare: {domain.providerStatus ?? 'pending'} / SSL: {domain.sslStatus ?? 'pending'}</span>
+                    {domain.verificationErrors.length > 0 ? <span>{domain.verificationErrors.join(' ')}</span> : null}
+                  </div>
+                  <div className="action-row">
+                    <StatusBadge
+                      status={domain.status === 'active' ? 'stable' : domain.status === 'failed' ? 'alert' : 'review'}
+                      label={domain.status.replace('_', ' ').toUpperCase()}
+                    />
+                    <button className="ghost-button tiny" type="button" disabled={trustBusyAction !== null} onClick={() => void refreshCustomDomain(domain)}>
+                      {trustBusyAction === domain.id ? 'Checking...' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : null}
         </Panel>

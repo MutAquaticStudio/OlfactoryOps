@@ -43,6 +43,7 @@ import {
   type PurchaseOrderRecord,
   type QuoteRecord,
   type RolePolicy,
+  type SaasCustomDomainRecord,
   type SampleRequestRecord,
   type SalesOrderRecord,
   type ScheduledReportRecord,
@@ -169,6 +170,7 @@ type SnapshotKey =
   | 'importJobRecords'
   | 'legalAcceptanceRecords'
   | 'privacyRequestRecords'
+  | 'customDomainRecords'
   | 'inventoryApprovalRequestRecords'
   | 'operationApprovalRequestRecords'
   | 'auditCounter'
@@ -220,6 +222,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   importJobRecords: DataImportJobRecord[]
   legalAcceptanceRecords: LegalAcceptanceRecord[]
   privacyRequestRecords: PrivacyRequestRecord[]
+  customDomainRecords: SaasCustomDomainRecord[]
   inventoryApprovalRequestRecords: Array<Record<string, unknown>>
   operationApprovalRequestRecords: Array<Record<string, unknown>>
   lots: InventoryLot[]
@@ -354,6 +357,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'importJobRecords',
   'legalAcceptanceRecords',
   'privacyRequestRecords',
+  'customDomainRecords',
   'inventoryApprovalRequestRecords',
   'operationApprovalRequestRecords',
   'auditCounter',
@@ -590,6 +594,8 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/billing/subscription/freeze', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.freezeSubscription(body) },
   { method: 'POST', pattern: '/billing/subscription/reactivate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.reactivateSubscription() },
   { method: 'POST', pattern: '/saas/custom-domains/provision', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body, env }) => provisionCloudflareCustomDomain(service, body, env) },
+  { method: 'GET', pattern: '/saas/custom-domains', handler: ({ service }) => service.customDomains() },
+  { method: 'POST', pattern: '/saas/custom-domains/:id/refresh', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, params, env }) => refreshCloudflareCustomDomain(service, params.id, env) },
   { method: 'GET', pattern: '/sso-config', handler: ({ service }) => service.ssoConfig() },
   { method: 'PATCH', pattern: '/sso-config', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.updateSsoConfig(body) },
   { method: 'POST', pattern: '/sso-config/scim-token/rotate', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service }) => service.rotateScimToken() },
@@ -1077,6 +1083,29 @@ async function provisionCloudflareCustomDomain(
   )
 }
 
+async function refreshCloudflareCustomDomain(service: NorthStarService, id: string, env: Env) {
+  const context = service.cloudflareSaasRefreshContext(id).data
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_SAAS_ZONE_ID) {
+    throw new UnprocessableEntityException('Cloudflare for SaaS is not configured for this environment')
+  }
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames/${encodeURIComponent(context.domain.providerId)}`,
+    { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } },
+  )
+  const payload = await readProviderJson(response)
+  const result = isRecord(payload.result) ? payload.result : undefined
+  if (!response.ok || !result) {
+    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Cloudflare could not refresh the custom hostname'))
+  }
+  const ssl = isRecord(result.ssl) ? result.ssl : undefined
+  return service.applyCloudflareSaasRefresh(id, {
+    providerStatus: typeof result.status === 'string' ? result.status : undefined,
+    sslStatus: typeof ssl?.status === 'string' ? ssl.status : undefined,
+    validation: cloudflareValidation(result),
+    verificationErrors: cloudflareVerificationErrors(result),
+  })
+}
+
 function cloudflareValidation(result: Record<string, unknown>) {
   const validation: Record<string, string> = {}
   const ownership = isRecord(result.ownership_verification) ? result.ownership_verification : undefined
@@ -1095,6 +1124,16 @@ function cloudflareValidation(result: Record<string, unknown>) {
       : typeof txtRecord.txt_record === 'string' ? txtRecord.txt_record : validation.value || ''
   }
   return validation
+}
+
+function cloudflareVerificationErrors(result: Record<string, unknown>) {
+  const errors = Array.isArray(result.verification_errors) ? result.verification_errors : []
+  const ssl = isRecord(result.ssl) ? result.ssl : undefined
+  const validationErrors = ssl && Array.isArray(ssl.validation_errors) ? ssl.validation_errors : []
+  return [...errors, ...validationErrors]
+    .map((entry) => typeof entry === 'string' ? entry : isRecord(entry) && typeof entry.message === 'string' ? entry.message : '')
+    .filter(Boolean)
+    .slice(0, 8)
 }
 
 async function handleStripeWebhook(service: NorthStarService, env: Env, request: Request, rawBody: string) {

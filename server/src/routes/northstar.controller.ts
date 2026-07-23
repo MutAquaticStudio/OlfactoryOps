@@ -1165,6 +1165,11 @@ export class NorthStarController {
     return this.northStar.reactivateSubscription()
   }
 
+  @Get('saas/custom-domains')
+  customDomains() {
+    return this.northStar.customDomains()
+  }
+
   @Post('webhooks/deliveries/:id/retry')
   retryWebhookDelivery(@Param('id') id: string) {
     return this.northStar.retryWebhookDelivery(id)

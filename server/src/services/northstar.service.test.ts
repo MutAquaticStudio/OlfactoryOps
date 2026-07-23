@@ -2103,6 +2103,44 @@ describe('NorthStarService', () => {
     expect(service.materials().data.some((material) => material.cas === '9000-00-1')).toBe(true)
   })
 
+  it('dry-runs lot imports and activates a custom hostname only after provider confirmation', () => {
+    const service = createAuthenticatedService()
+    const importedLot = {
+      entity: 'lots' as const,
+      fileName: 'inventory-lots.xlsx',
+      idempotencyKey: 'import-lot-test-1',
+      rows: [{
+        materialCas: '8007-75-8',
+        lotNumber: 'L-BER-IMPORT-01',
+        quantityGrams: 24.5,
+        expiryDate: '2028-12-31',
+        location: 'Lab A',
+        qualityStatus: 'QUARANTINE',
+        supplierLotRef: 'SUP-BER-01',
+      }],
+    }
+    const preview = service.previewImport(importedLot).data
+    expect(preview.job.status).toBe('VALIDATED')
+    expect(service.commitImport(preview.job.id).data.created).toBe(1)
+    expect(service.globalSearch('L-BER-IMPORT-01').data.results.some((result) => result.kind === 'lot')).toBe(true)
+
+    const provisioned = service.completeCloudflareSaasProvisioning(
+      'app.example-perfume.test',
+      'cf-custom-hostname-1',
+      { type: 'TXT', name: '_cf-custom-hostname.app.example-perfume.test', value: 'verification-token' },
+    ).data
+    expect(provisioned.domain.status).toBe('pending_validation')
+    expect(provisioned.organization.customDomain).not.toBe('app.example-perfume.test')
+    expect(service.customDomains().data.domains).toHaveLength(1)
+
+    const activated = service.applyCloudflareSaasRefresh(provisioned.domain.id, {
+      providerStatus: 'active',
+      sslStatus: 'active',
+    }).data
+    expect(activated.domain.status).toBe('active')
+    expect(activated.organization.customDomain).toBe('app.example-perfume.test')
+  })
+
   it('prepares Stripe checkout state and applies a verified-provider subscription event', () => {
     const service = createAuthenticatedService()
     const checkout = service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' }).data

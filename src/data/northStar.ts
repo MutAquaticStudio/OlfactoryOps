@@ -498,6 +498,25 @@ export interface OrganizationRecord {
   createdAt: string
 }
 
+export type CustomDomainProvisioningStatus = 'pending_validation' | 'active' | 'failed'
+
+export interface SaasCustomDomainRecord {
+  id: string
+  organizationId: string
+  hostname: string
+  providerId: string
+  status: CustomDomainProvisioningStatus
+  providerStatus?: string
+  sslStatus?: string
+  validation: Record<string, string>
+  verificationErrors: string[]
+  requestedBy: string
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt?: string
+  activatedAt?: string
+}
+
 export interface BrandRecord {
   id: string
   organizationId: string
