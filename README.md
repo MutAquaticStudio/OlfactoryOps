@@ -58,7 +58,14 @@ Create a password verifier interactively:
 npm run security:hash-admin-password
 ```
 
-For the local Nest API, set the resulting configuration through the API's supported development secret mechanism. For Cloudflare, store the generated verifier as `SEEDED_ADMIN_PASSWORD_HASH` using Wrangler. The seeded workspace includes representative materials, lots, formulas, production batches, SKUs, customers, quotes, orders, audit events, and analytics records so the primary flows are usable immediately.
+For the local Nest API, set the resulting verifier in the same PowerShell session before starting the API:
+
+```powershell
+$env:SEEDED_ADMIN_PASSWORD_HASH = 'pbkdf2:v1:sha256:...'
+npm run dev:api
+```
+
+For Cloudflare, store the generated verifier as `SEEDED_ADMIN_PASSWORD_HASH` using Wrangler. The seeded workspace includes representative materials, lots, formulas, production batches, SKUs, customers, quotes, orders, audit events, and analytics records so the primary flows are usable immediately.
 
 ## Useful Commands
 
