@@ -980,6 +980,19 @@ export class NorthStarController {
     return this.northStar.createQuote(body)
   }
 
+  @Patch('quotes/:id/status')
+  updateQuoteStatus(
+    @Param('id') id: string,
+    @Body() body: { status?: 'DRAFT' | 'REVIEW' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' },
+  ) {
+    return this.northStar.updateQuoteStatus(id, body)
+  }
+
+  @Post('quotes/:id/convert')
+  convertQuoteToOrder(@Param('id') id: string) {
+    return this.northStar.convertQuoteToOrder(id)
+  }
+
   @Get('samples')
   samples() {
     return this.northStar.samples()
@@ -988,6 +1001,11 @@ export class NorthStarController {
   @Post('samples')
   requestSample(@Body() body: SampleRequestBody) {
     return this.northStar.requestSample(body)
+  }
+
+  @Patch('samples/:id/status')
+  updateSampleStatus(@Param('id') id: string, @Body() body: { status?: 'REQUESTED' | 'APPROVED' | 'DECLINED' | 'CONVERTED' }) {
+    return this.northStar.updateSampleStatus(id, body)
   }
 
   @Get('customers')
@@ -1011,8 +1029,8 @@ export class NorthStarController {
   }
 
   @Post('orders/:id/reserve')
-  reserveOrder(@Param('id') id: string) {
-    return this.northStar.reserveOrder(id)
+  reserveOrder(@Param('id') id: string, @Body() body: { allowPartial?: boolean }) {
+    return this.northStar.reserveOrder(id, body)
   }
 
   @Post('orders/:id/cancel')

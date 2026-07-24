@@ -88,7 +88,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql` and `migrations/0020_runtime_observability.sql`, before enabling billing webhooks. For the test Worker:
+Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, and `migrations/0023_procurement_tenant_scope.sql`, before enabling billing webhooks. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
@@ -128,6 +128,8 @@ For Cloudflare for SaaS, the token needs the zone permission `SSL and Certificat
 For Resend, verify the sending domain that is used in `EMAIL_FROM`. Delivery failures are recorded on the notification outbox and do not roll back a business mutation. The current outbox covers workspace invitations, new-device security events, billing payment alerts, and privacy requests.
 
 Password reset is a separate transactional flow: `POST /api/v1/auth/password-reset/request` always returns a generic result, hashes the one-time token in D1 snapshot persistence, and sends the only raw token in the Resend email. `POST /api/v1/auth/password-reset/confirm` accepts the link token and a strong new password, expires tokens after 30 minutes, and revokes all active sessions for that account.
+
+The Worker runs its analytics scheduler hourly through the `crons` trigger in `wrangler.toml`. It evaluates daily, weekly, and monthly report cadences, persists only `lastRunAt` and audit evidence, and never mutates inventory, costing inputs, or order state.
 
 ## 3. Deploy Worker API
 

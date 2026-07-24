@@ -162,6 +162,7 @@ import {
   type PriceHistoryRecord,
   type PriceListRecord,
   type ProductionBatchRecord,
+  type PurchaseOrderLineItem,
   type PurchaseOrderRecord,
   type QuoteRecord,
   type RfqComparison,
@@ -589,6 +590,9 @@ type PurchaseOrderReceiptResponse = {
   movement: InventoryMovement
   purchaseOrder: PurchaseOrderRecord
   priceHistory: PriceHistoryRecord
+  lots?: InventoryLot[]
+  movements?: InventoryMovement[]
+  priceHistoryRecords?: PriceHistoryRecord[]
   audit: AuditEvent
   invariant: string
 }
@@ -10915,6 +10919,15 @@ function ProcurementWorkspace({
     unitCost: materialOptions[0]?.costPerGram ?? 0.1,
     currency: 'USD',
   })
+  const [purchaseOrderLines, setPurchaseOrderLines] = useState<PurchaseOrderLineItem[]>([
+    {
+      id: 'draft-po-line-1',
+      materialId: materialOptions[0]?.id ?? '',
+      quantityGrams: 100,
+      receivedGrams: 0,
+      unitCost: materialOptions[0]?.costPerGram ?? 0.1,
+    },
+  ])
   const [receiveDraft, setReceiveDraft] = useState<Record<string, number>>({})
   const [rfqQuantityGrams, setRfqQuantityGrams] = useState(100)
   const [rfqComparison, setRfqComparison] = useState<RfqComparison | null>(null)
@@ -10947,6 +10960,18 @@ function ProcurementWorkspace({
     () => orderRows.filter((order) => order.status !== 'RECEIVED').slice(0, 8),
     [orderRows],
   )
+
+  const linesForPurchaseOrder = useCallback((order: PurchaseOrderRecord): PurchaseOrderLineItem[] => (
+    order.lines?.length
+      ? order.lines
+      : [{
+          id: `${order.id}-legacy-line`,
+          materialId: order.materialId,
+          quantityGrams: order.quantityGrams,
+          receivedGrams: order.receivedGrams,
+          unitCost: order.unitCost,
+        }]
+  ), [])
 
   const updateOrder = useCallback((updated: PurchaseOrderRecord) => {
     setOrderRows((current) => {
@@ -11003,6 +11028,16 @@ function ProcurementWorkspace({
   }, [materialById, materialOptions, supplierRows])
 
   useEffect(() => {
+    setPurchaseOrderLines((current) => current.map((line) => {
+      const fallbackMaterial = materialOptions[0]
+      const material = materialById.get(line.materialId) ?? fallbackMaterial
+      return material
+        ? { ...line, materialId: material.id, unitCost: materialById.has(line.materialId) ? line.unitCost : material.costPerGram }
+        : line
+    }))
+  }, [materialById, materialOptions])
+
+  useEffect(() => {
     let active = true
     async function loadPriceHistory() {
       try {
@@ -11049,6 +11084,13 @@ function ProcurementWorkspace({
   }
 
   async function createPurchaseOrder() {
+    const validLines = purchaseOrderLines.filter((line) =>
+      line.materialId && Number(line.quantityGrams) > 0 && Number(line.unitCost) > 0,
+    )
+    if (validLines.length !== purchaseOrderLines.length || validLines.length === 0) {
+      setStatusMessage('Each purchase-order line needs a material, quantity, and unit cost')
+      return
+    }
     setBusyId('po-create')
     setStatusMessage('Creating purchase order draft')
     try {
@@ -11057,14 +11099,16 @@ function ProcurementWorkspace({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           supplierId: orderDraft.supplierId,
-          materialId: orderDraft.materialId,
-          quantityGrams: Number(orderDraft.quantityGrams),
-          unitCost: Number(orderDraft.unitCost),
           currency: orderDraft.currency,
+          lines: validLines.map((line) => ({
+            materialId: line.materialId,
+            quantityGrams: Number(line.quantityGrams),
+            unitCost: Number(line.unitCost),
+          })),
         }),
       })
       updateOrder(payload.purchaseOrder)
-      setSelectedMaterialId(payload.purchaseOrder.materialId)
+      setSelectedMaterialId(payload.purchaseOrder.lines?.[0]?.materialId ?? payload.purchaseOrder.materialId)
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Purchase order create failed')
@@ -11091,27 +11135,40 @@ function ProcurementWorkspace({
     }
   }
 
-  async function receivePurchaseOrder(order: PurchaseOrderRecord, receiveAll = false) {
-    const remainingGrams = order.quantityGrams - order.receivedGrams
-    const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[order.id] ?? remainingGrams)
+  async function receivePurchaseOrder(order: PurchaseOrderRecord, line: PurchaseOrderLineItem, receiveAll = false) {
+    const remainingGrams = line.quantityGrams - line.receivedGrams
+    const receiptKey = `${order.id}:${line.id}`
+    const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[receiptKey] ?? remainingGrams)
     setBusyId(order.id)
     setStatusMessage(`Receiving ${formatGrams(receivedGrams)} for ${order.id}`)
     try {
       const payload = await requestApi<PurchaseOrderReceiptResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receive`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receivedGrams }),
+        body: JSON.stringify({ lines: [{ materialId: line.materialId, receivedGrams }] }),
       })
       updateOrder(payload.purchaseOrder)
-      onLotsChange((current) => (current.some((lot) => lot.id === payload.lot.id) ? current : [payload.lot, ...current]))
-      onMovementsChange((current) =>
-        current.some((movement) => movement.id === payload.movement.id) ? current : [payload.movement, ...current],
-      )
-      setHistoryRows((current) =>
-        current.some((record) => record.id === payload.priceHistory.id) ? current : [payload.priceHistory, ...current],
-      )
-      setReceiveDraft((current) => ({ ...current, [order.id]: Math.max(payload.purchaseOrder.quantityGrams - payload.purchaseOrder.receivedGrams, 0) }))
-      setSelectedMaterialId(order.materialId)
+      const receiptLots = payload.lots?.length ? payload.lots : [payload.lot]
+      const receiptMovements = payload.movements?.length ? payload.movements : [payload.movement]
+      const receiptHistory = payload.priceHistoryRecords?.length ? payload.priceHistoryRecords : [payload.priceHistory]
+      onLotsChange((current) => [
+        ...receiptLots.filter((lot) => !current.some((candidate) => candidate.id === lot.id)),
+        ...current,
+      ])
+      onMovementsChange((current) => [
+        ...receiptMovements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
+        ...current,
+      ])
+      setHistoryRows((current) => [
+        ...receiptHistory.filter((record) => !current.some((candidate) => candidate.id === record.id)),
+        ...current,
+      ])
+      const receivedLine = linesForPurchaseOrder(payload.purchaseOrder).find((candidate) => candidate.materialId === line.materialId)
+      setReceiveDraft((current) => ({
+        ...current,
+        [receiptKey]: Math.max((receivedLine?.quantityGrams ?? 0) - (receivedLine?.receivedGrams ?? 0), 0),
+      }))
+      setSelectedMaterialId(line.materialId)
       setLastReceipt(payload)
       setStatusMessage(payload.invariant)
     } catch (error) {
@@ -11121,14 +11178,39 @@ function ProcurementWorkspace({
     }
   }
 
-  function fillOrderFromMaterial(materialId: string) {
-    const material = materialById.get(materialId)
-    setOrderDraft((current) => ({
-      ...current,
-      materialId,
-      unitCost: material?.costPerGram ?? current.unitCost,
+  function updatePurchaseOrderLine(lineId: string, patch: Partial<PurchaseOrderLineItem>) {
+    setPurchaseOrderLines((current) => current.map((line) => {
+      if (line.id !== lineId) {
+        return line
+      }
+      const material = patch.materialId ? materialById.get(patch.materialId) : undefined
+      return {
+        ...line,
+        ...patch,
+        unitCost: material ? material.costPerGram : patch.unitCost ?? line.unitCost,
+      }
     }))
-    setSelectedMaterialId(materialId)
+  }
+
+  function addPurchaseOrderLine() {
+    const material = materialOptions.find((candidate) => !purchaseOrderLines.some((line) => line.materialId === candidate.id)) ?? materialOptions[0]
+    if (!material) {
+      return
+    }
+    setPurchaseOrderLines((current) => [
+      ...current,
+      {
+        id: `draft-po-line-${Date.now()}`,
+        materialId: material.id,
+        quantityGrams: 100,
+        receivedGrams: 0,
+        unitCost: material.costPerGram,
+      },
+    ])
+  }
+
+  function removePurchaseOrderLine(lineId: string) {
+    setPurchaseOrderLines((current) => current.length > 1 ? current.filter((line) => line.id !== lineId) : current)
   }
 
   function prepareLowStockOrder(suggestion: InventoryReorderSuggestion) {
@@ -11141,6 +11223,13 @@ function ProcurementWorkspace({
       unitCost: material?.costPerGram ?? 0.1,
       currency: 'USD',
     })
+    setPurchaseOrderLines([{
+      id: `draft-po-line-${Date.now()}`,
+      materialId: suggestion.materialId,
+      quantityGrams: suggestion.suggestedOrderGrams,
+      receivedGrams: 0,
+      unitCost: material?.costPerGram ?? 0.1,
+    }])
     setSelectedMaterialId(suggestion.materialId)
     setStatusMessage(`${suggestion.materialName} loaded into PO draft from low-stock suggestion`)
   }
@@ -11193,6 +11282,13 @@ function ProcurementWorkspace({
         unitCost: option.unitCost,
         currency: option.currency,
       }))
+      setPurchaseOrderLines([{
+        id: `draft-po-line-${Date.now()}`,
+        materialId: rfqComparison.materialId,
+        quantityGrams: rfqComparison.quantityGrams,
+        receivedGrams: 0,
+        unitCost: option.unitCost,
+      }])
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'RFQ award failed')
@@ -11373,42 +11469,6 @@ function ProcurementWorkspace({
             </select>
           </label>
           <label className="field-row">
-            <span>Material</span>
-            <select
-              aria-label="Purchase order material"
-              value={orderDraft.materialId}
-              onChange={(event) => fillOrderFromMaterial(event.target.value)}
-            >
-              {materialOptions.map((material) => (
-                <option key={material.id} value={material.id}>
-                  {material.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field-row">
-            <span>Quantity grams</span>
-            <input
-              aria-label="Purchase order quantity grams"
-              min={1}
-              step={1}
-              type="number"
-              value={orderDraft.quantityGrams}
-              onChange={(event) => setOrderDraft((current) => ({ ...current, quantityGrams: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="field-row">
-            <span>Unit cost</span>
-            <input
-              aria-label="Purchase order unit cost"
-              min={0.01}
-              step={0.01}
-              type="number"
-              value={orderDraft.unitCost}
-              onChange={(event) => setOrderDraft((current) => ({ ...current, unitCost: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="field-row">
             <span>Currency</span>
             <input
               aria-label="Purchase order currency"
@@ -11417,18 +11477,73 @@ function ProcurementWorkspace({
               onChange={(event) => setOrderDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))}
             />
           </label>
+        </div>
+        <div className="po-line-builder">
+          {purchaseOrderLines.map((line, index) => (
+            <div className="po-line-builder-row" key={line.id}>
+              <strong>Line {index + 1}</strong>
+              <label className="field-row">
+                <span>Material</span>
+                <select
+                  aria-label={`Purchase order material ${index + 1}`}
+                  value={line.materialId}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { materialId: event.target.value })}
+                >
+                  {materialOptions.map((material) => (
+                    <option key={material.id} value={material.id}>{material.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-row">
+                <span>Quantity (g)</span>
+                <input
+                  aria-label={`Purchase order quantity grams ${index + 1}`}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={line.quantityGrams}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { quantityGrams: Number(event.target.value) })}
+                />
+              </label>
+              <label className="field-row">
+                <span>Unit cost</span>
+                <input
+                  aria-label={`Purchase order unit cost ${index + 1}`}
+                  min={0.01}
+                  step={0.01}
+                  type="number"
+                  value={line.unitCost}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { unitCost: Number(event.target.value) })}
+                />
+              </label>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => removePurchaseOrderLine(line.id)}
+                disabled={purchaseOrderLines.length === 1}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="document-actions">
+          <button className="ghost-button small" type="button" onClick={addPurchaseOrderLine}>
+            <Plus size={14} />
+            Add material
+          </button>
           <button
             className="primary-button"
             type="button"
             onClick={() => void createPurchaseOrder()}
-            disabled={busyId === 'po-create' || !orderDraft.supplierId || !orderDraft.materialId || orderDraft.quantityGrams <= 0}
+            disabled={busyId === 'po-create' || !orderDraft.supplierId || purchaseOrderLines.length === 0}
           >
             Create PO
           </button>
         </div>
         <ul className="policy-list">
           <li>Draft PO creation does not reserve or move inventory.</li>
-          <li>Goods receipt is the only action that creates lots and RECEIPT movements.</li>
+          <li>Each goods receipt line creates its own lot, RECEIPT movement, and price history evidence.</li>
         </ul>
       </Panel>
 
@@ -11438,30 +11553,56 @@ function ProcurementWorkspace({
             <div className="empty-state compact">No active purchase orders.</div>
           ) : (
             activeOrders.map((order) => {
-              const material = materialById.get(order.materialId)
               const supplier = supplierById.get(order.supplierId)
-              const remainingGrams = order.quantityGrams - order.receivedGrams
+              const orderLines = linesForPurchaseOrder(order)
               return (
                 <div className="document-row purchase-order-row" key={order.id}>
                   <div>
-                    <strong>{order.id} / {material?.name ?? order.materialId}</strong>
+                    <strong>{order.id} / {orderLines.length} material {orderLines.length === 1 ? 'line' : 'lines'}</strong>
                     <span>{supplier?.name ?? order.supplierId} / expected {order.expectedDate}</span>
-                    <span>
-                      {formatGrams(order.receivedGrams)} received of {formatGrams(order.quantityGrams)} / {formatCurrency(order.unitCost)} per g
-                    </span>
+                    <span>{formatGrams(order.receivedGrams)} received of {formatGrams(order.quantityGrams)}</span>
+                    <div className="po-receipt-lines">
+                      {orderLines.map((line) => {
+                        const material = materialById.get(line.materialId)
+                        const remainingGrams = line.quantityGrams - line.receivedGrams
+                        const receiptKey = `${order.id}:${line.id}`
+                        return (
+                          <div className="po-receipt-line" key={line.id}>
+                            <div>
+                              <strong>{material?.name ?? line.materialId}</strong>
+                              <span>{formatGrams(line.receivedGrams)} of {formatGrams(line.quantityGrams)} / {formatCurrency(line.unitCost)} per g</span>
+                            </div>
+                            <input
+                              aria-label={`Receive grams for ${order.id} ${line.materialId}`}
+                              min={0}
+                              max={remainingGrams}
+                              step={1}
+                              type="number"
+                              value={receiveDraft[receiptKey] ?? remainingGrams}
+                              onChange={(event) => setReceiveDraft((current) => ({ ...current, [receiptKey]: Number(event.target.value) }))}
+                            />
+                            <button
+                              className="primary-button small"
+                              type="button"
+                              onClick={() => void receivePurchaseOrder(order, line)}
+                              disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                            >
+                              Receive
+                            </button>
+                            <button
+                              className="ghost-button small"
+                              type="button"
+                              onClick={() => void receivePurchaseOrder(order, line, true)}
+                              disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                            >
+                              Remaining
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                   <StatusBadge status={purchaseOrderStatusTone[order.status]} label={order.status} />
-                  <input
-                    aria-label={`Receive grams for ${order.id}`}
-                    min={0}
-                    max={remainingGrams}
-                    step={1}
-                    type="number"
-                    value={receiveDraft[order.id] ?? remainingGrams}
-                    onChange={(event) =>
-                      setReceiveDraft((current) => ({ ...current, [order.id]: Number(event.target.value) }))
-                    }
-                  />
                   <div className="document-actions">
                     <button
                       className="ghost-button small"
@@ -11470,22 +11611,6 @@ function ProcurementWorkspace({
                       disabled={busyId === order.id || order.status !== 'DRAFT'}
                     >
                       Send
-                    </button>
-                    <button
-                      className="primary-button small"
-                      type="button"
-                      onClick={() => void receivePurchaseOrder(order)}
-                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
-                    >
-                      Receive
-                    </button>
-                    <button
-                      className="ghost-button small"
-                      type="button"
-                      onClick={() => void receivePurchaseOrder(order, true)}
-                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
-                    >
-                      Receive Remaining
                     </button>
                   </div>
                 </div>
@@ -11559,11 +11684,16 @@ const quoteStatusTone: Record<QuoteRecord['status'], DomainStatus> = {
   DRAFT: 'draft',
   REVIEW: 'review',
   SENT: 'stable',
+  ACCEPTED: 'active',
+  DECLINED: 'draft',
+  EXPIRED: 'review',
+  CONVERTED: 'stable',
 }
 
 const sampleStatusTone: Record<SampleRequestRecord['status'], DomainStatus> = {
   REQUESTED: 'active',
   APPROVED: 'stable',
+  DECLINED: 'draft',
   CONVERTED: 'review',
 }
 
@@ -11908,6 +12038,59 @@ function CommerceWorkspace({
     }
   }
 
+  async function updateQuoteStatus(quoteId: string, status: 'ACCEPTED' | 'DECLINED' | 'EXPIRED') {
+    setBusyId(`quote-status:${quoteId}`)
+    try {
+      const payload = await requestApi<{ quote: QuoteRecord; invariant: string }>(`/quotes/${encodeURIComponent(quoteId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      setQuoteRows((current) => current.map((quote) => (quote.id === quoteId ? payload.quote : quote)))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Quote lifecycle update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function convertQuoteToOrder(quoteId: string) {
+    setBusyId(`quote-convert:${quoteId}`)
+    try {
+      const payload = await requestApi<{ quote: QuoteRecord; order: SalesOrderRecord; customer: CustomerRecord; invariant: string }>(
+        `/quotes/${encodeURIComponent(quoteId)}/convert`,
+        { method: 'POST' },
+      )
+      setQuoteRows((current) => current.map((quote) => (quote.id === quoteId ? payload.quote : quote)))
+      setCustomerRows((current) =>
+        current.some((customer) => customer.id === payload.customer.id) ? current : [payload.customer, ...current],
+      )
+      setStatusMessage(`${payload.invariant} Created ${payload.order.id}.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Quote conversion failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function updateSampleStatus(sampleId: string, status: 'APPROVED' | 'DECLINED' | 'CONVERTED') {
+    setBusyId(`sample-status:${sampleId}`)
+    try {
+      const payload = await requestApi<{ sample: SampleRequestRecord; invariant: string }>(`/samples/${encodeURIComponent(sampleId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      setSampleRows((current) => current.map((sample) => (sample.id === sampleId ? payload.sample : sample)))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Sample lifecycle update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className="workspace-grid commerce-grid">
       <Panel title="SKU Catalog" icon={BadgeDollarSign} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
@@ -12198,6 +12381,9 @@ function CommerceWorkspace({
                 <div className="document-actions">
                   <button className="ghost-button tiny" type="button" onClick={() => printQuote(quote)}>Print / PDF</button>
                   <a className="ghost-button tiny" href={`mailto:${encodeURIComponent(customerRows.find((customer) => customer.name === quote.customer)?.contactEmail ?? '')}?subject=${encodeURIComponent(`Quotation ${quote.id}`)}&body=${encodeURIComponent(`Hello ${quote.customer},\n\nPlease find quotation ${quote.id} totaling ${formatCurrency(quote.total)} ${quote.currency}.\n\nRegards,\nOlfactoryOps`)}`}>Email</a>
+                  {quote.status === 'SENT' ? <button className="ghost-button tiny" type="button" onClick={() => void updateQuoteStatus(quote.id, 'ACCEPTED')} disabled={busyId === `quote-status:${quote.id}`}>Accept</button> : null}
+                  {quote.status === 'SENT' ? <button className="ghost-button tiny danger" type="button" onClick={() => void updateQuoteStatus(quote.id, 'DECLINED')} disabled={busyId === `quote-status:${quote.id}`}>Decline</button> : null}
+                  {quote.status === 'ACCEPTED' ? <button className="primary-button tiny" type="button" onClick={() => void convertQuoteToOrder(quote.id)} disabled={busyId === `quote-convert:${quote.id}`}>Create Order</button> : null}
                 </div>
               </div>
             ))}
@@ -12210,6 +12396,11 @@ function CommerceWorkspace({
                   <span>{sample.customer} / {sample.packs} pack(s)</span>
                 </div>
                 <StatusBadge status={sampleStatusTone[sample.status]} label={sample.status} />
+                <div className="document-actions">
+                  {sample.status === 'REQUESTED' ? <button className="ghost-button tiny" type="button" onClick={() => void updateSampleStatus(sample.id, 'APPROVED')} disabled={busyId === `sample-status:${sample.id}`}>Approve</button> : null}
+                  {sample.status === 'REQUESTED' ? <button className="ghost-button tiny danger" type="button" onClick={() => void updateSampleStatus(sample.id, 'DECLINED')} disabled={busyId === `sample-status:${sample.id}`}>Decline</button> : null}
+                  {sample.status === 'APPROVED' ? <button className="ghost-button tiny" type="button" onClick={() => void updateSampleStatus(sample.id, 'CONVERTED')} disabled={busyId === `sample-status:${sample.id}`}>Mark converted</button> : null}
+                </div>
               </div>
             ))}
           </div>
@@ -12428,7 +12619,11 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     setOrderLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
   }
 
-  async function runOrderAction(orderId: string, action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill') {
+  async function runOrderAction(
+    orderId: string,
+    action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill',
+    options: { allowPartial?: boolean } = {},
+  ) {
     setBusyId(`${action}:${orderId}`)
     const endpoint = `/orders/${encodeURIComponent(orderId)}/${action}`
     try {
@@ -12448,7 +12643,11 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         })
         invariant = payload.invariant
       } else if (action === 'reserve') {
-        const payload = await requestApi<OrderReservationResponse>(endpoint, { method: 'POST' })
+        const payload = await requestApi<OrderReservationResponse>(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allowPartial: options.allowPartial === true }),
+        })
         invariant = payload.invariant
       } else if (action === 'cancel') {
         const payload = await requestApi<OrderCancellationResponse>(endpoint, { method: 'POST' })
@@ -12622,7 +12821,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                       event.stopPropagation()
                       void runOrderAction(order.id, 'reserve')
                     }}
-                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status)}
+                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status) || order.reservedGrams > 0}
                   >
                     Reserve
                   </button>
@@ -12631,9 +12830,20 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation()
+                      void runOrderAction(order.id, 'reserve', { allowPartial: true })
+                    }}
+                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status) || order.reservedGrams > 0}
+                  >
+                    Reserve Available
+                  </button>
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
                       void runOrderAction(order.id, 'pack')
                     }}
-                    disabled={busy || order.status !== 'RESERVED'}
+                    disabled={busy || !['RESERVED', 'BACKORDER'].includes(order.status) || order.reservedGrams <= 0}
                   >
                     Pack
                   </button>
@@ -12655,7 +12865,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                       event.stopPropagation()
                       void runOrderAction(order.id, 'fulfill')
                     }}
-                    disabled={busy || !['RESERVED', 'PACKED', 'SHIPPED'].includes(order.status)}
+                    disabled={busy || !['RESERVED', 'BACKORDER', 'PACKED', 'SHIPPED'].includes(order.status) || order.reservedGrams <= 0}
                   >
                     Fulfill
                   </button>
@@ -12666,7 +12876,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                       event.stopPropagation()
                       void runOrderAction(order.id, 'cancel')
                     }}
-                    disabled={busy || ['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)}
+                    disabled={busy || order.fulfilledGrams > 0 || ['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)}
                   >
                     Cancel
                   </button>

@@ -777,6 +777,7 @@ export interface ProductionBatchRecord {
 
 export interface SupplierRecord {
   id: string
+  organizationId?: string
   name: string
   status: DomainStatus
   country: string
@@ -788,6 +789,7 @@ export interface SupplierRecord {
 
 export interface PurchaseOrderRecord {
   id: string
+  organizationId?: string
   supplierId: string
   materialId: string
   quantityGrams: number
@@ -797,10 +799,21 @@ export interface PurchaseOrderRecord {
   unitCost: number
   currency: string
   createdAt: string
+  /** Legacy primary-line fields remain populated so existing purchase orders stay readable. */
+  lines?: PurchaseOrderLineItem[]
+}
+
+export interface PurchaseOrderLineItem {
+  id: string
+  materialId: string
+  quantityGrams: number
+  receivedGrams: number
+  unitCost: number
 }
 
 export interface PriceHistoryRecord {
   id: string
+  organizationId?: string
   materialId: string
   supplierId: string
   purchaseOrderId: string
@@ -1066,7 +1079,7 @@ export interface QuoteRecord {
   unitPrice: number
   total: number
   currency: string
-  status: 'DRAFT' | 'REVIEW' | 'SENT'
+  status: 'DRAFT' | 'REVIEW' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CONVERTED'
   createdAt: string
   lines?: QuoteLineItem[]
 }
@@ -1083,7 +1096,7 @@ export interface SampleRequestRecord {
   skuId: string
   customer: string
   packs: number
-  status: 'REQUESTED' | 'APPROVED' | 'CONVERTED'
+  status: 'REQUESTED' | 'APPROVED' | 'DECLINED' | 'CONVERTED'
   createdAt: string
 }
 
@@ -1170,6 +1183,8 @@ export interface SalesOrderLineItem {
   quantity: number
   unitPrice: number
   lineTotal: number
+  reservedGrams?: number
+  fulfilledGrams?: number
 }
 
 export interface BillingPlanRecord {

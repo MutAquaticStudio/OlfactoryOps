@@ -574,13 +574,16 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/price-lists', mutates: true, handler: ({ service, body }) => service.createPriceList(body) },
   { method: 'GET', pattern: '/quotes', handler: ({ service }) => service.quotes() },
   { method: 'POST', pattern: '/quotes', mutates: true, handler: ({ service, body }) => service.createQuote(body) },
+  { method: 'PATCH', pattern: '/quotes/:id/status', mutates: true, handler: ({ service, params, body }) => service.updateQuoteStatus(params.id, body) },
+  { method: 'POST', pattern: '/quotes/:id/convert', mutates: true, handler: ({ service, params }) => service.convertQuoteToOrder(params.id) },
   { method: 'GET', pattern: '/samples', handler: ({ service }) => service.samples() },
   { method: 'POST', pattern: '/samples', mutates: true, handler: ({ service, body }) => service.requestSample(body) },
+  { method: 'PATCH', pattern: '/samples/:id/status', mutates: true, handler: ({ service, params, body }) => service.updateSampleStatus(params.id, body) },
   { method: 'GET', pattern: '/customers', handler: ({ service }) => service.customers() },
   { method: 'POST', pattern: '/customers', mutates: true, handler: ({ service, body }) => service.createCustomer(body) },
   { method: 'GET', pattern: '/orders', handler: ({ service }) => service.orders() },
   { method: 'POST', pattern: '/orders', mutates: true, handler: ({ service, body }) => service.createOrder(body) },
-  { method: 'POST', pattern: '/orders/:id/reserve', mutates: true, handler: ({ service, params }) => service.reserveOrder(params.id) },
+  { method: 'POST', pattern: '/orders/:id/reserve', mutates: true, handler: ({ service, params, body }) => service.reserveOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/cancel', mutates: true, handler: ({ service, params }) => service.cancelOrder(params.id) },
   { method: 'POST', pattern: '/orders/:id/pack', mutates: true, handler: ({ service, params, body }) => service.packOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/ship', mutates: true, handler: ({ service, params, body }) => service.shipOrder(params.id, body) },
@@ -779,6 +782,41 @@ export default {
       return errorJson(error, corsHeaders)
     }
   },
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(runScheduledAnalytics(controller, env))
+  },
+}
+
+async function runScheduledAnalytics(controller: ScheduledController, env: Env) {
+  const startedAt = Date.now()
+  try {
+    await assertPersistenceReady(env.DB)
+    const service = new NorthStarService({
+      authCredentials: seededAdminCredentialsForEnv(env),
+      mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+    })
+    await hydrateSnapshots(env.DB, service, env)
+    const scheduledAt = new Date(controller.scheduledTime).toISOString()
+    const result = service.runDueAnalyticsReports(scheduledAt)
+    if (result.data.reports.length > 0) {
+      await persistSnapshots(env.DB, service)
+      refreshCachedSnapshotState(service)
+    }
+    await recordRuntimeEvent(env.DB, {
+      route: 'SCHEDULED analytics-reports',
+      status: 200,
+      durationMs: Date.now() - startedAt,
+      category: 'scheduler',
+    })
+  } catch (error) {
+    console.error('Scheduled analytics report run failed', error)
+    const durationMs = Date.now() - startedAt
+    await Promise.all([
+      recordRuntimeEvent(env.DB, { route: 'SCHEDULED analytics-reports', status: 500, durationMs, category: 'error' }),
+      captureSentryRuntimeError(env, { route: 'SCHEDULED analytics-reports', status: 500, durationMs }),
+    ])
+    throw error
+  }
 }
 
 async function publicStatus(env: Env) {
@@ -1006,7 +1044,7 @@ type RuntimeEvent = {
   route: string
   status: number
   durationMs: number
-  category: 'error' | 'latency'
+  category: 'error' | 'latency' | 'scheduler'
 }
 
 async function recordRuntimeEvent(db: D1Database, event: RuntimeEvent) {
@@ -2261,6 +2299,7 @@ type ProductionBatchRow = {
 
 type SupplierRow = {
   id: string
+  organization_id: string | null
   name: string
   status: string
   country: string
@@ -2272,6 +2311,7 @@ type SupplierRow = {
 
 type PurchaseOrderRow = {
   id: string
+  organization_id: string | null
   supplier_id: string
   material_id: string
   quantity_grams: number
@@ -2281,10 +2321,12 @@ type PurchaseOrderRow = {
   unit_cost: number
   currency: string
   created_at: string
+  lines_json: string | null
 }
 
 type PriceHistoryRow = {
   id: string
+  organization_id: string | null
   material_id: string
   supplier_id: string
   purchase_order_id: string
@@ -3898,7 +3940,7 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
 async function hydrateProcurementState(db: D1Database, serviceState: ServiceState) {
   const supplierRows = await db
     .prepare(
-      `SELECT id, name, status, country, lead_time_days, contact_email, payment_terms, preferred_material_ids_json
+      `SELECT id, organization_id, name, status, country, lead_time_days, contact_email, payment_terms, preferred_material_ids_json
        FROM suppliers
        ORDER BY name ASC`,
     )
@@ -3912,8 +3954,8 @@ async function hydrateProcurementState(db: D1Database, serviceState: ServiceStat
 
   const poRows = await db
     .prepare(
-      `SELECT id, supplier_id, material_id, quantity_grams, received_grams, status,
-        expected_date, unit_cost, currency, created_at
+      `SELECT id, organization_id, supplier_id, material_id, quantity_grams, received_grams, status,
+        expected_date, unit_cost, currency, created_at, lines_json
        FROM purchase_orders
        ORDER BY created_at DESC, id DESC`,
     )
@@ -3927,7 +3969,7 @@ async function hydrateProcurementState(db: D1Database, serviceState: ServiceStat
 
   const priceRows = await db
     .prepare(
-      `SELECT id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
+      `SELECT id, organization_id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
         quantity_grams, captured_at, source
        FROM price_history
        ORDER BY captured_at DESC, id DESC`,
@@ -3957,11 +3999,12 @@ async function persistSuppliers(db: D1Database, suppliers: SupplierRecord[], upd
       db
         .prepare(
           `INSERT INTO suppliers (
-            id, name, status, country, lead_time_days, contact_email, payment_terms,
+            id, organization_id, name, status, country, lead_time_days, contact_email, payment_terms,
             preferred_material_ids_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             name = excluded.name,
             status = excluded.status,
             country = excluded.country,
@@ -3973,6 +4016,7 @@ async function persistSuppliers(db: D1Database, suppliers: SupplierRecord[], upd
         )
         .bind(
           supplier.id,
+          supplier.organizationId ?? 'org-nxl',
           supplier.name,
           supplier.status,
           supplier.country,
@@ -3996,11 +4040,12 @@ async function persistPurchaseOrders(db: D1Database, purchaseOrders: PurchaseOrd
       db
         .prepare(
           `INSERT INTO purchase_orders (
-            id, supplier_id, material_id, quantity_grams, received_grams, status,
-            expected_date, unit_cost, currency, created_at, updated_at
+            id, organization_id, supplier_id, material_id, quantity_grams, received_grams, status,
+            expected_date, unit_cost, currency, created_at, lines_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             supplier_id = excluded.supplier_id,
             material_id = excluded.material_id,
             quantity_grams = excluded.quantity_grams,
@@ -4010,10 +4055,12 @@ async function persistPurchaseOrders(db: D1Database, purchaseOrders: PurchaseOrd
             unit_cost = excluded.unit_cost,
             currency = excluded.currency,
             created_at = excluded.created_at,
+            lines_json = excluded.lines_json,
             updated_at = excluded.updated_at`,
         )
         .bind(
           order.id,
+          order.organizationId ?? 'org-nxl',
           order.supplierId,
           order.materialId,
           order.quantityGrams,
@@ -4023,6 +4070,7 @@ async function persistPurchaseOrders(db: D1Database, purchaseOrders: PurchaseOrd
           order.unitCost,
           order.currency,
           order.createdAt,
+          order.lines ? JSON.stringify(order.lines) : null,
           updatedAt,
         ),
     ),
@@ -4039,11 +4087,12 @@ async function persistPriceHistory(db: D1Database, records: PriceHistoryRecord[]
       db
         .prepare(
           `INSERT INTO price_history (
-            id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
+            id, organization_id, material_id, supplier_id, purchase_order_id, unit_cost, currency,
             quantity_grams, captured_at, source, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             material_id = excluded.material_id,
             supplier_id = excluded.supplier_id,
             purchase_order_id = excluded.purchase_order_id,
@@ -4056,6 +4105,7 @@ async function persistPriceHistory(db: D1Database, records: PriceHistoryRecord[]
         )
         .bind(
           record.id,
+          record.organizationId ?? 'org-nxl',
           record.materialId,
           record.supplierId,
           record.purchaseOrderId,
@@ -5589,6 +5639,7 @@ function documentFromRow(row: DocumentRecordRow): DocumentRecord {
 function supplierFromRow(row: SupplierRow): SupplierRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     name: row.name,
     status: readDomainStatus(row.status),
     country: row.country,
@@ -5604,6 +5655,7 @@ function supplierFromRow(row: SupplierRow): SupplierRecord {
 function purchaseOrderFromRow(row: PurchaseOrderRow): PurchaseOrderRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     supplierId: row.supplier_id,
     materialId: row.material_id,
     quantityGrams: Number(row.quantity_grams),
@@ -5613,12 +5665,14 @@ function purchaseOrderFromRow(row: PurchaseOrderRow): PurchaseOrderRecord {
     unitCost: Number(row.unit_cost),
     currency: row.currency,
     createdAt: row.created_at,
+    lines: row.lines_json ? parseJson<PurchaseOrderRecord['lines']>(row.lines_json, undefined) : undefined,
   }
 }
 
 function priceHistoryFromRow(row: PriceHistoryRow): PriceHistoryRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     materialId: row.material_id,
     supplierId: row.supplier_id,
     purchaseOrderId: row.purchase_order_id,

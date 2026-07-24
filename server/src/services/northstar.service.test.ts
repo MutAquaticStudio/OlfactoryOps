@@ -549,6 +549,12 @@ describe('NorthStarService', () => {
       cas: '67890-12-3',
       costPerGram: 0.14,
     }).data.material
+    service.createSupplier({
+      name: 'Scope Tenant Supplier',
+      country: 'TH',
+      contactEmail: 'scope-supplier@example.test',
+      preferredMaterialIds: [ownMaterial.id],
+    })
     const comparison = service.compareSupplierRfq({ materialId: ownMaterial.id, quantityGrams: 50 }).data
 
     expect(service.materials().data.some((material) => material.id === ownMaterial.id)).toBe(true)
@@ -715,6 +721,9 @@ describe('NorthStarService', () => {
     expect(() => service.billingConsole()).toThrow(ForbiddenException)
     expect(() => service.selectBillingPlan({ planId: 'PLAN-ARTISAN' })).toThrow(ForbiddenException)
     expect(() => service.openBillingPortal()).toThrow(ForbiddenException)
+    expect(service.analyticsDashboard().data.invariant).toContain('read-only')
+    expect(() => service.costingValuation()).toThrow(ForbiddenException)
+    expect(() => service.costingSku('SKU-ISO-050')).toThrow(ForbiddenException)
   })
 
   it('routes normal-user inventory updates through admin approval before mutating stock', () => {
@@ -1594,6 +1603,49 @@ describe('NorthStarService', () => {
     expect(() => service.generateDocument({ type: 'Formula Spec Sheet', linkedTo: tenantFormula.id })).toThrowError('was not found')
   })
 
+  it('scopes procurement evidence and analytics read models to the active workspace', () => {
+    const service = createAuthenticatedService()
+    const adminSupplierCount = service.suppliers().data.length
+    const signup = service.signup({
+      organizationName: 'Procurement Isolation Lab',
+      workspaceSlug: 'procurement-isolation',
+      email: 'owner@procurement-isolation.test',
+      name: 'Procurement Owner',
+      password: 'ProcurementIsolation2026!',
+    }).data
+
+    expect(service.suppliers().data).toEqual([])
+    expect(service.purchaseOrders().data).toEqual([])
+    expect(service.analyticsDashboard().data.burnRate).toEqual([])
+
+    const material = service.createMaterial({
+      name: 'Tenant Receipt Material',
+      cas: '1200-00-1',
+      family: 'Tenant isolate',
+      odor: ['clean'],
+      costPerGram: 0.5,
+    }).data.material
+    const supplier = service.createSupplier({
+      name: 'Tenant Receipt Supplier',
+      country: 'TH',
+      contactEmail: 'buyer@tenant-receipt.example',
+      preferredMaterialIds: [material.id],
+    }).data.supplier
+    const purchaseOrder = service.createPurchaseOrder({
+      supplierId: supplier.id,
+      lines: [{ materialId: material.id, quantityGrams: 20, unitCost: 0.6 }],
+    }).data.purchaseOrder
+
+    expect(supplier.organizationId).toBe(signup.organization.id)
+    expect(purchaseOrder.organizationId).toBe(signup.organization.id)
+    expect(service.suppliers().data).toHaveLength(1)
+    expect(service.purchaseOrders().data).toHaveLength(1)
+
+    service.login(adminEmail, adminPassword)
+    expect(service.suppliers().data).toHaveLength(adminSupplierCount)
+    expect(service.purchaseOrders().data.some((order) => order.id === purchaseOrder.id)).toBe(false)
+  })
+
   it('scopes Formula inventory sources to the active workspace', () => {
     const service = createAuthenticatedService()
     const adminLotIds = service.inventoryConsole().data.lots.map((lot) => lot.id)
@@ -1892,6 +1944,44 @@ describe('NorthStarService', () => {
     expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
   })
 
+  it('keeps multi-line PO receipt and price history reconciled per material line', () => {
+    const service = createAuthenticatedService()
+    const supplier = service.createSupplier({
+      name: 'Multi-line Procurement Supplier',
+      country: 'US',
+      contactEmail: 'multi-line-supplier@example.test',
+      leadTimeDays: 12,
+    }).data.supplier
+    const draft = service.createPurchaseOrder({
+      supplierId: supplier.id,
+      currency: 'USD',
+      lines: [
+        { materialId: 'mat-bergamot', quantityGrams: 40, unitCost: 0.11 },
+        { materialId: 'mat-vanillin', quantityGrams: 30, unitCost: 0.16 },
+      ],
+    }).data.purchaseOrder
+
+    expect(draft.lines).toHaveLength(2)
+    expect(draft.quantityGrams).toBe(70)
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+
+    const firstReceipt = service.receivePurchaseOrder(draft.id, {
+      lines: [{ materialId: 'mat-bergamot', receivedGrams: 40 }],
+    }).data
+    expect(firstReceipt.lots).toHaveLength(1)
+    expect(firstReceipt.purchaseOrder.status).toBe('PARTIAL')
+    expect(firstReceipt.purchaseOrder.lines?.find((line) => line.materialId === 'mat-bergamot')?.receivedGrams).toBe(40)
+    expect(firstReceipt.purchaseOrder.lines?.find((line) => line.materialId === 'mat-vanillin')?.receivedGrams).toBe(0)
+
+    const finalReceipt = service.receivePurchaseOrder(draft.id, {
+      lines: [{ materialId: 'mat-vanillin', receivedGrams: 30 }],
+    }).data
+    expect(finalReceipt.purchaseOrder.status).toBe('RECEIVED')
+    expect(finalReceipt.purchaseOrder.receivedGrams).toBe(70)
+    expect(service.materialPriceHistory('mat-bergamot').data.some((entry) => entry.purchaseOrderId === draft.id)).toBe(true)
+    expect(service.materialPriceHistory('mat-vanillin').data.some((entry) => entry.purchaseOrderId === draft.id)).toBe(true)
+  })
+
   it('compares supplier evidence and awards an RFQ into a PO draft without inventory movement', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
@@ -1962,6 +2052,26 @@ describe('NorthStarService', () => {
     expect(sample.sample.status).toBe('REQUESTED')
     expect(sample.invariant).toContain('does not reserve or move stock')
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('manages quote and sample lifecycles before converting accepted commercial intent to an order', () => {
+    const service = createAuthenticatedService()
+    const quote = service.createQuote({
+      customerId: 'CUS-DEMO',
+      skuId: 'SKU-ISO-050',
+      quantityPacks: 1,
+    }).data.quote
+    const accepted = service.updateQuoteStatus(quote.id, { status: 'ACCEPTED' }).data.quote
+    const converted = service.convertQuoteToOrder(quote.id).data
+
+    expect(accepted.status).toBe('ACCEPTED')
+    expect(converted.quote.status).toBe('CONVERTED')
+    expect(converted.order.total).toBe(quote.total)
+    expect(converted.order.reservedGrams).toBe(0)
+
+    const sample = service.requestSample({ skuId: 'SKU-ISO-050', customer: 'Maison Trial Studio', packs: 1 }).data.sample
+    expect(service.updateSampleStatus(sample.id, { status: 'APPROVED' }).data.sample.status).toBe('APPROVED')
+    expect(service.updateSampleStatus(sample.id, { status: 'CONVERTED' }).data.sample.status).toBe('CONVERTED')
   })
 
   it('prices and reserves each line of a multi-SKU quote and order', () => {
@@ -2049,6 +2159,30 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
+  it('reserves and fulfills available whole packs while retaining the remainder as a backorder', () => {
+    const service = createAuthenticatedService()
+    const order = service.createOrder({
+      skuId: 'SKU-ISO-050',
+      customerId: 'CUS-DEMO',
+      quantity: 6,
+    }).data.order
+
+    const reservation = service.reserveOrder(order.id, { allowPartial: true }).data
+    const reserved = service.orders().data.find((item) => item.id === order.id)
+    expect(reservation.invariant).toContain('backorder')
+    expect(reserved?.status).toBe('BACKORDER')
+    expect(reserved?.reservedGrams).toBeGreaterThan(0)
+    expect((reserved?.reservedGrams ?? 0) % 50).toBe(0)
+
+    service.packOrder(order.id)
+    const fulfillment = service.fulfillOrder(order.id).data
+    const backordered = service.orders().data.find((item) => item.id === order.id)
+    expect(fulfillment.invariant).toContain('remaining demand on backorder')
+    expect(backordered?.status).toBe('BACKORDER')
+    expect(backordered?.reservedGrams).toBe(0)
+    expect(backordered?.fulfilledGrams).toBeGreaterThan(0)
+  })
+
   it('builds costing read models from formula, batch, SKU margin, valuation, and COGS', () => {
     const service = createAuthenticatedService()
     const releasedBatch = service.createProductionBatch('frm-0421', 25).data
@@ -2101,6 +2235,22 @@ describe('NorthStarService', () => {
     expect(reports.some((report) => report.id === 'RPT-FIN-WEEKLY')).toBe(true)
     expect(run.report.lastRunAt).toBeDefined()
     expect(run.audit.action).toBe('analytics.report.run')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('runs only due active analytics reports on the scheduler without mutating operational state', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const firstRun = service.runDueAnalyticsReports('2026-07-10T08:00:00.000Z').data
+    const repeatRun = service.runDueAnalyticsReports('2026-07-10T08:01:00.000Z').data
+
+    expect(firstRun.reports.map((report) => report.id).sort()).toEqual([
+      'RPT-FIN-WEEKLY',
+      'RPT-INVENTORY-DAILY',
+    ])
+    expect(firstRun.audits.every((audit) => audit.action === 'analytics.report.scheduled-run')).toBe(true)
+    expect(firstRun.invariant).toContain('never mutate inventory, orders, or costing inputs')
+    expect(repeatRun.reports).toHaveLength(0)
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
