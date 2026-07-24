@@ -737,13 +737,17 @@ export class NorthStarService {
   }
 
   materials() {
-    return { data: this.materialRecords }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    return { data: this.materialCatalogForSession(session) }
   }
 
   materialDedupe(cas = '') {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
     const normalizedCas = cas.trim().toLowerCase()
     const matches = normalizedCas
-      ? this.materialRecords.filter((material) => material.cas.toLowerCase() === normalizedCas)
+      ? this.materialCatalogForSession(session).filter((material) => material.cas.toLowerCase() === normalizedCas)
       : []
     return {
       data: {
@@ -766,7 +770,7 @@ export class NorthStarService {
     if (!cas || !/^[0-9-]+$/.test(cas)) {
       throw new UnprocessableEntityException('CAS must contain digits and hyphens')
     }
-    if (this.materialRecords.some((material) => material.cas.toLowerCase() === cas.toLowerCase())) {
+    if (this.materialCatalogForSession(session).some((material) => material.cas.toLowerCase() === cas.toLowerCase())) {
       throw new UnprocessableEntityException('Material CAS already exists')
     }
 
@@ -1339,21 +1343,16 @@ export class NorthStarService {
 
   material(id: string) {
     const session = this.currentSession()
-    const material = this.materialRecords.find((item) => item.id === id)
-    if (!material) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
-    const summary = stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === id)
+    this.requirePermission(session.role, 'materials.view')
+    const material = this.materialForSession(id, session)
+    const summary = stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === id)
     return { data: { ...material, stock: summary } }
   }
 
   updateMaterial(id: string, body: MaterialMutationBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
-    const material = this.materialRecords.find((item) => item.id === id)
-    if (!material) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
+    const material = this.materialForSession(id, session)
     const updated = this.mergeMaterial(material, body, body.source?.trim() || 'Manual material update', body.version?.trim() || 'v1')
     this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
     const audit = this.recordAudit('material.update', id, session.userId, 'allowed')
@@ -1363,10 +1362,7 @@ export class NorthStarService {
   ingestMaterialDocument(id: string, body: MaterialIngestionBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
-    const material = this.materialRecords.find((item) => item.id === id)
-    if (!material) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
+    const material = this.materialForSession(id, session)
     const documentType = body.documentType === 'CoA' ? 'CoA' : 'SDS'
     const source = body.source?.trim() || `${material.name} ${documentType}`
     const version = body.version?.trim() || 'v1'
@@ -1427,10 +1423,7 @@ export class NorthStarService {
   pubchemFill(id: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
-    const material = this.materialRecords.find((item) => item.id === id)
-    if (!material) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
+    const material = this.materialForSession(id, session)
     const profile = this.pubchemProfile(material)
     const updated = this.mergeMaterial(material, profile.fields, 'PubChem curated fill', '2026-07')
     const nextMolecules = profile.molecules.map((molecule, index) => ({
@@ -1457,9 +1450,9 @@ export class NorthStarService {
   }
 
   materialMolecules(id: string) {
-    if (!this.materialRecords.some((item) => item.id === id)) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    this.materialForSession(id, session)
     const molecules = this.moleculeRecords.filter((molecule) => molecule.materialId === id)
     return {
       data: {
@@ -1472,10 +1465,9 @@ export class NorthStarService {
   }
 
   materialProvenance(id: string) {
-    const material = this.materialRecords.find((item) => item.id === id)
-    if (!material) {
-      throw new NotFoundException(`Material ${id} was not found`)
-    }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    const material = this.materialForSession(id, session)
     return {
       data: {
         materialId: id,
@@ -1969,7 +1961,7 @@ export class NorthStarService {
 
   inventorySummary() {
     const session = this.currentSession()
-    return { data: stockSummary(this.lotsForSession(session), this.materialRecords) }
+    return { data: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)) }
   }
 
   inventoryMovements() {
@@ -1988,7 +1980,7 @@ export class NorthStarService {
         movements,
         locations: this.locationRecords,
         stockTakes: this.stockTakeRecords.filter((stockTake) => lotIds.has(stockTake.lotId)),
-        summary: stockSummary(lots, this.materialRecords),
+        summary: stockSummary(lots, this.materialCatalogForSession(session)),
         reorderSuggestions: this.inventoryReorderSuggestions().data.suggestions,
         invariant: 'inventory console reads tenant lots, locations, stock takes, and immutable movement evidence together',
       },
@@ -2061,7 +2053,7 @@ export class NorthStarService {
       ['mat-vanillin', 100],
       ['mat-ethanol', 1500],
     ])
-    const suggestions: InventoryReorderSuggestion[] = stockSummary(lots, this.materialRecords)
+    const suggestions: InventoryReorderSuggestion[] = stockSummary(lots, this.materialCatalogForSession(session))
       .flatMap((item) => {
         const reorderPointGrams = reorderPoints.get(item.material.id) ?? 0
         if (reorderPointGrams <= 0 || item.available >= reorderPointGrams) {
@@ -2112,7 +2104,7 @@ export class NorthStarService {
       data: {
         lot: updatedLot,
         audit,
-        summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
         movementCount,
         reason: body.reason?.trim() || 'QC status workflow',
         invariant: 'quality status changes lot eligibility but creates no inventory movement',
@@ -2189,7 +2181,7 @@ export class NorthStarService {
         lot: updatedLot,
         movement,
         stockTake: record,
-        summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
         invariant: movement
           ? 'stock take variance updates stock through immutable ADJUSTMENT movement'
           : 'stock take match records evidence without changing stock quantity',
@@ -2200,10 +2192,7 @@ export class NorthStarService {
   lotLabel(id: string) {
     const session = this.currentSession()
     const lot = this.lotForSession(id, session)
-    const material = this.materialRecords.find((item) => item.id === lot.materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${lot.materialId} was not found`)
-    }
+    const material = this.materialForSession(lot.materialId, session)
 
     const label: LotLabelPayload = {
       lotId: lot.id,
@@ -2226,10 +2215,7 @@ export class NorthStarService {
   lotGenealogy(id: string) {
     const session = this.currentSession()
     const lot = this.lotForSession(id, session)
-    const material = this.materialRecords.find((item) => item.id === lot.materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${lot.materialId} was not found`)
-    }
+    const material = this.materialForSession(lot.materialId, session)
 
     const receivedAt = new Date(`${lot.receivedDate}T00:00:00.000Z`).getTime()
     const agingDays = Math.max(0, Math.round((Date.now() - receivedAt) / 86_400_000))
@@ -2538,7 +2524,7 @@ export class NorthStarService {
       data: {
         lot: updatedLot,
         movement,
-        summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
         invariant: 'inventory adjustment changes stock only through immutable movement',
       },
     }
@@ -2580,7 +2566,7 @@ export class NorthStarService {
       data: {
         lot: updatedLot,
         movement,
-        summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === lot.materialId),
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
         invariant: 'inventory transfer records movement evidence without changing stock quantity',
       },
     }
@@ -2589,11 +2575,11 @@ export class NorthStarService {
   receiveInventoryReceipt(body: InventoryReceiptBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'inventory.receive')
-    const materialId = body.materialId ?? this.materialRecords[0]?.id
-    const material = this.materialRecords.find((item) => item.id === materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${materialId} was not found`)
+    const materialId = body.materialId?.trim() || this.materialCatalogForSession(session)[0]?.id
+    if (!materialId) {
+      throw new NotFoundException('No material is available in this workspace')
     }
+    const material = this.materialForSession(materialId, session)
 
     const quantityGrams = Number(body.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
@@ -2678,7 +2664,7 @@ export class NorthStarService {
         lot,
         movement,
         documents: receiptDocuments,
-        summary: stockSummary(this.lotsForSession(session), this.materialRecords).find((item) => item.material.id === material.id),
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === material.id),
         invariant: 'inventory receipt creates a lot, immutable IN movement, and reviewable SDS/CoA evidence when attached',
       },
     }
@@ -4527,7 +4513,7 @@ export class NorthStarService {
       contactEmail,
       paymentTerms: body.paymentTerms?.trim() || 'Net 30',
       preferredMaterialIds: (body.preferredMaterialIds ?? []).filter((materialId) =>
-        this.materialRecords.some((material) => material.id === materialId),
+        this.materialCatalogForSession(session).some((material) => material.id === materialId),
       ),
     }
 
@@ -4553,10 +4539,11 @@ export class NorthStarService {
     if (!supplier) {
       throw new NotFoundException(`Supplier ${body.supplierId ?? 'unknown'} was not found`)
     }
-    const material = this.materialRecords.find((item) => item.id === body.materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${body.materialId ?? 'unknown'} was not found`)
+    const materialId = body.materialId?.trim()
+    if (!materialId) {
+      throw new NotFoundException('Material unknown was not found')
     }
+    const material = this.materialForSession(materialId, session)
     const quantityGrams = Number(body.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
       throw new UnprocessableEntityException('Purchase order quantityGrams must be greater than 0')
@@ -4717,9 +4704,9 @@ export class NorthStarService {
   }
 
   materialPriceHistory(materialId: string) {
-    if (!this.materialRecords.some((material) => material.id === materialId)) {
-      throw new NotFoundException(`Material ${materialId} was not found`)
-    }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.view')
+    this.materialForSession(materialId, session)
     return {
       data: this.priceHistoryRecords.filter((record) => record.materialId === materialId),
     }
@@ -4734,10 +4721,11 @@ export class NorthStarService {
   createCatalogSku(body: CreateCatalogSkuBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
-    const material = this.materialRecords.find((item) => item.id === body.materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${body.materialId ?? 'unknown'} was not found`)
+    const materialId = body.materialId?.trim()
+    if (!materialId) {
+      throw new NotFoundException('Material unknown was not found')
     }
+    const material = this.materialForSession(materialId, session)
     const name = body.name?.trim()
     if (!name) {
       throw new UnprocessableEntityException('SKU name is required')
@@ -5443,7 +5431,7 @@ export class NorthStarService {
   compareSupplierRfq(body: RfqComparisonBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'procurement.view')
-    const comparison = this.buildRfqComparison(body)
+    const comparison = this.buildRfqComparison(body, session)
     const audit = this.recordAudit('procurement.rfq.compare', comparison.materialId, session.userId, 'review')
     return { data: { ...comparison, audit } }
   }
@@ -5451,7 +5439,7 @@ export class NorthStarService {
   awardSupplierRfq(body: RfqAwardBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'procurement.manage')
-    const comparison = this.buildRfqComparison(body)
+    const comparison = this.buildRfqComparison(body, session)
     const supplierId = body.supplierId?.trim() || comparison.recommendedSupplierId
     const option = comparison.options.find((item) => item.supplierId === supplierId)
     if (!option) {
@@ -7682,11 +7670,11 @@ export class NorthStarService {
       }
     }
 
-    const materialId = this.optionalString(payload.materialId) || this.materialRecords[0]?.id
-    const material = this.materialRecords.find((item) => item.id === materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${materialId} was not found`)
+    const materialId = this.optionalString(payload.materialId) || this.materialCatalogForSession(session)[0]?.id
+    if (!materialId) {
+      throw new NotFoundException('No material is available in this workspace')
     }
+    const material = this.materialForSession(materialId, session)
     const quantityGrams = Number(payload.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
       throw new UnprocessableEntityException('Inventory receipt quantityGrams must be greater than 0')
@@ -8972,6 +8960,18 @@ export class NorthStarService {
       .map((formula) => this.normalizeFormulaRecord(formula, session.organizationId))
   }
 
+  private materialCatalogForSession(session: AuthSession) {
+    return this.materialRecords.filter((material) => !material.organizationId || material.organizationId === session.organizationId)
+  }
+
+  private materialForSession(id: string, session: AuthSession) {
+    const material = this.materialCatalogForSession(session).find((item) => item.id === id)
+    if (!material) {
+      throw new NotFoundException(`Material ${id} was not found`)
+    }
+    return material
+  }
+
   private formulaForSession(id: string, session: AuthSession) {
     const formula = this.formulaCatalogForSession(session).find((item) => item.id === id)
     if (!formula) {
@@ -9024,11 +9024,12 @@ export class NorthStarService {
 
   private formulaEvidence(formula: Formula, session: AuthSession) {
     const catalog = this.formulaCatalogForSession(session).map((item) => (item.id === formula.id ? formula : item))
-    const leaves = resolveFormulaWithCatalog(formula.id, catalog, this.materialRecords)
+    const materials = this.materialCatalogForSession(session)
+    const leaves = resolveFormulaWithCatalog(formula.id, catalog, materials)
     return {
       leaves,
       totals: formulaTotals(leaves),
-      ifra: evaluateFormulaIfra(formula, leaves, this.materialRecords),
+      ifra: evaluateFormulaIfra(formula, leaves, materials),
       evaporation: evaporationCurve(leaves),
     }
   }
@@ -9061,10 +9062,7 @@ export class NorthStarService {
       throw new UnprocessableEntityException('Formula line must reference exactly one material or child formula')
     }
 
-    const material = materialId ? this.materialRecords.find((item) => item.id === materialId) : undefined
-    if (materialId && !material) {
-      throw new NotFoundException(`Material ${materialId} was not found`)
-    }
+    const material = materialId ? this.materialForSession(materialId, session) : undefined
 
     const childFormula = childFormulaId
       ? this.formulaCatalogForSession(session).find((item) => item.id === childFormulaId)
@@ -9127,10 +9125,7 @@ export class NorthStarService {
   }
 
   private pickLotsForMaterial(materialId: string, requiredGrams: number, session: AuthSession, reservedOnly = false) {
-    const material = this.materialRecords.find((item) => item.id === materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${materialId} was not found`)
-    }
+    const material = this.materialForSession(materialId, session)
     const allocations: Allocation[] = []
     let remaining = requiredGrams
     const eligibleLots = this.lotsForSession(session)
@@ -9194,12 +9189,12 @@ export class NorthStarService {
     return document
   }
 
-  private buildRfqComparison(body: RfqComparisonBody): RfqComparison {
+  private buildRfqComparison(body: RfqComparisonBody, session: AuthSession): RfqComparison {
     const materialId = body.materialId?.trim()
-    const material = this.materialRecords.find((item) => item.id === materialId)
-    if (!material) {
-      throw new NotFoundException(`Material ${materialId ?? 'unknown'} was not found`)
+    if (!materialId) {
+      throw new NotFoundException('Material unknown was not found')
     }
+    const material = this.materialForSession(materialId, session)
     const quantityGrams = Number(body.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
       throw new UnprocessableEntityException('RFQ quantityGrams must be greater than 0')
@@ -9263,9 +9258,9 @@ export class NorthStarService {
   private documentGenerationTarget(type: DocumentType, linkedTo: string, session: AuthSession) {
     if (type === 'CoA') {
       const lot = this.lotForSession(linkedTo, session)
-      const material = this.materialRecords.find((item) => item.id === lot.materialId)
+      const material = this.materialForSession(lot.materialId, session)
       return {
-        label: `${lot.lotNumber} ${material?.name ?? 'Lot'}`,
+        label: `${lot.lotNumber} ${material.name}`,
         scope: 'lots',
         sensitivity: 'Confidential' as const,
         sizeKb: 168,

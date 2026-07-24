@@ -523,6 +523,39 @@ describe('NorthStarService', () => {
     expect(result.invariant).toContain('active session')
   })
 
+  it('prevents a newly provisioned workspace from reading or purchasing another tenant material', () => {
+    const service = createAuthenticatedService()
+    const privateMaterial = service.createMaterial({
+      name: 'NOXELIS Private Material',
+      cas: '98765-43-2',
+      costPerGram: 0.14,
+    }).data.material
+    const signup = service.signup({
+      email: 'scope.owner@example.test',
+      name: 'Scope Owner',
+      organizationName: 'Scope QA Lab',
+      workspaceSlug: 'scope-qa-lab',
+      password: 'ScopeQaOwner2026!',
+    }).data
+
+    expect(signup.organization.id).toBe('org-scope-qa-lab')
+    expect(service.materials().data.some((material) => material.id === 'mat-bergamot')).toBe(true)
+    expect(service.materials().data.some((material) => material.id === privateMaterial.id)).toBe(false)
+    expect(() => service.material(privateMaterial.id)).toThrow(/not found/i)
+    expect(() => service.compareSupplierRfq({ materialId: privateMaterial.id, quantityGrams: 50 })).toThrow(/not found/i)
+
+    const ownMaterial = service.createMaterial({
+      name: 'Tenant Bergamot Reference',
+      cas: '67890-12-3',
+      costPerGram: 0.14,
+    }).data.material
+    const comparison = service.compareSupplierRfq({ materialId: ownMaterial.id, quantityGrams: 50 }).data
+
+    expect(service.materials().data.some((material) => material.id === ownMaterial.id)).toBe(true)
+    expect(service.materialDedupe('67890-12-3').data.matches).toHaveLength(1)
+    expect(comparison.materialId).toBe(ownMaterial.id)
+  })
+
   it('invites tenant members without creating a usable credential', () => {
     const service = createAuthenticatedService()
     const result = service.inviteMember({
