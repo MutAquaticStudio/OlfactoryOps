@@ -136,6 +136,7 @@ import {
   type NumberingSequenceRecord,
   type OrganizationRecord,
   type PriceHistoryRecord,
+  type RfqComparison,
   type PriceListRecord,
   type PrivacyRequestRecord,
   type ProductionBatchRecord,
@@ -208,6 +209,23 @@ type LabWeighingOptions = {
 type LabUsageReverseOptions = {
   reason?: string
   actor?: string
+  allocations?: Array<{
+    lotId: string
+    materialId: string
+    grams: number
+  }>
+}
+
+type RfqComparisonBody = {
+  materialId?: string
+  quantityGrams?: number
+}
+
+type RfqAwardBody = RfqComparisonBody & {
+  supplierId?: string
+  unitCost?: number
+  currency?: string
+  expectedDate?: string
 }
 
 type GenerateDocumentBody = {
@@ -4151,37 +4169,80 @@ export class NorthStarService {
     const reason = options.reason?.trim() || 'Compensation reversal'
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
     const reversals: InventoryMovement[] = []
+    const reversalKey = (lotId: string, materialId: string) => `${lotId}:${materialId}`
+    const reversedByLot = new Map<string, number>()
+    usage.reversalMovements?.forEach((movement) => {
+      const key = reversalKey(movement.lotId, movement.materialId)
+      reversedByLot.set(key, (reversedByLot.get(key) ?? 0) + movement.quantityGrams)
+    })
+    const requestedByLot = new Map<string, number>()
+    options.allocations?.forEach((allocation) => {
+      if (!allocation?.lotId || !allocation.materialId || !Number.isFinite(allocation.grams) || allocation.grams <= 0) {
+        throw new UnprocessableEntityException('Partial reversal allocations require a material, lot, and grams greater than 0')
+      }
+      const original = usage.allocations.find(
+        (item) => item.lotId === allocation.lotId && item.materialId === allocation.materialId,
+      )
+      if (!original) {
+        throw new UnprocessableEntityException(`Lot ${allocation.lotId} is not part of ${usage.id}`)
+      }
+      const key = reversalKey(allocation.lotId, allocation.materialId)
+      requestedByLot.set(key, (requestedByLot.get(key) ?? 0) + allocation.grams)
+    })
 
     usage.allocations.forEach((allocation, index) => {
       const lot = lotMap.get(allocation.lotId)
       if (!lot) {
         return
       }
-      lot.quantityGrams += allocation.allocatedGrams
+      const allocationKey = reversalKey(allocation.lotId, allocation.materialId)
+      const alreadyReversed = reversedByLot.get(allocationKey) ?? 0
+      const remainingGrams = Math.max(0, allocation.allocatedGrams - alreadyReversed)
+      const requestedGrams = requestedByLot.size > 0 ? requestedByLot.get(allocationKey) ?? 0 : remainingGrams
+      if (requestedGrams - remainingGrams > 0.0001) {
+        throw new UnprocessableEntityException({
+          message: `Reversal exceeds the remaining consumed amount for lot ${allocation.lotNumber}`,
+          lotId: allocation.lotId,
+          remainingGrams,
+          requestedGrams,
+        })
+      }
+      if (requestedGrams <= 0) {
+        return
+      }
+      lot.quantityGrams += requestedGrams
       reversals.push({
-        id: `MOV-API-REV-${usage.id}-${index + 1}`,
+        id: `MOV-API-REV-${usage.id}-${(usage.reversalMovements?.length ?? 0) + index + 1}`,
         at: timestamp,
         type: 'REVERSAL',
         direction: 'IN',
         materialId: allocation.materialId,
         lotId: allocation.lotId,
-        quantityGrams: allocation.allocatedGrams,
+        quantityGrams: requestedGrams,
         balanceAfter: lot.quantityGrams,
         ref: usage.id,
         actor,
       })
     })
 
+    if (reversals.length === 0) {
+      throw new UnprocessableEntityException('No remaining consumed grams are available to reverse')
+    }
+
     this.replaceLotsForSession(session, Array.from(lotMap.values()))
     this.movements = [...reversals, ...this.movements]
+    const allReversals = [...(usage.reversalMovements ?? []), ...reversals]
+    const reversedTotal = allReversals.reduce((total, movement) => total + movement.quantityGrams, 0)
+    const consumedTotal = usage.allocations.reduce((total, allocation) => total + allocation.allocatedGrams, 0)
+    const fullyReversed = reversedTotal >= consumedTotal - 0.0001
     let reversedUsage: LabUsageRecord | undefined
     this.usageHistory = this.usageHistory.map((item) =>
       item.id === usage.id
         ? (reversedUsage = {
             ...item,
-            status: 'REVERSED',
+            status: fullyReversed ? 'REVERSED' : 'PARTIALLY_REVERSED',
             reversedAt: timestamp,
-            reversalMovements: reversals,
+            reversalMovements: allReversals,
           })
         : item,
     )
@@ -4189,12 +4250,17 @@ export class NorthStarService {
     return {
       data: {
         usageId: usage.id,
-        usage: reversedUsage ?? { ...usage, status: 'REVERSED', reversedAt: timestamp, reversalMovements: reversals },
+        usage: reversedUsage ?? {
+          ...usage,
+          status: fullyReversed ? 'REVERSED' : 'PARTIALLY_REVERSED',
+          reversedAt: timestamp,
+          reversalMovements: allReversals,
+        },
         movements: reversals,
         lots: this.lotsForSession(session),
         usageHistory: this.labUsageHistory().data.usages,
         reason,
-        invariant: 'reverse by compensation; original OUT remains',
+        invariant: 'partial or full reverse by compensation creates only IN movements; original OUT remains immutable',
       },
     }
   }
@@ -4203,7 +4269,7 @@ export class NorthStarService {
     const session = this.currentSession()
     const formulaIds = new Set(this.formulaCatalogForSession(session).map((formula) => formula.id))
     const usage = this.usageHistory.find(
-      (item) => item.status === 'COMMITTED' && formulaIds.has(item.formulaId),
+      (item) => (item.status === 'COMMITTED' || item.status === 'PARTIALLY_REVERSED') && formulaIds.has(item.formulaId),
     )
     if (!usage) {
       throw new UnprocessableEntityException('No committed lab usage exists to reverse')
@@ -5371,6 +5437,46 @@ export class NorthStarService {
         this.priceHistoryRecords,
         this.movements,
       ),
+    }
+  }
+
+  compareSupplierRfq(body: RfqComparisonBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.view')
+    const comparison = this.buildRfqComparison(body)
+    const audit = this.recordAudit('procurement.rfq.compare', comparison.materialId, session.userId, 'review')
+    return { data: { ...comparison, audit } }
+  }
+
+  awardSupplierRfq(body: RfqAwardBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.manage')
+    const comparison = this.buildRfqComparison(body)
+    const supplierId = body.supplierId?.trim() || comparison.recommendedSupplierId
+    const option = comparison.options.find((item) => item.supplierId === supplierId)
+    if (!option) {
+      throw new UnprocessableEntityException('Select a supplier returned by the RFQ comparison before awarding')
+    }
+    const unitCost = Number(body.unitCost ?? option.unitCost)
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      throw new UnprocessableEntityException('Awarded RFQ unitCost must be greater than 0')
+    }
+    const created = this.createPurchaseOrder({
+      supplierId: option.supplierId,
+      materialId: comparison.materialId,
+      quantityGrams: comparison.quantityGrams,
+      unitCost,
+      currency: body.currency?.trim().toUpperCase() || option.currency,
+      expectedDate: body.expectedDate,
+    }).data
+    const audit = this.recordAudit('procurement.rfq.award', created.purchaseOrder.id, session.userId, 'allowed')
+    return {
+      data: {
+        purchaseOrder: created.purchaseOrder,
+        option,
+        audit,
+        invariant: 'awarding an RFQ creates only a PO draft; inventory changes exclusively through goods receipt',
+      },
     }
   }
 
@@ -9086,6 +9192,51 @@ export class NorthStarService {
     }
     this.orderDocumentRecords = [document, ...this.orderDocumentRecords]
     return document
+  }
+
+  private buildRfqComparison(body: RfqComparisonBody): RfqComparison {
+    const materialId = body.materialId?.trim()
+    const material = this.materialRecords.find((item) => item.id === materialId)
+    if (!material) {
+      throw new NotFoundException(`Material ${materialId ?? 'unknown'} was not found`)
+    }
+    const quantityGrams = Number(body.quantityGrams ?? 0)
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      throw new UnprocessableEntityException('RFQ quantityGrams must be greater than 0')
+    }
+    const options = this.supplierRecords
+      .filter((supplier) => supplier.status !== 'alert')
+      .map((supplier) => {
+        const history = this.priceHistoryRecords
+          .filter((record) => record.materialId === material.id && record.supplierId === supplier.id)
+          .sort((left, right) => right.capturedAt.localeCompare(left.capturedAt))[0]
+        const unitCost = history?.unitCost ?? material.costPerGram
+        const currency = history?.currency ?? 'USD'
+        return {
+          supplierId: supplier.id,
+          supplierName: supplier.name,
+          country: supplier.country,
+          leadTimeDays: supplier.leadTimeDays,
+          unitCost,
+          currency,
+          totalCost: Number((unitCost * quantityGrams).toFixed(2)),
+          source: history ? 'PRICE_HISTORY' as const : 'MATERIAL_REFERENCE' as const,
+          isRecommended: false,
+        }
+      })
+      .sort((left, right) => left.totalCost - right.totalCost || left.leadTimeDays - right.leadTimeDays || left.supplierName.localeCompare(right.supplierName))
+    if (options.length === 0) {
+      throw new UnprocessableEntityException(`No active suppliers are available to compare for ${material.name}`)
+    }
+    const recommendedSupplierId = options[0]?.supplierId
+    return {
+      materialId: material.id,
+      materialName: material.name,
+      quantityGrams,
+      options: options.map((option) => ({ ...option, isRecommended: option.supplierId === recommendedSupplierId })),
+      recommendedSupplierId,
+      invariant: 'RFQ comparison reads supplier lead time and point-in-time cost evidence; award creates a draft PO without inventory movement',
+    }
   }
 
   private normalizeLabUsagePurpose(value?: LabUsagePurpose): LabUsagePurpose {

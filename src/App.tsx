@@ -163,6 +163,7 @@ import {
   type ProductionBatchRecord,
   type PurchaseOrderRecord,
   type QuoteRecord,
+  type RfqComparison,
   type ResolvedLeaf,
   type RolePolicy,
   type SaasCustomDomainRecord,
@@ -183,6 +184,12 @@ import {
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
+
+type LabUsageReversalAllocation = {
+  materialId: string
+  lotId: string
+  grams: number
+}
 
 type ModalKind =
   | 'commit'
@@ -553,6 +560,17 @@ type PurchaseOrderCreateResponse = {
 }
 
 type PurchaseOrderStatusResponse = PurchaseOrderCreateResponse
+
+type RfqComparisonResponse = RfqComparison & {
+  audit: AuditEvent
+}
+
+type RfqAwardResponse = {
+  purchaseOrder: PurchaseOrderRecord
+  option: RfqComparison['options'][number]
+  audit: AuditEvent
+  invariant: string
+}
 
 type PurchaseOrderReceiptResponse = {
   lot: InventoryLot
@@ -2197,27 +2215,32 @@ function App() {
     weighingReady,
   ])
 
-  const reverseLatestUsage = useCallback(async () => {
-    const latest = usageHistory.find((usage) => usage.status === 'COMMITTED')
-    if (!latest) {
+  const reverseLatestUsage = useCallback(async (usageId?: string, allocations?: LabUsageReversalAllocation[]) => {
+    const usage = usageHistory.find((item) => item.id === usageId) ?? usageHistory.find(
+      (item) => item.status === 'COMMITTED' || item.status === 'PARTIALLY_REVERSED',
+    )
+    if (!usage) {
       return
     }
 
     setLabUsageBusy(true)
     try {
-      const payload = await requestApi<LabUsageReverseResponse>(`/lab-usage/${encodeURIComponent(latest.id)}/reverse`, {
+      const payload = await requestApi<LabUsageReverseResponse>(`/lab-usage/${encodeURIComponent(usage.id)}/reverse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           actor: weighingOperator || 'Lab Manager',
           reason: 'Compensation reversal from Lab Usage workspace',
+          ...(allocations?.length ? { allocations } : {}),
         }),
       })
 
       setLots(payload.lots)
       setMovements((current) => mergeMovements(payload.movements, current))
       setUsageHistory(payload.usageHistory)
-      setLabUsageStatusMessage(`${payload.usageId} reversed by compensation`)
+      setLabUsageStatusMessage(
+        `${payload.usageId} ${payload.usage.status === 'REVERSED' ? 'fully' : 'partially'} reversed by compensation`,
+      )
     } catch (error) {
       setLabUsageStatusMessage(error instanceof Error ? error.message : 'Lab Usage reverse failed')
     } finally {
@@ -8947,11 +8970,62 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   weighingReady: boolean
   onUseTargetWeights: () => void
   onCommit: () => void
-  onReverse: () => void
+  onReverse: (usageId?: string, allocations?: LabUsageReversalAllocation[]) => void
 }) {
-  const latestCommitted = usageHistory.find((usage) => usage.status === 'COMMITTED')
+  const latestCommitted = usageHistory.find(
+    (usage) => usage.status === 'COMMITTED' || usage.status === 'PARTIALLY_REVERSED',
+  )
+  const reversalIdentity = `${latestCommitted?.id ?? 'none'}:${latestCommitted?.reversalMovements?.length ?? 0}`
+  const [reversalDraft, setReversalDraft] = useState<Record<string, string>>({})
+  const remainingReversalLines = useMemo(() => {
+    if (!latestCommitted) {
+      return []
+    }
+    const reversedByAllocation = new Map<string, number>()
+    latestCommitted.reversalMovements?.forEach((movement) => {
+      const key = `${movement.materialId}:${movement.lotId}`
+      reversedByAllocation.set(key, (reversedByAllocation.get(key) ?? 0) + movement.quantityGrams)
+    })
+    return latestCommitted.allocations
+      .map((allocation) => ({
+        ...allocation,
+        remainingGrams: Math.max(
+          0,
+          allocation.allocatedGrams - (reversedByAllocation.get(`${allocation.materialId}:${allocation.lotId}`) ?? 0),
+        ),
+      }))
+      .filter((allocation) => allocation.remainingGrams > 0.0001)
+  }, [latestCommitted])
+  useEffect(() => {
+    setReversalDraft(
+      Object.fromEntries(
+        remainingReversalLines.map((allocation) => [
+          allocationKey(allocation),
+          Number(allocation.remainingGrams.toFixed(3)).toString(),
+        ]),
+      ),
+    )
+  }, [reversalIdentity, remainingReversalLines])
+  const selectedReversalAllocations = remainingReversalLines.flatMap((allocation) => {
+    const grams = Number(reversalDraft[allocationKey(allocation)] ?? 0)
+    if (!Number.isFinite(grams) || grams <= 0) {
+      return []
+    }
+    return [{ materialId: allocation.materialId, lotId: allocation.lotId, grams }]
+  })
   const actualTotal = weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0)
   const maxDeviation = weighingSession.lines.reduce((max, line) => Math.max(max, line.deviationPercent), 0)
+  const printWeighingSheet = () => {
+    const rows = weighingSession.lines
+      .map(
+        (line) => `<tr><td>${escapePrintHtml(line.materialName)}</td><td>${escapePrintHtml(line.lotNumber)}</td><td>${formatGrams(line.targetGrams)}</td><td>${formatGrams(line.actualGrams)}</td><td>${line.deviationPercent.toFixed(2)}%</td><td></td></tr>`,
+      )
+      .join('')
+    openPrintDocument(
+      `Weighing sheet ${weighingSession.formulaCode}`,
+      `<div class="sheet"><div class="header"><div><div class="brand">OlfactoryOps</div><div class="muted">Controlled lab weighing sheet</div></div><div class="tag">${escapePrintHtml(weighingSession.status)}</div></div><div class="grid"><div class="field"><strong>Formula</strong>${escapePrintHtml(selectedFormula.name)} (${escapePrintHtml(weighingSession.formulaCode)})</div><div class="field"><strong>Target batch</strong>${formatGrams(weighingSession.targetBatchGrams)}</div><div class="field"><strong>Operator</strong>${escapePrintHtml(weighingSession.operator)}</div><div class="field"><strong>Tolerance</strong>${weighingSession.tolerancePercent.toFixed(2)}%</div></div><table><thead><tr><th>Material</th><th>Lot</th><th>Target</th><th>Actual</th><th>Deviation</th><th>Initials</th></tr></thead><tbody>${rows}</tbody></table><div class="signatures"><div class="signature">Weighed by</div><div class="signature">Reviewed by</div><div class="signature">Date / time</div></div></div>`,
+    )
+  }
   return (
     <div className="workspace-grid lab-grid">
       <Panel
@@ -9018,7 +9092,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
             <Play size={16} />
             {busy ? 'Working' : 'Post inventory usage'}
           </button>
-          <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted || busy}>
+          <button className="ghost-button" type="button" onClick={() => onReverse(latestCommitted?.id)} disabled={!latestCommitted || busy}>
             <RotateCcw size={16} />
             Reverse latest
           </button>
@@ -9057,6 +9131,9 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
           </label>
           <button className="ghost-button small" type="button" onClick={onUseTargetWeights}>
             Use target weights
+          </button>
+          <button className="ghost-button small" type="button" onClick={printWeighingSheet} disabled={!hasPublishedFormula}>
+            Print weighing sheet
           </button>
         </div>
         <div className="form-grid">
@@ -9127,6 +9204,55 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
           <DataTag label="Actual total" value={formatGrams(actualTotal)} tone="blue" />
           <DataTag label="Max deviation" value={`${maxDeviation.toFixed(2)}%`} tone={weighingReady ? 'green' : 'amber'} />
         </div>
+      </Panel>
+
+      <Panel title="Controlled Reversal" icon={RotateCcw}>
+        {!latestCommitted ? (
+          <div className="empty-state compact">No committed lab usage has remaining grams to reverse.</div>
+        ) : (
+          <>
+            <div className="empty-state compact">
+              <strong>{latestCommitted.id}</strong>
+              <span>Return only the actual grams selected below. The original consumption remains immutable.</span>
+            </div>
+            <div className="weighing-table">
+              {remainingReversalLines.map((allocation) => {
+                const key = allocationKey(allocation)
+                return (
+                  <label className="weighing-row" key={key}>
+                    <div>
+                      <strong>{allocation.materialName}</strong>
+                      <span>{allocation.lotNumber} / remaining {formatGrams(allocation.remainingGrams)}</span>
+                    </div>
+                    <input
+                      aria-label={`Reverse grams for ${allocation.materialName} ${allocation.lotNumber}`}
+                      min={0}
+                      max={allocation.remainingGrams}
+                      step={0.001}
+                      type="number"
+                      value={reversalDraft[key] ?? ''}
+                      onChange={(event) => setReversalDraft((current) => ({ ...current, [key]: event.target.value }))}
+                    />
+                    <span className="deviation-pill">{formatGrams(allocation.remainingGrams)}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <div className="action-row">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onReverse(latestCommitted.id, selectedReversalAllocations)}
+                disabled={busy || selectedReversalAllocations.length === 0}
+              >
+                Reverse selected
+              </button>
+              <button className="ghost-button" type="button" onClick={() => onReverse(latestCommitted.id)} disabled={busy}>
+                Reverse all remaining
+              </button>
+            </div>
+          </>
+        )}
       </Panel>
 
       <Panel title="Inventory Movement History" icon={Activity}>
@@ -10347,6 +10473,8 @@ function ProcurementWorkspace({
     currency: 'USD',
   })
   const [receiveDraft, setReceiveDraft] = useState<Record<string, number>>({})
+  const [rfqQuantityGrams, setRfqQuantityGrams] = useState(100)
+  const [rfqComparison, setRfqComparison] = useState<RfqComparison | null>(null)
 
   const materialById = useMemo(
     () => new Map(materialOptions.map((material) => [material.id, material])),
@@ -10574,6 +10702,62 @@ function ProcurementWorkspace({
     setStatusMessage(`${suggestion.materialName} loaded into PO draft from low-stock suggestion`)
   }
 
+  async function compareRfq() {
+    if (!selectedMaterial || rfqQuantityGrams <= 0) {
+      return
+    }
+    setBusyId('rfq-compare')
+    setStatusMessage(`Comparing supplier quotes for ${selectedMaterial.name}`)
+    try {
+      const payload = await requestApi<RfqComparisonResponse>('/procurement/rfq/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ materialId: selectedMaterial.id, quantityGrams: rfqQuantityGrams }),
+      })
+      setRfqComparison(payload)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'RFQ comparison failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function awardRfq(option: RfqComparison['options'][number]) {
+    if (!rfqComparison) {
+      return
+    }
+    setBusyId(`rfq-award-${option.supplierId}`)
+    setStatusMessage(`Awarding ${option.supplierName} and creating a PO draft`)
+    try {
+      const payload = await requestApi<RfqAwardResponse>('/procurement/rfq/award', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          materialId: rfqComparison.materialId,
+          quantityGrams: rfqComparison.quantityGrams,
+          supplierId: option.supplierId,
+          unitCost: option.unitCost,
+          currency: option.currency,
+        }),
+      })
+      updateOrder(payload.purchaseOrder)
+      setOrderDraft((current) => ({
+        ...current,
+        supplierId: option.supplierId,
+        materialId: rfqComparison.materialId,
+        quantityGrams: rfqComparison.quantityGrams,
+        unitCost: option.unitCost,
+        currency: option.currency,
+      }))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'RFQ award failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className="workspace-grid procurement-grid">
       <Panel title="Supplier Master" icon={Truck} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
@@ -10666,6 +10850,67 @@ function ProcurementWorkspace({
             ))
           )}
         </div>
+      </Panel>
+
+      <Panel title="RFQ Comparison" icon={BadgeDollarSign}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="RFQ material"
+              value={selectedMaterialId}
+              onChange={(event) => {
+                setSelectedMaterialId(event.target.value)
+                setRfqComparison(null)
+              }}
+            >
+              {materialOptions.map((material) => (
+                <option key={material.id} value={material.id}>{material.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Quantity grams</span>
+            <input
+              aria-label="RFQ quantity grams"
+              min={1}
+              step={1}
+              type="number"
+              value={rfqQuantityGrams}
+              onChange={(event) => setRfqQuantityGrams(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void compareRfq()} disabled={busyId === 'rfq-compare' || !selectedMaterial || rfqQuantityGrams <= 0}>
+            <BadgeDollarSign size={16} />
+            {busyId === 'rfq-compare' ? 'Comparing' : 'Compare suppliers'}
+          </button>
+        </div>
+        {rfqComparison ? (
+          <div className="document-list compact-list">
+            {rfqComparison.options.map((option) => (
+              <div className="document-row purchase-order-row" key={option.supplierId}>
+                <div>
+                  <strong>{option.supplierName}</strong>
+                  <span>{option.country} / {option.leadTimeDays}d lead / {option.source === 'PRICE_HISTORY' ? 'historical price' : 'material reference'}</span>
+                  <span>{formatCurrency(option.totalCost)} total / {formatCurrency(option.unitCost)} per gram</span>
+                </div>
+                <div className="document-actions">
+                  {option.isRecommended ? <DataTag label="Recommended" value="Lowest total" tone="green" /> : null}
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={() => void awardRfq(option)}
+                    disabled={busyId === `rfq-award-${option.supplierId}`}
+                  >
+                    {busyId === `rfq-award-${option.supplierId}` ? 'Awarding' : 'Award to PO'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Compare current supplier cost evidence before creating a purchase order.</div>
+        )}
       </Panel>
 
       <Panel title="Create Purchase Order" icon={ClipboardCheck}>

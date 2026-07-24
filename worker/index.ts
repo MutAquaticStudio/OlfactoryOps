@@ -545,6 +545,8 @@ const routes: Route[] = [
   { method: 'PATCH', pattern: '/production/batches/:id/status', mutates: true, handler: ({ service, params, body }) => service.updateProductionBatchStatus(params.id, readProductionStatus(body.status)) },
   { method: 'GET', pattern: '/suppliers', handler: ({ service }) => service.suppliers() },
   { method: 'POST', pattern: '/suppliers', mutates: true, handler: ({ service, body }) => service.createSupplier(body) },
+  { method: 'POST', pattern: '/procurement/rfq/compare', mutates: true, handler: ({ service, body }) => service.compareSupplierRfq(body) },
+  { method: 'POST', pattern: '/procurement/rfq/award', mutates: true, handler: ({ service, body }) => service.awardSupplierRfq(body) },
   { method: 'GET', pattern: '/purchase-orders', handler: ({ service }) => service.purchaseOrders() },
   { method: 'POST', pattern: '/purchase-orders', mutates: true, handler: ({ service, body }) => service.createPurchaseOrder(body) },
   { method: 'PATCH', pattern: '/purchase-orders/:id/status', mutates: true, handler: ({ service, params, body }) => service.updatePurchaseOrderStatus(params.id, readPurchaseOrderStatus(body.status)) },
@@ -5677,7 +5679,12 @@ function labUsageFromRow(row: LabUsageRecordRow): LabUsageRecord {
     formulaCode: row.formula_code,
     grams: Number(row.grams),
     batchGrams: Number(row.batch_grams),
-    status: row.status === 'REVERSED' ? 'REVERSED' : 'COMMITTED',
+    status:
+      row.status === 'REVERSED'
+        ? 'REVERSED'
+        : row.status === 'PARTIALLY_REVERSED'
+          ? 'PARTIALLY_REVERSED'
+          : 'COMMITTED',
     purpose: readLabUsagePurpose(row.purpose),
     projectCode: row.project_code ?? undefined,
     sampleCode: row.sample_code ?? undefined,

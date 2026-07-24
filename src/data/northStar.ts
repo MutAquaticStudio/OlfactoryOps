@@ -769,6 +769,27 @@ export interface PriceHistoryRecord {
   source: 'PO_RECEIPT' | 'QUOTE'
 }
 
+export interface RfqComparisonOption {
+  supplierId: string
+  supplierName: string
+  country: string
+  leadTimeDays: number
+  unitCost: number
+  currency: string
+  totalCost: number
+  source: 'PRICE_HISTORY' | 'MATERIAL_REFERENCE'
+  isRecommended: boolean
+}
+
+export interface RfqComparison {
+  materialId: string
+  materialName: string
+  quantityGrams: number
+  options: RfqComparisonOption[]
+  recommendedSupplierId?: string
+  invariant: string
+}
+
 export type CostMethod = 'FIFO' | 'LIFO' | 'WEIGHTED_AVERAGE' | 'STANDARD'
 
 export interface CostMethodPolicy {
@@ -1439,7 +1460,7 @@ export interface LabUsageRecord {
   formulaCode: string
   grams: number
   batchGrams: number
-  status: 'COMMITTED' | 'REVERSED'
+  status: 'COMMITTED' | 'PARTIALLY_REVERSED' | 'REVERSED'
   purpose: LabUsagePurpose
   projectCode?: string
   sampleCode?: string

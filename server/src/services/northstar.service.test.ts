@@ -246,6 +246,34 @@ describe('NorthStarService', () => {
     expect(reverse.invariant).toContain('reverse by compensation')
   })
 
+  it('partially reverses a selected lot before completing the remaining compensation', () => {
+    const service = createAuthenticatedService()
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5).data
+    const allocation = commit.usage.allocations[0]!
+    const partialGrams = Number((allocation.allocatedGrams / 2).toFixed(4))
+
+    const partial = service.reverseLabUsage(commit.usage.id, {
+      actor: 'Lab Manager',
+      reason: 'Recovered unused portion',
+      allocations: [{ materialId: allocation.materialId, lotId: allocation.lotId, grams: partialGrams }],
+    }).data
+
+    expect(partial.usage.status).toBe('PARTIALLY_REVERSED')
+    expect(partial.movements).toHaveLength(1)
+    expect(partial.movements[0]?.quantityGrams).toBe(partialGrams)
+    expect(() =>
+      service.reverseLabUsage(commit.usage.id, {
+        allocations: [{ materialId: allocation.materialId, lotId: allocation.lotId, grams: allocation.allocatedGrams }],
+      }),
+    ).toThrow(UnprocessableEntityException)
+
+    const complete = service.reverseLabUsage(commit.usage.id).data
+    expect(complete.usage.status).toBe('REVERSED')
+    expect(complete.usage.reversalMovements?.reduce((total, movement) => total + movement.quantityGrams, 0)).toBeCloseTo(
+      commit.usage.allocations.reduce((total, item) => total + item.allocatedGrams, 0),
+    )
+  })
+
   it('exposes lab usage history, detail, and reverse-by-id evidence', () => {
     const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-accord-citrus', 12.5, {
@@ -1725,6 +1753,34 @@ describe('NorthStarService', () => {
 
     const history = service.materialPriceHistory('mat-vanillin').data
     expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
+  })
+
+  it('compares supplier evidence and awards an RFQ into a PO draft without inventory movement', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const comparison = service.compareSupplierRfq({
+      materialId: 'mat-bergamot',
+      quantityGrams: 125,
+    }).data
+
+    expect(comparison.options.length).toBeGreaterThan(0)
+    expect(comparison.options.filter((option) => option.isRecommended)).toHaveLength(1)
+    expect(comparison.invariant).toContain('without inventory movement')
+
+    const selected = comparison.options[0]!
+    const award = service.awardSupplierRfq({
+      materialId: comparison.materialId,
+      quantityGrams: comparison.quantityGrams,
+      supplierId: selected.supplierId,
+      unitCost: selected.unitCost,
+      currency: selected.currency,
+    }).data
+
+    expect(award.purchaseOrder.status).toBe('DRAFT')
+    expect(award.purchaseOrder.supplierId).toBe(selected.supplierId)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(award.invariant).toContain('goods receipt')
   })
 
   it('runs commerce SKU, price list, quote, and sample workflow without stock movement', () => {

@@ -67,5 +67,8 @@
     "vite": "^8.1.1",
     "vitest": "^4.1.9",
     "wrangler": "^4.113.0"
+  },
+  "overrides": {
+    "find-my-way": "9.7.0"
   }
 }
