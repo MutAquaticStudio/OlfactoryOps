@@ -142,6 +142,7 @@ import {
   type FormulaVersionRecord,
   type FormulaWorkspacePreferences,
   type GlobalSearchResult,
+  type InventoryAgingRecord,
   type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
@@ -572,6 +573,17 @@ type RfqAwardResponse = {
   invariant: string
 }
 
+type DocumentSearchResponse = {
+  documents: DocumentRecord[]
+  invariant: string
+}
+
+type DocumentVersionsResponse = {
+  current: DocumentRecord
+  versions: DocumentRecord[]
+  invariant: string
+}
+
 type PurchaseOrderReceiptResponse = {
   lot: InventoryLot
   movement: InventoryMovement
@@ -854,6 +866,25 @@ type InventoryReceiptResponse = {
 type InventoryAdjustmentResponse = InventoryReceiptResponse
 
 type InventoryTransferResponse = InventoryReceiptResponse
+
+type InventoryWriteOffResponse = InventoryReceiptResponse & {
+  audit: AuditEvent
+}
+
+type InventoryAgingResponse = {
+  records: InventoryAgingRecord[]
+  summary: {
+    deadStockGrams: number
+    expiringOrExpiredGrams: number
+  }
+  invariant: string
+}
+
+type InventoryExpiryResponse = {
+  expiredLotIds: string[]
+  audit: AuditEvent
+  invariant: string
+}
 
 type InventoryApprovalAction =
   | 'inventory.adjust'
@@ -1802,6 +1833,7 @@ function App() {
   const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
   const [transferLotId, setTransferLotId] = useState('')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
+  const [transferViaTransit, setTransferViaTransit] = useState(false)
 
   useEffect(() => {
     const applyLocale = (candidate?: string) => {
@@ -2358,24 +2390,6 @@ function App() {
       location: 'Receiving Bay',
       qualityStatus: 'APPROVED',
       container: 'Receiving container',
-      documents: [
-        receiveSdsFile
-          ? {
-              type: 'SDS' as const,
-              fileName: receiveSdsFile.name,
-              fileSizeKb: Math.ceil(receiveSdsFile.size / 1024),
-              mimeType: receiveSdsFile.type || 'application/octet-stream',
-            }
-          : null,
-        receiveCoaFile
-          ? {
-              type: 'CoA' as const,
-              fileName: receiveCoaFile.name,
-              fileSizeKb: Math.ceil(receiveCoaFile.size / 1024),
-              mimeType: receiveCoaFile.type || 'application/octet-stream',
-            }
-          : null,
-      ].filter((document): document is NonNullable<typeof document> => document !== null),
     }
 
     try {
@@ -2394,6 +2408,26 @@ function App() {
         body: JSON.stringify(receiptPayload),
       })
 
+      const uploads = [
+        receiveSdsFile ? { file: receiveSdsFile, type: 'SDS' as const, linkedTo: material.id } : null,
+        receiveCoaFile ? { file: receiveCoaFile, type: 'CoA' as const, linkedTo: response.lot.id } : null,
+      ].filter((upload): upload is { file: File; type: 'SDS' | 'CoA'; linkedTo: string } => upload !== null)
+      const uploadFailures: string[] = []
+      for (const upload of uploads) {
+        const formData = new FormData()
+        formData.set('file', upload.file)
+        formData.set('type', upload.type)
+        formData.set('linkedTo', upload.linkedTo)
+        formData.set('title', `${material.name} ${upload.type} / ${response.lot.lotNumber}`)
+        formData.set('tags', `inventory-receipt,${upload.type.toLowerCase()}`)
+        formData.set('sensitivity', 'Internal')
+        try {
+          await requestApi<DocumentGenerationResponse>('/documents/upload', { method: 'POST', body: formData })
+        } catch (error) {
+          uploadFailures.push(`${upload.type}: ${error instanceof Error ? error.message : 'upload failed'}`)
+        }
+      }
+
       setLots((current) => [response.lot, ...current.filter((lot) => lot.id !== response.lot.id)])
       setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
@@ -2402,6 +2436,9 @@ function App() {
       setReceiveCoaFile(null)
       setActiveKey('inventory')
       setModal(null)
+      if (uploadFailures.length > 0) {
+        setApprovalNotice(`Lot ${response.lot.lotNumber} was received. ${uploadFailures.join(' ')}`)
+      }
     } catch (error) {
       if (isPermissionError(error, 'inventory.receive')) {
         await submitInventoryApprovalRequest(
@@ -2501,7 +2538,7 @@ function App() {
       return
     }
 
-    const transferPayload = { lotId: lot.id, toLocation }
+    const transferPayload = { lotId: lot.id, toLocation, viaTransit: transferViaTransit }
 
     try {
       if (!canAdjustInventory) {
@@ -2542,6 +2579,7 @@ function App() {
     submitInventoryApprovalRequest,
     transferLotId,
     transferLocation,
+    transferViaTransit,
   ])
 
   async function queueTenantAuditExport() {
@@ -3205,9 +3243,18 @@ function App() {
               ))}
             </select>
           </label>
+          <label className="checkbox-row">
+            <input
+              aria-label="Transfer via transit"
+              checked={transferViaTransit}
+              type="checkbox"
+              onChange={(event) => setTransferViaTransit(event.target.checked)}
+            />
+            <span>Route through Transit and complete receipt at the destination later</span>
+          </label>
           <div className="popup-grid">
             <Metric label="Movement type" value="TRANSFER" />
-            <Metric label="Quantity effect" value="No stock delta" />
+            <Metric label="Quantity effect" value={transferViaTransit ? 'Two MOVE events / no stock delta' : 'No stock delta'} />
           </div>
         </div>
       </BlackPopup>
@@ -8160,6 +8207,12 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   const [newLocationName, setNewLocationName] = useState('Retest Bin 1')
   const [newLocationZone, setNewLocationZone] = useState('Quality')
   const [newLocationCapacity, setNewLocationCapacity] = useState(600)
+  const [newLocationKind, setNewLocationKind] = useState<NonNullable<StorageLocation['kind']>>('Bin')
+  const [newLocationParentId, setNewLocationParentId] = useState('')
+  const [agingRecords, setAgingRecords] = useState<InventoryAgingRecord[]>([])
+  const [agingSummary, setAgingSummary] = useState<InventoryAgingResponse['summary'] | null>(null)
+  const [writeOffGrams, setWriteOffGrams] = useState(0)
+  const [writeOffReason, setWriteOffReason] = useState('')
   const [inventoryStatus, setInventoryStatus] = useState('Inventory console ready')
   const [lotComplianceDocuments, setLotComplianceDocuments] = useState<DocumentRecord[]>([])
   const [lotDocumentStatus, setLotDocumentStatus] = useState('Document review queue ready')
@@ -8413,7 +8466,8 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
           zone: newLocationZone,
           condition: 'Retest hold / controlled ambient',
           capacityGrams: newLocationCapacity,
-          kind: 'Bin',
+          kind: newLocationKind,
+          parentId: newLocationParentId || undefined,
           light: 'Amber',
           temperatureRange: '18-22C',
         }),
@@ -8522,6 +8576,79 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
     }
   }
 
+  async function loadAgingReport() {
+    try {
+      const payload = await requestApi<InventoryAgingResponse>('/inventory/aging-report')
+      setAgingRecords(payload.records)
+      setAgingSummary(payload.summary)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Inventory aging report failed')
+    }
+  }
+
+  async function refreshExpiry() {
+    try {
+      const payload = await requestApi<InventoryExpiryResponse>('/inventory/expiry/refresh', { method: 'POST' })
+      if (payload.expiredLotIds.length > 0) {
+        const expiredIds = new Set(payload.expiredLotIds)
+        onLotsChange((current) => current.map((lot) => expiredIds.has(lot.id) ? { ...lot, qualityStatus: 'EXPIRED' } : lot))
+      }
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Expiry refresh failed')
+    }
+  }
+
+  async function completeTransitTransfer() {
+    if (!selectedLot?.inTransitToLocation) {
+      return
+    }
+    try {
+      const payload = await requestApi<InventoryTransferResponse>(`/inventory/transfers/${encodeURIComponent(selectedLot.id)}/complete`, {
+        method: 'POST',
+      })
+      upsertLot(payload.lot)
+      prependMovement(payload.movement)
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Transfer completion failed')
+    }
+  }
+
+  async function writeOffSelectedLot() {
+    if (!selectedLot || writeOffGrams <= 0 || !writeOffReason.trim()) {
+      return
+    }
+    const payloadBody = { lotId: selectedLot.id, quantityGrams: writeOffGrams, reason: writeOffReason.trim() }
+    try {
+      if (!canAdjustInventory) {
+        await onRequestInventoryApproval(
+          'inventory.adjust',
+          payloadBody,
+          `Write off ${formatGrams(writeOffGrams)} from ${selectedLot.lotNumber}: ${writeOffReason.trim()}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} write-off is pending admin approval`)
+        return
+      }
+      const payload = await requestApi<InventoryWriteOffResponse>('/inventory/write-offs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadBody),
+      })
+      upsertLot(payload.lot)
+      prependMovement(payload.movement)
+      setWriteOffGrams(0)
+      setWriteOffReason('')
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Write-off failed')
+    }
+  }
+
   return (
     <div className="workspace-grid inventory-grid">
       <Panel
@@ -8586,6 +8713,9 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
                 <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
                 <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
                 <DataTag label="Location" value={selectedLot.location} tone="blue" />
+                {selectedLot.inTransitToLocation ? (
+                  <DataTag label="Transit to" value={selectedLot.inTransitToLocation} tone="amber" />
+                ) : null}
                 <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
                 <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
               </div>
@@ -8657,6 +8787,43 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               <button className="ghost-button small" type="button" onClick={() => void loadLotGenealogy()}>
                 View Genealogy
               </button>
+              {selectedLot.inTransitToLocation ? (
+                <button className="primary-button small" type="button" onClick={() => void completeTransitTransfer()}>
+                  Complete Transit
+                </button>
+              ) : null}
+            </div>
+
+            <div className="inventory-form-grid">
+              <label className="field-row">
+                <span>Write-off grams</span>
+                <input
+                  aria-label="Inventory write-off grams"
+                  min={0.001}
+                  max={Math.max(0, selectedLot.quantityGrams - selectedLot.reservedGrams)}
+                  step={0.001}
+                  type="number"
+                  value={writeOffGrams || ''}
+                  onChange={(event) => setWriteOffGrams(Number(event.target.value))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Disposal reason</span>
+                <input
+                  aria-label="Inventory write-off reason"
+                  value={writeOffReason}
+                  onChange={(event) => setWriteOffReason(event.target.value)}
+                  placeholder="Leak, damage, sample disposal..."
+                />
+              </label>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void writeOffSelectedLot()}
+                disabled={writeOffGrams <= 0 || !writeOffReason.trim() || writeOffGrams > selectedLot.quantityGrams - selectedLot.reservedGrams}
+              >
+                {canAdjustInventory ? 'Record Write-off' : 'Request Write-off Approval'}
+              </button>
             </div>
           </div>
         ) : (
@@ -8692,6 +8859,31 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               onChange={(event) => setNewLocationCapacity(Number(event.target.value))}
             />
           </label>
+          <label className="field-row">
+            <span>Location type</span>
+            <select
+              aria-label="New storage location type"
+              value={newLocationKind}
+              onChange={(event) => setNewLocationKind(event.target.value as NonNullable<StorageLocation['kind']>)}
+            >
+              {(['Warehouse', 'Room', 'Shelf', 'Bin', 'Transit'] as const).map((kind) => (
+                <option key={kind} value={kind}>{kind}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Parent location</span>
+            <select
+              aria-label="New storage location parent"
+              value={newLocationParentId}
+              onChange={(event) => setNewLocationParentId(event.target.value)}
+            >
+              <option value="">No parent</option>
+              {storageLocations.map((location) => (
+                <option key={location.id} value={location.id}>{location.name}</option>
+              ))}
+            </select>
+          </label>
           <button className="primary-button" type="button" onClick={() => void createLocation()} disabled={!newLocationName.trim() || newLocationCapacity <= 0}>
             New Location
           </button>
@@ -8701,17 +8893,54 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
             const storedGrams = lots
               .filter((lot) => lot.location === location.name)
               .reduce((sum, lot) => sum + lot.quantityGrams, 0)
+            const capacityPercent = location.capacityGrams > 0 ? Math.min(100, Math.round((storedGrams / location.capacityGrams) * 100)) : 0
+            const parent = location.parentId ? storageLocations.find((candidate) => candidate.id === location.parentId) : undefined
             return (
               <div className="material-row static" key={location.id}>
                 <div>
                   <strong>{location.name}</strong>
-                  <span>{location.zone} / {location.kind ?? 'Location'} / {location.condition}</span>
+                  <span>{location.zone} / {location.kind ?? 'Location'} / {parent ? `within ${parent.name}` : 'root'}</span>
                 </div>
-                <div className="mono-value">{formatGrams(storedGrams)}</div>
+                <div className="mono-value">{formatGrams(storedGrams)} / {capacityPercent}%</div>
                 <StatusBadge status={location.status === 'IN_TRANSIT' ? 'review' : 'stable'} label={location.status ?? 'ACTIVE'} />
               </div>
             )
           })}
+        </div>
+      </Panel>
+
+      <Panel
+        title="Aging, Expiry & Dead Stock"
+        icon={Activity}
+        right={
+          <div className="action-row">
+            <button className="ghost-button small" type="button" onClick={() => void loadAgingReport()}>Refresh report</button>
+            <button className="ghost-button small" type="button" onClick={() => void refreshExpiry()} disabled={!canReceiveInventory}>Refresh expiry</button>
+          </div>
+        }
+      >
+        <div className="tag-row">
+          <DataTag label="Dead stock" value={agingSummary ? formatGrams(agingSummary.deadStockGrams) : 'Not loaded'} tone="amber" />
+          <DataTag label="Expired / retest" value={agingSummary ? formatGrams(agingSummary.expiringOrExpiredGrams) : 'Not loaded'} tone="blue" />
+        </div>
+        <div className="material-list">
+          {agingRecords.length === 0 ? (
+            <div className="empty-state compact">Run the report to review aging, retest, expiry, and in-transit exposure without changing stock.</div>
+          ) : (
+            agingRecords.slice(0, 8).map((record) => (
+              <div className="material-row static" key={record.lotId}>
+                <div>
+                  <strong>{record.materialName} / {record.lotNumber}</strong>
+                  <span>{record.reason}</span>
+                </div>
+                <div className="mono-value">{formatGrams(record.quantityGrams)} / {record.agingDays}d</div>
+                <StatusBadge
+                  status={record.status === 'EXPIRED' ? 'alert' : record.status === 'DEAD_STOCK' || record.status === 'RETEST_DUE' ? 'review' : 'stable'}
+                  label={record.status.replace('_', ' ')}
+                />
+              </div>
+            ))
+          )}
         </div>
       </Panel>
 
@@ -9026,6 +9255,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
       `<div class="sheet"><div class="header"><div><div class="brand">OlfactoryOps</div><div class="muted">Controlled lab weighing sheet</div></div><div class="tag">${escapePrintHtml(weighingSession.status)}</div></div><div class="grid"><div class="field"><strong>Formula</strong>${escapePrintHtml(selectedFormula.name)} (${escapePrintHtml(weighingSession.formulaCode)})</div><div class="field"><strong>Target batch</strong>${formatGrams(weighingSession.targetBatchGrams)}</div><div class="field"><strong>Operator</strong>${escapePrintHtml(weighingSession.operator)}</div><div class="field"><strong>Tolerance</strong>${weighingSession.tolerancePercent.toFixed(2)}%</div></div><table><thead><tr><th>Material</th><th>Lot</th><th>Target</th><th>Actual</th><th>Deviation</th><th>Initials</th></tr></thead><tbody>${rows}</tbody></table><div class="signatures"><div class="signature">Weighed by</div><div class="signature">Reviewed by</div><div class="signature">Date / time</div></div></div>`,
     )
   }
+
   return (
     <div className="workspace-grid lab-grid">
       <Panel
@@ -9296,6 +9526,18 @@ function DocumentsWorkspace() {
   const [approvingDocumentId, setApprovingDocumentId] = useState<string | null>(null)
   const [sharingDocumentId, setSharingDocumentId] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [documentSearch, setDocumentSearch] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadType, setUploadType] = useState<DocumentType>('SDS')
+  const [uploadTarget, setUploadTarget] = useState(materials[0]?.id ?? '')
+  const [uploadTitle, setUploadTitle] = useState('')
+  const [uploadTags, setUploadTags] = useState('')
+  const [uploadSensitivity, setUploadSensitivity] = useState<DocumentRecord['sensitivity']>('Confidential')
+  const [versions, setVersions] = useState<DocumentRecord[]>([])
+  const [versionsTitle, setVersionsTitle] = useState('')
+  const [scanningDocumentId, setScanningDocumentId] = useState<string | null>(null)
+  const [archivingDocumentId, setArchivingDocumentId] = useState<string | null>(null)
   const [generationType, setGenerationType] = useState<DocumentType>('CoA')
   const [generationTarget, setGenerationTarget] = useState(initialLots[0]?.id ?? '')
   const [shareRecipient, setShareRecipient] = useState('client@example.com')
@@ -9310,6 +9552,14 @@ function DocumentsWorkspace() {
     }
     return initialLots.map((lot) => ({ id: lot.id, label: `${lot.lotNumber} ${lot.qualityStatus}` }))
   }, [selectedGenerationOption?.targetScope])
+  const uploadTargets = useMemo(
+    () => [
+      ...materials.map((material) => ({ id: material.id, label: `Material / ${material.name}` })),
+      ...initialLots.map((lot) => ({ id: lot.id, label: `Lot / ${lot.lotNumber}` })),
+      ...formulas.map((formula) => ({ id: formula.id, label: `Formula / ${formula.code} ${formula.name}` })),
+    ],
+    [],
+  )
 
   useEffect(() => {
     if (!generationTargets.some((target) => target.id === generationTarget)) {
@@ -9357,11 +9607,102 @@ function DocumentsWorkspace() {
       )
       setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
       setDownloadResult(payload)
-      setStatusMessage('Signed URL issued and download audit recorded')
+      const opened = window.open(payload.signedUrl.url, '_blank', 'noopener,noreferrer')
+      setStatusMessage(opened ? 'Signed URL opened and download audit recorded' : 'Signed URL issued; allow pop-ups or use the access card below')
     } catch {
       setStatusMessage('Could not sign URL from API; permission gate or server unavailable')
     } finally {
       setLoadingDocumentId(null)
+    }
+  }
+
+  async function searchDocuments() {
+    setStatusMessage('Searching tenant document metadata')
+    try {
+      const payload = await requestApi<DocumentSearchResponse>(`/documents/search?q=${encodeURIComponent(documentSearch)}`)
+      setDocumentRows(payload.documents)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document search failed')
+    }
+  }
+
+  async function uploadDocument() {
+    if (!uploadFile || !uploadTarget) {
+      return
+    }
+    setUploading(true)
+    setStatusMessage('Uploading to private document storage and queuing review')
+    try {
+      const formData = new FormData()
+      formData.set('file', uploadFile)
+      formData.set('type', uploadType)
+      formData.set('linkedTo', uploadTarget)
+      formData.set('title', uploadTitle.trim() || uploadFile.name)
+      formData.set('tags', uploadTags)
+      formData.set('sensitivity', uploadSensitivity)
+      const payload = await requestApi<DocumentGenerationResponse>('/documents/upload', { method: 'POST', body: formData })
+      setDocumentRows((current) => [payload.document, ...current.filter((document) => document.id !== payload.document.id)])
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setUploadFile(null)
+      setUploadTitle('')
+      setUploadTags('')
+      setStatusMessage(`${payload.document.title} is quarantined until a scan result is recorded`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function recordCleanScan(documentId: string) {
+    setScanningDocumentId(documentId)
+    setStatusMessage('Recording the external scan receipt')
+    try {
+      const payload = await requestApi<DocumentGenerationResponse>(`/documents/${encodeURIComponent(documentId)}/scan-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'CLEAN', provider: 'Manual compliance scan receipt' }),
+      })
+      setDocumentRows((current) => current.map((document) => document.id === documentId ? payload.document : document))
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} is ready for approval`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Scan result could not be recorded')
+    } finally {
+      setScanningDocumentId(null)
+    }
+  }
+
+  async function archiveDocument(documentId: string) {
+    setArchivingDocumentId(documentId)
+    try {
+      const payload = await requestApi<DocumentGenerationResponse>(`/documents/${encodeURIComponent(documentId)}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Archived from Documents workspace' }),
+      })
+      setDocumentRows((current) => current.map((document) => document.id === documentId ? payload.document : document))
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} archived with its object retained privately`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document archive failed')
+    } finally {
+      setArchivingDocumentId(null)
+    }
+  }
+
+  async function loadVersions(documentId: string) {
+    try {
+      const payload = await requestApi<DocumentVersionsResponse>(`/documents/${encodeURIComponent(documentId)}/versions`)
+      setVersions(payload.versions)
+      setVersionsTitle(`${payload.current.title} version history`)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document versions could not be loaded')
     }
   }
 
@@ -9450,13 +9791,24 @@ function DocumentsWorkspace() {
               <div className="document-main">
                 <strong>{document.title}</strong>
                 <span>
-                  {document.type} / {document.linkedTo} / {document.sizeKb}KB
+                  {document.type} / {document.linkedTo} / {document.sizeKb}KB / {document.version}
                   {document.expiresAt ? ` / expires ${document.expiresAt}` : ''}
                 </span>
               </div>
               <DataTag label={document.sensitivity} value={document.status} />
+              <DataTag label="Scan" value={document.scanStatus ?? 'NOT_REQUIRED'} tone={document.scanStatus === 'CLEAN' ? 'green' : document.scanStatus === 'PENDING' ? 'amber' : 'blue'} />
               <span className="mono-value">{document.downloads} downloads</span>
               <div className="document-actions">
+                {document.status === 'QUARANTINED' && (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void recordCleanScan(document.id)}
+                    disabled={scanningDocumentId === document.id}
+                  >
+                    {scanningDocumentId === document.id ? 'Recording' : 'Record clean scan'}
+                  </button>
+                )}
                 {document.status === 'REVIEW_REQUIRED' && (
                   <button
                     className="primary-button small"
@@ -9485,10 +9837,79 @@ function DocumentsWorkspace() {
                   <Globe2 size={14} />
                   {sharingDocumentId === document.id ? 'Sharing' : 'Share'}
                 </button>
+                <button className="ghost-button small" type="button" onClick={() => void loadVersions(document.id)}>
+                  Versions
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void archiveDocument(document.id)}
+                  disabled={archivingDocumentId === document.id || document.status === 'ARCHIVED'}
+                >
+                  {archivingDocumentId === document.id ? 'Archiving' : document.status === 'ARCHIVED' ? 'Archived' : 'Archive'}
+                </button>
               </div>
             </div>
           ))}
         </div>
+      </Panel>
+      <Panel title="Search & Upload" icon={Search}>
+        <div className="document-generate-form">
+          <label className="field-row">
+            <span>Search metadata</span>
+            <input
+              aria-label="Search documents"
+              value={documentSearch}
+              onChange={(event) => setDocumentSearch(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void searchDocuments() }}
+              placeholder="Title, tag, record, or extracted text"
+            />
+          </label>
+          <button className="ghost-button small" type="button" onClick={() => void searchDocuments()}>Search</button>
+          <label className="field-row">
+            <span>Private file</span>
+            <input
+              aria-label="Upload private document"
+              accept="application/pdf,image/png,image/jpeg,text/plain"
+              type="file"
+              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Document type</span>
+            <select aria-label="Uploaded document type" value={uploadType} onChange={(event) => setUploadType(event.target.value as DocumentType)}>
+              {(['SDS', 'CoA', 'IFRA', 'Invoice', 'Formula Export', 'Batch Record', 'Allergen Declaration', 'GHS Label', 'Formula Spec Sheet', 'Finished Product SDS'] as const).map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Linked record</span>
+            <select aria-label="Uploaded document linked record" value={uploadTarget} onChange={(event) => setUploadTarget(event.target.value)}>
+              {uploadTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Title</span>
+            <input aria-label="Uploaded document title" value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} placeholder={uploadFile?.name ?? 'Controlled document title'} />
+          </label>
+          <label className="field-row">
+            <span>Tags</span>
+            <input aria-label="Uploaded document tags" value={uploadTags} onChange={(event) => setUploadTags(event.target.value)} placeholder="supplier, revision, incoming" />
+          </label>
+          <label className="field-row">
+            <span>Sensitivity</span>
+            <select aria-label="Uploaded document sensitivity" value={uploadSensitivity} onChange={(event) => setUploadSensitivity(event.target.value as DocumentRecord['sensitivity'])}>
+              <option value="Internal">Internal</option>
+              <option value="Confidential">Confidential</option>
+              <option value="Highly Confidential">Highly Confidential</option>
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void uploadDocument()} disabled={!uploadFile || !uploadTarget || uploading}>
+            {uploading ? 'Uploading' : 'Upload for scan'}
+          </button>
+        </div>
+        <div className="empty-state compact">Uploads stay in private R2 storage, begin in quarantine, then require a recorded scan result and approval.</div>
       </Panel>
       <Panel title="Compliance Dashboard" icon={ShieldCheck}>
         <div className="stock-grid">
@@ -9566,6 +9987,27 @@ function DocumentsWorkspace() {
             <strong>No signed URL yet</strong>
             <span>Select a document to create a short-lived workspace-scoped access URL.</span>
           </div>
+        )}
+      </Panel>
+      <Panel title="Version History" icon={Library}>
+        {versions.length > 0 ? (
+          <div className="document-list compact-list">
+            <div className="panel-subtitle">{versionsTitle}</div>
+            {versions.map((document) => (
+              <div className="document-row" key={document.id}>
+                <div>
+                  <strong>{document.version} / {document.title}</strong>
+                  <span>{document.fileName ?? document.storageKey} / {document.checksum}</span>
+                </div>
+                <StatusBadge
+                  status={document.status === 'APPROVED' || document.status === 'SHARED' ? 'stable' : document.status === 'ARCHIVED' ? 'draft' : 'review'}
+                  label={document.status}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Choose Versions on a document to inspect its immutable version group.</div>
         )}
       </Panel>
       <Panel title="External Share" icon={Globe2}>
@@ -9698,6 +10140,7 @@ function activeUiLocale(): UiLocale {
   if (typeof document !== 'undefined' && document.documentElement.lang.toLowerCase().startsWith('vi')) {
     return 'vi-VN'
   }
+
   if (typeof window !== 'undefined' && window.localStorage.getItem(localeStorageKey) === 'vi-VN') {
     return 'vi-VN'
   }

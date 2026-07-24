@@ -556,6 +556,110 @@ describe('NorthStarService', () => {
     expect(comparison.materialId).toBe(ownMaterial.id)
   })
 
+  it('enforces storage capacity and records a two-step in-transit transfer without changing stock quantity', () => {
+    const service = createAuthenticatedService()
+    const lot = service.inventoryConsole().data.lots.find((candidate) => candidate.quantityGrams > 0 && candidate.reservedGrams === 0)
+    expect(lot).toBeDefined()
+    const sourceQuantity = lot!.quantityGrams
+    const destination = service.createStorageLocation({
+      name: 'Phase 6 QA Destination',
+      zone: 'Warehouse',
+      capacityGrams: sourceQuantity + 10,
+      kind: 'Bin',
+    }).data.location
+    const transit = service.createStorageLocation({
+      name: 'Phase 6 QA Transit',
+      zone: 'Dispatch',
+      capacityGrams: sourceQuantity + 10,
+      kind: 'Transit',
+      status: 'IN_TRANSIT',
+    }).data.location
+    const constrained = service.createStorageLocation({
+      name: 'Phase 6 QA Constrained',
+      zone: 'Warehouse',
+      capacityGrams: Math.max(0.1, sourceQuantity - 0.1),
+      kind: 'Bin',
+    }).data.location
+
+    expect(() => service.transferInventory({ lotId: lot!.id, toLocation: constrained.name })).toThrow(UnprocessableEntityException)
+
+    const started = service.transferInventory({ lotId: lot!.id, toLocation: destination.name, viaTransit: true }).data
+    expect(started.lot.location).toBe(transit.name)
+    expect(started.lot.inTransitToLocation).toBe(destination.name)
+    expect(started.movement.direction).toBe('MOVE')
+    expect(started.lot.quantityGrams).toBe(sourceQuantity)
+
+    const completed = service.completeInventoryTransfer(lot!.id).data
+    expect(completed.lot.location).toBe(destination.name)
+    expect(completed.lot.inTransitToLocation).toBeUndefined()
+    expect(completed.lot.quantityGrams).toBe(sourceQuantity)
+    expect(completed.movement.ref).toContain('transfer complete')
+  })
+
+  it('records expiry and waste controls without mutating the original movement history', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as { lots: Array<{ id: string; expiryDate: string; qualityStatus: string; quantityGrams: number; reservedGrams: number }> }
+    const lot = internals.lots.find((candidate) => candidate.quantityGrams > 5 && candidate.reservedGrams === 0)
+    expect(lot).toBeDefined()
+    lot!.expiryDate = '2020-01-01'
+    const beforeExpiryMovements = service.inventoryMovements().data.length
+    const expiry = service.refreshInventoryExpiry().data
+
+    expect(expiry.expiredLotIds).toContain(lot!.id)
+    expect(service.lotsList().data.find((candidate) => candidate.id === lot!.id)?.qualityStatus).toBe('EXPIRED')
+    expect(service.inventoryMovements().data).toHaveLength(beforeExpiryMovements)
+
+    const activeLot = service.inventoryConsole().data.lots.find((candidate) => candidate.quantityGrams > 5 && candidate.reservedGrams === 0 && candidate.id !== lot!.id)
+    expect(() => service.writeOffInventory({ lotId: activeLot!.id, quantityGrams: 1 })).toThrow(UnprocessableEntityException)
+    const writeOff = service.writeOffInventory({ lotId: activeLot!.id, quantityGrams: 1, reason: 'Damaged container disposal' }).data
+
+    expect(writeOff.movement.type).toBe('WASTE')
+    expect(writeOff.movement.direction).toBe('OUT')
+    expect(writeOff.lot.quantityGrams).toBeCloseTo(activeLot!.quantityGrams - 1)
+  })
+
+  it('quarantines private document uploads until scanned and approved, with tenant-scoped history', () => {
+    const service = createAuthenticatedService()
+    const prepared = service.prepareDocumentUpload({
+      type: 'SDS',
+      linkedTo: 'mat-iso',
+      fileName: 'iso-e-super-sds-v4.pdf',
+      mimeType: 'application/pdf',
+      tags: ['supplier', 'sds'],
+    }).data
+    const uploaded = service.commitDocumentUpload(prepared, {
+      sizeBytes: 2048,
+      checksum: `sha256:${'a'.repeat(64)}`,
+      ocrTextPreview: 'Iso E Super safety data sheet',
+    }).data
+
+    expect(uploaded.document.status).toBe('QUARANTINED')
+    expect(() => service.requestDocumentSignedUrl(uploaded.document.id)).toThrow(ForbiddenException)
+
+    const scanned = service.recordDocumentScanResult(uploaded.document.id, {
+      status: 'CLEAN',
+      provider: 'QA scanner',
+      textPreview: 'Iso E Super safety data sheet, section one',
+    }).data
+    expect(scanned.document.status).toBe('REVIEW_REQUIRED')
+    expect(scanned.document.scanStatus).toBe('CLEAN')
+
+    const approved = service.approveDocument(uploaded.document.id).data
+    expect(approved.document.status).toBe('APPROVED')
+    expect(service.documentVersions(uploaded.document.id).data.versions).toHaveLength(1)
+    expect(service.searchDocuments('safety data').data.documents.map((document) => document.id)).toContain(uploaded.document.id)
+
+    service.signup({
+      email: 'document.scope.owner@example.test',
+      name: 'Document Scope Owner',
+      organizationName: 'Document Scope Lab',
+      workspaceSlug: 'document-scope-lab',
+      password: 'DocumentScope2026!',
+    })
+    expect(service.documents().data.some((document) => document.id === uploaded.document.id)).toBe(false)
+    expect(() => service.documentVersions(uploaded.document.id)).toThrow(/not found/i)
+  })
+
   it('invites tenant members without creating a usable credential', () => {
     const service = createAuthenticatedService()
     const result = service.inviteMember({

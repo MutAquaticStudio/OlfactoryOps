@@ -110,6 +110,7 @@ import {
   type DataImportJobRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
+  type DocumentScanStatus,
   type DocumentShareLink,
   type DocumentType,
   type FeatureFlagRecord,
@@ -119,6 +120,7 @@ import {
   type FormulaType,
   type FormulaVersionRecord,
   type InventoryLot,
+  type InventoryAgingRecord,
   type InventoryMovement,
   type InventoryReorderSuggestion,
   type LegalAcceptanceRecord,
@@ -368,6 +370,7 @@ type InventoryAdjustmentBody = {
 type InventoryTransferBody = {
   lotId?: string
   toLocation?: string
+  viaTransit?: boolean
 }
 
 type InventoryReceiptBody = {
@@ -573,6 +576,35 @@ type FormulaLineMutationBody = {
   inventoryConsumptionMode?: 'LINKED' | 'CONSUMED'
 }
 
+type StorageLocationMutationBody = {
+  name?: string
+  zone?: string
+  condition?: string
+  capacityGrams?: number
+  parentId?: string
+  kind?: StorageLocation['kind']
+  light?: StorageLocation['light']
+  temperatureRange?: string
+  status?: StorageLocation['status']
+}
+
+type DocumentUploadPreparation = {
+  id: string
+  organizationId: string
+  type: DocumentType
+  linkedTo: string
+  title: string
+  version: string
+  sensitivity: DocumentRecord['sensitivity']
+  storageKey: string
+  fileName: string
+  mimeType: string
+  tags: string[]
+  supersedesDocumentId?: string
+  versionGroupId: string
+  expiresAt?: string
+}
+
 
 type FormulaDraftMutationBody = {
   expectedRevision?: number
@@ -706,6 +738,15 @@ export class NorthStarService {
   private securityStateDirty = false
 
   constructor(options: NorthStarServiceOptions = {}) {
+    this.documentRecords = this.documentRecords.map((document) => ({
+      ...document,
+      organizationId: document.organizationId || 'org-nxl',
+      fileName: document.fileName || document.storageKey.split('/').at(-1),
+      versionGroupId: document.versionGroupId || document.id,
+      tags: Array.isArray(document.tags) ? document.tags : [],
+      scanStatus: document.scanStatus || 'NOT_REQUIRED',
+      ocrStatus: document.ocrStatus || 'NOT_REQUESTED',
+    }))
     if (options.authCredentials) {
       this.authCredentialRecords = structuredClone(options.authCredentials)
     }
@@ -1924,6 +1965,7 @@ export class NorthStarService {
     const actor = session.userId
     const document: DocumentRecord = {
       id: `DOC-FRM-${formula.code.replace(/[^A-Z0-9]/g, '')}-${formula.version.toUpperCase()}`,
+      organizationId: session.organizationId,
       type: 'Formula Export',
       title: `${formula.code} ${formula.version} Export`,
       linkedTo: formula.id,
@@ -1938,6 +1980,12 @@ export class NorthStarService {
       sizeKb: Math.max(32, Math.round(JSON.stringify(formula.lines).length / 8)),
       checksum: this.formulaVersionChecksum(formula),
       owner: 'Compliance',
+      fileName: `export-${formula.version}.pdf`,
+      versionGroupId: `formula-export-${formula.id}`,
+      tags: ['formula', 'export'],
+      scanStatus: 'NOT_REQUIRED',
+      ocrStatus: 'NOT_REQUESTED',
+      retentionUntil: this.documentRetentionUntil('Formula Export'),
     }
     this.documentRecords = [
       document,
@@ -1978,7 +2026,7 @@ export class NorthStarService {
       data: {
         lots,
         movements,
-        locations: this.locationRecords,
+        locations: this.storageLocationsForSession(session),
         stockTakes: this.stockTakeRecords.filter((stockTake) => lotIds.has(stockTake.lotId)),
         summary: stockSummary(lots, this.materialCatalogForSession(session)),
         reorderSuggestions: this.inventoryReorderSuggestions().data.suggestions,
@@ -1988,26 +2036,19 @@ export class NorthStarService {
   }
 
   storageLocationsList() {
-    return { data: this.locationRecords }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.view')
+    return { data: this.storageLocationsForSession(session) }
   }
 
-  createStorageLocation(body: {
-    name?: string
-    zone?: string
-    condition?: string
-    capacityGrams?: number
-    parentId?: string
-    kind?: StorageLocation['kind']
-    light?: StorageLocation['light']
-    temperatureRange?: string
-  }) {
+  createStorageLocation(body: StorageLocationMutationBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'inventory.receive')
     const name = body.name?.trim()
     if (!name) {
       throw new UnprocessableEntityException('Storage location name is required')
     }
-    if (this.locationRecords.some((location) => location.name.toLowerCase() === name.toLowerCase())) {
+    if (this.storageLocationsForSession(session).some((location) => location.name.toLowerCase() === name.toLowerCase())) {
       throw new UnprocessableEntityException(`Storage location ${name} already exists`)
     }
 
@@ -2017,13 +2058,15 @@ export class NorthStarService {
     }
 
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `loc-${Date.now()}`
+    const parentId = this.assertStorageLocationParent(body.parentId?.trim(), session)
     const location: StorageLocation = {
-      id: `loc-${slug}`,
+      id: `loc-${session.organizationId}-${slug}`,
+      organizationId: session.organizationId,
       name,
       zone: body.zone?.trim() || 'Warehouse',
       condition: body.condition?.trim() || 'Controlled ambient',
       capacityGrams,
-      parentId: body.parentId?.trim() || undefined,
+      parentId,
       kind: body.kind ?? 'Bin',
       light: body.light ?? 'Ambient',
       temperatureRange: body.temperatureRange?.trim() || '18-22C',
@@ -2076,6 +2119,93 @@ export class NorthStarService {
       data: {
         suggestions,
         invariant: 'shopping list is generated from available approved non-expired stock without reserving or moving inventory',
+      },
+    }
+  }
+
+  inventoryAgingReport() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.view')
+    const today = new Date().toISOString().slice(0, 10)
+    const materials = this.materialCatalogForSession(session)
+    const records: InventoryAgingRecord[] = this.lotsForSession(session)
+      .map((lot) => {
+        const material = materials.find((item) => item.id === lot.materialId)
+        const receivedAt = new Date(`${lot.receivedDate}T00:00:00.000Z`).getTime()
+        const agingDays = Math.max(0, Math.floor((Date.now() - receivedAt) / 86_400_000))
+        const lastMovement = this.movements
+          .filter((movement) => movement.lotId === lot.id)
+          .sort((left, right) => right.at.localeCompare(left.at))[0]
+        const lastConsumption = this.movements
+          .filter((movement) => movement.lotId === lot.id && movement.direction === 'OUT')
+          .sort((left, right) => right.at.localeCompare(left.at))[0]
+        let status: InventoryAgingRecord['status'] = 'FRESH'
+        let reason = `Received ${agingDays} day(s) ago`
+        if (lot.inTransitToLocation) {
+          status = 'IN_TRANSIT'
+          reason = `In transit from ${lot.inTransitFromLocation ?? 'origin'} to ${lot.inTransitToLocation}`
+        } else if (lot.expiryDate < today || lot.qualityStatus === 'EXPIRED') {
+          status = 'EXPIRED'
+          reason = `Expired on ${lot.expiryDate}`
+        } else if (lot.retestDate && lot.retestDate < today) {
+          status = 'RETEST_DUE'
+          reason = `Retest due ${lot.retestDate}`
+        } else if (agingDays >= 180 && !lastConsumption) {
+          status = 'DEAD_STOCK'
+          reason = `No consumption recorded in ${agingDays} day(s)`
+        } else if (agingDays >= 90) {
+          status = 'AGING'
+          reason = `Aging threshold reached at ${agingDays} day(s)`
+        }
+        return {
+          lotId: lot.id,
+          lotNumber: lot.lotNumber,
+          materialId: lot.materialId,
+          materialName: material?.name ?? lot.materialId,
+          location: lot.location,
+          quantityGrams: lot.quantityGrams,
+          value: Number((lot.quantityGrams * lot.unitCost).toFixed(2)),
+          agingDays,
+          lastMovementAt: lastMovement?.at,
+          status,
+          reason,
+        }
+      })
+      .sort((left, right) => right.agingDays - left.agingDays || right.value - left.value)
+    return {
+      data: {
+        records,
+        summary: {
+          deadStockGrams: records.filter((record) => record.status === 'DEAD_STOCK').reduce((total, record) => total + record.quantityGrams, 0),
+          expiringOrExpiredGrams: records
+            .filter((record) => record.status === 'EXPIRED' || record.status === 'RETEST_DUE')
+            .reduce((total, record) => total + record.quantityGrams, 0),
+        },
+        invariant: 'aging and dead-stock reporting derives from tenant lots and immutable movement history without changing stock',
+      },
+    }
+  }
+
+  refreshInventoryExpiry() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.receive')
+    const today = new Date().toISOString().slice(0, 10)
+    const expiredLots = this.lotsForSession(session).filter(
+      (lot) => lot.expiryDate < today && lot.qualityStatus !== 'EXPIRED' && lot.qualityStatus !== 'REJECTED',
+    )
+    if (expiredLots.length > 0) {
+      const expiredIds = new Set(expiredLots.map((lot) => lot.id))
+      this.replaceLotsForSession(
+        session,
+        this.lotsForSession(session).map((lot) => expiredIds.has(lot.id) ? { ...lot, qualityStatus: 'EXPIRED' } : lot),
+      )
+    }
+    const audit = this.recordAudit('inventory.expiry.refresh', session.organizationId, session.userId, expiredLots.length ? 'review' : 'allowed')
+    return {
+      data: {
+        expiredLotIds: expiredLots.map((lot) => lot.id),
+        audit,
+        invariant: 'expiry enforcement changes lot eligibility only; it never creates or deletes inventory movement rows',
       },
     }
   }
@@ -2220,7 +2350,7 @@ export class NorthStarService {
     const receivedAt = new Date(`${lot.receivedDate}T00:00:00.000Z`).getTime()
     const agingDays = Math.max(0, Math.round((Date.now() - receivedAt) / 86_400_000))
     const movements = this.movements.filter((movement) => movement.lotId === lot.id)
-    const documents = this.documentRecords.filter((document) => document.linkedTo === lot.id || document.linkedTo === lot.materialId)
+    const documents = this.documentsForSession(session).filter((document) => document.linkedTo === lot.id || document.linkedTo === lot.materialId)
     const downstreamRefs = movements
       .filter((movement) => movement.direction === 'OUT' || movement.direction === 'MOVE')
       .map((movement) => ({
@@ -2534,6 +2664,9 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'inventory.adjust')
     const lot = this.lotForSession(body.lotId, session)
+    if (lot.inTransitToLocation) {
+      throw new UnprocessableEntityException('Complete the current in-transit transfer before starting another transfer')
+    }
 
     const toLocation = body.toLocation?.trim()
     if (!toLocation) {
@@ -2543,8 +2676,27 @@ export class NorthStarService {
       throw new UnprocessableEntityException('Transfer target location must be different from current location')
     }
 
+    const target = this.storageLocationForSession(toLocation, session)
     const timestamp = new Date().toISOString()
-    const updatedLot = { ...lot, location: toLocation }
+    const viaTransit = body.viaTransit === true
+    const transit = viaTransit
+      ? this.storageLocationsForSession(session).find((location) => location.status === 'IN_TRANSIT' || location.kind === 'Transit')
+      : undefined
+    if (viaTransit && !transit) {
+      throw new UnprocessableEntityException('Create an in-transit storage location before starting a staged transfer')
+    }
+    const nextLocation = transit?.name ?? target.name
+    this.assertLocationCapacity(transit ?? target, lot.quantityGrams, session, lot.id)
+    const updatedLot: InventoryLot = viaTransit
+      ? {
+          ...lot,
+          location: nextLocation,
+          inTransitFromLocation: lot.location,
+          inTransitToLocation: target.name,
+          transferStartedAt: timestamp,
+          transferStartedBy: session.userId,
+        }
+      : { ...lot, location: target.name }
     const movement: InventoryMovement = {
       id: `MOV-XFER-${String(this.movements.length + 1029).padStart(4, '0')}`,
       at: timestamp,
@@ -2554,7 +2706,9 @@ export class NorthStarService {
       lotId: lot.id,
       quantityGrams: lot.quantityGrams,
       balanceAfter: lot.quantityGrams,
-      ref: `${lot.location} -> ${toLocation}`,
+      ref: viaTransit
+        ? `${lot.location} -> ${nextLocation} (destination ${target.name})`
+        : `${lot.location} -> ${target.name}`,
       actor: session.userId,
     }
 
@@ -2567,7 +2721,96 @@ export class NorthStarService {
         lot: updatedLot,
         movement,
         summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
-        invariant: 'inventory transfer records movement evidence without changing stock quantity',
+        invariant: viaTransit
+          ? 'transfer started in a controlled transit location; stock quantity is unchanged and arrival must be completed separately'
+          : 'inventory transfer records movement evidence without changing stock quantity',
+      },
+    }
+  }
+
+  completeInventoryTransfer(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.adjust')
+    const lot = this.lotForSession(id, session)
+    const destinationName = lot.inTransitToLocation
+    if (!destinationName) {
+      throw new UnprocessableEntityException('Lot is not currently in transit')
+    }
+    const destination = this.storageLocationForSession(destinationName, session)
+    this.assertLocationCapacity(destination, lot.quantityGrams, session, lot.id)
+    const timestamp = new Date().toISOString()
+    const updatedLot: InventoryLot = {
+      ...lot,
+      location: destination.name,
+      inTransitFromLocation: undefined,
+      inTransitToLocation: undefined,
+      transferStartedAt: undefined,
+      transferStartedBy: undefined,
+    }
+    const movement: InventoryMovement = {
+      id: `MOV-XFER-${String(this.movements.length + 1029).padStart(4, '0')}`,
+      at: timestamp,
+      type: 'TRANSFER',
+      direction: 'MOVE',
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams: lot.quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: `${lot.location} -> ${destination.name} (transfer complete)`,
+      actor: session.userId,
+    }
+    this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+    this.movements = [movement, ...this.movements]
+    const audit = this.recordAudit('inventory.transfer.complete', lot.lotNumber, session.userId, 'allowed')
+    return {
+      data: {
+        lot: updatedLot,
+        movement,
+        audit,
+        summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === lot.materialId),
+        invariant: 'transfer completion writes a second immutable MOVE event and leaves stock quantity unchanged',
+      },
+    }
+  }
+
+  writeOffInventory(body: { lotId?: string; quantityGrams?: number; reason?: string }) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.adjust')
+    const lot = this.lotForSession(body.lotId, session)
+    const quantityGrams = Number(body.quantityGrams ?? 0)
+    const reason = body.reason?.trim()
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
+      throw new UnprocessableEntityException('Write-off quantityGrams must be greater than 0')
+    }
+    if (!reason) {
+      throw new UnprocessableEntityException('Write-off reason is required for disposal traceability')
+    }
+    const nextQuantity = lot.quantityGrams - quantityGrams
+    if (nextQuantity < lot.reservedGrams) {
+      throw new UnprocessableEntityException('Write-off would consume reserved stock or create negative available stock')
+    }
+    const updatedLot = { ...lot, quantityGrams: nextQuantity }
+    const movement: InventoryMovement = {
+      id: `MOV-WASTE-${String(this.movements.length + 1029).padStart(4, '0')}`,
+      at: new Date().toISOString(),
+      type: 'WASTE',
+      direction: 'OUT',
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams,
+      balanceAfter: nextQuantity,
+      ref: reason.slice(0, 180),
+      actor: session.userId,
+    }
+    this.lots = this.lots.map((item) => (item.id === lot.id ? updatedLot : item))
+    this.movements = [movement, ...this.movements]
+    const audit = this.recordAudit('inventory.writeOff', lot.lotNumber, session.userId, 'review')
+    return {
+      data: {
+        lot: updatedLot,
+        movement,
+        audit,
+        invariant: 'waste and disposal reduce stock only through an immutable WASTE movement with a required reason',
       },
     }
   }
@@ -2586,6 +2829,11 @@ export class NorthStarService {
       throw new UnprocessableEntityException('Inventory receipt quantityGrams must be greater than 0')
     }
     const qualityStatus = this.isLotQualityStatus(body.qualityStatus) ? body.qualityStatus : 'APPROVED'
+    const locationName = body.location?.trim() || 'Receiving Bay'
+    const location = this.storageLocationsForSession(session).find((item) => item.name === locationName)
+    if (location) {
+      this.assertLocationCapacity(location, quantityGrams, session)
+    }
 
     const timestamp = new Date().toISOString()
     const lot: InventoryLot = {
@@ -2598,7 +2846,7 @@ export class NorthStarService {
       receivedDate: timestamp.slice(0, 10),
       expiryDate: body.expiryDate ?? '2028-12-31',
       qualityStatus,
-      location: body.location?.trim() || 'Receiving Bay',
+      location: locationName,
       unitCost: material.costPerGram,
       supplierLotRef: body.supplierLotRef?.trim() || undefined,
       currency: body.currency?.trim() || 'USD',
@@ -2625,47 +2873,15 @@ export class NorthStarService {
 
     this.lots = [lot, ...this.lots]
     this.movements = [movement, ...this.movements]
-    const receiptDocuments = (body.documents ?? [])
-      .filter((item) => item && (item.type === 'SDS' || item.type === 'CoA') && item.fileName?.trim())
-      .slice(0, 2)
-      .map((item, index): DocumentRecord => {
-        const type = item.type as 'SDS' | 'CoA'
-        const fileName = item.fileName!.trim().slice(0, 160)
-        const sizeKb = Math.max(1, Math.min(51_200, Math.round(Number(item.fileSizeKb) || 1)))
-        const linkedTo = type === 'SDS' ? material.id : lot.id
-        const id = `DOC-RCV-${String(this.documentRecords.length + index + 1).padStart(5, '0')}`
-        const safeName = fileName.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || `${type}.pdf`
-        return {
-          id,
-          type,
-          title: `${material.name} ${type} / ${lot.lotNumber}`,
-          linkedTo,
-          version: 'v1',
-          sensitivity: 'Internal',
-          status: 'REVIEW_REQUIRED',
-          issueDate: timestamp.slice(0, 10),
-          lastAccessed: timestamp,
-          downloads: 0,
-          storageKey: `${session.organizationId}/inventory/${lot.id}/${type.toLowerCase()}-${safeName}`,
-          mimeType: item.mimeType?.trim().slice(0, 100) || 'application/octet-stream',
-          sizeKb,
-          checksum: this.documentChecksum(`${lot.id}:${type}:${fileName}:${sizeKb}`),
-          owner: session.userId,
-        }
-      })
-    if (receiptDocuments.length > 0) {
-      this.documentRecords = [...receiptDocuments, ...this.documentRecords]
-      receiptDocuments.forEach((document) => this.recordAudit('inventory.document.attach', document.id, session.userId, 'review'))
-    }
     this.recordAudit('inventory.receive', lot.lotNumber, session.userId, 'allowed')
 
     return {
       data: {
         lot,
         movement,
-        documents: receiptDocuments,
+        documents: [],
         summary: stockSummary(this.lotsForSession(session), this.materialCatalogForSession(session)).find((item) => item.material.id === material.id),
-        invariant: 'inventory receipt creates a lot, immutable IN movement, and reviewable SDS/CoA evidence when attached',
+        invariant: 'inventory receipt creates a lot and immutable IN movement; attached SDS and CoA files are stored through the private document upload workflow',
       },
     }
   }
@@ -3133,6 +3349,86 @@ export class NorthStarService {
         invariant: 'tenant console reads only the organization bound to the active session',
       },
     }
+  }
+
+  updateStorageLocation(id: string, body: StorageLocationMutationBody) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.receive')
+    const current = this.storageLocationForSession(id, session)
+    if (!current.organizationId && session.role !== 'Admin') {
+      throw new ForbiddenException('Shared default storage locations cannot be changed by this role')
+    }
+    const name = body.name?.trim() || current.name
+    const duplicate = this.storageLocationsForSession(session).find(
+      (location) => location.id !== current.id && location.name.toLowerCase() === name.toLowerCase(),
+    )
+    if (duplicate) {
+      throw new UnprocessableEntityException(`Storage location ${name} already exists`)
+    }
+    const capacityGrams = body.capacityGrams === undefined ? current.capacityGrams : Number(body.capacityGrams)
+    if (!Number.isFinite(capacityGrams) || capacityGrams <= 0) {
+      throw new UnprocessableEntityException('Storage location capacityGrams must be greater than 0')
+    }
+    const storedGrams = this.locationStoredGrams(current.name, session)
+    if (storedGrams > capacityGrams + 0.0001) {
+      throw new UnprocessableEntityException({
+        message: 'Storage location capacity cannot be lower than stored stock',
+        locationName: current.name,
+        storedGrams,
+        capacityGrams,
+      })
+    }
+    const parentId = body.parentId === undefined
+      ? current.parentId
+      : this.assertStorageLocationParent(body.parentId?.trim(), session, current.id)
+    const updated: StorageLocation = {
+      ...current,
+      name,
+      zone: body.zone?.trim() || current.zone,
+      condition: body.condition?.trim() || current.condition,
+      capacityGrams,
+      parentId,
+      kind: body.kind ?? current.kind,
+      light: body.light ?? current.light,
+      temperatureRange: body.temperatureRange?.trim() || current.temperatureRange,
+      status: body.status ?? current.status,
+    }
+    this.locationRecords = this.locationRecords.map((location) => (location.id === current.id ? updated : location))
+    if (name !== current.name) {
+      this.replaceLotsForSession(
+        session,
+        this.lotsForSession(session).map((lot) => {
+          if (lot.location !== current.name) return lot
+          return {
+            ...lot,
+            location: name,
+            inTransitFromLocation: lot.inTransitFromLocation === current.name ? name : lot.inTransitFromLocation,
+            inTransitToLocation: lot.inTransitToLocation === current.name ? name : lot.inTransitToLocation,
+          }
+        }),
+      )
+    }
+    const audit = this.recordAudit('inventory.location.update', updated.name, session.userId, 'allowed')
+    return { data: { location: updated, audit, invariant: 'location metadata and hierarchy changes do not mutate stock quantity' } }
+  }
+
+  deleteStorageLocation(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.receive')
+    const location = this.storageLocationForSession(id, session)
+    if (!location.organizationId) {
+      throw new ForbiddenException('Shared default storage locations cannot be deleted')
+    }
+    if (this.storageLocationsForSession(session).some((item) => item.parentId === location.id)) {
+      throw new UnprocessableEntityException('Move or delete child storage locations before deleting this location')
+    }
+    const storedGrams = this.locationStoredGrams(location.name, session)
+    if (storedGrams > 0.0001) {
+      throw new UnprocessableEntityException('Transfer stock out of this location before deleting it')
+    }
+    this.locationRecords = this.locationRecords.filter((item) => item.id !== location.id)
+    const audit = this.recordAudit('inventory.location.delete', location.name, session.userId, 'allowed')
+    return { data: { id: location.id, audit, invariant: 'storage location deletion is blocked while it has stock or child locations' } }
   }
 
   beginPasswordReset(email?: string) {
@@ -3737,17 +4033,238 @@ export class NorthStarService {
   }
 
   documents() {
-    return { data: this.documentRecords }
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.view')
+    return { data: this.documentsForSession(session) }
   }
 
   documentComplianceDashboard() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.view')
+    return { data: this.documentDashboardForSession(session) }
+  }
+
+  searchDocuments(query = '', filters: { type?: string; status?: string; linkedTo?: string; tag?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.view')
+    const needle = query.trim().toLowerCase()
+    const rows = this.documentsForSession(session).filter((document) => {
+      const haystack = [
+        document.title,
+        document.type,
+        document.linkedTo,
+        document.fileName,
+        document.version,
+        ...(document.tags ?? []),
+        document.extractedTextPreview,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+      return (
+        (!needle || haystack.includes(needle)) &&
+        (!filters.type || document.type === filters.type) &&
+        (!filters.status || document.status === filters.status) &&
+        (!filters.linkedTo || document.linkedTo === filters.linkedTo) &&
+        (!filters.tag || (document.tags ?? []).some((tag) => tag.toLowerCase() === filters.tag?.toLowerCase()))
+      )
+    })
     return {
-      data: documentComplianceDashboard(
-        this.documentRecords,
-        this.materialRecords,
-        this.lots,
-        this.formulaRecords,
-      ),
+      data: {
+        documents: rows,
+        invariant: 'document search is tenant-scoped and indexes only retained metadata or approved text extraction',
+      },
+    }
+  }
+
+  documentVersions(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.view')
+    const document = this.documentForSession(id, session)
+    const groupId = document.versionGroupId || document.id
+    const versions = this.documentsForSession(session)
+      .filter((item) => (item.versionGroupId || item.id) === groupId)
+      .sort((left, right) => right.lastAccessed.localeCompare(left.lastAccessed) || right.version.localeCompare(left.version))
+    return {
+      data: {
+        current: document,
+        versions,
+        invariant: 'document version history stays inside the active tenant and preserves immutable object keys per version',
+      },
+    }
+  }
+
+  prepareDocumentUpload(body: {
+    type?: DocumentType
+    linkedTo?: string
+    title?: string
+    version?: string
+    sensitivity?: DocumentRecord['sensitivity']
+    fileName?: string
+    mimeType?: string
+    tags?: string[]
+    supersedesDocumentId?: string
+    expiresAt?: string
+  }) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.manage')
+    const type = this.normalizeDocumentType(body.type)
+    const linkedTo = body.linkedTo?.trim()
+    if (!linkedTo) {
+      throw new UnprocessableEntityException('Document linkedTo target is required')
+    }
+    this.assertDocumentTargetForSession(linkedTo, session)
+    const fileName = this.sanitizeDocumentFileName(body.fileName)
+    const mimeType = this.normalizeDocumentMimeType(body.mimeType, fileName)
+    const supersedesDocumentId = body.supersedesDocumentId?.trim() || undefined
+    const superseded = supersedesDocumentId ? this.documentForSession(supersedesDocumentId, session) : undefined
+    if (superseded && (superseded.type !== type || superseded.linkedTo !== linkedTo)) {
+      throw new UnprocessableEntityException('New document version must retain the same type and linked object')
+    }
+    const id = `DOC-UPL-${this.shortId()}`
+    const versionGroupId = superseded?.versionGroupId || superseded?.id || id
+    const version = body.version?.trim().slice(0, 32) || this.nextDocumentVersion(superseded?.version)
+    const tags = Array.from(new Set((body.tags ?? []).map((tag) => tag.trim().toLowerCase()).filter(Boolean))).slice(0, 12)
+    const storageKey = `${session.organizationId}/documents/${id}/${fileName}`
+    const sensitivity =
+      body.sensitivity === 'Internal' || body.sensitivity === 'Confidential' || body.sensitivity === 'Highly Confidential'
+        ? body.sensitivity
+        : superseded?.sensitivity ?? 'Confidential'
+    return {
+      data: {
+        id,
+        organizationId: session.organizationId,
+        type,
+        linkedTo,
+        title: body.title?.trim().slice(0, 160) || `${type} ${fileName}`,
+        version,
+        sensitivity,
+        storageKey,
+        fileName,
+        mimeType,
+        tags,
+        supersedesDocumentId,
+        versionGroupId,
+        expiresAt: this.normalizeOptionalIsoDate(body.expiresAt),
+      } satisfies DocumentUploadPreparation,
+    }
+  }
+
+  commitDocumentUpload(prepared: DocumentUploadPreparation, body: { sizeBytes?: number; checksum?: string; ocrTextPreview?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.manage')
+    if (prepared.organizationId !== session.organizationId) {
+      throw new ForbiddenException('Document upload preparation belongs to a different tenant')
+    }
+    this.assertDocumentTargetForSession(prepared.linkedTo, session)
+    const sizeBytes = Number(body.sizeBytes ?? 0)
+    if (!Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > 25 * 1024 * 1024) {
+      throw new UnprocessableEntityException('Document file size must be between 1 byte and 25MB')
+    }
+    const checksum = body.checksum?.trim().toLowerCase()
+    if (!checksum || !/^sha256:[a-f0-9]{64}$/.test(checksum)) {
+      throw new UnprocessableEntityException('Document checksum must be a SHA-256 value')
+    }
+    const timestamp = new Date().toISOString()
+    const document: DocumentRecord = {
+      id: prepared.id,
+      organizationId: session.organizationId,
+      type: prepared.type,
+      title: prepared.title,
+      linkedTo: prepared.linkedTo,
+      version: prepared.version,
+      sensitivity: prepared.sensitivity,
+      status: 'QUARANTINED',
+      issueDate: timestamp.slice(0, 10),
+      expiresAt: prepared.expiresAt,
+      lastAccessed: timestamp,
+      downloads: 0,
+      storageKey: prepared.storageKey,
+      mimeType: prepared.mimeType,
+      sizeKb: Number((sizeBytes / 1024).toFixed(2)),
+      checksum,
+      owner: session.userId,
+      fileName: prepared.fileName,
+      versionGroupId: prepared.versionGroupId,
+      supersedesDocumentId: prepared.supersedesDocumentId,
+      tags: prepared.tags,
+      scanStatus: 'PENDING',
+      ocrStatus: 'NOT_REQUESTED',
+      extractedTextPreview: this.sanitizeDocumentTextPreview(body.ocrTextPreview),
+      retentionUntil: this.documentRetentionUntil(prepared.type, prepared.expiresAt),
+    }
+    this.documentRecords = [document, ...this.documentRecords]
+    const audit = this.recordAudit('document.upload', document.id, session.userId, 'review')
+    return {
+      data: {
+        document,
+        audit,
+        dashboard: this.documentDashboardForSession(session),
+        invariant: 'uploaded objects remain quarantined in private storage until a scan result is recorded and compliance review approves them',
+      },
+    }
+  }
+
+  recordDocumentScanResult(id: string, body: { status?: DocumentScanStatus; provider?: string; textPreview?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.manage')
+    const document = this.documentForSession(id, session)
+    if (document.status !== 'QUARANTINED') {
+      throw new UnprocessableEntityException('Only quarantined documents can receive a scan result')
+    }
+    const scanStatus: DocumentScanStatus = body.status === 'CLEAN' || body.status === 'INFECTED' || body.status === 'ERROR'
+      ? body.status
+      : 'ERROR'
+    const updated: DocumentRecord = {
+      ...document,
+      status: scanStatus === 'CLEAN' ? 'REVIEW_REQUIRED' : 'QUARANTINED',
+      scanStatus,
+      scannedAt: new Date().toISOString(),
+      scanProvider: body.provider?.trim().slice(0, 80) || 'manual-compliance-review',
+      ocrStatus: body.textPreview?.trim() ? 'COMPLETE' : document.ocrStatus,
+      extractedTextPreview: this.sanitizeDocumentTextPreview(body.textPreview) || document.extractedTextPreview,
+      lastAccessed: new Date().toISOString(),
+    }
+    this.documentRecords = this.documentRecords.map((item) => item.id === document.id ? updated : item)
+    const audit = this.recordAudit(
+      scanStatus === 'CLEAN' ? 'document.scan.clean' : 'document.scan.blocked',
+      document.id,
+      session.userId,
+      scanStatus === 'CLEAN' ? 'review' : 'blocked',
+    )
+    return {
+      data: {
+        document: updated,
+        audit,
+        dashboard: this.documentDashboardForSession(session),
+        invariant: scanStatus === 'CLEAN'
+          ? 'clean scan moves the private object to compliance review; approval is still required before external sharing'
+          : 'failed or infected scan keeps the private object quarantined and unavailable for download',
+      },
+    }
+  }
+
+  archiveDocument(id: string, _body: { reason?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.manage')
+    const document = this.documentForSession(id, session)
+    if (document.status === 'ARCHIVED') {
+      throw new UnprocessableEntityException('Document is already archived')
+    }
+    const updated: DocumentRecord = {
+      ...document,
+      status: 'ARCHIVED',
+      archivedAt: new Date().toISOString(),
+      lastAccessed: new Date().toISOString(),
+    }
+    this.documentRecords = this.documentRecords.map((item) => item.id === document.id ? updated : item)
+    const audit = this.recordAudit('document.archive', document.id, session.userId, 'allowed')
+    return {
+      data: {
+        document: updated,
+        audit,
+        invariant: 'archive preserves private retention evidence but blocks future download grants',
+      },
     }
   }
 
@@ -3761,7 +4278,7 @@ export class NorthStarService {
     }
 
     const target = this.documentGenerationTarget(type, linkedTo, session)
-    const existingCount = this.documentRecords.filter(
+    const existingCount = this.documentsForSession(session).filter(
       (document) => document.type === type && document.linkedTo === linkedTo,
     ).length
     const timestamp = new Date()
@@ -3774,6 +4291,7 @@ export class NorthStarService {
     const storageType = type.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
     const document: DocumentRecord = {
       id,
+      organizationId: session.organizationId,
       type,
       title: `${target.label} ${type}`,
       linkedTo,
@@ -3790,6 +4308,12 @@ export class NorthStarService {
       checksum: this.documentChecksum(`${type}:${linkedTo}:${existingCount + 1}:${issueDate}`),
       owner: 'Compliance',
       generatedFrom: target.generatedFrom,
+      fileName: `${storageType}-v${existingCount + 1}.pdf`,
+      versionGroupId: id,
+      tags: ['generated', target.scope, storageType],
+      scanStatus: 'NOT_REQUIRED',
+      ocrStatus: 'NOT_REQUESTED',
+      retentionUntil: this.documentRetentionUntil(type, expiresAt),
     }
     this.documentRecords = [document, ...this.documentRecords]
     const audit = this.recordAudit('document.generate', document.id, body.actor?.trim() || session.userId, 'review')
@@ -3798,12 +4322,7 @@ export class NorthStarService {
       data: {
         document,
         audit,
-        dashboard: documentComplianceDashboard(
-          this.documentRecords,
-          this.materialRecords,
-          this.lots,
-          this.formulaRecords,
-        ),
+        dashboard: this.documentDashboardForSession(session),
         invariant: 'generated documents enter review and stay in the private document workflow',
       },
     }
@@ -3812,12 +4331,12 @@ export class NorthStarService {
   approveDocument(id: string, body: { actor?: string; note?: string } = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'documents.manage')
-    const document = this.documentRecords.find((item) => item.id === id)
-    if (!document) {
-      throw new NotFoundException(`Document ${id} was not found`)
-    }
+    const document = this.documentForSession(id, session)
     if (document.status !== 'REVIEW_REQUIRED') {
       throw new UnprocessableEntityException('Only review-required documents can be approved')
+    }
+    if (document.scanStatus === 'PENDING' || document.scanStatus === 'INFECTED' || document.scanStatus === 'ERROR') {
+      throw new UnprocessableEntityException('Document scan must be clean before compliance approval')
     }
 
     const approvedDocument: DocumentRecord = {
@@ -3832,12 +4351,7 @@ export class NorthStarService {
       data: {
         document: approvedDocument,
         audit,
-        dashboard: documentComplianceDashboard(
-          this.documentRecords,
-          this.materialRecords,
-          this.lots,
-          this.formulaRecords,
-        ),
+        dashboard: this.documentDashboardForSession(session),
         invariant: 'approval moves generated documents out of review before external share',
       },
     }
@@ -3846,11 +4360,8 @@ export class NorthStarService {
   shareDocument(id: string, body: { recipient?: string; actor?: string } = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'documents.manage')
-    const document = this.documentRecords.find((item) => item.id === id)
-    if (!document) {
-      throw new NotFoundException(`Document ${id} was not found`)
-    }
-    if (document.status === 'REVIEW_REQUIRED') {
+    const document = this.documentForSession(id, session)
+    if (document.status === 'REVIEW_REQUIRED' || document.status === 'QUARANTINED' || document.status === 'ARCHIVED') {
       throw new UnprocessableEntityException('Review-required documents must be approved before external sharing')
     }
     const recipient = body.recipient?.trim().toLowerCase()
@@ -3872,21 +4383,20 @@ export class NorthStarService {
         document: sharedDocument,
         shareLink,
         audit,
-        dashboard: documentComplianceDashboard(
-          this.documentRecords,
-          this.materialRecords,
-          this.lots,
-          this.formulaRecords,
-        ),
+        dashboard: this.documentDashboardForSession(session),
         invariant: 'external share link is tenant-scoped, time-boxed, and audit-reviewed',
       },
     }
   }
 
   documentDownloadAudit() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'documents.view')
+    const documentIds = new Set(this.documentsForSession(session).map((document) => document.id))
     return {
       data: this.auditEvents.filter((event) =>
-        ['document.download', 'document.generate', 'document.approve', 'document.externalShare'].includes(event.action),
+        ['document.download', 'document.generate', 'document.approve', 'document.externalShare', 'document.upload', 'document.scan.clean', 'document.scan.blocked', 'document.archive'].includes(event.action) &&
+        documentIds.has(event.entity),
       ),
     }
   }
@@ -3896,10 +4406,7 @@ export class NorthStarService {
     context: { actor?: string; permissions?: string[]; ip?: string } = {},
   ) {
     const session = this.currentSession()
-    const document = this.documentRecords.find((item) => item.id === id)
-    if (!document) {
-      throw new NotFoundException(`Document ${id} was not found`)
-    }
+    const document = this.documentForSession(id, session)
 
     const actor = context.actor ?? session.userId
     const permissions = context.permissions ?? this.permissionsForRole(session.role)
@@ -8262,16 +8769,9 @@ export class NorthStarService {
       (formula) => (formula.organizationId || 'org-nxl') === organizationId,
     )
     const lots = this.lots.filter((lot) => (lot.organizationId || 'org-nxl') === organizationId)
-    const batches = this.productionBatchRecords.filter((batch) =>
-      formulas.some((formula) => formula.id === batch.formulaId),
+    const documents = this.documentRecords.filter(
+      (document) => (document.organizationId || 'org-nxl') === organizationId,
     )
-    const tenantRecordIds = new Set([
-      ...materials.map((material) => material.id),
-      ...formulas.map((formula) => formula.id),
-      ...lots.map((lot) => lot.id),
-      ...batches.map((batch) => batch.id),
-    ])
-    const documents = this.documentRecords.filter((document) => tenantRecordIds.has(document.linkedTo))
     const tenantActors = new Set(
       this.membershipRecords
         .filter((membership) => membership.organizationId === organizationId)
@@ -8951,6 +9451,63 @@ export class NorthStarService {
     ]
   }
 
+  private storageLocationsForSession(session: AuthSession) {
+    return this.locationRecords.filter(
+      (location) => !location.organizationId || location.organizationId === session.organizationId,
+    )
+  }
+
+  private storageLocationForSession(idOrName: string | undefined, session: AuthSession) {
+    const normalized = idOrName?.trim()
+    const location = this.storageLocationsForSession(session).find(
+      (item) => item.id === normalized || item.name === normalized,
+    )
+    if (!location) {
+      throw new NotFoundException(`Storage location ${normalized || 'unknown'} was not found`)
+    }
+    return location
+  }
+
+  private locationStoredGrams(locationName: string, session: AuthSession, excludingLotId?: string) {
+    return this.lotsForSession(session)
+      .filter((lot) => lot.location === locationName && lot.id !== excludingLotId)
+      .reduce((total, lot) => total + lot.quantityGrams, 0)
+  }
+
+  private assertLocationCapacity(location: StorageLocation, quantityGrams: number, session: AuthSession, excludingLotId?: string) {
+    const currentGrams = this.locationStoredGrams(location.name, session, excludingLotId)
+    const nextGrams = currentGrams + quantityGrams
+    if (nextGrams > location.capacityGrams + 0.0001) {
+      throw new UnprocessableEntityException({
+        message: 'Transfer or receipt would exceed storage location capacity',
+        locationId: location.id,
+        locationName: location.name,
+        capacityGrams: location.capacityGrams,
+        currentGrams,
+        requestedGrams: quantityGrams,
+        nextGrams,
+      })
+    }
+  }
+
+  private assertStorageLocationParent(parentId: string | undefined, session: AuthSession, currentId?: string) {
+    if (!parentId) return undefined
+    const parent = this.storageLocationForSession(parentId, session)
+    if (parent.id === currentId) {
+      throw new UnprocessableEntityException('Storage location cannot be its own parent')
+    }
+    let cursor: StorageLocation | undefined = parent
+    const visited = new Set<string>()
+    while (cursor?.parentId) {
+      if (cursor.id === currentId || visited.has(cursor.id)) {
+        throw new UnprocessableEntityException('Storage location hierarchy cannot contain a cycle')
+      }
+      visited.add(cursor.id)
+      cursor = this.storageLocationsForSession(session).find((item) => item.id === cursor?.parentId)
+    }
+    return parent.id
+  }
+
   private formulaCatalogForSession(session: AuthSession) {
     return this.formulaRecords
       .filter((formula) => {
@@ -8970,6 +9527,37 @@ export class NorthStarService {
       throw new NotFoundException(`Material ${id} was not found`)
     }
     return material
+  }
+
+  private documentsForSession(session: AuthSession) {
+    return this.documentRecords
+      .filter((document) => (document.organizationId || 'org-nxl') === session.organizationId)
+      .map((document) => ({
+        ...document,
+        organizationId: document.organizationId || 'org-nxl',
+        fileName: document.fileName || document.storageKey.split('/').at(-1),
+        versionGroupId: document.versionGroupId || document.id,
+        tags: Array.isArray(document.tags) ? document.tags : [],
+        scanStatus: document.scanStatus || 'NOT_REQUIRED',
+        ocrStatus: document.ocrStatus || 'NOT_REQUESTED',
+      }))
+  }
+
+  private documentForSession(id: string, session: AuthSession) {
+    const document = this.documentsForSession(session).find((item) => item.id === id)
+    if (!document) {
+      throw new NotFoundException(`Document ${id} was not found`)
+    }
+    return document
+  }
+
+  private documentDashboardForSession(session: AuthSession) {
+    return documentComplianceDashboard(
+      this.documentsForSession(session),
+      this.materialCatalogForSession(session),
+      this.lotsForSession(session),
+      this.formulaCatalogForSession(session),
+    )
   }
 
   private formulaForSession(id: string, session: AuthSession) {
@@ -9253,6 +9841,83 @@ export class NorthStarService {
       return value
     }
     throw new UnprocessableEntityException('Unsupported generated document type')
+  }
+
+  private normalizeDocumentType(value?: DocumentType | string): DocumentType {
+    const validTypes: DocumentType[] = [
+      'SDS',
+      'CoA',
+      'IFRA',
+      'Invoice',
+      'Formula Export',
+      'Batch Record',
+      'Allergen Declaration',
+      'GHS Label',
+      'Formula Spec Sheet',
+      'Finished Product SDS',
+    ]
+    if (value && validTypes.includes(value as DocumentType)) {
+      return value as DocumentType
+    }
+    throw new UnprocessableEntityException('Document type is required and must be supported')
+  }
+
+  private sanitizeDocumentFileName(value?: string) {
+    const fileName = value?.trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '')
+    if (!fileName || fileName.length > 160) {
+      throw new UnprocessableEntityException('Document file name must be 1 to 160 safe characters')
+    }
+    if (!/\.(pdf|png|jpe?g|txt)$/i.test(fileName)) {
+      throw new UnprocessableEntityException('Document file type must be PDF, PNG, JPEG, or TXT')
+    }
+    return fileName
+  }
+
+  private normalizeDocumentMimeType(value: string | undefined, fileName: string) {
+    const fromExtension = /\.pdf$/i.test(fileName)
+      ? 'application/pdf'
+      : /\.png$/i.test(fileName)
+        ? 'image/png'
+        : /\.jpe?g$/i.test(fileName)
+          ? 'image/jpeg'
+          : 'text/plain'
+    const mimeType = value?.trim().toLowerCase() || fromExtension
+    if (!['application/pdf', 'image/png', 'image/jpeg', 'text/plain'].includes(mimeType)) {
+      throw new UnprocessableEntityException('Document mime type is not allowed')
+    }
+    return mimeType
+  }
+
+  private nextDocumentVersion(previous?: string) {
+    const match = /^v(\d+)$/i.exec(previous ?? '')
+    return `v${(match ? Number(match[1]) : 0) + 1}`
+  }
+
+  private sanitizeDocumentTextPreview(value: string | undefined) {
+    if (!value?.trim()) return undefined
+    return Array.from(value)
+      .map((character) => {
+        const code = character.charCodeAt(0)
+        const isUnsafeControl = (code < 32 && character !== '\t' && character !== '\r' && character !== '\n') || code === 127
+        return isUnsafeControl ? ' ' : character
+      })
+      .join('')
+      .trim()
+      .slice(0, 2_000)
+  }
+
+  private documentRetentionUntil(type: DocumentType, expiresAt?: string) {
+    const basis = expiresAt ? new Date(`${expiresAt}T00:00:00.000Z`) : new Date()
+    const years = type === 'Batch Record' || type === 'CoA' ? 7 : 5
+    basis.setUTCFullYear(basis.getUTCFullYear() + years)
+    return basis.toISOString().slice(0, 10)
+  }
+
+  private assertDocumentTargetForSession(linkedTo: string, session: AuthSession) {
+    if (this.materialCatalogForSession(session).some((material) => material.id === linkedTo)) return
+    if (this.lotsForSession(session).some((lot) => lot.id === linkedTo)) return
+    if (this.formulaCatalogForSession(session).some((formula) => formula.id === linkedTo)) return
+    throw new NotFoundException(`Document target ${linkedTo} was not found in the active tenant`)
   }
 
   private documentGenerationTarget(type: DocumentType, linkedTo: string, session: AuthSession) {

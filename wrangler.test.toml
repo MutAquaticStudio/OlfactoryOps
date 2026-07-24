@@ -13,3 +13,7 @@ binding = "DB"
 database_name = "olfactoryops-test"
 database_id = "a5144134-3f58-4f6b-b516-05789ef05fbc"
 migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "olfactoryops-documents-test"

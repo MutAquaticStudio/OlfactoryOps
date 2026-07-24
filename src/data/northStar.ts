@@ -334,6 +334,10 @@ export interface InventoryLot {
   container?: string
   packaging?: string
   coaDocumentId?: string
+  inTransitFromLocation?: string
+  inTransitToLocation?: string
+  transferStartedAt?: string
+  transferStartedBy?: string
 }
 
 export interface InventoryMovement {
@@ -347,6 +351,7 @@ export interface InventoryMovement {
     | 'FULFILLMENT'
     | 'ADJUSTMENT'
     | 'TRANSFER'
+    | 'WASTE'
   direction: 'IN' | 'OUT' | 'MOVE'
   materialId: string
   lotId: string
@@ -358,6 +363,7 @@ export interface InventoryMovement {
 
 export interface StorageLocation {
   id: string
+  organizationId?: string
   name: string
   zone: string
   condition: string
@@ -367,6 +373,20 @@ export interface StorageLocation {
   light?: 'Dark' | 'Amber' | 'Ambient'
   temperatureRange?: string
   status?: 'ACTIVE' | 'IN_TRANSIT'
+}
+
+export interface InventoryAgingRecord {
+  lotId: string
+  lotNumber: string
+  materialId: string
+  materialName: string
+  location: string
+  quantityGrams: number
+  value: number
+  agingDays: number
+  lastMovementAt?: string
+  status: 'FRESH' | 'AGING' | 'DEAD_STOCK' | 'EXPIRED' | 'RETEST_DUE' | 'IN_TRANSIT'
+  reason: string
 }
 
 export interface StockTakeRecord {
@@ -416,10 +436,21 @@ export type DocumentType =
   | 'Formula Spec Sheet'
   | 'Finished Product SDS'
 
-export type DocumentStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'EXPIRING' | 'EXPIRED' | 'SHARED'
+export type DocumentStatus =
+  | 'QUARANTINED'
+  | 'REVIEW_REQUIRED'
+  | 'APPROVED'
+  | 'EXPIRING'
+  | 'EXPIRED'
+  | 'SHARED'
+  | 'ARCHIVED'
+
+export type DocumentScanStatus = 'PENDING' | 'CLEAN' | 'INFECTED' | 'ERROR' | 'NOT_REQUIRED'
+export type DocumentOcrStatus = 'NOT_REQUESTED' | 'PENDING' | 'COMPLETE' | 'FAILED'
 
 export interface DocumentRecord {
   id: string
+  organizationId?: string
   type: DocumentType
   title: string
   linkedTo: string
@@ -436,6 +467,17 @@ export interface DocumentRecord {
   checksum: string
   owner: string
   generatedFrom?: string
+  fileName?: string
+  versionGroupId?: string
+  supersedesDocumentId?: string
+  tags?: string[]
+  scanStatus?: DocumentScanStatus
+  scannedAt?: string
+  scanProvider?: string
+  ocrStatus?: DocumentOcrStatus
+  extractedTextPreview?: string
+  retentionUntil?: string
+  archivedAt?: string
 }
 
 export interface DocumentComplianceRequirement {
@@ -3535,7 +3577,8 @@ export function documentRequiredPermissions(document: DocumentRecord) {
 
 export function canDownloadDocument(document: DocumentRecord, permissions: string[]) {
   const permissionSet = new Set(permissions)
-  return documentRequiredPermissions(document).every((permission) => permissionSet.has(permission))
+  const contentReady = document.status !== 'QUARANTINED' && document.status !== 'ARCHIVED'
+  return contentReady && documentRequiredPermissions(document).every((permission) => permissionSet.has(permission))
 }
 
 export function createSignedDocumentUrl(
@@ -3602,10 +3645,10 @@ function documentRequirementStatus(
   if (!document) {
     return 'missing'
   }
-  if (document.status === 'REVIEW_REQUIRED') {
+  if (document.status === 'QUARANTINED' || document.status === 'REVIEW_REQUIRED') {
     return 'review'
   }
-  if (document.status === 'EXPIRED' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) < 0)) {
+  if (document.status === 'ARCHIVED' || document.status === 'EXPIRED' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) < 0)) {
     return 'missing'
   }
   if (document.status === 'EXPIRING' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) <= 90)) {

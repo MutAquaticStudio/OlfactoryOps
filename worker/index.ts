@@ -65,9 +65,11 @@ import {
 
 type Env = {
   DB: D1Database
+  DOCUMENTS?: R2Bucket
   CORS_ORIGINS?: string
   SEEDED_ADMIN_PASSWORD_HASH?: string
   MFA_ENCRYPTION_KEY?: string
+  DOCUMENT_SIGNING_KEY?: string
   STRIPE_SECRET_KEY?: string
   STRIPE_WEBHOOK_SECRET?: string
   STRIPE_PRICE_ARTISAN?: string
@@ -88,6 +90,7 @@ type RouteContext = {
   query: URLSearchParams
   body: Record<string, unknown>
   rawBody?: string
+  formData?: FormData
   env: Env
   request: Request
 }
@@ -104,6 +107,7 @@ type Route = {
   writeGate?: boolean
   persistScope?: 'userSettings' | 'mfaVerification'
   rawBody?: boolean
+  formData?: boolean
   handler: (context: RouteContext) => unknown
 }
 
@@ -233,6 +237,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
 
 const API_PREFIX = '/api/v1'
 const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
 const authenticatedMutationRateLimit: RateLimitPolicy = {
   key: 'authenticated-mutation',
   scope: 'session',
@@ -461,15 +466,21 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/inventory/summary', handler: ({ service }) => service.inventorySummary() },
   { method: 'GET', pattern: '/inventory/movements', handler: ({ service }) => service.inventoryMovements() },
   { method: 'GET', pattern: '/inventory/reorder-suggestions', handler: ({ service }) => service.inventoryReorderSuggestions() },
+  { method: 'GET', pattern: '/inventory/aging-report', handler: ({ service }) => service.inventoryAgingReport() },
+  { method: 'POST', pattern: '/inventory/expiry/refresh', mutates: true, handler: ({ service }) => service.refreshInventoryExpiry() },
   { method: 'POST', pattern: '/inventory/stock-takes', mutates: true, handler: ({ service, body }) => service.performStockTake(body) },
   { method: 'GET', pattern: '/storage-locations', handler: ({ service }) => service.storageLocationsList() },
   { method: 'POST', pattern: '/storage-locations', mutates: true, handler: ({ service, body }) => service.createStorageLocation(body) },
+  { method: 'PATCH', pattern: '/storage-locations/:id', mutates: true, handler: ({ service, params, body }) => service.updateStorageLocation(params.id, body) },
+  { method: 'DELETE', pattern: '/storage-locations/:id', mutates: true, handler: ({ service, params }) => service.deleteStorageLocation(params.id) },
   { method: 'PATCH', pattern: '/lots/:id/quality', mutates: true, handler: ({ service, params, body }) => service.changeLotQuality(params.id, body) },
   { method: 'POST', pattern: '/lots/:id/label', handler: ({ service, params }) => service.lotLabel(params.id) },
   { method: 'GET', pattern: '/lots/:id/genealogy', handler: ({ service, params }) => service.lotGenealogy(params.id) },
   { method: 'POST', pattern: '/inventory/receipts', mutates: true, limitKey: 'lots', handler: ({ service, body }) => service.receiveInventoryReceipt(body) },
   { method: 'POST', pattern: '/inventory/adjustments', mutates: true, handler: ({ service, body }) => service.adjustInventory(body) },
+  { method: 'POST', pattern: '/inventory/write-offs', mutates: true, handler: ({ service, body }) => service.writeOffInventory(body) },
   { method: 'POST', pattern: '/inventory/transfers', mutates: true, handler: ({ service, body }) => service.transferInventory(body) },
+  { method: 'POST', pattern: '/inventory/transfers/:id/complete', mutates: true, handler: ({ service, params }) => service.completeInventoryTransfer(params.id) },
   { method: 'GET', pattern: '/inventory/approval-requests', handler: ({ service }) => service.inventoryApprovalRequests() },
   { method: 'POST', pattern: '/inventory/approval-requests', mutates: true, writeGate: false, handler: ({ service, body }) => service.requestInventoryApproval(body) },
   { method: 'POST', pattern: '/inventory/approval-requests/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveInventoryApprovalRequest(params.id, body) },
@@ -524,13 +535,19 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/numbering-sequences/:key/next', mutates: true, handler: ({ service, params }) => service.nextNumber(params.key) },
   { method: 'POST', pattern: '/custom-fields', mutates: true, handler: ({ service, body }) => service.createCustomField(body) },
   { method: 'PATCH', pattern: '/branding', mutates: true, handler: ({ service, body }) => service.updateBranding(body) },
+  { method: 'GET', pattern: '/documents/:id/content', public: true, hydrateState: false, handler: ({ params, query, env }) => serveDocumentContent(params.id, query, env) },
   { method: 'GET', pattern: '/documents', handler: ({ service }) => service.documents() },
+  { method: 'GET', pattern: '/documents/search', handler: ({ service, query }) => service.searchDocuments(query.get('q') ?? '', { type: query.get('type') ?? undefined, status: query.get('status') ?? undefined, linkedTo: query.get('linkedTo') ?? undefined, tag: query.get('tag') ?? undefined }) },
+  { method: 'GET', pattern: '/documents/:id/versions', handler: ({ service, params }) => service.documentVersions(params.id) },
   { method: 'GET', pattern: '/documents/compliance-dashboard', handler: ({ service }) => service.documentComplianceDashboard() },
-  { method: 'POST', pattern: '/documents/generate', mutates: true, limitKey: 'documents', handler: ({ service, body }) => service.generateDocument(body) },
+  { method: 'POST', pattern: '/documents/upload', mutates: true, formData: true, limitKey: 'documents', rateLimit: sensitiveMutationRateLimit, handler: ({ service, env, formData }) => handleDocumentUpload(service, env, formData) },
+  { method: 'POST', pattern: '/documents/generate', mutates: true, limitKey: 'documents', handler: ({ service, body, env }) => generateDocumentObject(service, env, body) },
   { method: 'POST', pattern: '/documents/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveDocument(params.id, body) },
-  { method: 'POST', pattern: '/documents/:id/share', mutates: true, handler: ({ service, params, body }) => service.shareDocument(params.id, body) },
+  { method: 'POST', pattern: '/documents/:id/scan-result', mutates: true, handler: ({ service, params, body }) => service.recordDocumentScanResult(params.id, body) },
+  { method: 'POST', pattern: '/documents/:id/archive', mutates: true, handler: ({ service, params, body }) => service.archiveDocument(params.id, body) },
+  { method: 'POST', pattern: '/documents/:id/share', mutates: true, handler: ({ service, params, body, env, request }) => shareDocumentObject(service, env, request, params.id, body) },
   { method: 'GET', pattern: '/documents/download-audit', handler: ({ service }) => service.documentDownloadAudit() },
-  { method: 'POST', pattern: '/documents/:id/signed-url', mutates: true, handler: ({ service, params }) => service.requestDocumentSignedUrl(params.id) },
+  { method: 'POST', pattern: '/documents/:id/signed-url', mutates: true, handler: ({ service, params, env, request }) => signDocumentDownload(service, env, request, params.id) },
   { method: 'GET', pattern: '/lab-usage', handler: ({ service }) => service.labUsageHistory() },
   { method: 'GET', pattern: '/lab-usage/plan', handler: ({ service, query }) => service.labUsagePlan(query.get('formulaId') ?? '', Number(query.get('grams') ?? '12.5')) },
   { method: 'GET', pattern: '/lab-usage/:id', handler: ({ service, params }) => service.labUsageDetail(params.id) },
@@ -644,7 +661,8 @@ export default {
       mfaVerificationRequest = match.route.persistScope === 'mfaVerification'
 
       const rawBody = match.route.rawBody ? await readRawBody(request) : undefined
-      const body = rawBody === undefined ? await readJsonBody(request) : {}
+      const formData = match.route.formData ? await readDocumentFormData(request) : undefined
+      const body = rawBody === undefined && formData === undefined ? await readJsonBody(request) : {}
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -694,6 +712,7 @@ export default {
         query: url.searchParams,
         body,
         rawBody,
+        formData,
         env,
         request,
       })
@@ -724,7 +743,9 @@ export default {
         refreshWorkspaceBrandingCache(service, credential.sessionId)
       }
 
-      const response = json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
+      const response = result instanceof Response
+        ? withApiSecurityHeaders(result, corsHeaders)
+        : json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
       const durationMs = Date.now() - startedAt
       if (durationMs >= 1200) {
         ctx.waitUntil(recordRuntimeEvent(env.DB, { route: routeLabel, status: response.status, durationMs, category: 'latency' }))
@@ -1311,6 +1332,278 @@ async function readRawBody(request: Request) {
     })
   }
   return text
+}
+
+async function readDocumentFormData(request: Request) {
+  const contentType = request.headers.get('Content-Type') ?? ''
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
+    throw new UnprocessableEntityException('Document upload must use multipart/form-data')
+  }
+  const declaredLength = Number(request.headers.get('Content-Length'))
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_DOCUMENT_UPLOAD_BYTES + 64 * 1024) {
+    throw new PayloadTooLargeException({
+      message: 'Document upload is too large',
+      maxBytes: MAX_DOCUMENT_UPLOAD_BYTES,
+    })
+  }
+  const formData = await request.formData()
+  const candidate = formData.get('file')
+  if (!(candidate instanceof File)) {
+    throw new UnprocessableEntityException('Document upload must include a file field')
+  }
+  if (candidate.size <= 0 || candidate.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+    throw new PayloadTooLargeException({
+      message: 'Document file must be between 1 byte and 25MB',
+      maxBytes: MAX_DOCUMENT_UPLOAD_BYTES,
+    })
+  }
+  return formData
+}
+
+function withApiSecurityHeaders(response: Response, corsHeaders: HeadersInit) {
+  const headers = new Headers(response.headers)
+  buildApiSecurityHeaders(corsHeaders).forEach((value, key) => {
+    if (!headers.has(key)) headers.set(key, value)
+  })
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+
+function requireDocumentBucket(env: Env) {
+  if (!env.DOCUMENTS) {
+    throw new UnprocessableEntityException('Private document storage is not configured')
+  }
+  return env.DOCUMENTS
+}
+
+function documentSigningKey(env: Env) {
+  const key = env.DOCUMENT_SIGNING_KEY?.trim() || env.MFA_ENCRYPTION_KEY?.trim()
+  if (!key || key.length < 32) {
+    throw new UnprocessableEntityException('Document signing secret is not configured')
+  }
+  return key
+}
+
+function base64UrlEncode(value: ArrayBuffer | Uint8Array | string) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value)
+  let binary = ''
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte) })
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '')
+}
+
+function base64UrlDecode(value: string) {
+  const padded = value.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - value.length % 4) % 4)
+  const binary = atob(padded)
+  return new Uint8Array(Array.from(binary, (character) => character.charCodeAt(0)))
+}
+
+async function signDocumentGrant(env: Env, document: DocumentRecord, request: Request) {
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
+  const expires = Math.floor(expiresAt.getTime() / 1000)
+  const payload = `v1|${document.id}|${document.organizationId || 'org-nxl'}|${expires}|${crypto.randomUUID().replaceAll('-', '')}`
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(documentSigningKey(env)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))
+  const grant = `${base64UrlEncode(payload)}.${base64UrlEncode(signature)}`
+  const origin = new URL(request.url).origin
+  return {
+    url: `${origin}${API_PREFIX}/documents/${encodeURIComponent(document.id)}/content?grant=${encodeURIComponent(grant)}`,
+    expiresAt: expiresAt.toISOString(),
+    ttlSeconds: 300,
+    method: 'GET' as const,
+  }
+}
+
+async function verifyDocumentGrant(env: Env, documentId: string, grant: string | null) {
+  if (!grant) return undefined
+  const [encodedPayload, encodedSignature, ...extra] = grant.split('.')
+  if (!encodedPayload || !encodedSignature || extra.length > 0) return undefined
+  let payload: string
+  let providedSignature: Uint8Array
+  try {
+    payload = new TextDecoder().decode(base64UrlDecode(encodedPayload))
+    providedSignature = base64UrlDecode(encodedSignature)
+  } catch {
+    return undefined
+  }
+  const [version, grantedDocumentId, organizationId, expiresRaw, nonce, ...rest] = payload.split('|')
+  const expires = Number(expiresRaw)
+  if (version !== 'v1' || !nonce || rest.length > 0 || grantedDocumentId !== documentId || !Number.isFinite(expires) || expires <= Math.floor(Date.now() / 1000)) {
+    return undefined
+  }
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(documentSigningKey(env)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const expectedSignature = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload)))
+  if (expectedSignature.byteLength !== providedSignature.byteLength) return undefined
+  let mismatch = 0
+  for (let index = 0; index < expectedSignature.byteLength; index += 1) mismatch |= expectedSignature[index]! ^ providedSignature[index]!
+  return mismatch === 0 ? { organizationId, expires } : undefined
+}
+
+function formDataString(formData: FormData, name: string) {
+  const value = formData.get(name)
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+async function sha256ForArrayBuffer(value: ArrayBuffer) {
+  const digest = await crypto.subtle.digest('SHA-256', value)
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+async function handleDocumentUpload(service: NorthStarService, env: Env, formData: FormData | undefined) {
+  if (!formData) throw new UnprocessableEntityException('Document upload form data is missing')
+  const file = formData.get('file')
+  if (!(file instanceof File)) throw new UnprocessableEntityException('Document upload file is missing')
+  const tags = formDataString(formData, 'tags').split(',').map((tag) => tag.trim()).filter(Boolean)
+  const prepared = service.prepareDocumentUpload({
+    type: formDataString(formData, 'type') as DocumentRecord['type'],
+    linkedTo: formDataString(formData, 'linkedTo'),
+    title: formDataString(formData, 'title') || undefined,
+    version: formDataString(formData, 'version') || undefined,
+    sensitivity: formDataString(formData, 'sensitivity') as DocumentRecord['sensitivity'],
+    fileName: file.name,
+    mimeType: file.type,
+    tags,
+    supersedesDocumentId: formDataString(formData, 'supersedesDocumentId') || undefined,
+    expiresAt: formDataString(formData, 'expiresAt') || undefined,
+  }).data
+  const objectBody = await file.arrayBuffer()
+  const checksum = await sha256ForArrayBuffer(objectBody)
+  const bucket = requireDocumentBucket(env)
+  await bucket.put(prepared.storageKey, objectBody, {
+    httpMetadata: { contentType: prepared.mimeType },
+    customMetadata: {
+      documentId: prepared.id,
+      organizationId: prepared.organizationId,
+      checksum,
+      scanStatus: 'PENDING',
+    },
+  })
+  try {
+    return service.commitDocumentUpload(prepared, {
+      sizeBytes: file.size,
+      checksum,
+      ocrTextPreview: formDataString(formData, 'ocrTextPreview') || undefined,
+    })
+  } catch (error) {
+    await bucket.delete(prepared.storageKey)
+    throw error
+  }
+}
+
+async function generateDocumentObject(service: NorthStarService, env: Env, body: Record<string, unknown>) {
+  const bucket = requireDocumentBucket(env)
+  const result = service.generateDocument(body)
+  const document = result.data.document
+  const pdf = createGeneratedDocumentPdf(document)
+  await bucket.put(document.storageKey, pdf, {
+    httpMetadata: { contentType: 'application/pdf' },
+    customMetadata: {
+      documentId: document.id,
+      organizationId: document.organizationId || 'org-nxl',
+      checksum: document.checksum,
+      generated: 'true',
+    },
+  })
+  return result
+}
+
+async function signDocumentDownload(service: NorthStarService, env: Env, request: Request, documentId: string) {
+  requireDocumentBucket(env)
+  const result = service.requestDocumentSignedUrl(documentId).data
+  return {
+    data: {
+      ...result,
+      signedUrl: await signDocumentGrant(env, result.document, request),
+    },
+  }
+}
+
+async function shareDocumentObject(
+  service: NorthStarService,
+  env: Env,
+  request: Request,
+  documentId: string,
+  body: Record<string, unknown>,
+) {
+  requireDocumentBucket(env)
+  const result = service.shareDocument(documentId, body).data
+  return {
+    data: {
+      ...result,
+      shareLink: {
+        ...result.shareLink,
+        url: (await signDocumentGrant(env, result.document, request)).url,
+      },
+    },
+  }
+}
+
+async function serveDocumentContent(documentId: string, query: URLSearchParams, env: Env) {
+  const grant = await verifyDocumentGrant(env, documentId, query.get('grant'))
+  if (!grant) throw new ForbiddenException('Document access grant is invalid or expired')
+  const row = await env.DB
+    .prepare('SELECT id, organization_id, storage_key, mime_type, title, status FROM document_records WHERE id = ?1 AND organization_id = ?2')
+    .bind(documentId, grant.organizationId)
+    .first<{ id: string; organization_id: string; storage_key: string; mime_type: string; title: string; status: string }>()
+  if (!row) throw new ForbiddenException('Document is unavailable for this access grant')
+  if (row.status === 'QUARANTINED' || row.status === 'ARCHIVED') {
+    throw new ForbiddenException('Document is not available for download')
+  }
+  const object = await requireDocumentBucket(env).get(row.storage_key)
+  if (!object) throw new UnprocessableEntityException('Document object is not available in private storage')
+  const fileName = row.title.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || `${row.id}.bin`
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': row.mime_type || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Cache-Control': 'private, no-store, max-age=0',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
+}
+
+function createGeneratedDocumentPdf(document: DocumentRecord) {
+  const safe = (value: string) => value.replace(/[\\()]/g, '\\$&').replace(/[^\x20-\x7E]/g, '?')
+  const lines = [
+    'OlfactoryOps Controlled Document',
+    document.title,
+    `Document: ${document.id} / ${document.version}`,
+    `Type: ${document.type} / Status: ${document.status}`,
+    `Linked record: ${document.linkedTo}`,
+    `Issued: ${document.issueDate ?? new Date().toISOString().slice(0, 10)}`,
+    `Owner: ${document.owner}`,
+    `Checksum: ${document.checksum}`,
+    'Generated from controlled workspace data. Review and approve before external use.',
+  ]
+  const stream = lines.map((line, index) => `BT /F1 ${index === 0 ? 16 : 10} Tf 54 ${760 - index * 38} Td (${safe(line)}) Tj ET`).join('\n')
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+  ]
+  let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n'
+  const offsets = [0]
+  objects.forEach((object, index) => {
+    offsets.push(new TextEncoder().encode(pdf).byteLength)
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
+  })
+  const xrefOffset = new TextEncoder().encode(pdf).byteLength
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  offsets.slice(1).forEach((offset) => { pdf += `${String(offset).padStart(10, '0')} 00000 n \n` })
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+  return new TextEncoder().encode(pdf)
 }
 
 function readString(value: unknown, fallback: string) {
@@ -1929,6 +2222,7 @@ type FormulaVersionRecordRow = {
 
 type DocumentRecordRow = {
   id: string
+  organization_id: string | null
   type: string
   title: string
   linked_to: string
@@ -1945,6 +2239,7 @@ type DocumentRecordRow = {
   checksum: string
   owner: string
   generated_from: string | null
+  record_json: string | null
 }
 
 type ProductionBatchRow = {
@@ -2245,6 +2540,10 @@ type InventoryLotRow = {
   container: string | null
   packaging: string | null
   coa_document_id: string | null
+  in_transit_from_location: string | null
+  in_transit_to_location: string | null
+  transfer_started_at: string | null
+  transfer_started_by: string | null
 }
 
 type InventoryMovementRow = {
@@ -3520,7 +3819,8 @@ async function hydrateDocumentState(db: D1Database, serviceState: ServiceState) 
   const documentRows = await db
     .prepare(
       `SELECT id, type, title, linked_to, version, sensitivity, status, issue_date, expires_at,
-        last_accessed, downloads, storage_key, mime_type, size_kb, checksum, owner, generated_from
+        last_accessed, downloads, storage_key, mime_type, size_kb, checksum, owner, generated_from,
+        organization_id, record_json
        FROM document_records
        ORDER BY last_accessed DESC, id DESC`,
     )
@@ -3545,9 +3845,9 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
           `INSERT INTO document_records (
             id, type, title, linked_to, version, sensitivity, status, issue_date, expires_at,
             last_accessed, downloads, storage_key, mime_type, size_kb, checksum, owner,
-            generated_from, updated_at
+            generated_from, organization_id, record_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
           ON CONFLICT(id) DO UPDATE SET
             type = excluded.type,
             title = excluded.title,
@@ -3565,6 +3865,8 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
             checksum = excluded.checksum,
             owner = excluded.owner,
             generated_from = excluded.generated_from,
+            organization_id = excluded.organization_id,
+            record_json = excluded.record_json,
             updated_at = excluded.updated_at`,
         )
         .bind(
@@ -3585,6 +3887,8 @@ async function persistDocumentRecords(db: D1Database, documents: DocumentRecord[
           document.checksum,
           document.owner,
           document.generatedFrom ?? null,
+          document.organizationId ?? 'org-nxl',
+          JSON.stringify(document),
           updatedAt,
         ),
     ),
@@ -4818,7 +5122,8 @@ async function hydrateInventoryState(db: D1Database, serviceState: ServiceState)
     .prepare(
       `SELECT id, organization_id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
         quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
-        shelf_life_after_opening_days, container, packaging, coa_document_id
+        shelf_life_after_opening_days, container, packaging, coa_document_id, in_transit_from_location,
+        in_transit_to_location, transfer_started_at, transfer_started_by
        FROM inventory_lots
        ORDER BY received_date DESC, id DESC`,
     )
@@ -4875,9 +5180,10 @@ async function persistInventoryLots(db: D1Database, lots: InventoryLot[], update
           `INSERT INTO inventory_lots (
             id, organization_id, material_id, lot_number, quantity_grams, reserved_grams, received_date, expiry_date,
             quality_status, location, unit_cost, supplier_lot_ref, currency, retest_date, opened_date,
-            shelf_life_after_opening_days, container, packaging, coa_document_id, updated_at
+            shelf_life_after_opening_days, container, packaging, coa_document_id, in_transit_from_location,
+            in_transit_to_location, transfer_started_at, transfer_started_by, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
           ON CONFLICT(id) DO UPDATE SET
             organization_id = excluded.organization_id,
             material_id = excluded.material_id,
@@ -4897,6 +5203,10 @@ async function persistInventoryLots(db: D1Database, lots: InventoryLot[], update
             container = excluded.container,
             packaging = excluded.packaging,
             coa_document_id = excluded.coa_document_id,
+            in_transit_from_location = excluded.in_transit_from_location,
+            in_transit_to_location = excluded.in_transit_to_location,
+            transfer_started_at = excluded.transfer_started_at,
+            transfer_started_by = excluded.transfer_started_by,
             updated_at = excluded.updated_at`,
         )
         .bind(
@@ -4919,6 +5229,10 @@ async function persistInventoryLots(db: D1Database, lots: InventoryLot[], update
           lot.container ?? null,
           lot.packaging ?? null,
           lot.coaDocumentId ?? null,
+          lot.inTransitFromLocation ?? null,
+          lot.inTransitToLocation ?? null,
+          lot.transferStartedAt ?? null,
+          lot.transferStartedBy ?? null,
           updatedAt,
         ),
     ),
@@ -5248,8 +5562,11 @@ function formulaVersionFromRow(row: FormulaVersionRecordRow): FormulaVersionReco
 }
 
 function documentFromRow(row: DocumentRecordRow): DocumentRecord {
+  const record = parseJsonOptional<DocumentRecord>(row.record_json)
   return {
+    ...record,
     id: row.id,
+    organizationId: row.organization_id ?? record?.organizationId ?? 'org-nxl',
     type: readDocumentType(row.type),
     title: row.title,
     linkedTo: row.linked_to,
@@ -5647,6 +5964,10 @@ function inventoryLotFromRow(row: InventoryLotRow): InventoryLot {
     container: row.container ?? undefined,
     packaging: row.packaging ?? undefined,
     coaDocumentId: row.coa_document_id ?? undefined,
+    inTransitFromLocation: row.in_transit_from_location ?? undefined,
+    inTransitToLocation: row.in_transit_to_location ?? undefined,
+    transferStartedAt: row.transfer_started_at ?? undefined,
+    transferStartedBy: row.transfer_started_by ?? undefined,
   }
 }
 
@@ -5850,7 +6171,15 @@ function readDocumentSensitivity(value: string): DocumentRecord['sensitivity'] {
 }
 
 function readDocumentStatus(value: string): DocumentRecord['status'] {
-  if (value === 'APPROVED' || value === 'REVIEW_REQUIRED' || value === 'EXPIRING' || value === 'EXPIRED' || value === 'SHARED') {
+  if (
+    value === 'QUARANTINED' ||
+    value === 'APPROVED' ||
+    value === 'REVIEW_REQUIRED' ||
+    value === 'EXPIRING' ||
+    value === 'EXPIRED' ||
+    value === 'SHARED' ||
+    value === 'ARCHIVED'
+  ) {
     return value
   }
   return 'REVIEW_REQUIRED'
@@ -6041,7 +6370,8 @@ function readInventoryMovementType(value: string): InventoryMovement['type'] {
     value === 'PRODUCTION_CONSUMPTION' ||
     value === 'FULFILLMENT' ||
     value === 'ADJUSTMENT' ||
-    value === 'TRANSFER'
+    value === 'TRANSFER' ||
+    value === 'WASTE'
   ) {
     return value
   }
