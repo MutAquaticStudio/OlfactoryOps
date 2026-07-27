@@ -43,6 +43,7 @@ import {
   type LabUsageRecord,
   type MembershipRecord,
   type Material,
+  type MaterialComplianceProfile,
   type MoleculeComponent,
   type NumberingSequenceRecord,
   type OrderDocumentRecord,
@@ -50,6 +51,11 @@ import {
   type PriceHistoryRecord,
   type PriceListRecord,
   type ProductionBatchRecord,
+  type ProductionQcResultRecord,
+  type ProductionQcTemplateRecord,
+  type ProductionYieldRecord,
+  type ProcurementReceiptRecord,
+  type LandedCostAllocationRecord,
   type PurchaseOrderRecord,
   type QuoteRecord,
   type RolePolicy,
@@ -62,6 +68,7 @@ import {
   type StockTakeRecord,
   type StorageLocation,
   type SupplierRecord,
+  type SupplierMaterialProfile,
   type TenantSettingsRecord,
   type UserSettingsRecord,
   type WebhookRecord,
@@ -120,6 +127,7 @@ type Route = {
   persistScope?: 'userSettings' | 'mfaVerification'
   rawBody?: boolean
   formData?: boolean
+  idempotent?: boolean
   handler: (context: RouteContext) => unknown
 }
 
@@ -136,8 +144,23 @@ type RateLimitPolicy = {
   message: string
 }
 
+type OperationIdempotencyClaim = {
+  organizationId: string
+  operation: string
+  key: string
+  requestHash: string
+}
+
+type OperationIdempotencyRow = {
+  request_hash: string
+  status: 'PENDING' | 'COMPLETED'
+  response_json: string | null
+}
+
 type SnapshotKey =
   | 'materialRecords'
+  | 'materialComplianceRecords'
+  | 'supplierMaterialProfileRecords'
   | 'moleculeRecords'
   | 'lots'
   | 'movements'
@@ -168,6 +191,11 @@ type SnapshotKey =
   | 'supplierRecords'
   | 'purchaseOrderRecords'
   | 'priceHistoryRecords'
+  | 'procurementReceiptRecords'
+  | 'landedCostAllocationRecords'
+  | 'productionQcTemplateRecords'
+  | 'productionQcResultRecords'
+  | 'productionYieldRecords'
   | 'commercialSkuRecords'
   | 'priceListRecords'
   | 'quoteRecords'
@@ -205,6 +233,8 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   mfaEnrollmentRecords: MfaEnrollmentRecord[]
   rolePolicyRecords: RolePolicy[]
   materialRecords: Material[]
+  materialComplianceRecords: MaterialComplianceProfile[]
+  supplierMaterialProfileRecords: SupplierMaterialProfile[]
   moleculeRecords: MoleculeComponent[]
   locationRecords: StorageLocation[]
   stockTakeRecords: StockTakeRecord[]
@@ -222,6 +252,11 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   supplierRecords: SupplierRecord[]
   purchaseOrderRecords: PurchaseOrderRecord[]
   priceHistoryRecords: PriceHistoryRecord[]
+  procurementReceiptRecords: ProcurementReceiptRecord[]
+  landedCostAllocationRecords: LandedCostAllocationRecord[]
+  productionQcTemplateRecords: ProductionQcTemplateRecord[]
+  productionQcResultRecords: ProductionQcResultRecord[]
+  productionYieldRecords: ProductionYieldRecord[]
   commercialSkuRecords: CommercialSkuRecord[]
   priceListRecords: PriceListRecord[]
   quoteRecords: QuoteRecord[]
@@ -293,6 +328,8 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'membershipRecords',
   'rolePolicyRecords',
   'materialRecords',
+  'materialComplianceRecords',
+  'supplierMaterialProfileRecords',
   'moleculeRecords',
   'locationRecords',
   'stockTakeRecords',
@@ -310,6 +347,11 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'supplierRecords',
   'purchaseOrderRecords',
   'priceHistoryRecords',
+  'procurementReceiptRecords',
+  'landedCostAllocationRecords',
+  'productionQcTemplateRecords',
+  'productionQcResultRecords',
+  'productionYieldRecords',
   'commercialSkuRecords',
   'priceListRecords',
   'quoteRecords',
@@ -341,6 +383,8 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
 ])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
+  'materialComplianceRecords',
+  'supplierMaterialProfileRecords',
   'moleculeRecords',
   'lots',
   'movements',
@@ -371,6 +415,11 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'supplierRecords',
   'purchaseOrderRecords',
   'priceHistoryRecords',
+  'procurementReceiptRecords',
+  'landedCostAllocationRecords',
+  'productionQcTemplateRecords',
+  'productionQcResultRecords',
+  'productionYieldRecords',
   'commercialSkuRecords',
   'priceListRecords',
   'quoteRecords',
@@ -414,6 +463,8 @@ const NORMALIZED_TABLES = [
   'tenant_memberships',
   'role_policies',
   'material_records',
+  'material_compliance_profiles',
+  'supplier_material_profiles',
   'molecule_components',
   'storage_locations',
   'stock_take_records',
@@ -431,6 +482,12 @@ const NORMALIZED_TABLES = [
   'suppliers',
   'purchase_orders',
   'price_history',
+  'procurement_receipts',
+  'landed_cost_allocations',
+  'production_qc_templates',
+  'production_qc_results',
+  'production_yield_records',
+  'operation_idempotency_records',
   'commercial_skus',
   'price_lists',
   'quotes',
@@ -475,6 +532,8 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
   { method: 'GET', pattern: '/materials/:id', handler: ({ service, params }) => service.material(params.id) },
   { method: 'PATCH', pattern: '/materials/:id', mutates: true, handler: ({ service, params, body }) => service.updateMaterial(params.id, body) },
+  { method: 'GET', pattern: '/materials/:id/compliance', handler: ({ service, params }) => service.materialCompliance(params.id) },
+  { method: 'PUT', pattern: '/materials/:id/compliance', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.upsertMaterialCompliance(params.id, body) },
   { method: 'POST', pattern: '/materials/:id/ingest', mutates: true, handler: ({ service, params, body }) => service.ingestMaterialDocument(params.id, body) },
   { method: 'POST', pattern: '/materials/:id/pubchem-fill', mutates: true, handler: ({ service, params }) => service.pubchemFill(params.id) },
   { method: 'GET', pattern: '/materials/:id/molecules', handler: ({ service, params }) => service.materialMolecules(params.id) },
@@ -603,17 +662,31 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/production/batches', handler: ({ service }) => service.productionBatches() },
   { method: 'POST', pattern: '/production/batches', mutates: true, handler: ({ service, body }) => service.createProductionBatch(typeof body.formulaId === 'string' ? body.formulaId : undefined, typeof body.targetGrams === 'number' ? body.targetGrams : undefined) },
   { method: 'POST', pattern: '/production/batches/:id/consume', mutates: true, handler: ({ service, params }) => service.consumeProductionBatch(params.id) },
+  { method: 'GET', pattern: '/production/schedule', handler: ({ service }) => service.productionSchedule() },
+  { method: 'PATCH', pattern: '/production/batches/:id/plan', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.planProductionBatch(params.id, body) },
+  { method: 'GET', pattern: '/production/qc-templates', handler: ({ service }) => service.productionQcTemplates() },
+  { method: 'POST', pattern: '/production/qc-templates', mutates: true, idempotent: true, handler: ({ service, body }) => service.createProductionQcTemplate(body) },
+  { method: 'GET', pattern: '/production/batches/:id/qc/results', handler: ({ service, params }) => service.productionQcResults(params.id) },
+  { method: 'POST', pattern: '/production/batches/:id/qc/results', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.recordProductionQcResult(params.id, body) },
+  { method: 'POST', pattern: '/production/batches/:id/qc/approve', mutates: true, idempotent: true, handler: ({ service, params }) => service.approveProductionQc(params.id) },
+  { method: 'POST', pattern: '/production/batches/:id/yield', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.recordProductionYield(params.id, body) },
   { method: 'POST', pattern: '/production/batches/:id/qc', mutates: true, handler: ({ service, params, body }) => service.qcProductionBatch(params.id, body.result === 'FAILED' ? 'FAILED' : 'PASSED') },
   { method: 'PATCH', pattern: '/production/batches/:id/status', mutates: true, handler: ({ service, params, body }) => service.updateProductionBatchStatus(params.id, readProductionStatus(body.status)) },
   { method: 'GET', pattern: '/production/finished-goods', handler: ({ service }) => service.finishedGoodLots() },
   { method: 'GET', pattern: '/suppliers', handler: ({ service }) => service.suppliers() },
   { method: 'POST', pattern: '/suppliers', mutates: true, handler: ({ service, body }) => service.createSupplier(body) },
+  { method: 'GET', pattern: '/suppliers/:id/material-profiles', handler: ({ service, params }) => service.supplierMaterialProfiles(params.id) },
+  { method: 'PUT', pattern: '/suppliers/:id/material-profiles/:materialId', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.upsertSupplierMaterialProfile(params.id, params.materialId, body) },
   { method: 'POST', pattern: '/procurement/rfq/compare', mutates: true, handler: ({ service, body }) => service.compareSupplierRfq(body) },
   { method: 'POST', pattern: '/procurement/rfq/award', mutates: true, handler: ({ service, body }) => service.awardSupplierRfq(body) },
   { method: 'GET', pattern: '/purchase-orders', handler: ({ service }) => service.purchaseOrders() },
   { method: 'POST', pattern: '/purchase-orders', mutates: true, handler: ({ service, body }) => service.createPurchaseOrder(body) },
   { method: 'PATCH', pattern: '/purchase-orders/:id/status', mutates: true, handler: ({ service, params, body }) => service.updatePurchaseOrderStatus(params.id, readPurchaseOrderStatus(body.status)) },
   { method: 'POST', pattern: '/purchase-orders/:id/receive', mutates: true, handler: ({ service, params, body }) => service.receivePurchaseOrder(params.id, body) },
+  { method: 'GET', pattern: '/procurement/receipts', handler: ({ service }) => service.procurementReceipts() },
+  { method: 'POST', pattern: '/purchase-orders/:id/receipts', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.createProcurementReceipt(params.id, body) },
+  { method: 'POST', pattern: '/procurement/receipts/:id/landed-cost', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.postProcurementLandedCost(params.id, body) },
+  { method: 'POST', pattern: '/procurement/receipts/:id/inspect', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.inspectProcurementReceipt(params.id, body) },
   { method: 'GET', pattern: '/catalog/skus', handler: ({ service }) => service.catalogSkus() },
   { method: 'POST', pattern: '/catalog/skus', mutates: true, handler: ({ service, body }) => service.createCatalogSku(body) },
   { method: 'GET', pattern: '/price-lists', handler: ({ service }) => service.priceLists() },
@@ -643,6 +716,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/costing/skus/:id', handler: ({ service, params }) => service.costingSku(params.id) },
   { method: 'GET', pattern: '/costing/valuation', handler: ({ service }) => service.costingValuation() },
   { method: 'GET', pattern: '/analytics/dashboard', handler: ({ service }) => service.analyticsDashboard() },
+  { method: 'GET', pattern: '/analytics/operations', handler: ({ service }) => service.operationalAnalytics() },
   { method: 'GET', pattern: '/analytics/burn-rate', handler: ({ service }) => service.analyticsBurnRate() },
   { method: 'GET', pattern: '/analytics/low-stock-forecast', handler: ({ service }) => service.analyticsLowStockForecast() },
   { method: 'GET', pattern: '/analytics/expiry-risk', handler: ({ service }) => service.analyticsExpiryRisk() },
@@ -692,6 +766,8 @@ export default {
     let service: NorthStarService | undefined
     let skipSecurityPersistence = false
     let mfaVerificationRequest = false
+    let idempotencyClaim: OperationIdempotencyClaim | undefined
+    let mutationPersisted = false
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: buildApiSecurityHeaders(corsHeaders) })
@@ -754,6 +830,28 @@ export default {
       if (match.route.limitKey) {
         service.assertPlanCapacity(match.route.limitKey)
       }
+      if (match.route.idempotent) {
+        const key = request.headers.get('Idempotency-Key')?.trim()
+        if (!key || key.length < 8 || key.length > 160) {
+          throw new UnprocessableEntityException('Idempotency-Key header must be between 8 and 160 characters')
+        }
+        const session = (service as unknown as ServiceState).sessions.find((item) => item.id === credential.sessionId)
+        if (!session) {
+          throw new UnauthorizedException('Authentication required')
+        }
+        const operation = `${request.method} ${match.route.pattern}`
+        const requestHash = await operationRequestHash(request.method, path, body)
+        const claim = await claimOperationIdempotency(env.DB, {
+          organizationId: session.organizationId,
+          operation,
+          key,
+          requestHash,
+        })
+        if ('response' in claim) {
+          return json(claim.response, 200, buildResponseHeaders(corsHeaders, match.route, claim.response))
+        }
+        idempotencyClaim = claim
+      }
       const previousMfaEnrollments =
         match.route.persistScope === 'mfaVerification'
           ? structuredClone((service as unknown as ServiceState).mfaEnrollmentRecords)
@@ -789,6 +887,10 @@ export default {
           await persistSnapshots(env.DB, service)
           refreshSnapshotCache = true
         }
+        mutationPersisted = true
+      }
+      if (idempotencyClaim && !(result instanceof Response)) {
+        await completeOperationIdempotency(env.DB, idempotencyClaim, result)
       }
       if (refreshSnapshotCache) {
         refreshCachedSnapshotState(service)
@@ -804,6 +906,9 @@ export default {
       }
       return response
     } catch (error) {
+      if (idempotencyClaim && !mutationPersisted) {
+        await abandonOperationIdempotency(env.DB, idempotencyClaim).catch((idempotencyError) => console.error(idempotencyError))
+      }
       const candidate = error as {
         getStatus?: () => number
         status?: number
@@ -1491,6 +1596,68 @@ function formDataString(formData: FormData, name: string) {
 async function sha256ForArrayBuffer(value: ArrayBuffer) {
   const digest = await crypto.subtle.digest('SHA-256', value)
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+async function operationRequestHash(method: string, path: string, body: Record<string, unknown>) {
+  const payload = new TextEncoder().encode(JSON.stringify(['olfactoryops.operation-idempotency.v1', method, path, body]))
+  const digest = await crypto.subtle.digest('SHA-256', payload)
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function claimOperationIdempotency(db: D1Database, claim: OperationIdempotencyClaim) {
+  const id = `OPID-${crypto.randomUUID()}`
+  const now = new Date().toISOString()
+  const inserted = await db
+    .prepare(
+      `INSERT OR IGNORE INTO operation_idempotency_records (
+        id, organization_id, operation, idempotency_key, request_hash, status, created_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, 'PENDING', ?6)`,
+    )
+    .bind(id, claim.organizationId, claim.operation, claim.key, claim.requestHash, now)
+    .run()
+  if ((inserted.meta.changes ?? 0) === 1) return claim
+
+  const existing = await db
+    .prepare(
+      `SELECT request_hash, status, response_json
+       FROM operation_idempotency_records
+       WHERE organization_id = ?1 AND operation = ?2 AND idempotency_key = ?3`,
+    )
+    .bind(claim.organizationId, claim.operation, claim.key)
+    .first<OperationIdempotencyRow>()
+  if (!existing || existing.request_hash !== claim.requestHash) {
+    throw new UnprocessableEntityException('Idempotency-Key cannot be reused with a different request payload')
+  }
+  if (existing.status !== 'COMPLETED' || !existing.response_json) {
+    throw new UnprocessableEntityException('An operation with this Idempotency-Key is still processing; retry shortly')
+  }
+  return { response: JSON.parse(existing.response_json) as unknown }
+}
+
+async function completeOperationIdempotency(db: D1Database, claim: OperationIdempotencyClaim, response: unknown) {
+  const result = await db
+    .prepare(
+      `UPDATE operation_idempotency_records
+       SET status = 'COMPLETED', response_json = ?1, completed_at = ?2
+       WHERE organization_id = ?3 AND operation = ?4 AND idempotency_key = ?5
+         AND request_hash = ?6 AND status = 'PENDING'`,
+    )
+    .bind(JSON.stringify(response), new Date().toISOString(), claim.organizationId, claim.operation, claim.key, claim.requestHash)
+    .run()
+  if ((result.meta.changes ?? 0) !== 1) {
+    throw new UnprocessableEntityException('Unable to finalize idempotent operation')
+  }
+}
+
+async function abandonOperationIdempotency(db: D1Database, claim: OperationIdempotencyClaim) {
+  await db
+    .prepare(
+      `DELETE FROM operation_idempotency_records
+       WHERE organization_id = ?1 AND operation = ?2 AND idempotency_key = ?3
+         AND request_hash = ?4 AND status = 'PENDING'`,
+    )
+    .bind(claim.organizationId, claim.operation, claim.key, claim.requestHash)
+    .run()
 }
 
 async function handleDocumentUpload(service: NorthStarService, env: Env, formData: FormData | undefined) {
@@ -2797,6 +2964,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   await hydrateTenantCoreState(db, serviceState)
   await ensureSeededAdminBootstrap(db, serviceState, env.SEEDED_ADMIN_PASSWORD_HASH)
   await hydrateMaterialState(db, serviceState)
+  await hydrateOperationalP1State(db, serviceState)
   await hydrateFormulaState(db, serviceState)
   await hydrateCustomizationState(db, serviceState)
   await hydrateDocumentState(db, serviceState)
@@ -2820,6 +2988,7 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistEnterpriseGovernanceState(db, serviceState, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
+  await persistOperationalP1State(db, serviceState, updatedAt)
   await persistFormulaState(db, serviceState, updatedAt)
   await persistCustomizationState(db, serviceState, updatedAt)
   await persistDocumentRecords(db, serviceState.documentRecords, updatedAt)
@@ -3675,6 +3844,72 @@ async function persistMaterialState(db: D1Database, serviceState: ServiceState, 
   await persistMolecules(db, serviceState.moleculeRecords, updatedAt)
   await persistStorageLocations(db, serviceState.locationRecords, updatedAt)
   await persistStockTakes(db, serviceState.stockTakeRecords, updatedAt)
+}
+
+async function hydrateOperationalP1State(db: D1Database, serviceState: ServiceState) {
+  const rows = await Promise.all([
+    db.prepare('SELECT record_json FROM material_compliance_profiles ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM supplier_material_profiles ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM procurement_receipts ORDER BY created_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM landed_cost_allocations ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM production_qc_templates ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM production_qc_results ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT record_json FROM production_yield_records ORDER BY updated_at DESC').all<JsonStateRow>(),
+  ])
+  serviceState.materialComplianceRecords = (rows[0].results ?? []).map((row) => parseJsonOptional<MaterialComplianceProfile>(row.record_json)).filter(isDefined)
+  serviceState.supplierMaterialProfileRecords = (rows[1].results ?? []).map((row) => parseJsonOptional<SupplierMaterialProfile>(row.record_json)).filter(isDefined)
+  serviceState.procurementReceiptRecords = (rows[2].results ?? []).map((row) => parseJsonOptional<ProcurementReceiptRecord>(row.record_json)).filter(isDefined)
+  serviceState.landedCostAllocationRecords = (rows[3].results ?? []).map((row) => parseJsonOptional<LandedCostAllocationRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionQcTemplateRecords = (rows[4].results ?? []).map((row) => parseJsonOptional<ProductionQcTemplateRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionQcResultRecords = (rows[5].results ?? []).map((row) => parseJsonOptional<ProductionQcResultRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionYieldRecords = (rows[6].results ?? []).map((row) => parseJsonOptional<ProductionYieldRecord>(row.record_json)).filter(isDefined)
+}
+
+async function persistOperationalP1State(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await Promise.all([
+    persistOperationalP1RecordSet(db, 'material_compliance_profiles', serviceState.materialComplianceRecords, (record) => record.materialId, (record) => record.status, updatedAt, (record) => record.reviewedAt),
+    persistOperationalP1RecordSet(db, 'supplier_material_profiles', serviceState.supplierMaterialProfileRecords, (record) => `${record.supplierId}:${record.materialId}`, (record) => record.status, updatedAt, (record) => record.reviewedAt),
+    persistOperationalP1RecordSet(db, 'procurement_receipts', serviceState.procurementReceiptRecords, (record) => record.purchaseOrderId, (record) => record.status, updatedAt, (record) => record.receivedAt),
+    persistOperationalP1RecordSet(db, 'landed_cost_allocations', serviceState.landedCostAllocationRecords, (record) => record.receiptId, () => 'POSTED', updatedAt, (record) => record.postedAt),
+    persistOperationalP1RecordSet(db, 'production_qc_templates', serviceState.productionQcTemplateRecords, (record) => record.formulaId ?? 'workspace', (record) => record.status, updatedAt, (record) => record.updatedAt),
+    persistOperationalP1RecordSet(db, 'production_qc_results', serviceState.productionQcResultRecords, (record) => record.batchId, (record) => record.status, updatedAt, (record) => record.recordedAt),
+    persistOperationalP1RecordSet(db, 'production_yield_records', serviceState.productionYieldRecords, (record) => record.batchId, (record) => record.status, updatedAt, (record) => record.recordedAt),
+  ])
+}
+
+async function persistOperationalP1RecordSet<T extends { id: string; organizationId?: string }>(
+  db: D1Database,
+  table: string,
+  records: T[],
+  entityId: (record: T) => string,
+  status: (record: T) => string,
+  updatedAt: string,
+  createdAt: (record: T) => string,
+) {
+  if (!Array.isArray(records) || records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO ${table} (id, organization_id, entity_id, status, record_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+           organization_id = excluded.organization_id,
+           entity_id = excluded.entity_id,
+           status = excluded.status,
+           record_json = excluded.record_json,
+           updated_at = excluded.updated_at`,
+      ).bind(
+        record.id,
+        record.organizationId ?? 'org-nxl',
+        entityId(record),
+        status(record),
+        JSON.stringify(record),
+        createdAt(record),
+        updatedAt,
+      ),
+    ),
+  )
 }
 
 async function persistMaterials(db: D1Database, materials: Material[], updatedAt: string) {

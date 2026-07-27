@@ -154,6 +154,7 @@ import {
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
+  type MaterialComplianceProfile,
   type MembershipRecord,
   type MoleculeComponent,
   type NumberingSequenceRecord,
@@ -162,6 +163,12 @@ import {
   type PriceHistoryRecord,
   type PriceListRecord,
   type ProductionBatchRecord,
+  type ProductionQcResultRecord,
+  type ProductionQcTemplateRecord,
+  type ProductionYieldRecord,
+  type ProcurementReceiptRecord,
+  type LandedCostAllocationRecord,
+  type OperationalAnalyticsReport,
   type PurchaseOrderLineItem,
   type PurchaseOrderRecord,
   type QuoteRecord,
@@ -563,14 +570,56 @@ type DocumentVersionsResponse = {
   invariant: string
 }
 
-type PurchaseOrderReceiptResponse = {
-  lot: InventoryLot
-  movement: InventoryMovement
+type MaterialComplianceResponse = {
+  profile: MaterialComplianceProfile
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementReceiptCreateResponse = {
+  receipt: ProcurementReceiptRecord
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
   purchaseOrder: PurchaseOrderRecord
-  priceHistory: PriceHistoryRecord
-  lots?: InventoryLot[]
-  movements?: InventoryMovement[]
-  priceHistoryRecords?: PriceHistoryRecord[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementLandedCostResponse = {
+  allocation: LandedCostAllocationRecord
+  receipt: ProcurementReceiptRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementInspectionResponse = {
+  receipt: ProcurementReceiptRecord
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcTemplateResponse = {
+  template: ProductionQcTemplateRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcResultResponse = {
+  result: ProductionQcResultRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcApprovalResponse = {
+  batch: ProductionBatchRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionYieldResponse = {
+  record: ProductionYieldRecord
   audit: AuditEvent
   invariant: string
 }
@@ -1260,6 +1309,12 @@ async function digestImportRows(rows: Array<Record<string, unknown>>) {
 }
 
 let csrfToken: string | null = null
+
+function idempotencyHeaders(headers?: HeadersInit) {
+  const next = new Headers(headers)
+  next.set('Idempotency-Key', crypto.randomUUID())
+  return next
+}
 
 async function requestApi<T>(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
@@ -4629,6 +4684,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
         <ProcurementWorkspace
           stock={stock}
           materialRecords={materialRecords}
+          session={session}
           onLotsChange={onLotsChange}
           onMovementsChange={onMovementsChange}
         />
@@ -4706,8 +4762,21 @@ function MaterialWorkspace({
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
+  const [compliance, setCompliance] = useState<MaterialComplianceProfile | null>(null)
+  const [complianceSaving, setComplianceSaving] = useState(false)
+  const [complianceDraft, setComplianceDraft] = useState({
+    status: 'REVIEW_REQUIRED' as MaterialComplianceProfile['status'],
+    category: 'IFRA Category 4',
+    limitPercent: 100,
+    allergens: '',
+    euUkFlags: '',
+    source: '',
+    sourceVersion: 'v1',
+    note: '',
+  })
   const canCreateMaterials = sessionHasPermission(session, 'materials.create')
   const canUpdateMaterials = sessionHasPermission(session, 'materials.update')
+  const canManageCompliance = session.role === 'Owner' || session.role === 'Admin'
   const [createName, setCreateName] = useState('Vetiveryl Acetate')
   const [createCas, setCreateCas] = useState('68917-34-0')
   const [createFamily, setCreateFamily] = useState('Woody vetiver')
@@ -4794,6 +4863,37 @@ function MaterialWorkspace({
       active = false
     }
   }, [selected])
+
+  useEffect(() => {
+    let active = true
+    async function loadCompliance() {
+      try {
+        const profile = await requestApi<MaterialComplianceProfile | undefined>(
+          `/materials/${encodeURIComponent(selected.id)}/compliance`,
+        )
+        if (!active) return
+        setCompliance(profile ?? null)
+        setComplianceDraft({
+          status: profile?.status ?? 'REVIEW_REQUIRED',
+          category: profile?.ifraCategoryLimits[0]?.category ?? 'IFRA Category 4',
+          limitPercent: profile?.ifraCategoryLimits[0]?.limitPercent ?? selected.ifraLimit,
+          allergens: (profile?.allergens ?? []).map((allergen) => allergen.name).join(', '),
+          euUkFlags: (profile?.euUkFlags ?? []).join(', '),
+          source: profile?.source ?? '',
+          sourceVersion: profile?.sourceVersion ?? 'v1',
+          note: profile?.note ?? '',
+        })
+      } catch {
+        if (active) {
+          setCompliance(null)
+        }
+      }
+    }
+    void loadCompliance()
+    return () => {
+      active = false
+    }
+  }, [selected.id, selected.ifraLimit])
 
   function upsertMaterial(nextMaterial: Material) {
     const exists = materialRecords.some((material) => material.id === nextMaterial.id)
@@ -5042,6 +5142,40 @@ function MaterialWorkspace({
     }
   }
 
+  async function saveComplianceProfile() {
+    if (!canManageCompliance) {
+      setMaterialStatus('Only an Owner or Admin can save material compliance policy.')
+      return
+    }
+    const limitPercent = Number(complianceDraft.limitPercent)
+    if (!complianceDraft.category.trim() || !Number.isFinite(limitPercent) || limitPercent < 0 || limitPercent > 100) {
+      setMaterialStatus('Compliance needs an IFRA category and a limit between 0 and 100.')
+      return
+    }
+    setComplianceSaving(true)
+    try {
+      const payload = await requestApi<MaterialComplianceResponse>(`/materials/${encodeURIComponent(selected.id)}/compliance`, {
+        method: 'PUT',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          status: complianceDraft.status,
+          ifraCategoryLimits: [{ category: complianceDraft.category.trim(), limitPercent }],
+          allergens: complianceDraft.allergens.split(',').map((name) => name.trim()).filter(Boolean).map((name) => ({ name })),
+          euUkFlags: complianceDraft.euUkFlags.split(',').map((flag) => flag.trim()).filter(Boolean),
+          source: complianceDraft.source.trim() || 'Manual compliance review',
+          sourceVersion: complianceDraft.sourceVersion.trim() || 'v1',
+          note: complianceDraft.note.trim() || undefined,
+        }),
+      })
+      setCompliance(payload.profile)
+      setMaterialStatus(`${selected.name} compliance is ${payload.profile.status}`)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Compliance policy update failed')
+    } finally {
+      setComplianceSaving(false)
+    }
+  }
+
   return (
     <div className="workspace-grid material-intelligence-grid">
       <Panel title="Material Library" icon={Atom}>
@@ -5279,6 +5413,64 @@ function MaterialWorkspace({
           >
             {pubChemSaving ? 'Filling...' : 'PubChem fill'}
           </button>
+        </div>
+      </Panel>
+
+      <Panel
+        title="Compliance Profile"
+        icon={ShieldCheck}
+        right={<StatusBadge status={compliance?.status === 'APPROVED' ? 'stable' : compliance?.status === 'BLOCKED' ? 'alert' : 'review'} label={compliance?.status ?? 'NOT CONFIGURED'} />}
+      >
+        <p className="muted-copy">
+          IFRA and EU/UK evidence is scoped to this material. This is an operational control, not a legal determination.
+        </p>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Disposition</span>
+            <select
+              value={complianceDraft.status}
+              disabled={!canManageCompliance}
+              onChange={(event) => setComplianceDraft((current) => ({ ...current, status: event.target.value as MaterialComplianceProfile['status'] }))}
+            >
+              <option value="APPROVED">Approved</option>
+              <option value="REVIEW_REQUIRED">Review required</option>
+              <option value="BLOCKED">Blocked</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>IFRA category</span>
+            <input value={complianceDraft.category} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, category: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>IFRA limit %</span>
+            <input min={0} max={100} step={0.01} type="number" value={complianceDraft.limitPercent} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, limitPercent: Number(event.target.value) }))} />
+          </label>
+          <label className="field-row">
+            <span>Evidence source</span>
+            <input value={complianceDraft.source} placeholder="Supplier SDS / IFRA certificate" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, source: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Source version</span>
+            <input value={complianceDraft.sourceVersion} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, sourceVersion: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>EU / UK flags</span>
+            <input value={complianceDraft.euUkFlags} placeholder="EU allergen disclosure, UK retained law" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, euUkFlags: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>Declared allergens</span>
+            <input value={complianceDraft.allergens} placeholder="Limonene, Linalool" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, allergens: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>Review note</span>
+            <input value={complianceDraft.note} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, note: event.target.value }))} />
+          </label>
+        </div>
+        <div className="action-row">
+          <button className="primary-button small" type="button" onClick={() => void saveComplianceProfile()} disabled={!canManageCompliance || complianceSaving}>
+            {complianceSaving ? 'Saving...' : 'Save compliance'}
+          </button>
+          {compliance ? <DataTag label="Reviewed" value={new Date(compliance.reviewedAt).toLocaleDateString()} tone="blue" /> : <span className="muted-copy">No compliance profile configured.</span>}
         </div>
       </Panel>
 
@@ -10195,167 +10387,6 @@ function canMoveProductionBatch(batch: ProductionBatchRecord, status: Production
   return !(status === 'BOTTLING' || status === 'RELEASED') || batch.qcStatus === 'PASSED'
 }
 
-type ProductionLifecycleFallback = {
-  batch: ProductionBatchRecord
-  message: string
-  changed: boolean
-}
-
-type ProductionConsumeFallback = ProductionLifecycleFallback & {
-  movement?: InventoryMovement
-}
-
-function isApprovalPendingMessage(message: string) {
-  return message.toLowerCase().includes('pending approval')
-}
-
-function updateProductionWorkOrderStep(
-  workOrder: ProductionBatchRecord['workOrder'],
-  label: string,
-  status: ProductionBatchRecord['workOrder']['steps'][number]['status'],
-  evidence: string,
-): ProductionBatchRecord['workOrder'] {
-  return {
-    ...workOrder,
-    steps: workOrder.steps.map((step) => (step.label === label ? { ...step, status, evidence } : step)),
-  }
-}
-
-function releaseProductionBatchLocal(batch: ProductionBatchRecord): ProductionBatchRecord {
-  if (batch.outputLot) {
-    return batch
-  }
-
-  const releasedAt = new Date().toISOString()
-  const yieldGrams = Number((batch.consumedGrams * 0.985).toFixed(3))
-  const yieldVariancePercent = Number((((yieldGrams - batch.targetGrams) / batch.targetGrams) * 100).toFixed(2))
-  const outputLot = {
-    id: `FG-${batch.id}`,
-    lotNumber: `FG-${batch.id}`,
-    formulaId: batch.formulaId,
-    quantityGrams: yieldGrams,
-    qualityStatus: 'RELEASED' as const,
-    releasedAt,
-  }
-
-  return {
-    ...batch,
-    yieldGrams,
-    yieldVariancePercent,
-    outputLot,
-    genealogy: {
-      ...batch.genealogy,
-      outputLotId: outputLot.id,
-    },
-    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'DONE', outputLot.id),
-  }
-}
-
-function applyProductionLifecycleLocal(
-  batch: ProductionBatchRecord,
-  status: ProductionBatchRecord['status'],
-): ProductionLifecycleFallback {
-  if (!productionLifecycle.includes(status)) {
-    return { batch, changed: false, message: `${status} is not a supported lifecycle gate` }
-  }
-  if (!canMoveProductionBatch(batch, status)) {
-    return { batch, changed: false, message: `${batch.id} cannot move from ${batch.status} to ${status}` }
-  }
-  if (status === 'WEIGHING' && batch.consumedGrams > 0) {
-    return { batch, changed: false, message: `${batch.id} cannot return to weighing after consumption` }
-  }
-  if (productionConsumptionRequiredStatuses.has(status) && batch.consumedGrams <= 0) {
-    return { batch, changed: false, message: `${batch.id} must consume inventory before ${status}` }
-  }
-  if (status === 'RELEASED' && batch.qcStatus !== 'PASSED') {
-    return { batch, changed: false, message: `${batch.id} must pass QC before release` }
-  }
-
-  let next: ProductionBatchRecord = { ...batch, status }
-  if (status === 'MACERATION') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(
-        next.workOrder,
-        'Weigh raw materials',
-        batch.consumedGrams > 0 ? 'DONE' : 'READY',
-        batch.consumedGrams > 0 ? 'Input weighed' : 'Maceration gate selected',
-      ),
-    }
-  }
-  if (status === 'FILTRATION') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Maceration hold', 'DONE', 'Filtration gate selected'),
-    }
-  }
-  if (status === 'QC' || status === 'BOTTLING') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Filter and bottle', 'READY', `${status} gate selected`),
-    }
-  }
-  if (status === 'RELEASED') {
-    next = releaseProductionBatchLocal(next)
-  }
-
-  return { batch: next, changed: true, message: `${batch.id} moved to ${next.status}` }
-}
-
-function applyProductionQcLocal(batch: ProductionBatchRecord, result: 'PASSED' | 'FAILED'): ProductionLifecycleFallback {
-  const timestamp = new Date().toISOString()
-  const status = result === 'PASSED' ? 'QC' : 'HOLD'
-  const updated: ProductionBatchRecord = {
-    ...batch,
-    status,
-    qcStatus: result,
-    qcChecks: batch.qcChecks.map((check) => ({
-      ...check,
-      result,
-      recordedAt: timestamp,
-      note: result === 'PASSED' ? 'Within production release tolerance' : 'Deviation review required',
-    })),
-    workOrder:
-      result === 'PASSED'
-        ? updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'READY', 'QC passed')
-        : batch.workOrder,
-  }
-  return { batch: updated, changed: true, message: `${batch.id} QC ${result}; status is now ${updated.status}` }
-}
-
-function applyProductionConsumeLocal(batch: ProductionBatchRecord): ProductionConsumeFallback {
-  if (batch.consumedGrams > 0) {
-    return { batch, changed: false, message: `${batch.id} has already consumed inventory` }
-  }
-
-  const timestamp = new Date().toISOString()
-  const movement: InventoryMovement = {
-    id: `MOV-PROD-${batch.id}-LOCAL`,
-    at: timestamp,
-    type: 'PRODUCTION_CONSUMPTION',
-    direction: 'OUT',
-    materialId: batch.formulaId,
-    lotId: `LOCAL-${batch.id}`,
-    quantityGrams: batch.targetGrams,
-    balanceAfter: 0,
-    ref: batch.id,
-    actor: 'local-production-fallback',
-  }
-  const updated: ProductionBatchRecord = {
-    ...batch,
-    consumedGrams: batch.targetGrams,
-    status: 'MACERATION',
-    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Weigh raw materials', 'DONE', movement.id),
-    genealogy: {
-      ...batch.genealogy,
-      inputLotIds: [movement.lotId],
-      inputMovementIds: [movement.id],
-    },
-  }
-
-  return { batch: updated, changed: true, movement, message: `${batch.id} consumed in local production preview` }
-}
-
 function ProductionWorkspace({
   formulaRecords,
   materialRecords,
@@ -10377,9 +10408,17 @@ function ProductionWorkspace({
   const [creating, setCreating] = useState(false)
   const [lastMovements, setLastMovements] = useState<InventoryMovement[]>([])
   const [activeBatchId, setActiveBatchId] = useState('')
+  const [qcTemplates, setQcTemplates] = useState<ProductionQcTemplateRecord[]>([])
+  const [qcResults, setQcResults] = useState<ProductionQcResultRecord[]>([])
+  const [qcObserved, setQcObserved] = useState<Record<string, string>>({})
+  const [scheduleDraft, setScheduleDraft] = useState({ scheduledStartAt: '', dueAt: '', equipment: '' })
+  const [yieldDraft, setYieldDraft] = useState({ yieldGrams: 0, wasteGrams: 0, laborCost: 0, overheadCost: 0 })
   const activeBatch = batches.find((batch) => batch.id === activeBatchId) ?? batches[0]
   const canManageProduction = sessionHasPermission(session, 'production.consume')
   const canRecordProductionQc = sessionHasPermission(session, 'production.qc')
+  const canApproveProductionQc = session.role === 'Owner' || session.role === 'Admin' || session.role === 'Lab Manager' || session.role === 'Manager'
+  const activeQcTemplate = qcTemplates.find((template) => template.id === activeBatch?.qcTemplateId)
+  const selectedFormulaHasQcTemplate = qcTemplates.some((template) => template.status === 'ACTIVE' && template.formulaId === selectedFormulaId)
 
   const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
     const leaves = resolveFormulaWithCatalog(batch.formulaId, formulaRecords, materialRecords)
@@ -10406,6 +10445,20 @@ function ProductionWorkspace({
   }, [loadBatches])
 
   useEffect(() => {
+    let active = true
+    void requestApi<ProductionQcTemplateRecord[]>('/production/qc-templates')
+      .then((templates) => {
+        if (active) setQcTemplates(templates)
+      })
+      .catch(() => {
+        if (active) setQcTemplates([])
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
     setSelectedFormulaId((current) =>
       approvedFormulas.some((formula) => formula.id === current) ? current : (approvedFormulas[0]?.id ?? ''),
     )
@@ -10416,6 +10469,38 @@ function ProductionWorkspace({
       current && batches.some((batch) => batch.id === current) ? current : (batches[0]?.id ?? ''),
     )
   }, [batches])
+
+  useEffect(() => {
+    if (!activeBatch) {
+      setQcResults([])
+      return
+    }
+    let active = true
+    setScheduleDraft({
+      scheduledStartAt: activeBatch.workOrder.scheduledStartAt.slice(0, 16),
+      dueAt: activeBatch.workOrder.dueAt.slice(0, 16),
+      equipment: activeBatch.workOrder.equipment,
+    })
+    setYieldDraft({
+      yieldGrams: activeBatch.yieldGrams || activeBatch.consumedGrams,
+      wasteGrams: Math.max(activeBatch.consumedGrams - (activeBatch.yieldGrams || activeBatch.consumedGrams), 0),
+      laborCost: 0,
+      overheadCost: 0,
+    })
+    void requestApi<ProductionQcResultRecord[]>(`/production/batches/${encodeURIComponent(activeBatch.id)}/qc/results`)
+      .then((results) => {
+        if (active) {
+          setQcResults(results)
+          setQcObserved(Object.fromEntries(results.map((result) => [result.templateCheckId, result.observedValue ?? ''])))
+        }
+      })
+      .catch(() => {
+        if (active) setQcResults([])
+      })
+    return () => {
+      active = false
+    }
+  }, [activeBatch])
 
   async function createBatch() {
     if (!selectedFormulaId) {
@@ -10440,6 +10525,107 @@ function ProductionWorkspace({
     }
   }
 
+  async function createDefaultQcTemplate() {
+    if (!selectedFormulaId) {
+      setStatusMessage('Select an approved formula before creating its QC template')
+      return
+    }
+    setBusyId('qc-template')
+    try {
+      const formula = approvedFormulas.find((item) => item.id === selectedFormulaId)
+      const payload = await requestApi<ProductionQcTemplateResponse>('/production/qc-templates', {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          formulaId: selectedFormulaId,
+          name: `${formula?.name ?? selectedFormulaId} release specification`,
+          checks: [
+            { id: 'appearance', label: 'Appearance', kind: 'TEXT', expectedText: 'Clear', required: true },
+            { id: 'odor-match', label: 'Odor match', kind: 'TEXT', expectedText: 'Pass', required: true },
+            { id: 'fill-weight', label: 'Fill weight', kind: 'NUMERIC', min: 0, required: true, unit: 'g' },
+          ],
+        }),
+      })
+      setQcTemplates((current) => [payload.template, ...current.filter((template) => template.id !== payload.template.id)])
+      setStatusMessage(`${payload.template.name} created; new batches will use structured QC.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC template creation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function planBatch(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionStatusResponse & { conflict?: boolean }>(`/production/batches/${encodeURIComponent(batchId)}/plan`, {
+        method: 'PATCH',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          scheduledStartAt: new Date(scheduleDraft.scheduledStartAt).toISOString(),
+          dueAt: new Date(scheduleDraft.dueAt).toISOString(),
+          equipment: scheduleDraft.equipment,
+        }),
+      })
+      updateBatch(payload.batch)
+      setStatusMessage(payload.conflict ? 'Schedule saved with an equipment overlap warning.' : 'Batch schedule saved without equipment conflicts.')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Batch schedule update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function recordStructuredQcResult(batchId: string, templateCheckId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionQcResultResponse>(`/production/batches/${encodeURIComponent(batchId)}/qc/results`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ templateCheckId, observedValue: qcObserved[templateCheckId] ?? '' }),
+      })
+      setQcResults((current) => [payload.result, ...current.filter((result) => result.id !== payload.result.id)])
+      setStatusMessage(`${payload.result.label}: ${payload.result.status}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC result could not be recorded')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function approveStructuredQc(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionQcApprovalResponse>(`/production/batches/${encodeURIComponent(batchId)}/qc/approve`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+      })
+      updateBatch(payload.batch)
+      setStatusMessage('Structured QC approved. Batch advanced to bottling.')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC approval blocked')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function recordYield(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionYieldResponse>(`/production/batches/${encodeURIComponent(batchId)}/yield`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(yieldDraft),
+      })
+      await loadBatches()
+      setStatusMessage(`Yield reconciled: ${formatGrams(payload.record.yieldGrams)} output and ${formatGrams(payload.record.wasteGrams)} waste.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Yield reconciliation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   async function consumeBatch(batchId: string) {
     setBusyId(batchId)
     setStatusMessage(`Consuming inventory for ${batchId}`)
@@ -10452,15 +10638,7 @@ function ProductionWorkspace({
       setStatusMessage(`${batchId} consumed through ${payload.movements.length} production movement(s)`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Production consumption failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionConsumeLocal(batch) : null
-      if (fallback?.changed && fallback.movement) {
-        setBatches((current) => current.map((batch) => (batch.id === batchId ? fallback.batch : batch)))
-        setLastMovements([fallback.movement])
-        setStatusMessage(`${message}; local preview: ${fallback.message}`)
-      } else {
-        setStatusMessage(fallback?.message ?? message)
-      }
+      setStatusMessage(message)
     } finally {
       setBusyId(null)
     }
@@ -10478,13 +10656,7 @@ function ProductionWorkspace({
       updateBatch(batch)
       setStatusMessage(`${batch.id} QC ${result}; status is now ${batch.status}`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'QC update failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionQcLocal(batch, result) : null
-      if (fallback?.changed) {
-        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
-      }
-      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
+      setStatusMessage(error instanceof Error ? error.message : 'QC update failed')
     } finally {
       setBusyId(null)
     }
@@ -10502,13 +10674,7 @@ function ProductionWorkspace({
       updateBatch(payload.batch)
       setStatusMessage(`${payload.batch.id} moved to ${payload.batch.status}`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Lifecycle update failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionLifecycleLocal(batch, status) : null
-      if (fallback?.changed) {
-        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
-      }
-      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
+      setStatusMessage(error instanceof Error ? error.message : 'Lifecycle update failed')
     } finally {
       setBusyId(null)
     }
@@ -10547,15 +10713,24 @@ function ProductionWorkspace({
             className="primary-button"
             type="button"
             onClick={() => void createBatch()}
-            disabled={creating || targetGrams <= 0 || !selectedFormulaId || !canManageProduction}
-            title={canManageProduction ? undefined : 'Your role cannot create production batches'}
+            disabled={creating || targetGrams <= 0 || !selectedFormulaId || !canManageProduction || !selectedFormulaHasQcTemplate}
+            title={!canManageProduction ? 'Your role cannot create production batches' : !selectedFormulaHasQcTemplate ? 'Create a release QC template before creating a P1 batch' : undefined}
           >
             {creating ? 'Creating' : 'Create batch'}
+          </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void createDefaultQcTemplate()}
+            disabled={busyId === 'qc-template' || !selectedFormulaId || !canApproveProductionQc || selectedFormulaHasQcTemplate}
+          >
+            {selectedFormulaHasQcTemplate ? 'QC template ready' : busyId === 'qc-template' ? 'Creating QC template' : 'Create release QC template'}
           </button>
         </div>
         <ul className="policy-list">
           <li>Only formulas with an approved version snapshot can enter production.</li>
           <li>Raw materials are issued to this batch at weighing, separately from R&amp;D sample usage.</li>
+          <li>New P1 batches require a structured release QC template.</li>
           <li>{statusMessage}</li>
         </ul>
       </Panel>
@@ -10685,26 +10860,38 @@ function ProductionWorkspace({
                   </button>
                 ) : null}
                 {activeBatch.status === 'QC' ? (
-                  <>
+                  activeQcTemplate ? (
                     <button
                       className="primary-button small"
                       type="button"
-                      onClick={() => void recordQc(activeBatch.id, 'PASSED')}
-                      disabled={busyId === activeBatch.id || !canRecordProductionQc || activeBatch.qcStatus === 'PASSED'}
-                      title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                      onClick={() => void approveStructuredQc(activeBatch.id)}
+                      disabled={busyId === activeBatch.id || !canApproveProductionQc}
+                      title={canApproveProductionQc ? undefined : 'An Admin or Manager must approve structured QC'}
                     >
-                      Pass QC
+                      Approve structured QC
                     </button>
-                    <button
-                      className="ghost-button small"
-                      type="button"
-                      onClick={() => void recordQc(activeBatch.id, 'FAILED')}
-                      disabled={busyId === activeBatch.id || !canRecordProductionQc}
-                      title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
-                    >
-                      Place on hold
-                    </button>
-                  </>
+                  ) : (
+                    <>
+                      <button
+                        className="primary-button small"
+                        type="button"
+                        onClick={() => void recordQc(activeBatch.id, 'PASSED')}
+                        disabled={busyId === activeBatch.id || !canRecordProductionQc || activeBatch.qcStatus === 'PASSED'}
+                        title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                      >
+                        Pass legacy QC
+                      </button>
+                      <button
+                        className="ghost-button small"
+                        type="button"
+                        onClick={() => void recordQc(activeBatch.id, 'FAILED')}
+                        disabled={busyId === activeBatch.id || !canRecordProductionQc}
+                        title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                      >
+                        Place on hold
+                      </button>
+                    </>
+                  )
                 ) : null}
                 {activeBatch.status === 'BOTTLING' ? (
                   <button
@@ -10745,6 +10932,91 @@ function ProductionWorkspace({
             <Metric label="Output lot" value={activeBatch.outputLot?.lotNumber ?? 'Pending release'} />
           </div>
         )}
+      </Panel>
+
+      <Panel title="Batch Plan" icon={Activity}>
+        {activeBatch ? (
+          <>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Start</span>
+                <input type="datetime-local" value={scheduleDraft.scheduledStartAt} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, scheduledStartAt: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>Due</span>
+                <input type="datetime-local" value={scheduleDraft.dueAt} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, dueAt: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>Equipment</span>
+                <input value={scheduleDraft.equipment} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, equipment: event.target.value }))} />
+              </label>
+            </div>
+            <button className="ghost-button small" type="button" onClick={() => void planBatch(activeBatch.id)} disabled={busyId === activeBatch.id || !canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status) || !scheduleDraft.scheduledStartAt || !scheduleDraft.dueAt}>
+              Save schedule
+            </button>
+            <p className="caveat">Equipment overlaps are shown as warnings; they never bypass lifecycle gates.</p>
+          </>
+        ) : <div className="empty-state compact">Create a batch to schedule its equipment and work window.</div>}
+      </Panel>
+
+      <Panel title="Structured QC & Yield" icon={ClipboardCheck}>
+        {activeBatch ? (
+          <>
+            {activeQcTemplate ? (
+              <div className="document-list compact-list">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <span className="eyebrow">Release specification</span>
+                    <strong>{activeQcTemplate.name}</strong>
+                  </div>
+                  <StatusBadge status={activeBatch.qcApprovedAt ? 'stable' : 'review'} label={activeBatch.qcApprovedAt ? 'APPROVED' : 'IN REVIEW'} />
+                </div>
+                {activeQcTemplate.checks.map((check) => {
+                  const result = qcResults.find((item) => item.templateCheckId === check.id)
+                  return (
+                    <div className="document-row" key={check.id}>
+                      <div>
+                        <strong>{check.label}</strong>
+                        <span>{check.kind}{check.unit ? ` / ${check.unit}` : ''}{check.min !== undefined || check.max !== undefined ? ` / ${check.min ?? '-'} to ${check.max ?? '-'}` : ''}</span>
+                      </div>
+                      <input
+                        aria-label={`Observed ${check.label}`}
+                        value={qcObserved[check.id] ?? ''}
+                        disabled={activeBatch.status !== 'QC' || !canRecordProductionQc || Boolean(activeBatch.qcApprovedAt)}
+                        onChange={(event) => setQcObserved((current) => ({ ...current, [check.id]: event.target.value }))}
+                      />
+                      <StatusBadge status={result?.status === 'PASSED' ? 'stable' : result?.status === 'FAILED' ? 'alert' : 'review'} label={result?.status ?? 'PENDING'} />
+                      <button className="ghost-button small" type="button" onClick={() => void recordStructuredQcResult(activeBatch.id, check.id)} disabled={busyId === activeBatch.id || activeBatch.status !== 'QC' || !canRecordProductionQc || Boolean(activeBatch.qcApprovedAt)}>
+                        Record
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : <div className="empty-state compact">This legacy batch has no structured QC template. New P1 batches require a release specification.</div>}
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Yield grams</span>
+                <input min={0} step={0.001} type="number" value={yieldDraft.yieldGrams} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, yieldGrams: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Waste grams</span>
+                <input min={0} step={0.001} type="number" value={yieldDraft.wasteGrams} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, wasteGrams: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Labor cost</span>
+                <input min={0} step={0.01} type="number" value={yieldDraft.laborCost} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, laborCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Overhead cost</span>
+                <input min={0} step={0.01} type="number" value={yieldDraft.overheadCost} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, overheadCost: Number(event.target.value) }))} />
+              </label>
+            </div>
+            <button className="ghost-button small" type="button" onClick={() => void recordYield(activeBatch.id)} disabled={busyId === activeBatch.id || activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'}>
+              Reconcile yield and cost
+            </button>
+          </>
+        ) : <div className="empty-state compact">Yield, loss, labor, and overhead become available after raw materials are issued.</div>}
       </Panel>
 
       <Panel title="Work Order & QC Protocol" icon={ClipboardCheck}>
@@ -10867,11 +11139,13 @@ const reorderPointByTier: Record<Material['tier'], number> = {
 function ProcurementWorkspace({
   stock,
   materialRecords,
+  session,
   onLotsChange,
   onMovementsChange,
 }: {
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  session: AuthSession
   onLotsChange: Dispatch<SetStateAction<InventoryLot[]>>
   onMovementsChange: Dispatch<SetStateAction<InventoryMovement[]>>
 }) {
@@ -10882,7 +11156,9 @@ function ProcurementWorkspace({
   const [selectedMaterialId, setSelectedMaterialId] = useState(materialOptions[0]?.id ?? 'mat-bergamot')
   const [statusMessage, setStatusMessage] = useState('Loading procurement workspace')
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [lastReceipt, setLastReceipt] = useState<PurchaseOrderReceiptResponse | null>(null)
+  const [lastReceipt, setLastReceipt] = useState<ProcurementReceiptRecord | null>(null)
+  const [receiptRows, setReceiptRows] = useState<ProcurementReceiptRecord[]>([])
+  const [landedCostDraft, setLandedCostDraft] = useState({ freightCost: 0, dutyCost: 0, insuranceCost: 0 })
   const [supplierDraft, setSupplierDraft] = useState({
     name: 'North Aroma Cooperative',
     country: 'TH',
@@ -10909,6 +11185,8 @@ function ProcurementWorkspace({
   const [receiveDraft, setReceiveDraft] = useState<Record<string, number>>({})
   const [rfqQuantityGrams, setRfqQuantityGrams] = useState(100)
   const [rfqComparison, setRfqComparison] = useState<RfqComparison | null>(null)
+  const canManageProcurement = sessionHasPermission(session, 'procurement.manage')
+  const canInspectReceipt = session.role === 'Owner' || session.role === 'Admin' || session.role === 'Lab Manager' || session.role === 'Manager'
 
   const materialById = useMemo(
     () => new Map(materialOptions.map((material) => [material.id, material])),
@@ -10964,16 +11242,18 @@ function ProcurementWorkspace({
     let active = true
     async function loadProcurement() {
       try {
-        const [supplierPayload, orderPayload] = await Promise.all([
+        const [supplierPayload, orderPayload, receiptPayload] = await Promise.all([
           requestApi<SupplierRecord[]>('/suppliers'),
           requestApi<PurchaseOrderRecord[]>('/purchase-orders'),
+          requestApi<ProcurementReceiptRecord[]>('/procurement/receipts'),
         ])
         if (!active) {
           return
         }
         setSupplierRows(supplierPayload)
         setOrderRows(orderPayload)
-        setStatusMessage('Procurement API synced: suppliers, PO board, and receipt controls are live')
+        setReceiptRows(receiptPayload)
+        setStatusMessage('Procurement API synced: supplier, PO, quarantine, and landed-cost records are live')
       } catch (error) {
         if (active) {
           setStatusMessage(error instanceof Error ? error.message : 'Using local procurement seed until API is reachable')
@@ -11118,27 +11398,20 @@ function ProcurementWorkspace({
     const receiptKey = `${order.id}:${line.id}`
     const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[receiptKey] ?? remainingGrams)
     setBusyId(order.id)
-    setStatusMessage(`Receiving ${formatGrams(receivedGrams)} for ${order.id}`)
+    setStatusMessage(`Creating quarantined receipt for ${formatGrams(receivedGrams)} on ${order.id}`)
     try {
-      const payload = await requestApi<PurchaseOrderReceiptResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receive`, {
+      const payload = await requestApi<ProcurementReceiptCreateResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receipts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ lines: [{ materialId: line.materialId, receivedGrams }] }),
       })
       updateOrder(payload.purchaseOrder)
-      const receiptLots = payload.lots?.length ? payload.lots : [payload.lot]
-      const receiptMovements = payload.movements?.length ? payload.movements : [payload.movement]
-      const receiptHistory = payload.priceHistoryRecords?.length ? payload.priceHistoryRecords : [payload.priceHistory]
       onLotsChange((current) => [
-        ...receiptLots.filter((lot) => !current.some((candidate) => candidate.id === lot.id)),
+        ...payload.lots.filter((lot) => !current.some((candidate) => candidate.id === lot.id)),
         ...current,
       ])
       onMovementsChange((current) => [
-        ...receiptMovements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
-        ...current,
-      ])
-      setHistoryRows((current) => [
-        ...receiptHistory.filter((record) => !current.some((candidate) => candidate.id === record.id)),
+        ...payload.movements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
         ...current,
       ])
       const receivedLine = linesForPurchaseOrder(payload.purchaseOrder).find((candidate) => candidate.materialId === line.materialId)
@@ -11147,10 +11420,63 @@ function ProcurementWorkspace({
         [receiptKey]: Math.max((receivedLine?.quantityGrams ?? 0) - (receivedLine?.receivedGrams ?? 0), 0),
       }))
       setSelectedMaterialId(line.materialId)
-      setLastReceipt(payload)
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => [payload.receipt, ...current.filter((receipt) => receipt.id !== payload.receipt.id)])
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Purchase order receipt failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function postLandedCost(receiptId: string) {
+    setBusyId(receiptId)
+    setStatusMessage(`Posting landed cost for ${receiptId}`)
+    try {
+      const payload = await requestApi<ProcurementLandedCostResponse>(`/procurement/receipts/${encodeURIComponent(receiptId)}/landed-cost`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(landedCostDraft),
+      })
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => current.map((receipt) => receipt.id === payload.receipt.id ? payload.receipt : receipt))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Landed cost posting failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function inspectReceipt(receiptId: string, action: 'ACCEPT' | 'RETURN') {
+    setBusyId(receiptId)
+    setStatusMessage(`${action === 'ACCEPT' ? 'Accepting' : 'Returning'} quarantined receipt ${receiptId}`)
+    try {
+      const payload = await requestApi<ProcurementInspectionResponse>(`/procurement/receipts/${encodeURIComponent(receiptId)}/inspect`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ action }),
+      })
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => current.map((receipt) => receipt.id === payload.receipt.id ? payload.receipt : receipt))
+      onLotsChange((current) => current.map((lot) => payload.lots.find((candidate) => candidate.id === lot.id) ?? lot))
+      if (payload.movements.length > 0) {
+        onMovementsChange((current) => [
+          ...payload.movements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
+          ...current,
+        ])
+      }
+      setStatusMessage(payload.invariant)
+      if (action === 'ACCEPT') {
+        const materialId = payload.receipt.lines[0]?.materialId
+        if (materialId) {
+          const history = await requestApi<PriceHistoryRecord[]>(`/materials/${encodeURIComponent(materialId)}/price-history`)
+          setHistoryRows(history)
+        }
+      }
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Receipt inspection failed')
     } finally {
       setBusyId(null)
     }
@@ -11598,17 +11924,60 @@ function ProcurementWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Goods Receipt Evidence" icon={Database}>
+      <Panel title="Receipt, Inspection & Landed Cost" icon={Database}>
         {lastReceipt ? (
-          <div className="metric-grid">
-            <Metric label="Lot created" value={lastReceipt.lot.lotNumber} />
-            <Metric label="Movement" value={lastReceipt.movement.id} />
-            <Metric label="Received" value={formatGrams(lastReceipt.movement.quantityGrams)} />
-            <Metric label="Price snapshot" value={lastReceipt.priceHistory.id} />
-          </div>
+          <>
+            <div className="metric-grid">
+              <Metric label="Receipt" value={lastReceipt.id} />
+              <Metric label="Status" value={lastReceipt.status} />
+              <Metric label="Lines" value={String(lastReceipt.lines.length)} />
+              <Metric label="Received" value={formatGrams(lastReceipt.lines.reduce((total, line) => total + line.receivedGrams, 0))} />
+            </div>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Freight</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.freightCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, freightCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Duty</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.dutyCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, dutyCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Insurance</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.insuranceCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, insuranceCost: Number(event.target.value) }))} />
+              </label>
+            </div>
+            <div className="action-row">
+              <button className="ghost-button small" type="button" onClick={() => void postLandedCost(lastReceipt.id)} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canManageProcurement}>
+                Post landed cost
+              </button>
+              <button className="primary-button small" type="button" onClick={() => void inspectReceipt(lastReceipt.id, 'ACCEPT')} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canInspectReceipt}>
+                Accept to inventory
+              </button>
+              <button className="ghost-button small" type="button" onClick={() => void inspectReceipt(lastReceipt.id, 'RETURN')} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canInspectReceipt}>
+                Return to supplier
+              </button>
+            </div>
+            <p className="caveat">Accept is unavailable until landed cost is posted, including an explicit zero-cost allocation.</p>
+          </>
         ) : (
-          <div className="empty-state compact">Receive a sent PO to create lot, movement, and price history evidence.</div>
+          <div className="empty-state compact">Receive a sent PO to create quarantined lots; post landed cost and inspect before inventory is available.</div>
         )}
+      </Panel>
+
+      <Panel title="Quarantine Queue" icon={ShieldCheck}>
+        <div className="document-list compact-list">
+          {receiptRows.filter((receipt) => receipt.status === 'QUARANTINE' || receipt.status === 'INSPECTED').slice(0, 6).map((receipt) => (
+            <button className="document-row purchase-order-row" type="button" key={receipt.id} onClick={() => setLastReceipt(receipt)}>
+              <div>
+                <strong>{receipt.id}</strong>
+                <span>{receipt.lines.length} line(s) / {formatGrams(receipt.lines.reduce((total, line) => total + line.receivedGrams, 0))}</span>
+              </div>
+              <StatusBadge status={receipt.status === 'QUARANTINE' ? 'review' : 'active'} label={receipt.status} />
+            </button>
+          ))}
+          {receiptRows.every((receipt) => receipt.status !== 'QUARANTINE' && receipt.status !== 'INSPECTED') ? <div className="empty-state compact">No receipt awaits inspection.</div> : null}
+        </div>
       </Panel>
 
       <Panel title="Price History" icon={BadgeDollarSign}>
@@ -13266,6 +13635,7 @@ function CostingWorkspace() {
 
 function AnalyticsWorkspace() {
   const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(clientFallbackAnalytics)
+  const [operationalData, setOperationalData] = useState<OperationalAnalyticsReport | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading analytics dashboard')
   const [runningReportId, setRunningReportId] = useState<string | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
@@ -13277,14 +13647,17 @@ function AnalyticsWorkspace() {
 
   const refreshAnalytics = useCallback(async (signal?: AbortSignal) => {
       try {
-        const dashboard = await requestApi<AnalyticsDashboardReport>('/analytics/dashboard', {
-          signal,
-        })
+        const [dashboard, operations] = await Promise.all([
+          requestApi<AnalyticsDashboardReport>('/analytics/dashboard', { signal }),
+          requestApi<OperationalAnalyticsReport>('/analytics/operations', { signal }),
+        ])
         setAnalyticsData(dashboard)
+        setOperationalData(operations)
         setLastSyncedAt(new Date().toISOString())
         setStatusMessage('Live analytics synced from API')
       } catch {
         if (!signal?.aborted) {
+          setOperationalData(null)
           setStatusMessage('Using local analytics seed until API is reachable')
         }
       }
@@ -13360,6 +13733,40 @@ function AnalyticsWorkspace() {
           </ResponsiveContainer>
         </div>
         <p className="caveat">{analyticsData.invariant}</p>
+      </Panel>
+
+      <Panel title="Operational P1 Signals" icon={Activity}>
+        {operationalData ? (
+          <>
+            <div className="metric-grid analytics-metrics">
+              <Metric label="Quarantine lots" value={String(operationalData.quarantineLots)} />
+              <Metric label="Open discrepancies" value={String(operationalData.openReceiptDiscrepancies)} />
+              <Metric label="QC failures" value={String(operationalData.qcFailures)} />
+              <Metric label="Actual margins" value={String(operationalData.actualBatchMargins.length)} />
+            </div>
+            <div className="analytics-list compact-list">
+              {operationalData.supplierPerformance.slice(0, 3).map((supplier) => (
+                <div className="analytics-row" key={supplier.supplierId}>
+                  <div>
+                    <strong>{supplier.supplierId}</strong>
+                    <span>{supplier.receipts} receipt(s) / {supplier.returned} returned</span>
+                  </div>
+                  <DataTag label="Accepted" value={`${supplier.acceptanceRatePercent}%`} tone={supplier.acceptanceRatePercent >= 95 ? 'green' : 'amber'} />
+                </div>
+              ))}
+              {operationalData.landedCostVariance.slice(0, 3).map((row) => (
+                <div className="analytics-row" key={row.receiptId}>
+                  <div>
+                    <strong>{row.receiptId}</strong>
+                    <span>{formatCurrency(row.totalLandedCost)} landed on {formatCurrency(row.materialValue)} material value</span>
+                  </div>
+                  <DataTag label="Variance" value={`${row.landedPercent}%`} tone="blue" />
+                </div>
+              ))}
+            </div>
+            <p className="caveat">{operationalData.invariant}</p>
+          </>
+        ) : <div className="empty-state compact">Operational analytics is unavailable until the tenant-scoped API responds.</div>}
       </Panel>
 
       <Panel title="Role Dashboards" icon={UsersRound}>

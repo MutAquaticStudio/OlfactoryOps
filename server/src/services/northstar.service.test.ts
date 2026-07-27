@@ -1893,6 +1893,41 @@ describe('NorthStarService', () => {
     expect(costSheet.costPerGram).toBeCloseTo(costSheet.totalCost / costSheet.outputGrams, 4)
   })
 
+  it('runs structured P1 production QC, reconciled yield, private CoA, and actual costing', () => {
+    const service = createAuthenticatedService()
+    const template = service.createProductionQcTemplate({
+      formulaId: 'frm-0421',
+      name: 'Citrus release specification',
+      checks: [
+        { id: 'DENSITY', label: 'Density', kind: 'NUMERIC', required: true, min: 0.9, max: 1.1, unit: 'g/ml' },
+        { id: 'ODOR', label: 'Organoleptic', kind: 'TEXT', required: true, expectedText: 'match' },
+      ],
+    }).data.template
+    const batch = service.createProductionBatch('frm-0421', 25).data
+    expect(batch.qcTemplateId).toBe(template.id)
+    service.planProductionBatch(batch.id, { equipment: 'Pilot kettle PK-02' })
+    service.consumeProductionBatch(batch.id)
+    service.updateProductionBatchStatus(batch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(batch.id, 'QC')
+
+    service.recordProductionQcResult(batch.id, { templateCheckId: 'DENSITY', observedValue: '0.98' })
+    service.recordProductionQcResult(batch.id, { templateCheckId: 'ODOR', observedValue: 'match' })
+    expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/next lifecycle gate/)
+    const approved = service.approveProductionQc(batch.id).data.batch
+    expect(approved.status).toBe('BOTTLING')
+    expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/reconciled yield/)
+
+    const yieldRecord = service.recordProductionYield(batch.id, { yieldGrams: 24.5, wasteGrams: 0.5, laborCost: 3, overheadCost: 1 }).data.record
+    expect(yieldRecord.status).toBe('RECONCILED')
+    const released = service.updateProductionBatchStatus(batch.id, 'RELEASED').data.batch
+    expect(released.outputLot?.quantityGrams).toBe(24.5)
+    expect(released.coaDocumentId).toContain(`DOC-COA-${batch.id}`)
+    expect(service.documents().data.find((document) => document.id === released.coaDocumentId)?.status).toBe('REVIEW_REQUIRED')
+    const costSheet = service.costingBatch(batch.id).data
+    expect(costSheet.laborCost).toBe(3)
+    expect(costSheet.overheadCost).toBe(1)
+  })
+
   it('carries a released formula through finished-good FEFO fulfillment and source COGS', () => {
     const service = createAuthenticatedService()
     const batch = service.createProductionBatch('frm-0421', 25).data
@@ -1941,6 +1976,42 @@ describe('NorthStarService', () => {
     expect(receipt.invariant).toContain('creates lot and IN movement')
   })
 
+  it('keeps material compliance and supplier material approval tenant-scoped', () => {
+    const service = createAuthenticatedService()
+    const compliance = service.upsertMaterialCompliance('mat-vanillin', {
+      status: 'BLOCKED',
+      ifraCategoryLimits: [{ category: '4', limitPercent: 0.1 }],
+      allergens: [{ name: 'Vanillin', cas: '121-33-5', concentrationPercent: 100 }],
+      euUkFlags: ['EU_ALLERGEN_DECLARATION'],
+      source: 'Supplier compliance statement',
+      sourceVersion: '2026.1',
+    }).data.profile
+
+    expect(compliance.status).toBe('BLOCKED')
+    expect(service.materialCompliance('mat-vanillin').data?.id).toBe(compliance.id)
+    expect(() => service.createPurchaseOrder({
+      supplierId: 'SUP-003',
+      materialId: 'mat-vanillin',
+      quantityGrams: 100,
+      unitCost: 0.12,
+    })).toThrow(/blocked by its compliance profile/)
+
+    const supplierProfile = service.upsertSupplierMaterialProfile('SUP-003', 'mat-bergamot', {
+      status: 'APPROVED',
+      leadTimeDays: 14,
+      minimumOrderGrams: 50,
+      unitCost: 0.14,
+      currency: 'USD',
+    }).data.profile
+    expect(service.supplierMaterialProfiles('SUP-003').data).toEqual(expect.arrayContaining([supplierProfile]))
+    expect(() => service.createPurchaseOrder({
+      supplierId: 'SUP-003',
+      materialId: 'mat-bergamot',
+      quantityGrams: 10,
+      unitCost: 0.14,
+    })).toThrow(/below supplier MOQ/)
+  })
+
   it('runs procurement supplier, PO state, partial receipt, and price history workflow', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
@@ -1981,6 +2052,72 @@ describe('NorthStarService', () => {
 
     const history = service.materialPriceHistory('mat-vanillin').data
     expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
+  })
+
+  it('quarantines P1 procurement receipts until value-based landed cost and inspection acceptance', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({
+      supplierId: 'SUP-003',
+      currency: 'USD',
+      lines: [
+        { materialId: 'mat-bergamot', quantityGrams: 40, unitCost: 0.1 },
+        { materialId: 'mat-vanillin', quantityGrams: 20, unitCost: 0.3 },
+      ],
+    }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+
+    const receipt = service.createProcurementReceipt(draft.id, {
+      lines: [
+        { materialId: 'mat-bergamot', receivedGrams: 40, supplierLotRef: 'BER-LOT-9' },
+        { materialId: 'mat-vanillin', receivedGrams: 20, supplierLotRef: 'VAN-LOT-4' },
+      ],
+    }).data.receipt
+    expect(receipt.status).toBe('QUARANTINE')
+    expect(service.lotsList().data.filter((lot) => receipt.lines.some((line) => line.lotId === lot.id)).every((lot) => lot.qualityStatus === 'QUARANTINE')).toBe(true)
+    expect(() => service.inspectProcurementReceipt(receipt.id, { action: 'ACCEPT' })).toThrow(/Post landed cost/)
+
+    const allocation = service.postProcurementLandedCost(receipt.id, {
+      freightCost: 3,
+      dutyCost: 1,
+      insuranceCost: 0,
+    }).data.allocation
+    expect(allocation.allocationMethod).toBe('EXTENDED_VALUE')
+    expect(allocation.allocations.reduce((total, item) => total + item.allocatedCost, 0)).toBeCloseTo(4, 6)
+
+    const accepted = service.inspectProcurementReceipt(receipt.id, { action: 'ACCEPT', note: 'CoA accepted' }).data.receipt
+    expect(accepted.status).toBe('ACCEPTED')
+    expect(accepted.lines.every((line) => line.acceptedGrams === line.receivedGrams && (line.landedUnitCost ?? 0) > line.unitCost)).toBe(true)
+    expect(service.lotsList().data.filter((lot) => accepted.lines.some((line) => line.lotId === lot.id)).every((lot) => lot.qualityStatus === 'APPROVED')).toBe(true)
+    expect(service.materialPriceHistory('mat-bergamot').data.some((record) => record.purchaseOrderId === draft.id && record.unitCost > 0.1)).toBe(true)
+  })
+
+  it('writes an immutable supplier-return trace for rejected procurement inspection', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({ supplierId: 'SUP-003', materialId: 'mat-bergamot', quantityGrams: 25, unitCost: 0.1 }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+    const receipt = service.createProcurementReceipt(draft.id, { lines: [{ materialId: 'mat-bergamot', receivedGrams: 25 }] }).data.receipt
+    const returned = service.inspectProcurementReceipt(receipt.id, {
+      action: 'RETURN',
+      discrepancies: [{ type: 'QUALITY', action: 'RETURN', note: 'Off-odor at inspection' }],
+    }).data
+
+    expect(returned.receipt.status).toBe('RETURNED')
+    expect(returned.movements).toHaveLength(1)
+    expect(returned.movements[0]?.type).toBe('RETURN_TO_SUPPLIER')
+    expect(service.lotsList().data.find((lot) => lot.id === receipt.lines[0]?.lotId)?.qualityStatus).toBe('REJECTED')
+  })
+
+  it('derives operational analytics from P1 receipt and quality records', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({ supplierId: 'SUP-003', materialId: 'mat-bergamot', quantityGrams: 25, unitCost: 0.1 }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+    service.createProcurementReceipt(draft.id, { lines: [{ materialId: 'mat-bergamot', receivedGrams: 25 }] })
+    const report = service.operationalAnalytics().data
+
+    expect(report.quarantineLots).toBeGreaterThan(0)
+    expect(report.receiptsByStatus.find((row) => row.status === 'QUARANTINE')?.count).toBe(1)
+    expect(report.supplierPerformance[0]?.receipts).toBe(1)
+    expect(report.invariant).toContain('tenant-scoped')
   })
 
   it('keeps multi-line PO receipt and price history reconciled per material line', () => {

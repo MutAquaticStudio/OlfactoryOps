@@ -135,17 +135,25 @@ import {
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
+  type MaterialComplianceProfile,
+  type MaterialComplianceStatus,
   type MaterialIngestionRecord,
   type MaterialProvenance,
   type MembershipRecord,
   type MoleculeComponent,
   type NumberingSequenceRecord,
+  type OperationalAnalyticsReport,
   type OrganizationRecord,
   type PriceHistoryRecord,
   type RfqComparison,
   type PriceListRecord,
   type PrivacyRequestRecord,
   type ProductionBatchRecord,
+  type ProductionQcResultRecord,
+  type ProductionQcTemplateRecord,
+  type ProductionYieldRecord,
+  type ProcurementReceiptRecord,
+  type LandedCostAllocationRecord,
   type PurchaseOrderLineItem,
   type PurchaseOrderRecord,
   type QuoteRecord,
@@ -159,6 +167,7 @@ import {
   type StockTakeRecord,
   type StorageLocation,
   type SupplierRecord,
+  type SupplierMaterialProfile,
   type TenantSettingsRecord,
   type UserSettingsRecord,
   type GlobalSearchResult,
@@ -233,6 +242,81 @@ type RfqAwardBody = RfqComparisonBody & {
   unitCost?: number
   currency?: string
   expectedDate?: string
+}
+
+type MaterialComplianceBody = {
+  status?: MaterialComplianceStatus
+  ifraCategoryLimits?: Array<{ category?: string; limitPercent?: number }>
+  allergens?: Array<{ name?: string; cas?: string; concentrationPercent?: number }>
+  euUkFlags?: string[]
+  sourceDocumentId?: string
+  source?: string
+  sourceVersion?: string
+  reviewedAt?: string
+  note?: string
+}
+
+type SupplierMaterialProfileBody = {
+  status?: SupplierMaterialProfile['status']
+  leadTimeDays?: number
+  minimumOrderGrams?: number
+  unitCost?: number
+  currency?: string
+  supplierMaterialCode?: string
+}
+
+type ProcurementReceiptBody = {
+  idempotencyKey?: string
+  lines?: Array<{ materialId?: string; receivedGrams?: number; supplierLotRef?: string }>
+  documentIds?: string[]
+}
+
+type ProcurementInspectionBody = {
+  idempotencyKey?: string
+  action?: 'ACCEPT' | 'QUARANTINE' | 'RETURN'
+  note?: string
+  discrepancies?: Array<{ type?: string; action?: string; note?: string }>
+}
+
+type LandedCostBody = {
+  idempotencyKey?: string
+  freightCost?: number
+  dutyCost?: number
+  insuranceCost?: number
+}
+
+type ProductionQcTemplateBody = {
+  formulaId?: string
+  name?: string
+  checks?: Array<{
+    id?: string
+    label?: string
+    kind?: 'NUMERIC' | 'TEXT' | 'BOOLEAN'
+    required?: boolean
+    min?: number
+    max?: number
+    expectedText?: string
+    unit?: string
+  }>
+}
+
+type ProductionQcResultBody = {
+  idempotencyKey?: string
+  templateCheckId?: string
+  status?: ProductionQcResultRecord['status']
+  observedValue?: string
+  note?: string
+  documentIds?: string[]
+}
+
+type ProductionYieldBody = {
+  idempotencyKey?: string
+  yieldGrams?: number
+  wasteGrams?: number
+  laborCost?: number
+  overheadCost?: number
+  currency?: string
+  note?: string
 }
 
 type GenerateDocumentBody = {
@@ -713,6 +797,8 @@ function normalizeFormulaLineMetadata(body: FormulaLineMutationBody, fallback?: 
 @Injectable()
 export class NorthStarService {
   private materialRecords: Material[] = structuredClone(materials)
+  private materialComplianceRecords: MaterialComplianceProfile[] = []
+  private supplierMaterialProfileRecords: SupplierMaterialProfile[] = []
   private moleculeRecords: MoleculeComponent[] = structuredClone(moleculeComponents)
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
@@ -744,6 +830,11 @@ export class NorthStarService {
   private supplierRecords: SupplierRecord[] = structuredClone(suppliers)
   private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
   private priceHistoryRecords: PriceHistoryRecord[] = structuredClone(priceHistory)
+  private procurementReceiptRecords: ProcurementReceiptRecord[] = []
+  private landedCostAllocationRecords: LandedCostAllocationRecord[] = []
+  private productionQcTemplateRecords: ProductionQcTemplateRecord[] = []
+  private productionQcResultRecords: ProductionQcResultRecord[] = []
+  private productionYieldRecords: ProductionYieldRecord[] = []
   private commercialSkuRecords: CommercialSkuRecord[] = structuredClone(commercialSkus)
   private priceListRecords: PriceListRecord[] = structuredClone(priceLists)
   private quoteRecords: QuoteRecord[] = structuredClone(quotes)
@@ -1825,6 +1916,137 @@ export class NorthStarService {
         invariant: movements.length > 0
           ? 'formula scale updates source-lot consumption through immutable delta movements'
           : 'formula scale updates the draft composition without inventory movement',
+      },
+    }
+  }
+
+  materialCompliance(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    this.materialForSession(id, session)
+    return {
+      data: this.materialComplianceRecords.find(
+        (profile) => profile.materialId === id && (profile.organizationId || 'org-nxl') === session.organizationId,
+      ),
+    }
+  }
+
+  upsertMaterialCompliance(id: string, body: MaterialComplianceBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    this.requireOwnerOrAdmin(session, 'Material compliance policy')
+    this.materialForSession(id, session)
+    if (body.sourceDocumentId) {
+      this.documentForSession(body.sourceDocumentId, session)
+    }
+    const status = body.status ?? 'REVIEW_REQUIRED'
+    const ifraCategoryLimits = (body.ifraCategoryLimits ?? []).map((entry) => {
+      const category = entry.category?.trim()
+      const limitPercent = Number(entry.limitPercent)
+      if (!category || !Number.isFinite(limitPercent) || limitPercent < 0 || limitPercent > 100) {
+        throw new UnprocessableEntityException('Each IFRA category limit needs a category and a value from 0 to 100')
+      }
+      return { category, limitPercent: Number(limitPercent.toFixed(4)) }
+    })
+    const allergens = (body.allergens ?? []).map((entry) => {
+      const name = entry.name?.trim()
+      const concentrationPercent = entry.concentrationPercent === undefined ? undefined : Number(entry.concentrationPercent)
+      if (!name || (concentrationPercent !== undefined && (!Number.isFinite(concentrationPercent) || concentrationPercent < 0 || concentrationPercent > 100))) {
+        throw new UnprocessableEntityException('Each allergen needs a name and an optional value from 0 to 100')
+      }
+      return {
+        name,
+        cas: entry.cas?.trim() || undefined,
+        concentrationPercent: concentrationPercent === undefined ? undefined : Number(concentrationPercent.toFixed(4)),
+      }
+    })
+    const previous = this.materialComplianceRecords.find(
+      (profile) => profile.materialId === id && (profile.organizationId || 'org-nxl') === session.organizationId,
+    )
+    const profile: MaterialComplianceProfile = {
+      id: previous?.id ?? `MCP-${session.organizationId}-${id}`,
+      organizationId: session.organizationId,
+      materialId: id,
+      status,
+      ifraCategoryLimits,
+      allergens,
+      euUkFlags: [...new Set((body.euUkFlags ?? []).map((flag) => flag.trim()).filter(Boolean))],
+      sourceDocumentId: body.sourceDocumentId?.trim() || undefined,
+      source: body.source?.trim() || previous?.source || 'Manual compliance review',
+      sourceVersion: body.sourceVersion?.trim() || previous?.sourceVersion || 'v1',
+      reviewedAt: body.reviewedAt?.trim() || new Date().toISOString(),
+      reviewedBy: session.userId,
+      note: body.note?.trim() || undefined,
+    }
+    this.materialComplianceRecords = [
+      profile,
+      ...this.materialComplianceRecords.filter((item) => item.id !== profile.id),
+    ]
+    const audit = this.recordAudit('material.compliance.upsert', profile.id, session.userId, status === 'BLOCKED' ? 'review' : 'allowed')
+    return {
+      data: {
+        profile,
+        audit,
+        invariant: 'material compliance is tenant-scoped evidence; it does not infer a legal conclusion',
+      },
+    }
+  }
+
+  supplierMaterialProfiles(supplierId: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.view')
+    const supplier = this.suppliersForSession(session).find((item) => item.id === supplierId)
+    if (!supplier) {
+      throw new NotFoundException(`Supplier ${supplierId} was not found`)
+    }
+    return {
+      data: this.supplierMaterialProfileRecords.filter(
+        (profile) => profile.supplierId === supplierId && (profile.organizationId || 'org-nxl') === session.organizationId,
+      ),
+    }
+  }
+
+  upsertSupplierMaterialProfile(supplierId: string, materialId: string, body: SupplierMaterialProfileBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.manage')
+    const supplier = this.suppliersForSession(session).find((item) => item.id === supplierId)
+    if (!supplier) {
+      throw new NotFoundException(`Supplier ${supplierId} was not found`)
+    }
+    const material = this.materialForSession(materialId, session)
+    const leadTimeDays = Number(body.leadTimeDays ?? supplier.leadTimeDays)
+    const minimumOrderGrams = Number(body.minimumOrderGrams ?? 1)
+    const unitCost = Number(body.unitCost ?? material.costPerGram)
+    if (!Number.isFinite(leadTimeDays) || leadTimeDays < 0 || !Number.isFinite(minimumOrderGrams) || minimumOrderGrams <= 0 || !Number.isFinite(unitCost) || unitCost <= 0) {
+      throw new UnprocessableEntityException('Supplier material lead time, MOQ, and unit cost must be valid positive values')
+    }
+    const previous = this.supplierMaterialProfileRecords.find(
+      (profile) => profile.supplierId === supplierId && profile.materialId === materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
+    )
+    const profile: SupplierMaterialProfile = {
+      id: previous?.id ?? `SMP-${session.organizationId}-${supplierId}-${materialId}`,
+      organizationId: session.organizationId,
+      supplierId,
+      materialId,
+      status: body.status ?? previous?.status ?? 'REVIEW_REQUIRED',
+      leadTimeDays: Math.round(leadTimeDays),
+      minimumOrderGrams: Number(minimumOrderGrams.toFixed(3)),
+      unitCost: Number(unitCost.toFixed(6)),
+      currency: body.currency?.trim().toUpperCase() || previous?.currency || 'USD',
+      supplierMaterialCode: body.supplierMaterialCode?.trim() || undefined,
+      reviewedAt: new Date().toISOString(),
+      reviewedBy: session.userId,
+    }
+    this.supplierMaterialProfileRecords = [
+      profile,
+      ...this.supplierMaterialProfileRecords.filter((item) => item.id !== profile.id),
+    ]
+    const audit = this.recordAudit('procurement.supplier-material.upsert', profile.id, session.userId, profile.status === 'BLOCKED' ? 'review' : 'allowed')
+    return {
+      data: {
+        profile,
+        audit,
+        invariant: 'supplier material approval is tenant-scoped and does not create a purchase order or stock movement',
       },
     }
   }
@@ -4842,6 +5064,7 @@ export class NorthStarService {
     }
     const id = this.consumeSequenceNumber('batch', session.userId).data.value
     const timestamp = new Date()
+    const qcTemplate = this.activeProductionQcTemplate(formulaId, session)
     const batch: ProductionBatchRecord = {
       id,
       formulaId,
@@ -4851,8 +5074,11 @@ export class NorthStarService {
       consumedGrams: 0,
       qcStatus: 'PENDING',
       owner: 'Manufacturing',
+      qcTemplateId: qcTemplate?.id,
       workOrder: this.createProductionWorkOrder(id, timestamp),
-      qcChecks: this.createProductionQcChecks(id),
+      qcChecks: qcTemplate
+        ? qcTemplate.checks.map((check) => ({ id: `QC-${id}-${check.id}`, label: check.label, result: 'PENDING' as const }))
+        : this.createProductionQcChecks(id),
       genealogy: {
         inputLotIds: [],
         inputMovementIds: [],
@@ -4891,6 +5117,7 @@ export class NorthStarService {
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
     const timestamp = new Date().toISOString()
     const movements = plan.allocations.map((allocation, index) => {
+      this.assertMaterialCanBeConsumed(allocation.materialId, session)
       const lot = lotMap.get(allocation.lotId)
       if (!lot) {
         throw new NotFoundException(`Lot ${allocation.lotId} was not found`)
@@ -4945,6 +5172,12 @@ export class NorthStarService {
     if (batch.status !== 'QC') {
       throw new UnprocessableEntityException(`Production batch ${id} must enter QC before recording a QC result`)
     }
+    if (batch.qcTemplateId) {
+      if (result === 'FAILED') {
+        throw new UnprocessableEntityException('Record the failed structured QC result before placing a P1 batch on hold')
+      }
+      return { data: this.approveProductionQc(id).data.batch }
+    }
     const timestamp = new Date().toISOString()
     const status = result === 'PASSED' ? 'BOTTLING' : 'HOLD'
     this.productionBatchRecords = this.productionBatchRecords.map((item) =>
@@ -4968,6 +5201,235 @@ export class NorthStarService {
     )
     this.recordAudit('production.batch.qc', id, session.userId, result === 'PASSED' ? 'allowed' : 'review')
     return { data: this.productionBatchRecords.find((item) => item.id === id)! }
+  }
+
+  productionSchedule() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.view')
+    this.normalizeProductionBatches()
+    const batches = this.productionBatchRecords.filter((batch) => this.formulaCatalogForSession(session).some((formula) => formula.id === batch.formulaId))
+    return {
+      data: batches.map((batch) => ({
+        batch,
+        conflict: batches.some((other) => other.id !== batch.id && this.productionWorkOrdersOverlap(batch, other)),
+      })),
+    }
+  }
+
+  planProductionBatch(id: string, body: { scheduledStartAt?: string; dueAt?: string; equipment?: string } = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.consume')
+    this.normalizeProductionBatches()
+    const batch = this.productionBatchRecords.find((item) => item.id === id)
+    if (!batch) throw new NotFoundException(`Production batch ${id} was not found`)
+    if (batch.status !== 'WEIGHING' && batch.status !== 'PLANNED') {
+      throw new UnprocessableEntityException('Only planned or weighing batches can be scheduled')
+    }
+    const scheduledStartAt = body.scheduledStartAt?.trim() || batch.workOrder.scheduledStartAt
+    const dueAt = body.dueAt?.trim() || batch.workOrder.dueAt
+    if (Number.isNaN(Date.parse(scheduledStartAt)) || Number.isNaN(Date.parse(dueAt)) || Date.parse(dueAt) <= Date.parse(scheduledStartAt)) {
+      throw new UnprocessableEntityException('Production schedule requires a valid start and later due time')
+    }
+    const workOrder = {
+      ...batch.workOrder,
+      scheduledStartAt,
+      dueAt,
+      equipment: body.equipment?.trim() || batch.workOrder.equipment,
+    }
+    this.productionBatchRecords = this.productionBatchRecords.map((item) => item.id === id ? { ...item, workOrder } : item)
+    const conflict = this.productionBatchRecords.some((other) => other.id !== id && this.productionWorkOrdersOverlap({ ...batch, workOrder }, other))
+    const audit = this.recordAudit('production.batch.plan', id, session.userId, conflict ? 'review' : 'allowed')
+    return {
+      data: {
+        batch: this.productionBatchRecords.find((item) => item.id === id)!,
+        conflict,
+        audit,
+        invariant: 'equipment overlap is surfaced as a planning warning and does not bypass lifecycle, inventory, or QC gates',
+      },
+    }
+  }
+
+  productionQcTemplates() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.view')
+    return {
+      data: this.productionQcTemplateRecords.filter((template) => (template.organizationId || 'org-nxl') === session.organizationId),
+    }
+  }
+
+  createProductionQcTemplate(body: ProductionQcTemplateBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.qc')
+    this.requireOwnerOrAdmin(session, 'Production QC template management')
+    const name = body.name?.trim()
+    if (!name || name.length > 120) throw new UnprocessableEntityException('QC template name is required and must be 120 characters or fewer')
+    if (body.formulaId) this.formulaForSession(body.formulaId, session)
+    const checks = body.checks ?? []
+    if (checks.length === 0 || checks.length > 30) throw new UnprocessableEntityException('QC template must have between 1 and 30 checks')
+    const seen = new Set<string>()
+    const normalizedChecks = checks.map((check, index) => {
+      const label = check.label?.trim()
+      if (!label || seen.has(label.toLowerCase())) throw new UnprocessableEntityException('QC template checks must have unique labels')
+      seen.add(label.toLowerCase())
+      const min = check.min === undefined ? undefined : Number(check.min)
+      const max = check.max === undefined ? undefined : Number(check.max)
+      if ((min !== undefined && !Number.isFinite(min)) || (max !== undefined && !Number.isFinite(max)) || (min !== undefined && max !== undefined && min > max)) {
+        throw new UnprocessableEntityException(`QC check ${label} has an invalid numeric range`)
+      }
+      return {
+        id: check.id?.trim() || `CHK-${String(index + 1).padStart(2, '0')}`,
+        label,
+        kind: check.kind === 'TEXT' || check.kind === 'BOOLEAN' ? check.kind : 'NUMERIC' as const,
+        required: check.required !== false,
+        min,
+        max,
+        expectedText: check.expectedText?.trim() || undefined,
+        unit: check.unit?.trim() || undefined,
+      }
+    })
+    const template: ProductionQcTemplateRecord = {
+      id: `QCT-${session.organizationId}-${String(this.productionQcTemplateRecords.length + 1).padStart(4, '0')}`,
+      organizationId: session.organizationId,
+      formulaId: body.formulaId?.trim() || undefined,
+      name,
+      status: 'ACTIVE',
+      checks: normalizedChecks,
+      updatedAt: new Date().toISOString(),
+      updatedBy: session.userId,
+    }
+    this.productionQcTemplateRecords = [template, ...this.productionQcTemplateRecords]
+    const audit = this.recordAudit('production.qc-template.create', template.id, session.userId, 'allowed')
+    return { data: { template, audit, invariant: 'QC templates are tenant-scoped structured specifications and contain no external instrument integration' } }
+  }
+
+  productionQcResults(batchId: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.view')
+    this.productionBatchForSession(batchId, session)
+    return { data: this.productionQcResultsForSession(batchId, session) }
+  }
+
+  recordProductionQcResult(batchId: string, body: ProductionQcResultBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.qc')
+    const batch = this.productionBatchForSession(batchId, session)
+    if (batch.status !== 'QC') throw new UnprocessableEntityException('Structured QC results can only be recorded while the batch is in QC')
+    const template = batch.qcTemplateId ? this.productionQcTemplateForSession(batch.qcTemplateId, session) : undefined
+    if (!template) throw new UnprocessableEntityException('Assign an active QC template to the batch before recording structured results')
+    const check = template.checks.find((item) => item.id === body.templateCheckId)
+    if (!check) throw new NotFoundException('QC template check was not found')
+    const documentIds = [...new Set((body.documentIds ?? []).map((documentId) => documentId.trim()).filter(Boolean))]
+    documentIds.forEach((documentId) => this.documentForSession(documentId, session))
+    const observedValue = body.observedValue?.trim() || undefined
+    let status = body.status ?? 'PENDING'
+    if (check.kind === 'NUMERIC' && observedValue !== undefined) {
+      const numericValue = Number(observedValue)
+      if (!Number.isFinite(numericValue)) throw new UnprocessableEntityException(`${check.label} requires a numeric observed value`)
+      const withinRange = (check.min === undefined || numericValue >= check.min) && (check.max === undefined || numericValue <= check.max)
+      if (status === 'PASSED' && !withinRange) throw new UnprocessableEntityException(`${check.label} is outside its approved range`)
+      if (status === 'PENDING') status = withinRange ? 'PASSED' : 'FAILED'
+    }
+    if (check.kind === 'TEXT' && check.expectedText && observedValue !== undefined) {
+      const matches = observedValue.trim().toLowerCase() === check.expectedText.trim().toLowerCase()
+      if (status === 'PASSED' && !matches) throw new UnprocessableEntityException(`${check.label} does not match the expected result`)
+      if (status === 'PENDING') status = matches ? 'PASSED' : 'FAILED'
+    }
+    if (status === 'PENDING' && check.required && !observedValue) throw new UnprocessableEntityException(`${check.label} requires an observed value before review`)
+    const previous = this.productionQcResultsForSession(batchId, session).find((result) => result.templateCheckId === check.id)
+    const result: ProductionQcResultRecord = {
+      id: previous?.id ?? `QCR-${batchId}-${check.id}`,
+      organizationId: session.organizationId,
+      batchId,
+      templateCheckId: check.id,
+      label: check.label,
+      status,
+      observedValue,
+      note: body.note?.trim() || undefined,
+      documentIds,
+      recordedAt: new Date().toISOString(),
+      recordedBy: session.userId,
+    }
+    this.productionQcResultRecords = [result, ...this.productionQcResultRecords.filter((item) => item.id !== result.id)]
+    this.productionBatchRecords = this.productionBatchRecords.map((item) => item.id === batchId ? {
+      ...item,
+      qcChecks: item.qcChecks.map((qcCheck) => qcCheck.label === check.label ? { ...qcCheck, result: status === 'NOT_APPLICABLE' ? 'PASSED' : status, note: result.note, recordedAt: result.recordedAt } : qcCheck),
+    } : item)
+    const audit = this.recordAudit('production.qc-result.record', result.id, session.userId, status === 'FAILED' ? 'review' : 'allowed')
+    return { data: { result, audit, invariant: 'structured QC results retain their source evidence and do not release the batch by themselves' } }
+  }
+
+  approveProductionQc(batchId: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.qc')
+    this.requireProductionApproverRole(session)
+    const batch = this.productionBatchForSession(batchId, session)
+    if (batch.status !== 'QC') throw new UnprocessableEntityException('Production QC can only be approved while the batch is in QC')
+    const template = batch.qcTemplateId ? this.productionQcTemplateForSession(batch.qcTemplateId, session) : undefined
+    if (!template) throw new UnprocessableEntityException('Structured QC approval requires an assigned QC template')
+    const results = this.productionQcResultsForSession(batchId, session)
+    const missing = template.checks.filter((check) => check.required && !results.some((result) => result.templateCheckId === check.id && (result.status === 'PASSED' || result.status === 'NOT_APPLICABLE')))
+    if (missing.length > 0 || results.some((result) => result.status === 'FAILED')) {
+      throw new UnprocessableEntityException('All required QC checks must pass or be marked not applicable before QA approval')
+    }
+    const now = new Date().toISOString()
+    this.productionQcResultRecords = this.productionQcResultRecords.map((result) =>
+      result.batchId === batchId && (result.organizationId || 'org-nxl') === session.organizationId
+        ? { ...result, approvedAt: now, approvedBy: session.userId }
+        : result,
+    )
+    this.productionBatchRecords = this.productionBatchRecords.map((item) => item.id === batchId ? {
+      ...item,
+      qcStatus: 'PASSED',
+      qcApprovedAt: now,
+      qcApprovedBy: session.userId,
+      status: 'BOTTLING',
+      workOrder: this.updateWorkOrderStep(item.workOrder, 'Filter and bottle', 'READY', 'Structured QA approved'),
+    } : item)
+    const audit = this.recordAudit('production.qc.approve', batchId, session.userId, 'allowed')
+    return { data: { batch: this.productionBatchForSession(batchId, session), audit, invariant: 'Admin or Manager QA approval moves a fully passed structured QC batch to bottling without MFA' } }
+  }
+
+  recordProductionYield(batchId: string, body: ProductionYieldBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'production.consume')
+    const batch = this.productionBatchForSession(batchId, session)
+    if (batch.consumedGrams <= 0) throw new UnprocessableEntityException('Production yield requires recorded raw-material consumption')
+    const yieldGrams = Number(body.yieldGrams)
+    const wasteGrams = Number(body.wasteGrams ?? 0)
+    const laborCost = this.requireNonNegativeAmount(body.laborCost, 'laborCost')
+    const overheadCost = this.requireNonNegativeAmount(body.overheadCost, 'overheadCost')
+    if (!Number.isFinite(yieldGrams) || yieldGrams <= 0 || !Number.isFinite(wasteGrams) || wasteGrams < 0) {
+      throw new UnprocessableEntityException('Yield and waste grams must be valid non-negative values, with yield above zero')
+    }
+    if (Math.abs(batch.consumedGrams - yieldGrams - wasteGrams) > 0.001) {
+      throw new UnprocessableEntityException('Yield plus waste must reconcile to consumed raw-material grams')
+    }
+    const now = new Date().toISOString()
+    const record: ProductionYieldRecord = {
+      id: `YLD-${batchId}`,
+      organizationId: session.organizationId,
+      batchId,
+      yieldGrams: Number(yieldGrams.toFixed(3)),
+      wasteGrams: Number(wasteGrams.toFixed(3)),
+      laborCost,
+      overheadCost,
+      currency: body.currency?.trim().toUpperCase() || 'USD',
+      status: 'RECONCILED',
+      recordedAt: now,
+      recordedBy: session.userId,
+      reconciledAt: now,
+      reconciledBy: session.userId,
+      note: body.note?.trim() || undefined,
+    }
+    this.productionYieldRecords = [record, ...this.productionYieldRecords.filter((item) => item.id !== record.id)]
+    this.productionBatchRecords = this.productionBatchRecords.map((item) => item.id === batchId ? {
+      ...item,
+      yieldGrams: record.yieldGrams,
+      yieldVariancePercent: Number((((record.yieldGrams - item.targetGrams) / item.targetGrams) * 100).toFixed(2)),
+      yieldRecordId: record.id,
+    } : item)
+    const audit = this.recordAudit('production.yield.reconcile', record.id, session.userId, 'allowed')
+    return { data: { record, audit, invariant: 'yield, waste, labor, and overhead reconcile before a P1 batch can release' } }
   }
 
   updateProductionBatchStatus(id: string, status: ProductionBatchRecord['status']) {
@@ -5015,14 +5477,18 @@ export class NorthStarService {
     if (status === 'WEIGHING' && batch.consumedGrams > 0) {
       throw new UnprocessableEntityException(`Production batch ${id} cannot return to weighing after consumption`)
     }
+    if (status === 'RELEASED' && batch.qcTemplateId) {
+      this.assertStructuredProductionRelease(batch, session)
+    }
 
     let releasedBatch: ProductionBatchRecord | undefined
     this.productionBatchRecords = this.productionBatchRecords.map((item) => {
       if (item.id !== id) {
         return item
       }
-      const released = status === 'RELEASED' ? this.releaseProductionOutputLot(item) : item
-      const updated = { ...released, status }
+      const released = status === 'RELEASED' ? this.releaseProductionOutputLot(item, this.productionYieldForSession(item.id, session)) : item
+      const coa = status === 'RELEASED' ? this.createProductionBatchCoa(released, session) : undefined
+      const updated = { ...released, status, coaDocumentId: coa?.id ?? released.coaDocumentId }
       if (status === 'RELEASED') {
         releasedBatch = updated
       }
@@ -5123,11 +5589,19 @@ export class NorthStarService {
       }
       seenMaterialIds.add(materialId)
       const material = this.materialForSession(materialId, session)
+      this.assertMaterialCanBePurchased(material.id, session)
+      const supplierProfile = this.supplierMaterialProfileForSession(supplier.id, material.id, session)
+      if (supplierProfile?.status === 'BLOCKED') {
+        throw new UnprocessableEntityException(`Supplier ${supplier.name} is blocked for ${material.name}`)
+      }
       const quantityGrams = Number(line.quantityGrams ?? 0)
       if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
         throw new UnprocessableEntityException(`Purchase order quantity for ${material.name} must be greater than 0`)
       }
-      const unitCost = Number(line.unitCost ?? material.costPerGram)
+      if (supplierProfile && quantityGrams + 0.0001 < supplierProfile.minimumOrderGrams) {
+        throw new UnprocessableEntityException(`Purchase order quantity for ${material.name} is below supplier MOQ`)
+      }
+      const unitCost = Number(line.unitCost ?? supplierProfile?.unitCost ?? material.costPerGram)
       if (!Number.isFinite(unitCost) || unitCost <= 0) {
         throw new UnprocessableEntityException(`Purchase order unitCost for ${material.name} must be greater than 0`)
       }
@@ -5327,6 +5801,306 @@ export class NorthStarService {
         priceHistoryRecords: priceHistory,
         audit,
         invariant: 'goods receipt creates lot and IN movement per PO line plus immutable price history snapshots',
+      },
+    }
+  }
+
+  procurementReceipts() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.view')
+    return { data: this.procurementReceiptsForSession(session) }
+  }
+
+  createProcurementReceipt(id: string, body: ProcurementReceiptBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.manage')
+    const order = this.purchaseOrdersForSession(session).find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Purchase order ${id} was not found`)
+    }
+    if (order.status === 'DRAFT' || order.status === 'RECEIVED') {
+      throw new UnprocessableEntityException(`Purchase order ${id} must be sent and have open lines before receiving`)
+    }
+    const documentIds = [...new Set((body.documentIds ?? []).map((documentId) => documentId.trim()).filter(Boolean))]
+    documentIds.forEach((documentId) => this.documentForSession(documentId, session))
+    const orderLines = this.purchaseOrderLines(order)
+    const requestedLines = body.lines?.length
+      ? body.lines
+      : orderLines
+          .filter((line) => line.quantityGrams > line.receivedGrams)
+          .map((line) => ({ materialId: line.materialId, receivedGrams: line.quantityGrams - line.receivedGrams, supplierLotRef: undefined }))
+    if (requestedLines.length === 0 || requestedLines.length > orderLines.length) {
+      throw new UnprocessableEntityException('Goods receipt must contain one or more open purchase order lines')
+    }
+    const receivedAt = new Date().toISOString()
+    const receiptNumber = this.procurementReceiptsForSession(session).filter((receipt) => receipt.purchaseOrderId === id).length + 1
+    const receiptId = `RCV-${id}-${String(receiptNumber).padStart(2, '0')}`
+    const seenMaterialIds = new Set<string>()
+    const lineInputs = requestedLines.map((requestedLine, index) => {
+      const materialId = requestedLine.materialId?.trim()
+      if (!materialId || seenMaterialIds.has(materialId)) {
+        throw new UnprocessableEntityException('Each goods receipt material line must be unique')
+      }
+      seenMaterialIds.add(materialId)
+      const orderLine = orderLines.find((line) => line.materialId === materialId)
+      if (!orderLine) {
+        throw new UnprocessableEntityException(`Material ${materialId} is not on purchase order ${id}`)
+      }
+      this.assertMaterialCanBePurchased(materialId, session)
+      const remainingGrams = orderLine.quantityGrams - orderLine.receivedGrams
+      const receivedGrams = Number(requestedLine.receivedGrams ?? remainingGrams)
+      if (!Number.isFinite(receivedGrams) || receivedGrams <= 0 || receivedGrams > remainingGrams + 0.0001) {
+        throw new UnprocessableEntityException(`receivedGrams for ${materialId} must be within the open purchase order balance`)
+      }
+      return { orderLine, receivedGrams: Number(receivedGrams.toFixed(3)), supplierLotRef: requestedLine.supplierLotRef?.trim(), index }
+    })
+
+    const lots: InventoryLot[] = lineInputs.map(({ orderLine, receivedGrams, supplierLotRef, index }) => ({
+      id: `lot-${receiptId.toLowerCase()}-${String(index + 1).padStart(2, '0')}`,
+      organizationId: session.organizationId,
+      materialId: orderLine.materialId,
+      lotNumber: `L-${receiptId}-${String(index + 1).padStart(2, '0')}`,
+      quantityGrams: receivedGrams,
+      reservedGrams: 0,
+      receivedDate: receivedAt.slice(0, 10),
+      expiryDate: '2028-12-31',
+      qualityStatus: 'QUARANTINE',
+      location: 'Receiving Quarantine',
+      unitCost: orderLine.unitCost,
+      supplierLotRef: supplierLotRef || order.id,
+      currency: order.currency,
+    }))
+    const movements: InventoryMovement[] = lots.map((lot, index) => ({
+      id: `MOV-RCV-${receiptId}-${String(index + 1).padStart(2, '0')}`,
+      at: receivedAt,
+      type: 'RECEIPT',
+      direction: 'IN',
+      materialId: lot.materialId,
+      lotId: lot.id,
+      quantityGrams: lot.quantityGrams,
+      balanceAfter: lot.quantityGrams,
+      ref: receiptId,
+      actor: session.userId,
+    }))
+    const updatedLines = orderLines.map((line) => {
+      const received = lineInputs.find((input) => input.orderLine.id === line.id)
+      return received ? { ...line, receivedGrams: Number((line.receivedGrams + received.receivedGrams).toFixed(3)) } : line
+    })
+    const complete = updatedLines.every((line) => line.receivedGrams + 0.0001 >= line.quantityGrams)
+    const updatedOrder: PurchaseOrderRecord = {
+      ...order,
+      receivedGrams: updatedLines.reduce((total, line) => total + line.receivedGrams, 0),
+      status: complete ? 'RECEIVED' : 'PARTIAL',
+      lines: updatedLines,
+    }
+    const receipt: ProcurementReceiptRecord = {
+      id: receiptId,
+      organizationId: session.organizationId,
+      purchaseOrderId: order.id,
+      supplierId: order.supplierId,
+      status: 'QUARANTINE',
+      receivedAt,
+      receivedBy: session.userId,
+      lines: lineInputs.map(({ orderLine, receivedGrams }, index) => ({
+        id: `${receiptId}-L${String(index + 1).padStart(2, '0')}`,
+        materialId: orderLine.materialId,
+        purchaseOrderLineId: orderLine.id,
+        receivedGrams,
+        acceptedGrams: 0,
+        rejectedGrams: 0,
+        unitCost: orderLine.unitCost,
+        lotId: lots[index]!.id,
+      })),
+      discrepancies: [],
+      documentIds,
+    }
+    this.lots = [...lots, ...this.lots]
+    this.movements = [...movements, ...this.movements]
+    this.purchaseOrderRecords = this.purchaseOrderRecords.map((item) => (item.id === id ? updatedOrder : item))
+    this.procurementReceiptRecords = [receipt, ...this.procurementReceiptRecords]
+    const audit = this.recordAudit('procurement.receipt.create', receipt.id, session.userId, 'review')
+    return {
+      data: {
+        receipt,
+        lots,
+        movements,
+        purchaseOrder: updatedOrder,
+        audit,
+        invariant: 'goods receipt creates quarantined lots and RECEIPT ledger entries; inspection must accept stock before it becomes available',
+      },
+    }
+  }
+
+  postProcurementLandedCost(receiptId: string, body: LandedCostBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.manage')
+    const receipt = this.procurementReceiptForSession(receiptId, session)
+    if (receipt.status === 'ACCEPTED' || receipt.status === 'RETURNED') {
+      throw new UnprocessableEntityException('Landed cost must be posted before final receipt disposition')
+    }
+    const existing = this.landedCostAllocationRecords.find(
+      (record) => record.receiptId === receiptId && (record.organizationId || 'org-nxl') === session.organizationId,
+    )
+    if (existing) {
+      throw new UnprocessableEntityException(`Landed cost for receipt ${receiptId} is already posted and immutable`)
+    }
+    const freightCost = this.requireNonNegativeAmount(body.freightCost, 'freightCost')
+    const dutyCost = this.requireNonNegativeAmount(body.dutyCost, 'dutyCost')
+    const insuranceCost = this.requireNonNegativeAmount(body.insuranceCost, 'insuranceCost')
+    const totalLandedCost = Number((freightCost + dutyCost + insuranceCost).toFixed(6))
+    const extendedValue = receipt.lines.map((line) => ({ line, value: line.receivedGrams * line.unitCost }))
+    const totalValue = extendedValue.reduce((total, item) => total + item.value, 0)
+    if (totalValue <= 0) {
+      throw new UnprocessableEntityException('Receipt has no value basis for landed cost allocation')
+    }
+    const primaryLine = [...extendedValue].sort((left, right) => right.value - left.value || left.line.id.localeCompare(right.line.id))[0]!
+    let allocated = 0
+    const allocations = extendedValue.map((item) => {
+      const provisional = Number((totalLandedCost * (item.value / totalValue)).toFixed(6))
+      allocated += provisional
+      return { receiptLineId: item.line.id, lotId: item.line.lotId, allocatedCost: provisional, landedUnitCost: 0 }
+    })
+    const residual = Number((totalLandedCost - allocated).toFixed(6))
+    const primaryAllocation = allocations.find((allocation) => allocation.receiptLineId === primaryLine.line.id)
+    if (primaryAllocation) primaryAllocation.allocatedCost = Number((primaryAllocation.allocatedCost + residual).toFixed(6))
+    const nextLines = receipt.lines.map((line) => {
+      const allocation = allocations.find((item) => item.receiptLineId === line.id)!
+      const landedUnitCost = Number((line.unitCost + allocation.allocatedCost / line.receivedGrams).toFixed(6))
+      allocation.landedUnitCost = landedUnitCost
+      return { ...line, landedUnitCost }
+    })
+    const allocationRecord: LandedCostAllocationRecord = {
+      id: `LCA-${receiptId}`,
+      organizationId: session.organizationId,
+      receiptId,
+      currency: this.purchaseOrdersForSession(session).find((order) => order.id === receipt.purchaseOrderId)?.currency ?? 'USD',
+      freightCost,
+      dutyCost,
+      insuranceCost,
+      totalLandedCost,
+      allocationMethod: 'EXTENDED_VALUE',
+      allocations,
+      postedAt: new Date().toISOString(),
+      postedBy: session.userId,
+    }
+    this.landedCostAllocationRecords = [allocationRecord, ...this.landedCostAllocationRecords]
+    this.procurementReceiptRecords = this.procurementReceiptRecords.map((item) => item.id === receiptId ? { ...item, lines: nextLines } : item)
+    this.lots = this.lots.map((lot) => {
+      const line = nextLines.find((candidate) => candidate.lotId === lot.id)
+      return line ? { ...lot, unitCost: line.landedUnitCost ?? line.unitCost } : lot
+    })
+    const audit = this.recordAudit('procurement.landed-cost.post', allocationRecord.id, session.userId, 'allowed')
+    return {
+      data: {
+        allocation: allocationRecord,
+        receipt: this.procurementReceiptForSession(receiptId, session),
+        audit,
+        invariant: 'freight, duty, and insurance are allocated once by extended purchase value and preserve immutable lot landed cost',
+      },
+    }
+  }
+
+  inspectProcurementReceipt(receiptId: string, body: ProcurementInspectionBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'procurement.manage')
+    this.requireProductionApproverRole(session)
+    const receipt = this.procurementReceiptForSession(receiptId, session)
+    if (receipt.status !== 'QUARANTINE' && receipt.status !== 'INSPECTED') {
+      throw new UnprocessableEntityException(`Receipt ${receiptId} has already reached a final disposition`)
+    }
+    const action = body.action ?? 'QUARANTINE'
+    const allocation = this.landedCostAllocationRecords.find(
+      (record) => record.receiptId === receiptId && (record.organizationId || 'org-nxl') === session.organizationId,
+    )
+    if (action === 'ACCEPT' && !allocation) {
+      throw new UnprocessableEntityException('Post landed cost, including zero values, before accepting inventory')
+    }
+    const now = new Date().toISOString()
+    const discrepancies = (body.discrepancies ?? []).map((item, index) => {
+      const type: 'SHORT' | 'DAMAGE' | 'QUALITY' | 'DOCUMENT' | 'OTHER' = item.type === 'SHORT' || item.type === 'DAMAGE' || item.type === 'QUALITY' || item.type === 'DOCUMENT' ? item.type : 'OTHER'
+      const discrepancyAction: 'ACCEPT' | 'QUARANTINE' | 'RETURN' = item.action === 'ACCEPT' || item.action === 'RETURN' ? item.action : 'QUARANTINE'
+      return {
+        id: `${receiptId}-D${String(index + 1).padStart(2, '0')}`,
+        type,
+        action: discrepancyAction,
+        note: item.note?.trim() || 'Inspection discrepancy',
+        status: discrepancyAction === 'QUARANTINE' ? 'OPEN' as const : 'RESOLVED' as const,
+        createdAt: now,
+        resolvedAt: discrepancyAction === 'QUARANTINE' ? undefined : now,
+        resolvedBy: discrepancyAction === 'QUARANTINE' ? undefined : session.userId,
+      }
+    })
+    if (action === 'ACCEPT' && discrepancies.some((item) => item.status === 'OPEN')) {
+      throw new UnprocessableEntityException('Open receipt discrepancies must be resolved before acceptance')
+    }
+    const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
+    const returnMovements: InventoryMovement[] = []
+    const nextLines = receipt.lines.map((line) => {
+      const lot = lotMap.get(line.lotId)
+      if (!lot) throw new NotFoundException(`Receipt lot ${line.lotId} was not found`)
+      if (action === 'ACCEPT') {
+        lot.qualityStatus = 'APPROVED'
+        lot.location = 'Inventory'
+        return { ...line, acceptedGrams: line.receivedGrams, rejectedGrams: 0 }
+      }
+      if (action === 'RETURN') {
+        lot.qualityStatus = 'REJECTED'
+        lot.quantityGrams = 0
+        returnMovements.push({
+          id: `MOV-RMA-${receiptId}-${line.id}`,
+          at: now,
+          type: 'RETURN_TO_SUPPLIER',
+          direction: 'OUT',
+          materialId: line.materialId,
+          lotId: line.lotId,
+          quantityGrams: line.receivedGrams,
+          balanceAfter: 0,
+          ref: receiptId,
+          actor: session.userId,
+        })
+        return { ...line, acceptedGrams: 0, rejectedGrams: line.receivedGrams }
+      }
+      return line
+    })
+    const status = action === 'ACCEPT' ? 'ACCEPTED' : action === 'RETURN' ? 'RETURNED' : 'INSPECTED'
+    const updatedReceipt: ProcurementReceiptRecord = {
+      ...receipt,
+      status,
+      lines: nextLines,
+      discrepancies: [...receipt.discrepancies, ...discrepancies],
+      inspectionNote: body.note?.trim() || undefined,
+      inspectedAt: now,
+      inspectedBy: session.userId,
+    }
+    this.replaceLotsForSession(session, Array.from(lotMap.values()))
+    if (returnMovements.length > 0) this.movements = [...returnMovements, ...this.movements]
+    this.procurementReceiptRecords = this.procurementReceiptRecords.map((item) => item.id === receiptId ? updatedReceipt : item)
+    if (status === 'ACCEPTED') {
+      const order = this.purchaseOrdersForSession(session).find((item) => item.id === receipt.purchaseOrderId)!
+      const priceHistory = nextLines.map((line) => ({
+        id: `PRICE-${receiptId}-${line.id}`,
+        organizationId: session.organizationId,
+        materialId: line.materialId,
+        supplierId: receipt.supplierId,
+        purchaseOrderId: receipt.purchaseOrderId,
+        unitCost: line.landedUnitCost ?? line.unitCost,
+        currency: order.currency,
+        quantityGrams: line.acceptedGrams,
+        capturedAt: now,
+        source: 'PO_RECEIPT' as const,
+      }))
+      this.priceHistoryRecords = [...priceHistory, ...this.priceHistoryRecords]
+    }
+    const audit = this.recordAudit('procurement.receipt.inspect', receiptId, session.userId, status === 'ACCEPTED' ? 'allowed' : 'review')
+    return {
+      data: {
+        receipt: updatedReceipt,
+        lots: nextLines.map((line) => lotMap.get(line.lotId)!).filter(Boolean),
+        movements: returnMovements,
+        audit,
+        invariant: status === 'ACCEPTED'
+          ? 'accepted inspection promotes quarantined lots without duplicating receipt movements'
+          : 'inspection preserves the quarantine or return trace until a final acceptance decision',
       },
     }
   }
@@ -6406,16 +7180,27 @@ export class NorthStarService {
     }
     this.formulaForSession(batch.formulaId, session)
     const formulas = this.formulaCatalogForSession(session)
+    const report = batchCostReport(
+      id,
+      this.productionBatchRecords,
+      formulas,
+      this.materialRecords,
+      this.lotsForSession(session),
+      this.priceHistoryForSession(session),
+      this.movementsForLots(this.lotsForSession(session)),
+    )
+    const yieldRecord = this.productionYieldForSession(id, session)
+    if (!yieldRecord) return { data: report }
+    const totalCost = Number((report.materialCost + yieldRecord.laborCost + yieldRecord.overheadCost).toFixed(6))
     return {
-      data: batchCostReport(
-        id,
-        this.productionBatchRecords,
-        formulas,
-        this.materialRecords,
-        this.lotsForSession(session),
-        this.priceHistoryForSession(session),
-        this.movementsForLots(this.lotsForSession(session)),
-      ),
+      data: {
+        ...report,
+        laborCost: yieldRecord.laborCost,
+        overheadCost: yieldRecord.overheadCost,
+        totalCost,
+        costPerGram: Number((totalCost / report.outputGrams).toFixed(6)),
+        invariant: 'released batch costing uses actual raw-lot consumption plus reconciled labor and overhead evidence',
+      },
     }
   }
 
@@ -6642,6 +7427,71 @@ export class NorthStarService {
         invariant: 'notification inbox is scoped to the authenticated member and never exposes another workspace activity',
       },
     }
+  }
+
+  operationalAnalytics() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'analytics.view')
+    const receipts = this.procurementReceiptsForSession(session)
+    const allocations = this.landedCostAllocationRecords.filter((record) => (record.organizationId || 'org-nxl') === session.organizationId)
+    const yields = this.productionYieldRecords.filter((record) => (record.organizationId || 'org-nxl') === session.organizationId)
+    const qcResults = this.productionQcResultRecords.filter((record) => (record.organizationId || 'org-nxl') === session.organizationId)
+    const supplierPerformance = new Map<string, { receipts: number; accepted: number; returned: number }>()
+    receipts.forEach((receipt) => {
+      const current = supplierPerformance.get(receipt.supplierId) ?? { receipts: 0, accepted: 0, returned: 0 }
+      current.receipts += 1
+      if (receipt.status === 'ACCEPTED') current.accepted += 1
+      if (receipt.status === 'RETURNED') current.returned += 1
+      supplierPerformance.set(receipt.supplierId, current)
+    })
+    const batches = this.productionBatchRecords.filter((batch) => this.formulaCatalogForSession(session).some((formula) => formula.id === batch.formulaId))
+    const skus = this.commercialSkusForSession(session).filter((sku) => sku.productKind === 'FORMULA' && sku.formulaId)
+    const report: OperationalAnalyticsReport = {
+      quarantineLots: this.lotsForSession(session).filter((lot) => lot.qualityStatus === 'QUARANTINE').length,
+      openReceiptDiscrepancies: receipts.reduce((total, receipt) => total + receipt.discrepancies.filter((discrepancy) => discrepancy.status === 'OPEN').length, 0),
+      qcFailures: qcResults.filter((result) => result.status === 'FAILED').length,
+      receiptsByStatus: ['QUARANTINE', 'INSPECTED', 'ACCEPTED', 'RETURNED'].map((status) => ({
+        status: status as ProcurementReceiptRecord['status'],
+        count: receipts.filter((receipt) => receipt.status === status).length,
+      })),
+      supplierPerformance: Array.from(supplierPerformance.entries()).map(([supplierId, value]) => ({
+        supplierId,
+        ...value,
+        acceptanceRatePercent: value.receipts === 0 ? 0 : Number(((value.accepted / value.receipts) * 100).toFixed(2)),
+      })).sort((left, right) => right.receipts - left.receipts || left.supplierId.localeCompare(right.supplierId)),
+      yieldVariance: yields.map((record) => ({
+        batchId: record.batchId,
+        yieldVariancePercent: batches.find((batch) => batch.id === record.batchId)?.yieldVariancePercent ?? 0,
+        wasteGrams: record.wasteGrams,
+        status: record.status,
+      })),
+      landedCostVariance: allocations.map((record) => {
+        const receipt = receipts.find((candidate) => candidate.id === record.receiptId)
+        const materialValue = receipt?.lines.reduce((total, line) => total + line.unitCost * line.receivedGrams, 0) ?? 0
+        return {
+          receiptId: record.receiptId,
+          totalLandedCost: record.totalLandedCost,
+          materialValue: Number(materialValue.toFixed(6)),
+          landedPercent: materialValue === 0 ? 0 : Number(((record.totalLandedCost / materialValue) * 100).toFixed(2)),
+        }
+      }),
+      actualBatchMargins: batches.filter((batch) => batch.status === 'RELEASED' && batch.outputLot).flatMap((batch) => {
+        const sku = skus.find((candidate) => candidate.formulaId === batch.formulaId)
+        if (!sku || !batch.outputLot) return []
+        const finishedGood = this.finishedGoodLotsForSession(session).find((lot) => lot.batchId === batch.id)
+        if (!finishedGood) return []
+        const cost = finishedGood.costPerGram * sku.packSizeGrams
+        return [{
+          batchId: batch.id,
+          formulaId: batch.formulaId,
+          unitCost: Number(cost.toFixed(6)),
+          price: sku.price,
+          marginPercent: sku.price === 0 ? 0 : Number((((sku.price - cost) / sku.price) * 100).toFixed(2)),
+        }]
+      }),
+      invariant: 'operational analytics is derived from tenant-scoped receipt, QC, yield, finished-good, and ledger records',
+    }
+    return { data: report }
   }
 
   runDueAnalyticsReports(at = new Date().toISOString()) {
@@ -9702,6 +10552,20 @@ export class NorthStarService {
     }
   }
 
+  private requireOwnerOrAdmin(session: AuthSession, action: string) {
+    const effectiveRole = this.normalizeRoleForPermission(session.role)
+    if (effectiveRole !== 'Owner' && effectiveRole !== 'Admin') {
+      throw new ForbiddenException(`${action} requires Owner or Admin role`)
+    }
+  }
+
+  private requireProductionApproverRole(session: AuthSession) {
+    const effectiveRole = this.normalizeRoleForPermission(session.role)
+    if (effectiveRole !== 'Owner' && effectiveRole !== 'Admin' && effectiveRole !== 'Lab Manager' && effectiveRole !== 'Manager') {
+      throw new ForbiddenException('Production QC approval requires Admin or Manager role')
+    }
+  }
+
   private requirePermission(role: string, permission: string) {
     if (!this.roleHasPermission(role, permission)) {
       throw new ForbiddenException(`Role ${role} cannot perform ${permission}`)
@@ -9812,6 +10676,112 @@ export class NorthStarService {
     ]
   }
 
+  private activeProductionQcTemplate(formulaId: string, session: AuthSession) {
+    return this.productionQcTemplateRecords.find(
+      (template) =>
+        (template.organizationId || 'org-nxl') === session.organizationId &&
+        template.status === 'ACTIVE' &&
+        template.formulaId === formulaId,
+    ) ?? this.productionQcTemplateRecords.find(
+      (template) =>
+        (template.organizationId || 'org-nxl') === session.organizationId &&
+        template.status === 'ACTIVE' &&
+        !template.formulaId,
+    )
+  }
+
+  private productionQcTemplateForSession(id: string, session: AuthSession) {
+    const template = this.productionQcTemplateRecords.find(
+      (item) => item.id === id && (item.organizationId || 'org-nxl') === session.organizationId,
+    )
+    if (!template) throw new NotFoundException(`Production QC template ${id} was not found`)
+    return template
+  }
+
+  private productionQcResultsForSession(batchId: string, session: AuthSession) {
+    return this.productionQcResultRecords.filter(
+      (result) => result.batchId === batchId && (result.organizationId || 'org-nxl') === session.organizationId,
+    )
+  }
+
+  private productionYieldForSession(batchId: string, session: AuthSession) {
+    return this.productionYieldRecords.find(
+      (record) => record.batchId === batchId && (record.organizationId || 'org-nxl') === session.organizationId,
+    )
+  }
+
+  private productionBatchForSession(id: string, session: AuthSession) {
+    const batch = this.productionBatchRecords.find(
+      (item) => item.id === id && this.formulaCatalogForSession(session).some((formula) => formula.id === item.formulaId),
+    )
+    if (!batch) throw new NotFoundException(`Production batch ${id} was not found`)
+    return batch
+  }
+
+  private productionWorkOrdersOverlap(left: ProductionBatchRecord, right: ProductionBatchRecord) {
+    if (left.workOrder.equipment !== right.workOrder.equipment) return false
+    const leftStart = Date.parse(left.workOrder.scheduledStartAt)
+    const leftEnd = Date.parse(left.workOrder.dueAt)
+    const rightStart = Date.parse(right.workOrder.scheduledStartAt)
+    const rightEnd = Date.parse(right.workOrder.dueAt)
+    if ([leftStart, leftEnd, rightStart, rightEnd].some(Number.isNaN)) return false
+    return leftStart < rightEnd && rightStart < leftEnd
+  }
+
+  private assertStructuredProductionRelease(batch: ProductionBatchRecord, session: AuthSession) {
+    const template = batch.qcTemplateId ? this.productionQcTemplateForSession(batch.qcTemplateId, session) : undefined
+    const results = this.productionQcResultsForSession(batch.id, session)
+    if (!template || !batch.qcApprovedBy || !batch.qcApprovedAt) {
+      throw new UnprocessableEntityException('P1 production release requires structured QA approval')
+    }
+    if (template.checks.some((check) => check.required && !results.some((result) => result.templateCheckId === check.id && result.approvedBy && (result.status === 'PASSED' || result.status === 'NOT_APPLICABLE')))) {
+      throw new UnprocessableEntityException('P1 production release requires approved results for every required QC check')
+    }
+    if (results.some((result) => result.status === 'FAILED')) {
+      throw new UnprocessableEntityException('P1 production release cannot proceed while a QC result has failed')
+    }
+    const yieldRecord = this.productionYieldForSession(batch.id, session)
+    if (!yieldRecord || yieldRecord.status !== 'RECONCILED') {
+      throw new UnprocessableEntityException('P1 production release requires reconciled yield and waste')
+    }
+  }
+
+  private createProductionBatchCoa(batch: ProductionBatchRecord, session: AuthSession) {
+    const existing = this.documentsForSession(session).find((document) => document.type === 'CoA' && document.linkedTo === batch.id)
+    if (existing) return existing
+    const timestamp = new Date()
+    const id = `DOC-COA-${batch.id}`
+    const document: DocumentRecord = {
+      id,
+      organizationId: session.organizationId,
+      type: 'CoA',
+      title: `${batch.formulaCode} ${batch.id} Batch CoA`,
+      linkedTo: batch.id,
+      version: 'v1',
+      sensitivity: 'Confidential',
+      status: 'REVIEW_REQUIRED',
+      issueDate: timestamp.toISOString().slice(0, 10),
+      expiresAt: new Date(timestamp.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      lastAccessed: timestamp.toISOString(),
+      downloads: 0,
+      storageKey: `${session.organizationId}/generated/production/${batch.id}/batch-coa-v1.pdf`,
+      mimeType: 'application/pdf',
+      sizeKb: 168,
+      checksum: this.documentChecksum(`batch-coa:${batch.id}:${timestamp.toISOString().slice(0, 10)}`),
+      owner: 'Quality',
+      generatedFrom: `production-batch:${batch.id}`,
+      fileName: `batch-coa-${batch.id}.pdf`,
+      versionGroupId: id,
+      tags: ['generated', 'production', 'coa'],
+      scanStatus: 'NOT_REQUIRED',
+      ocrStatus: 'NOT_REQUESTED',
+      retentionUntil: this.documentRetentionUntil('CoA'),
+    }
+    this.documentRecords = [document, ...this.documentRecords]
+    this.recordAudit('production.batch.coa.generate', document.id, session.userId, 'review')
+    return document
+  }
+
   private normalizeProductionBatches() {
     this.productionBatchRecords = this.productionBatchRecords.map((batch) => {
       const legacy = batch as ProductionBatchRecord & {
@@ -9853,13 +10823,13 @@ export class NorthStarService {
     }
   }
 
-  private releaseProductionOutputLot(batch: ProductionBatchRecord): ProductionBatchRecord {
+  private releaseProductionOutputLot(batch: ProductionBatchRecord, yieldRecord?: ProductionYieldRecord): ProductionBatchRecord {
     if (batch.outputLot) {
       return batch
     }
 
     const releasedAt = new Date().toISOString()
-    const yieldGrams = Number((batch.consumedGrams * 0.985).toFixed(3))
+    const yieldGrams = yieldRecord?.yieldGrams ?? Number((batch.consumedGrams * 0.985).toFixed(3))
     const yieldVariancePercent = Number((((yieldGrams - batch.targetGrams) / batch.targetGrams) * 100).toFixed(2))
     const outputLot = {
       id: `FG-${batch.id}`,
@@ -10187,6 +11157,35 @@ export class NorthStarService {
     )
   }
 
+  private materialComplianceForSession(materialId: string, session: AuthSession) {
+    return this.materialComplianceRecords.find(
+      (profile) => profile.materialId === materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
+    )
+  }
+
+  private supplierMaterialProfileForSession(supplierId: string, materialId: string, session: AuthSession) {
+    return this.supplierMaterialProfileRecords.find(
+      (profile) =>
+        profile.supplierId === supplierId &&
+        profile.materialId === materialId &&
+        (profile.organizationId || 'org-nxl') === session.organizationId,
+    )
+  }
+
+  private assertMaterialCanBePurchased(materialId: string, session: AuthSession) {
+    const compliance = this.materialComplianceForSession(materialId, session)
+    if (compliance?.status === 'BLOCKED') {
+      throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be purchased`)
+    }
+  }
+
+  private assertMaterialCanBeConsumed(materialId: string, session: AuthSession) {
+    const compliance = this.materialComplianceForSession(materialId, session)
+    if (compliance?.status === 'BLOCKED') {
+      throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be consumed`)
+    }
+  }
+
   private purchaseOrdersForSession(session: AuthSession) {
     return this.purchaseOrderRecords.filter((order) =>
       (order.organizationId || 'org-nxl') === session.organizationId,
@@ -10197,6 +11196,28 @@ export class NorthStarService {
     return this.priceHistoryRecords.filter((record) =>
       (record.organizationId || 'org-nxl') === session.organizationId,
     )
+  }
+
+  private procurementReceiptsForSession(session: AuthSession) {
+    return this.procurementReceiptRecords.filter((record) =>
+      (record.organizationId || 'org-nxl') === session.organizationId,
+    )
+  }
+
+  private procurementReceiptForSession(id: string, session: AuthSession) {
+    const receipt = this.procurementReceiptsForSession(session).find((item) => item.id === id)
+    if (!receipt) {
+      throw new NotFoundException(`Procurement receipt ${id} was not found`)
+    }
+    return receipt
+  }
+
+  private requireNonNegativeAmount(value: unknown, field: string) {
+    const amount = Number(value ?? 0)
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new UnprocessableEntityException(`${field} must be a non-negative number`)
+    }
+    return Number(amount.toFixed(6))
   }
 
   private commerceRecordsForSession<T extends { organizationId?: string }>(records: T[], session: AuthSession) {

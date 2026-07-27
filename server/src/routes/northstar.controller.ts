@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
 
 type LabUsageBody = {
@@ -887,6 +887,71 @@ export class NorthStarController {
     return this.northStar.qcProductionBatch(id, body.result)
   }
 
+  @Get('production/schedule')
+  productionSchedule() {
+    return this.northStar.productionSchedule()
+  }
+
+  @Patch('production/batches/:id/plan')
+  planProductionBatch(
+    @Param('id') id: string,
+    @Body() body: { scheduledStartAt?: string; dueAt?: string; equipment?: string },
+  ) {
+    return this.northStar.planProductionBatch(id, body)
+  }
+
+  @Get('production/qc-templates')
+  productionQcTemplates() {
+    return this.northStar.productionQcTemplates()
+  }
+
+  @Post('production/qc-templates')
+  createProductionQcTemplate(
+    @Body()
+    body: {
+      formulaId?: string
+      name?: string
+      checks?: Array<{
+        id?: string
+        label?: string
+        kind?: 'NUMERIC' | 'TEXT' | 'BOOLEAN'
+        unit?: string
+        required?: boolean
+        min?: number
+        max?: number
+        expectedText?: string
+      }>
+    },
+  ) {
+    return this.northStar.createProductionQcTemplate(body)
+  }
+
+  @Get('production/batches/:id/qc/results')
+  productionQcResults(@Param('id') id: string) {
+    return this.northStar.productionQcResults(id)
+  }
+
+  @Post('production/batches/:id/qc/results')
+  recordProductionQcResult(
+    @Param('id') id: string,
+    @Body() body: { templateCheckId?: string; observedValue?: string; status?: 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE'; note?: string; documentIds?: string[] },
+  ) {
+    return this.northStar.recordProductionQcResult(id, body)
+  }
+
+  @Post('production/batches/:id/qc/approve')
+  approveProductionQc(@Param('id') id: string) {
+    return this.northStar.approveProductionQc(id)
+  }
+
+  @Post('production/batches/:id/yield')
+  recordProductionYield(
+    @Param('id') id: string,
+    @Body() body: { yieldGrams?: number; wasteGrams?: number; laborCost?: number; overheadCost?: number; note?: string },
+  ) {
+    return this.northStar.recordProductionYield(id, body)
+  }
+
   @Patch('production/batches/:id/status')
   updateProductionBatchStatus(
     @Param('id') id: string,
@@ -943,6 +1008,81 @@ export class NorthStarController {
   @Post('purchase-orders/:id/receive')
   receivePurchaseOrder(@Param('id') id: string, @Body() body: { receivedGrams?: number }) {
     return this.northStar.receivePurchaseOrder(id, body)
+  }
+
+  @Get('procurement/receipts')
+  procurementReceipts() {
+    return this.northStar.procurementReceipts()
+  }
+
+  @Post('purchase-orders/:id/receipts')
+  createProcurementReceipt(
+    @Param('id') id: string,
+    @Body() body: { receivedAt?: string; documentIds?: string[]; lines?: Array<{ materialId?: string; receivedGrams?: number; supplierLotRef?: string }> },
+  ) {
+    return this.northStar.createProcurementReceipt(id, body)
+  }
+
+  @Post('procurement/receipts/:id/landed-cost')
+  postProcurementLandedCost(
+    @Param('id') id: string,
+    @Body() body: { freightCost?: number; dutyCost?: number; insuranceCost?: number },
+  ) {
+    return this.northStar.postProcurementLandedCost(id, body)
+  }
+
+  @Post('procurement/receipts/:id/inspect')
+  inspectProcurementReceipt(
+    @Param('id') id: string,
+    @Body() body: { action?: 'ACCEPT' | 'QUARANTINE' | 'RETURN'; discrepancies?: Array<{ type?: 'SHORT' | 'DAMAGE' | 'QUALITY' | 'DOCUMENT' | 'OTHER'; action?: 'ACCEPT' | 'QUARANTINE' | 'RETURN'; note?: string }> },
+  ) {
+    return this.northStar.inspectProcurementReceipt(id, body)
+  }
+
+  @Get('materials/:id/compliance')
+  materialCompliance(@Param('id') id: string) {
+    return this.northStar.materialCompliance(id)
+  }
+
+  @Put('materials/:id/compliance')
+  upsertMaterialCompliance(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      status?: 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
+      ifraCategoryLimits?: Array<{ category?: string; limitPercent?: number }>
+      allergens?: Array<{ name?: string; cas?: string; concentrationPercent?: number }>
+      euUkFlags?: string[]
+      source?: string
+      sourceVersion?: string
+      reviewedAt?: string
+      sourceDocumentId?: string
+      note?: string
+    },
+  ) {
+    return this.northStar.upsertMaterialCompliance(id, body)
+  }
+
+  @Get('suppliers/:id/material-profiles')
+  supplierMaterialProfiles(@Param('id') id: string) {
+    return this.northStar.supplierMaterialProfiles(id)
+  }
+
+  @Put('suppliers/:id/material-profiles/:materialId')
+  upsertSupplierMaterialProfile(
+    @Param('id') id: string,
+    @Param('materialId') materialId: string,
+    @Body()
+    body: {
+      status?: 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
+      leadTimeDays?: number
+      minimumOrderGrams?: number
+      unitCost?: number
+      currency?: string
+      supplierMaterialCode?: string
+    },
+  ) {
+    return this.northStar.upsertSupplierMaterialProfile(id, materialId, body)
   }
 
   @Get('materials/:id/price-history')
@@ -1091,6 +1231,11 @@ export class NorthStarController {
   @Get('analytics/dashboard')
   analyticsDashboard() {
     return this.northStar.analyticsDashboard()
+  }
+
+  @Get('analytics/operations')
+  operationalAnalytics() {
+    return this.northStar.operationalAnalytics()
   }
 
   @Get('analytics/burn-rate')

@@ -109,6 +109,7 @@ The full production checklist, security requirements, custom domain guidance, an
 ### Enterprise Release Gates
 
 - Apply D1 migrations before deploying a Worker. `0025_enterprise_persistence_audit_chain.sql` completes the normalized-state cutover and adds append-only audit-chain evidence. `0026_finished_goods_operational_trace.sql` adds finished-good lots, finished-good ledger/COGS, formula SKU support, and organization scope for commerce records.
+- `0027_operational_p1_enterprise.sql` adds tenant-scoped material compliance, approved supplier offers, quarantined receipt/inspection/RMA records, immutable landed-cost allocations, structured QC specifications/results, yield reconciliation, and operation idempotency records. Apply it before a Worker that exposes the Operational P1 routes.
 - A production batch can create a finished-good lot only after approved formula input, raw-material consumption, QC pass, and release. Formula SKUs reserve released finished-good lots using FEFO and write COGS only when fulfilled.
 - `GET /api/v1/audit/chain/verify` and `GET /api/v1/audit/chain/evidence` are Owner/Admin-only evidence endpoints. They never return provider secrets.
 - Beta integrations are honest by default: integration readiness returns `Not configured` until its Worker secret and any DNS/HTTPS dependency are active. `managed_beta` continues to reject all Stripe customer-payment mutations server-side.
@@ -122,6 +123,16 @@ npm run deploy:pages:test
 ```
 
 Do not deploy the Worker until the remote D1 migration succeeds. `beta.labofscents.org` remains an external DNS/Pages custom-domain gate; a successful Pages preview is not evidence that the hostname resolves or has a valid certificate.
+
+### Operational P1 Workflow
+
+1. An Owner or Admin records a material compliance profile with an IFRA category limit, EU/UK flags, source, version, review date, and disposition. `BLOCKED` materials cannot be purchased or consumed. `REVIEW_REQUIRED` material can only enter receiving quarantine.
+2. A sent purchase order creates a goods receipt. Each receipt line becomes a `QUARANTINE` lot and a `RECEIPT` ledger movement; it is not FEFO-eligible or production-eligible.
+3. Post freight, duty, and insurance before accepting the receipt. The service allocates the total by extended line value, sends any rounding residual to the highest-value line, and stores immutable landed unit cost on the lot.
+4. An Owner, Admin, Lab Manager, or Manager inspects the receipt. Acceptance promotes the lot to available inventory; return-to-supplier writes an immutable return movement. Open discrepancies block acceptance.
+5. Create a formula-specific release QC template before starting a P1 batch. Operators record structured results; an Admin or Manager approves QC without MFA. Reconcile yield, waste, labor, and overhead before release. Release then creates a private Batch CoA record in review state and an auditable finished-good lot.
+
+The P1 routes require `Idempotency-Key` on mutations in the Worker. Retrying the same request returns the persisted response instead of repeating a receipt, landed-cost posting, QC approval, yield record, or lifecycle mutation.
 
 ## Data And Security Notes
 

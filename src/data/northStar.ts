@@ -89,6 +89,39 @@ export interface MaterialIngestionRecord {
   extractedFields: string[]
 }
 
+export type MaterialComplianceStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
+
+export interface MaterialComplianceProfile {
+  id: string
+  organizationId?: string
+  materialId: string
+  status: MaterialComplianceStatus
+  ifraCategoryLimits: Array<{ category: string; limitPercent: number }>
+  allergens: Array<{ name: string; cas?: string; concentrationPercent?: number }>
+  euUkFlags: string[]
+  sourceDocumentId?: string
+  source: string
+  sourceVersion: string
+  reviewedAt: string
+  reviewedBy: string
+  note?: string
+}
+
+export interface SupplierMaterialProfile {
+  id: string
+  organizationId?: string
+  supplierId: string
+  materialId: string
+  status: 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
+  leadTimeDays: number
+  minimumOrderGrams: number
+  unitCost: number
+  currency: string
+  supplierMaterialCode?: string
+  reviewedAt: string
+  reviewedBy: string
+}
+
 export interface MoleculeComponent {
   id: string
   materialId: string
@@ -352,6 +385,7 @@ export interface InventoryMovement {
     | 'ADJUSTMENT'
     | 'TRANSFER'
     | 'WASTE'
+    | 'RETURN_TO_SUPPLIER'
   direction: 'IN' | 'OUT' | 'MOVE'
   materialId: string
   lotId: string
@@ -359,6 +393,60 @@ export interface InventoryMovement {
   balanceAfter: number
   ref: string
   actor: string
+}
+
+export interface ProcurementReceiptLine {
+  id: string
+  materialId: string
+  purchaseOrderLineId: string
+  receivedGrams: number
+  acceptedGrams: number
+  rejectedGrams: number
+  unitCost: number
+  lotId: string
+  landedUnitCost?: number
+}
+
+export interface ProcurementDiscrepancy {
+  id: string
+  type: 'SHORT' | 'DAMAGE' | 'QUALITY' | 'DOCUMENT' | 'OTHER'
+  action: 'ACCEPT' | 'QUARANTINE' | 'RETURN'
+  note: string
+  status: 'OPEN' | 'RESOLVED'
+  createdAt: string
+  resolvedAt?: string
+  resolvedBy?: string
+}
+
+export interface ProcurementReceiptRecord {
+  id: string
+  organizationId?: string
+  purchaseOrderId: string
+  supplierId: string
+  status: 'QUARANTINE' | 'INSPECTED' | 'ACCEPTED' | 'RETURNED'
+  receivedAt: string
+  receivedBy: string
+  lines: ProcurementReceiptLine[]
+  discrepancies: ProcurementDiscrepancy[]
+  documentIds: string[]
+  inspectionNote?: string
+  inspectedAt?: string
+  inspectedBy?: string
+}
+
+export interface LandedCostAllocationRecord {
+  id: string
+  organizationId?: string
+  receiptId: string
+  currency: string
+  freightCost: number
+  dutyCost: number
+  insuranceCost: number
+  totalLandedCost: number
+  allocationMethod: 'EXTENDED_VALUE'
+  allocations: Array<{ receiptLineId: string; lotId: string; allocatedCost: number; landedUnitCost: number }>
+  postedAt: string
+  postedBy: string
 }
 
 export interface StorageLocation {
@@ -739,6 +827,59 @@ export interface ProductionQcCheck {
   note?: string
 }
 
+export interface ProductionQcTemplateRecord {
+  id: string
+  organizationId?: string
+  formulaId?: string
+  name: string
+  status: 'ACTIVE' | 'ARCHIVED'
+  checks: Array<{
+    id: string
+    label: string
+    kind: 'NUMERIC' | 'TEXT' | 'BOOLEAN'
+    required: boolean
+    min?: number
+    max?: number
+    expectedText?: string
+    unit?: string
+  }>
+  updatedAt: string
+  updatedBy: string
+}
+
+export interface ProductionQcResultRecord {
+  id: string
+  organizationId?: string
+  batchId: string
+  templateCheckId: string
+  label: string
+  status: 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE'
+  observedValue?: string
+  note?: string
+  documentIds: string[]
+  recordedAt: string
+  recordedBy: string
+  approvedAt?: string
+  approvedBy?: string
+}
+
+export interface ProductionYieldRecord {
+  id: string
+  organizationId?: string
+  batchId: string
+  yieldGrams: number
+  wasteGrams: number
+  laborCost: number
+  overheadCost: number
+  currency: string
+  status: 'RECORDED' | 'RECONCILED'
+  recordedAt: string
+  recordedBy: string
+  reconciledAt?: string
+  reconciledBy?: string
+  note?: string
+}
+
 export interface ProductionOutputLot {
   id: string
   lotNumber: string
@@ -790,6 +931,11 @@ export interface ProductionBatchRecord {
   consumedGrams: number
   qcStatus: 'PENDING' | 'PASSED' | 'FAILED'
   owner: string
+  qcTemplateId?: string
+  qcApprovedAt?: string
+  qcApprovedBy?: string
+  yieldRecordId?: string
+  coaDocumentId?: string
   workOrder: {
     id: string
     scheduledStartAt: string
@@ -1077,6 +1223,18 @@ export interface AnalyticsDashboardReport {
   inventoryAnalytics: InventoryAnalyticsRow[]
   roleWidgets: RoleDashboardWidget[]
   scheduledReports: ScheduledReportRecord[]
+  invariant: string
+}
+
+export interface OperationalAnalyticsReport {
+  quarantineLots: number
+  openReceiptDiscrepancies: number
+  qcFailures: number
+  receiptsByStatus: Array<{ status: ProcurementReceiptRecord['status']; count: number }>
+  supplierPerformance: Array<{ supplierId: string; receipts: number; accepted: number; returned: number; acceptanceRatePercent: number }>
+  yieldVariance: Array<{ batchId: string; yieldVariancePercent: number; wasteGrams: number; status: ProductionYieldRecord['status'] }>
+  landedCostVariance: Array<{ receiptId: string; totalLandedCost: number; materialValue: number; landedPercent: number }>
+  actualBatchMargins: Array<{ batchId: string; formulaId: string; unitCost: number; price: number; marginPercent: number }>
   invariant: string
 }
 
