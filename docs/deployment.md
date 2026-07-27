@@ -5,7 +5,7 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Frontend: Cloudflare Pages.
 - API: Cloudflare Workers.
 - Persistent commercial state: Cloudflare D1.
-- Future document binaries: Cloudflare R2.
+- Private beta document binaries: Cloudflare Workers KV; document metadata and audit evidence: Cloudflare D1.
 
 The Worker reuses the existing OlfactoryOps domain service. Formula drafts and immutable version evidence now persist in normalized D1 tables, alongside tenant, auth, audit, material master, tenant-owned inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state. The hybrid snapshot adapter remains only for the smaller approval-request and bootstrap metadata set that has not yet been normalized.
 
@@ -201,13 +201,15 @@ npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta
 
 Then add `beta.labofscents.org` as a custom domain for the `olfactoryops-beta` Pages project and create the DNS record Cloudflare requests. Set `BETA_APP_ORIGIN=https://beta.labofscents.org` in the test Worker configuration. The owner-only **Integration Readiness** panel must show the hostname as reachable before beta is announced.
 
-Before deploying the Worker, enable R2 in the Cloudflare account and create the bound test bucket:
+Before deploying the Worker, create the private Workers KV namespace used only for beta SDS/CoA and generated documents:
 
 ```bash
-npx wrangler r2 bucket create olfactoryops-documents-test
+npx wrangler kv namespace create DOCUMENTS --config wrangler.test.toml
 ```
 
-Do not deploy the Worker if this command or the subsequent R2 binding check fails. The Worker requires D1 migrations to be applied first and document uploads must not silently fall back to browser-only storage.
+Copy the returned namespace ID into `[[kv_namespaces]]` with binding `DOCUMENTS` in `wrangler.test.toml`. Do not deploy the Worker if the namespace binding check fails. The Worker requires D1 migrations to be applied first and document uploads must not silently fall back to browser-only storage.
+
+Workers KV is used only for immutable beta document blobs. It supports values up to 25 MiB, matching the upload limit. D1 remains the source of truth for tenant isolation, document metadata, approval, audit, and signed-access authorization. Do not use KV for inventory, audit, approvals, or other transactional state because KV is eventually consistent.
 
 The repo includes:
 
@@ -283,6 +285,6 @@ Supabase is not connected to the live beta write path yet. Cloudflare D1 is the 
 - D1 is SQLite-compatible, not Postgres. Sell-ready Formula and operational state use normalized D1 tables including `formula_records`, `formula_version_records`, `mfa_enrollments`, `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `material_records`, `molecule_components`, `storage_locations`, `stock_take_records`, `tenant_settings`, `feature_flags`, `numbering_sequences`, `custom_fields`, `tenant_branding`, `document_records`, `production_batches`, `suppliers`, `purchase_orders`, `price_history`, `commercial_skus`, `price_lists`, `quotes`, `sample_requests`, `customers`, `sales_orders`, `order_shipments`, `order_documents`, `scheduled_reports`, `billing_subscriptions`, `billing_invoices`, `sso_configs`, `api_keys`, `webhooks`, `webhook_deliveries`, `audit_export_jobs`, `inventory_lots`, `inventory_movements`, and `lab_usage_records`.
 - Apply D1 migrations before deploying Worker code that depends on new normalized tables.
 - Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only.
-- Keep document binaries and generated PDFs out of D1. Store files in R2 and keep only metadata/signed URL evidence in D1.
+- Keep document binaries and generated PDFs out of D1. During beta, store them in the private Workers KV namespace and keep only metadata/signed URL evidence in D1. Move these immutable blobs to R2 before high-volume production usage.
 - The next persistence hardening target is the remaining approval-request and bootstrap metadata still served by the hybrid snapshot adapter.
 

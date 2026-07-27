@@ -110,7 +110,7 @@ The full production checklist, security requirements, custom domain guidance, an
 
 - Tenant access, sessions, permissions, and audit events are server-enforced.
 - Mutating cookie-authenticated API calls require a CSRF token.
-- D1 stores structured operational metadata; document binaries should live in Cloudflare R2 with only metadata and signed-URL evidence persisted in D1.
+- D1 stores structured operational metadata; beta SDS/CoA binaries live in a private Cloudflare Workers KV namespace, while document metadata and signed-access evidence remain in D1.
 - Generated functional reports, browser evidence, `.env*` files, and credentials are intentionally ignored by Git.
 
 ## Production Integrations

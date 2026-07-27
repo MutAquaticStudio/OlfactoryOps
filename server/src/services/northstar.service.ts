@@ -7032,8 +7032,8 @@ export class NorthStarService {
             label: 'Document storage',
             status: config.documentsAvailable ? 'ready' : 'blocked',
             detail: config.documentsAvailable
-              ? 'R2 document storage binding is available.'
-              : 'R2 document storage is unavailable. Enable R2 and bind the beta bucket before document upload goes live.',
+              ? 'Cloudflare KV private document storage binding is available.'
+              : 'Cloudflare KV private document storage is unavailable. Bind the beta namespace before document upload goes live.',
           },
           {
             key: 'email',

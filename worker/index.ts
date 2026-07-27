@@ -73,7 +73,7 @@ import {
 
 type Env = {
   DB: D1Database
-  DOCUMENTS?: R2Bucket
+  DOCUMENTS?: KVNamespace
   CORS_ORIGINS?: string
   SEEDED_ADMIN_PASSWORD_HASH?: string
   MFA_ENCRYPTION_KEY?: string
@@ -1367,7 +1367,7 @@ function withApiSecurityHeaders(response: Response, corsHeaders: HeadersInit) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
-function requireDocumentBucket(env: Env) {
+function requireDocumentStore(env: Env) {
   if (!env.DOCUMENTS) {
     throw new UnprocessableEntityException('Private document storage is not configured')
   }
@@ -1477,10 +1477,9 @@ async function handleDocumentUpload(service: NorthStarService, env: Env, formDat
   }).data
   const objectBody = await file.arrayBuffer()
   const checksum = await sha256ForArrayBuffer(objectBody)
-  const bucket = requireDocumentBucket(env)
-  await bucket.put(prepared.storageKey, objectBody, {
-    httpMetadata: { contentType: prepared.mimeType },
-    customMetadata: {
+  const documentStore = requireDocumentStore(env)
+  await documentStore.put(prepared.storageKey, objectBody, {
+    metadata: {
       documentId: prepared.id,
       organizationId: prepared.organizationId,
       checksum,
@@ -1494,19 +1493,18 @@ async function handleDocumentUpload(service: NorthStarService, env: Env, formDat
       ocrTextPreview: formDataString(formData, 'ocrTextPreview') || undefined,
     })
   } catch (error) {
-    await bucket.delete(prepared.storageKey)
+    await documentStore.delete(prepared.storageKey)
     throw error
   }
 }
 
 async function generateDocumentObject(service: NorthStarService, env: Env, body: Record<string, unknown>) {
-  const bucket = requireDocumentBucket(env)
+  const documentStore = requireDocumentStore(env)
   const result = service.generateDocument(body)
   const document = result.data.document
   const pdf = createGeneratedDocumentPdf(document)
-  await bucket.put(document.storageKey, pdf, {
-    httpMetadata: { contentType: 'application/pdf' },
-    customMetadata: {
+  await documentStore.put(document.storageKey, pdf, {
+    metadata: {
       documentId: document.id,
       organizationId: document.organizationId || 'org-nxl',
       checksum: document.checksum,
@@ -1517,7 +1515,7 @@ async function generateDocumentObject(service: NorthStarService, env: Env, body:
 }
 
 async function signDocumentDownload(service: NorthStarService, env: Env, request: Request, documentId: string) {
-  requireDocumentBucket(env)
+  requireDocumentStore(env)
   const result = service.requestDocumentSignedUrl(documentId).data
   return {
     data: {
@@ -1534,7 +1532,7 @@ async function shareDocumentObject(
   documentId: string,
   body: Record<string, unknown>,
 ) {
-  requireDocumentBucket(env)
+  requireDocumentStore(env)
   const result = service.shareDocument(documentId, body).data
   return {
     data: {
@@ -1558,10 +1556,10 @@ async function serveDocumentContent(documentId: string, query: URLSearchParams, 
   if (row.status === 'QUARANTINED' || row.status === 'ARCHIVED') {
     throw new ForbiddenException('Document is not available for download')
   }
-  const object = await requireDocumentBucket(env).get(row.storage_key)
+  const object = await requireDocumentStore(env).get(row.storage_key, 'stream')
   if (!object) throw new UnprocessableEntityException('Document object is not available in private storage')
   const fileName = row.title.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-|-$/g, '') || `${row.id}.bin`
-  return new Response(object.body, {
+  return new Response(object, {
     headers: {
       'Content-Type': row.mime_type || 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${fileName}"`,

@@ -9,7 +9,7 @@ workers_dev = true
 crons = ["0 * * * *"]
 
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.pages.dev,https://*.labofscents.pages.dev,https://beta.labofscents.org"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.pages.dev,https://*.labofscents.pages.dev,https://olfactoryops-beta.pages.dev,https://beta.labofscents.org"
 BILLING_MODE = "managed_beta"
 BETA_APP_ORIGIN = "https://beta.labofscents.org"
 
@@ -19,6 +19,6 @@ database_name = "olfactoryops-test"
 database_id = "a5144134-3f58-4f6b-b516-05789ef05fbc"
 migrations_dir = "migrations"
 
-[[r2_buckets]]
+[[kv_namespaces]]
 binding = "DOCUMENTS"
-bucket_name = "olfactoryops-documents-test"
+id = "38a6be8a60e04985a27fa27c96c855ba"
