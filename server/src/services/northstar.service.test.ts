@@ -1893,6 +1893,44 @@ describe('NorthStarService', () => {
     expect(costSheet.costPerGram).toBeCloseTo(costSheet.totalCost / costSheet.outputGrams, 4)
   })
 
+  it('carries a released formula through finished-good FEFO fulfillment and source COGS', () => {
+    const service = createAuthenticatedService()
+    const batch = service.createProductionBatch('frm-0421', 25).data
+    service.consumeProductionBatch(batch.id)
+    service.updateProductionBatchStatus(batch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(batch.id, 'QC')
+    service.qcProductionBatch(batch.id, 'PASSED')
+    service.updateProductionBatchStatus(batch.id, 'RELEASED')
+
+    const finishedGood = service.finishedGoodLots().data.find((lot) => lot.batchId === batch.id)
+    expect(finishedGood?.qualityStatus).toBe('RELEASED')
+    expect(finishedGood?.costPerGram).toBeGreaterThan(0)
+
+    const sku = service.createCatalogSku({
+      formulaId: 'frm-0421',
+      name: `Released formula pack ${batch.id}`,
+      packSizeGrams: 10,
+      price: 30,
+    }).data.sku
+    expect(sku.productKind).toBe('FORMULA')
+    expect(sku.canSellPacks).toBeGreaterThan(0)
+
+    const quote = service.createQuote({ customerId: 'CUS-DEMO', skuId: sku.id, quantityPacks: 1 }).data.quote
+    service.updateQuoteStatus(quote.id, { status: 'ACCEPTED' })
+    const order = service.convertQuoteToOrder(quote.id).data.order
+    const reservation = service.reserveOrder(order.id).data
+    const fulfillment = service.fulfillOrder(order.id).data
+    const finishedGoodCosting = service.finishedGoodCosting().data
+
+    expect(reservation.allocations.every((allocation) => allocation.sourceType === 'FINISHED_GOOD')).toBe(true)
+    expect(fulfillment.movements).toHaveLength(0)
+    expect(fulfillment.finishedGoodMovements[0]?.cogsAmount).toBeGreaterThan(0)
+    expect(finishedGoodCosting.cogs).toBeGreaterThan(0)
+    expect(finishedGoodCosting.movements.map((movement) => movement.type)).toEqual(
+      expect.arrayContaining(['PRODUCTION_OUTPUT', 'RESERVATION', 'FULFILLMENT']),
+    )
+  })
+
   it('receives purchase orders into inventory through lot and IN movement', () => {
     const service = createAuthenticatedService()
     const receipt = service.receivePurchaseOrder('PO-2026-014').data
@@ -2053,6 +2091,33 @@ describe('NorthStarService', () => {
     expect(sample.sample.status).toBe('REQUESTED')
     expect(sample.invariant).toContain('does not reserve or move stock')
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('does not expose or quote catalog records from another tenant', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as { commercialSkuRecords: Array<Record<string, unknown>> }
+    internals.commercialSkuRecords = [
+      {
+        id: 'SKU-OTHER-001',
+        organizationId: 'org-other',
+        materialId: 'mat-iso',
+        name: 'External tenant formula pack',
+        description: 'Must remain tenant-scoped',
+        packSizeGrams: 10,
+        price: 10,
+        currency: 'USD',
+        tier: 'Studio',
+        status: 'ACTIVE',
+        moqPacks: 1,
+        labelTemplate: 'External',
+      },
+      ...internals.commercialSkuRecords,
+    ]
+
+    expect(service.catalogSkus().data.some((sku) => sku.id === 'SKU-OTHER-001')).toBe(false)
+    expect(() => service.createQuote({ customerId: 'CUS-DEMO', skuId: 'SKU-OTHER-001', quantityPacks: 1 })).toThrow(
+      /was not found/,
+    )
   })
 
   it('manages quote and sample lifecycles before converting accepted commercial intent to an order', () => {

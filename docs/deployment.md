@@ -7,7 +7,9 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Persistent commercial state: Cloudflare D1.
 - Private beta document binaries: Cloudflare Workers KV; document metadata and audit evidence: Cloudflare D1.
 
-The Worker reuses the existing OlfactoryOps domain service. Formula drafts and immutable version evidence now persist in normalized D1 tables, alongside tenant, auth, audit, material master, tenant-owned inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state. The hybrid snapshot adapter remains only for the smaller approval-request and bootstrap metadata set that has not yet been normalized.
+The Worker reuses the existing OlfactoryOps domain service. Formula drafts and immutable version evidence now persist in normalized D1 tables, alongside tenant, auth, audit, material master, tenant-owned inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state. `0025_enterprise_persistence_audit_chain.sql` completes the remaining bootstrap and approval persistence cutover and adds append-only hash-chain evidence. The legacy snapshot table is read only during one short cutover path and is not used for new mutations.
+
+`0026_finished_goods_operational_trace.sql` adds finished-good lots and immutable finished-good ledger events. A released batch creates a workspace-scoped lot only after formula-version approval, input consumption, QC pass, and lifecycle release. Formula SKUs allocate released finished goods by FEFO; reservation/release/fulfillment events retain source lot and COGS evidence. The same migration adds organization scope to catalog, price list, quote, customer, order, shipment, document, and scheduled-report records.
 
 ## 1. Create D1
 
@@ -88,7 +90,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, and `migrations/0024_notification_outbox.sql`, before enabling billing webhooks or transactional email. For the test Worker:
+Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, and `migrations/0026_finished_goods_operational_trace.sql`, before enabling billing webhooks, transactional email, or finished-good commerce. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
@@ -199,7 +201,7 @@ npx wrangler pages project create olfactoryops-beta --production-branch beta
 npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta
 ```
 
-Then add `beta.labofscents.org` as a custom domain for the `olfactoryops-beta` Pages project and create the DNS record Cloudflare requests. Set `BETA_APP_ORIGIN=https://beta.labofscents.org` in the test Worker configuration. The owner-only **Integration Readiness** panel must show the hostname as reachable before beta is announced.
+Then add `beta.labofscents.org` as a custom domain for the `olfactoryops-beta` Pages project and create the DNS record Cloudflare requests. Set `BETA_APP_ORIGIN=https://beta.labofscents.org` in the test Worker configuration. The owner-only **Integration Readiness** panel must show the hostname as reachable before beta is announced. Until DNS resolves and Cloudflare has issued HTTPS, Integration Readiness must remain `Not configured` or `Pending`; a successful Pages deployment is not a hostname activation signal.
 
 Before deploying the Worker, create the private Workers KV namespace used only for beta SDS/CoA and generated documents:
 

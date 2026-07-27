@@ -748,6 +748,39 @@ export interface ProductionOutputLot {
   releasedAt?: string
 }
 
+export interface FinishedGoodLotRecord {
+  id: string
+  organizationId: string
+  batchId: string
+  formulaId: string
+  formulaCode: string
+  lotNumber: string
+  quantityGrams: number
+  reservedGrams: number
+  qualityStatus: 'RELEASED' | 'HOLD'
+  releasedAt: string
+  costPerGram: number
+  currency: string
+  location: string
+}
+
+export interface FinishedGoodMovementRecord {
+  id: string
+  organizationId: string
+  finishedGoodLotId: string
+  batchId: string
+  formulaId: string
+  orderId?: string
+  type: 'PRODUCTION_OUTPUT' | 'RESERVATION' | 'RESERVATION_RELEASE' | 'FULFILLMENT'
+  direction: 'IN' | 'HOLD' | 'RELEASE' | 'OUT'
+  quantityGrams: number
+  balanceAfter: number
+  costPerGram: number
+  cogsAmount?: number
+  at: string
+  actor: string
+}
+
 export interface ProductionBatchRecord {
   id: string
   formulaId: string
@@ -1027,6 +1060,7 @@ export interface RoleDashboardWidget {
 
 export interface ScheduledReportRecord {
   id: string
+  organizationId?: string
   name: string
   cadence: 'DAILY' | 'WEEKLY' | 'MONTHLY'
   audience: string
@@ -1048,7 +1082,10 @@ export interface AnalyticsDashboardReport {
 
 export interface CommercialSkuRecord {
   id: string
+  organizationId?: string
   materialId: string
+  formulaId?: string
+  productKind?: 'MATERIAL' | 'FORMULA'
   name: string
   description: string
   packSizeGrams: number
@@ -1062,6 +1099,7 @@ export interface CommercialSkuRecord {
 
 export interface PriceListRecord {
   id: string
+  organizationId?: string
   name: string
   customerGroup: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
   currency: string
@@ -1072,6 +1110,7 @@ export interface PriceListRecord {
 
 export interface QuoteRecord {
   id: string
+  organizationId?: string
   skuId: string
   customer: string
   customerGroup: PriceListRecord['customerGroup']
@@ -1093,6 +1132,7 @@ export interface QuoteLineItem {
 
 export interface SampleRequestRecord {
   id: string
+  organizationId?: string
   skuId: string
   customer: string
   packs: number
@@ -1110,6 +1150,7 @@ export interface CustomerAddress {
 
 export interface CustomerRecord {
   id: string
+  organizationId?: string
   name: string
   group: PriceListRecord['customerGroup']
   creditLimit: number
@@ -1122,6 +1163,7 @@ export interface CustomerRecord {
 
 export interface ShipmentRecord {
   id: string
+  organizationId?: string
   orderId: string
   carrier: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
   trackingNumber: string
@@ -1134,6 +1176,7 @@ export interface ShipmentRecord {
 
 export interface OrderDocumentRecord {
   id: string
+  organizationId?: string
   orderId: string
   type: 'PICK_LIST' | 'PACKING_SLIP' | 'INVOICE' | 'COA'
   status: 'DRAFT' | 'READY' | 'SENT'
@@ -1143,6 +1186,7 @@ export interface OrderDocumentRecord {
 
 export interface SalesOrderRecord {
   id: string
+  organizationId?: string
   skuId: string
   customerId: string
   customer: string
@@ -1491,6 +1535,8 @@ export interface BusinessRecord {
 export interface Allocation {
   materialId: string
   materialName: string
+  sourceType?: 'MATERIAL' | 'FINISHED_GOOD'
+  formulaId?: string
   requiredGrams: number
   lotId: string
   lotNumber: string

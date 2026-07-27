@@ -106,6 +106,23 @@ The hosted architecture is Cloudflare Pages for the frontend and Cloudflare Work
 
 The full production checklist, security requirements, custom domain guidance, and live test commands are in [docs/deployment.md](docs/deployment.md).
 
+### Enterprise Release Gates
+
+- Apply D1 migrations before deploying a Worker. `0025_enterprise_persistence_audit_chain.sql` completes the normalized-state cutover and adds append-only audit-chain evidence. `0026_finished_goods_operational_trace.sql` adds finished-good lots, finished-good ledger/COGS, formula SKU support, and organization scope for commerce records.
+- A production batch can create a finished-good lot only after approved formula input, raw-material consumption, QC pass, and release. Formula SKUs reserve released finished-good lots using FEFO and write COGS only when fulfilled.
+- `GET /api/v1/audit/chain/verify` and `GET /api/v1/audit/chain/evidence` are Owner/Admin-only evidence endpoints. They never return provider secrets.
+- Beta integrations are honest by default: integration readiness returns `Not configured` until its Worker secret and any DNS/HTTPS dependency are active. `managed_beta` continues to reject all Stripe customer-payment mutations server-side.
+
+For the isolated beta Worker, use the test configuration explicitly:
+
+```bash
+npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
+npm run deploy:worker -- --config wrangler.test.toml
+npm run deploy:pages:test
+```
+
+Do not deploy the Worker until the remote D1 migration succeeds. `beta.labofscents.org` remains an external DNS/Pages custom-domain gate; a successful Pages preview is not evidence that the hostname resolves or has a valid certificate.
+
 ## Data And Security Notes
 
 - Tenant access, sessions, permissions, and audit events are server-enforced.

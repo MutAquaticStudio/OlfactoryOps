@@ -115,6 +115,8 @@ import {
   type DocumentShareLink,
   type DocumentType,
   type FeatureFlagRecord,
+  type FinishedGoodLotRecord,
+  type FinishedGoodMovementRecord,
   type Formula,
   type FormulaLine,
   type FormulaEvaluationRecord,
@@ -312,6 +314,7 @@ type CreateSupplierBody = {
 
 type CreateCatalogSkuBody = {
   materialId?: string
+  formulaId?: string
   name?: string
   description?: string
   packSizeGrams?: number
@@ -736,6 +739,8 @@ export class NorthStarService {
   private customFieldRecords: CustomFieldDefinition[] = structuredClone(customFields)
   private brandingRecord: BrandingConfig = structuredClone(brandingConfig)
   private productionBatchRecords: ProductionBatchRecord[] = structuredClone(productionBatches)
+  private finishedGoodLotRecords: FinishedGoodLotRecord[] = []
+  private finishedGoodMovementRecords: FinishedGoodMovementRecord[] = []
   private supplierRecords: SupplierRecord[] = structuredClone(suppliers)
   private purchaseOrderRecords: PurchaseOrderRecord[] = structuredClone(purchaseOrders)
   private priceHistoryRecords: PriceHistoryRecord[] = structuredClone(priceHistory)
@@ -3346,6 +3351,19 @@ export class NorthStarService {
     return { data: this.auditEventsForSession(session) }
   }
 
+  auditChainAccess() {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can verify audit evidence')
+    }
+    return {
+      data: {
+        organizationId: session.organizationId,
+        invariant: 'audit-chain verification is restricted to the active owner or admin workspace',
+      },
+    }
+  }
+
   securityPolicy() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'security.policy.manage')
@@ -4998,13 +5016,21 @@ export class NorthStarService {
       throw new UnprocessableEntityException(`Production batch ${id} cannot return to weighing after consumption`)
     }
 
+    let releasedBatch: ProductionBatchRecord | undefined
     this.productionBatchRecords = this.productionBatchRecords.map((item) => {
       if (item.id !== id) {
         return item
       }
       const released = status === 'RELEASED' ? this.releaseProductionOutputLot(item) : item
-      return { ...released, status }
+      const updated = { ...released, status }
+      if (status === 'RELEASED') {
+        releasedBatch = updated
+      }
+      return updated
     })
+    if (releasedBatch) {
+      this.ensureFinishedGoodLot(releasedBatch, session)
+    }
     this.recordAudit('production.batch.status', id, session.userId, status === 'HOLD' ? 'review' : 'allowed')
     return {
       data: {
@@ -5315,8 +5341,9 @@ export class NorthStarService {
   }
 
   catalogSkus() {
+    const session = this.currentSession()
     return {
-      data: skuAvailability(this.commercialSkuRecords, this.lots, this.materialRecords),
+      data: this.catalogSkuAvailability(this.commercialSkusForSession(session), session),
     }
   }
 
@@ -5324,15 +5351,28 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
     const materialId = body.materialId?.trim()
-    if (!materialId) {
-      throw new NotFoundException('Material unknown was not found')
+    const formulaId = body.formulaId?.trim()
+    if (Boolean(materialId) === Boolean(formulaId)) {
+      throw new UnprocessableEntityException('Select exactly one material or approved formula for a SKU')
     }
-    const material = this.materialForSession(materialId, session)
+    const material = materialId ? this.materialForSession(materialId, session) : undefined
+    const formula = formulaId ? this.formulaForSession(formulaId, session) : undefined
+    const approvedFormulaVersion = formula
+      ? this.formulaVersionRecords.some(
+          (version) =>
+            version.formulaId === formula.id &&
+            (version.organizationId || 'org-nxl') === session.organizationId &&
+            version.status === 'APPROVED',
+        )
+      : false
+    if (formula && !approvedFormulaVersion) {
+      throw new UnprocessableEntityException(`Formula ${formula.id} must be approved before it can be catalogued`)
+    }
     const name = body.name?.trim()
     if (!name) {
       throw new UnprocessableEntityException('SKU name is required')
     }
-    if (this.commercialSkuRecords.some((sku) => sku.name.toLowerCase() === name.toLowerCase())) {
+    if (this.commercialSkusForSession(session).some((sku) => sku.name.toLowerCase() === name.toLowerCase())) {
       throw new UnprocessableEntityException(`SKU ${name} already exists`)
     }
     const packSizeGrams = Number(body.packSizeGrams ?? 0)
@@ -5353,10 +5393,13 @@ export class NorthStarService {
     }
 
     const sku: CommercialSkuRecord = {
-      id: `SKU-${material.id.replace('mat-', '').slice(0, 3).toUpperCase()}-${String(this.commercialSkuRecords.length + 51).padStart(3, '0')}`,
-      materialId: material.id,
+      id: `SKU-${(material?.id ?? formula?.code ?? formula?.id ?? 'FG').replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase()}-${String(this.commercialSkuRecords.length + 51).padStart(3, '0')}`,
+      organizationId: session.organizationId,
+      materialId: material?.id ?? `FG:${formula!.id}`,
+      formulaId: formula?.id,
+      productKind: formula ? 'FORMULA' : 'MATERIAL',
       name,
-      description: body.description?.trim() || `${material.name} commercial pack`,
+      description: body.description?.trim() || `${material?.name ?? formula?.name} commercial pack`,
       packSizeGrams,
       price,
       currency: body.currency?.trim().toUpperCase() || 'USD',
@@ -5369,15 +5412,18 @@ export class NorthStarService {
     const audit = this.recordAudit('commerce.sku.create', sku.id, session.userId, 'allowed')
     return {
       data: {
-        sku: skuAvailability([sku], this.lots, this.materialRecords)[0],
+        sku: this.catalogSkuAvailability([sku], session)[0],
         audit,
-        invariant: 'commerce SKU creation stores no stock; availability is derived from Inventory lots',
+        invariant: formula
+          ? 'formula SKU availability is derived only from released finished-good lots for this workspace'
+          : 'commerce SKU creation stores no stock; availability is derived from approved Inventory lots for this workspace',
       },
     }
   }
 
   priceLists() {
-    return { data: this.priceListRecords }
+    const session = this.currentSession()
+    return { data: this.priceListsForSession(session) }
   }
 
   createPriceList(body: CreatePriceListBody = {}) {
@@ -5398,6 +5444,7 @@ export class NorthStarService {
 
     const priceList: PriceListRecord = {
       id: `PL-${customerGroup.toUpperCase()}-${String(this.priceListRecords.length + 1).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       name,
       customerGroup,
       currency: body.currency?.trim().toUpperCase() || 'USD',
@@ -5417,7 +5464,8 @@ export class NorthStarService {
   }
 
   quotes() {
-    return { data: this.quoteRecords }
+    const session = this.currentSession()
+    return { data: this.quotesForSession(session) }
   }
 
   createQuote(body: CreateQuoteBody = {}) {
@@ -5429,7 +5477,7 @@ export class NorthStarService {
     if (requestedLines.length === 0 || requestedLines.length > 25) {
       throw new UnprocessableEntityException('Quote must contain between 1 and 25 SKU lines')
     }
-    const customerRecord = body.customerId ? this.customerRecords.find((item) => item.id === body.customerId) : undefined
+    const customerRecord = body.customerId ? this.customersForSession(session).find((item) => item.id === body.customerId) : undefined
     if (body.customerId && !customerRecord) {
       throw new NotFoundException(`Customer ${body.customerId} was not found`)
     }
@@ -5439,8 +5487,8 @@ export class NorthStarService {
     }
     const customerGroup = customerRecord?.group ?? body.customerGroup ?? 'Studio'
     const priceList =
-      this.priceListRecords.find((item) => item.customerGroup === customerGroup && item.status === 'ACTIVE') ??
-      this.priceListRecords.find((item) => item.customerGroup === 'Studio' && item.status === 'ACTIVE')
+      this.priceListsForSession(session).find((item) => item.customerGroup === customerGroup && item.status === 'ACTIVE') ??
+      this.priceListsForSession(session).find((item) => item.customerGroup === 'Studio' && item.status === 'ACTIVE')
     if (!priceList) {
       throw new NotFoundException(`Active price list for ${customerGroup} was not found`)
     }
@@ -5451,7 +5499,7 @@ export class NorthStarService {
         throw new UnprocessableEntityException('Each quote SKU line must be unique')
       }
       seenSkuIds.add(skuId)
-      const sku = this.commercialSkuRecords.find((item) => item.id === skuId)
+      const sku = this.commercialSkusForSession(session).find((item) => item.id === skuId)
       if (!sku) {
         throw new NotFoundException(`SKU ${skuId} was not found`)
       }
@@ -5470,14 +5518,14 @@ export class NorthStarService {
         lineTotal: Number((unitPrice * quantityPacks).toFixed(2)),
       }
     })
-    const availability = skuAvailability(
-      lines.map((line) => this.commercialSkuRecords.find((item) => item.id === line.skuId)!),
-      this.lots,
-      this.materialRecords,
+    const availability = this.catalogSkuAvailability(
+      lines.map((line) => this.commercialSkusForSession(session).find((item) => item.id === line.skuId)!),
+      session,
     )
     const primaryLine = lines[0]
     const quote: QuoteRecord = {
       id: `QTE-2026-${String(this.quoteRecords.length + 34).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       skuId: primaryLine.skuId,
       customer,
       customerGroup,
@@ -5496,7 +5544,7 @@ export class NorthStarService {
         quote,
         availability,
         audit,
-        invariant: 'quote creation reads SKU availability from inventory and creates no reservation or movement',
+        invariant: 'quote creation reads workspace-scoped SKU availability and creates no reservation or movement',
       },
     }
   }
@@ -5504,7 +5552,7 @@ export class NorthStarService {
   updateQuoteStatus(id: string, body: UpdateQuoteStatusBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
-    const quote = this.quoteRecords.find((item) => item.id === id)
+    const quote = this.quotesForSession(session).find((item) => item.id === id)
     if (!quote) {
       throw new NotFoundException(`Quote ${id} was not found`)
     }
@@ -5542,7 +5590,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
     this.requirePermission(session.role, 'orders.reserve')
-    const quote = this.quoteRecords.find((item) => item.id === id)
+    const quote = this.quotesForSession(session).find((item) => item.id === id)
     if (!quote) {
       throw new NotFoundException(`Quote ${id} was not found`)
     }
@@ -5550,7 +5598,7 @@ export class NorthStarService {
       throw new UnprocessableEntityException(`Quote ${id} must be accepted before conversion to an order`)
     }
     const customer =
-      this.customerRecords.find((item) => item.name.toLowerCase() === quote.customer.toLowerCase()) ??
+      this.customersForSession(session).find((item) => item.name.toLowerCase() === quote.customer.toLowerCase()) ??
       (() => {
         const normalized = quote.customer.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 18).toUpperCase()
         const baseId = `CUS-${normalized || this.customerRecords.length + 1}`
@@ -5559,6 +5607,7 @@ export class NorthStarService {
           : baseId
         const created: CustomerRecord = {
           id: customerId,
+          organizationId: session.organizationId,
           name: quote.customer,
           group: quote.customerGroup,
           creditLimit: 250,
@@ -5575,7 +5624,7 @@ export class NorthStarService {
       ? quote.lines
       : [{ skuId: quote.skuId, quantityPacks: quote.quantityPacks, unitPrice: quote.unitPrice, lineTotal: quote.total }]
     ).map((line) => {
-      const sku = this.commercialSkuRecords.find((item) => item.id === line.skuId)
+      const sku = this.commercialSkusForSession(session).find((item) => item.id === line.skuId)
       if (!sku || sku.status !== 'ACTIVE') {
         throw new UnprocessableEntityException(`Quote ${id} contains a SKU that is no longer available for orders`)
       }
@@ -5591,6 +5640,7 @@ export class NorthStarService {
     const primaryLine = lines[0]
     const order: SalesOrderRecord = {
       id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       skuId: primaryLine.skuId,
       customerId: customer.id,
       customer: customer.name,
@@ -5630,13 +5680,14 @@ export class NorthStarService {
   }
 
   samples() {
-    return { data: this.sampleRequestRecords }
+    const session = this.currentSession()
+    return { data: this.samplesForSession(session) }
   }
 
   requestSample(body: CreateSampleRequestBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
-    const sku = this.commercialSkuRecords.find((item) => item.id === body.skuId)
+    const sku = this.commercialSkusForSession(session).find((item) => item.id === body.skuId)
     if (!sku) {
       throw new NotFoundException(`SKU ${body.skuId ?? 'unknown'} was not found`)
     }
@@ -5648,17 +5699,18 @@ export class NorthStarService {
     if (!Number.isFinite(packs) || packs <= 0 || packs > 2) {
       throw new UnprocessableEntityException('Sample packs must be between 1 and 2')
     }
-    const priceList = this.priceListRecords.find((item) => item.customerGroup === sku.tier && item.status === 'ACTIVE')
+    const priceList = this.priceListsForSession(session).find((item) => item.customerGroup === sku.tier && item.status === 'ACTIVE')
     if (priceList && !priceList.sampleEligible) {
       throw new UnprocessableEntityException(`Samples are not enabled for ${sku.tier} price list`)
     }
-    const availability = skuAvailability([sku], this.lots, this.materialRecords)[0]
+    const availability = this.catalogSkuAvailability([sku], session)[0]
     if (packs > availability.canSellPacks) {
       throw new UnprocessableEntityException(`Sample request exceeds available packs for ${sku.id}`)
     }
 
     const sample: SampleRequestRecord = {
       id: `SMP-2026-${String(this.sampleRequestRecords.length + 18).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       skuId: sku.id,
       customer,
       packs,
@@ -5680,7 +5732,7 @@ export class NorthStarService {
   updateSampleStatus(id: string, body: UpdateSampleStatusBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'commerce.manage')
-    const sample = this.sampleRequestRecords.find((item) => item.id === id)
+    const sample = this.samplesForSession(session).find((item) => item.id === id)
     if (!sample) {
       throw new NotFoundException(`Sample request ${id} was not found`)
     }
@@ -5713,11 +5765,13 @@ export class NorthStarService {
   }
 
   orders() {
-    return { data: this.salesOrderRecords }
+    const session = this.currentSession()
+    return { data: this.ordersForSession(session) }
   }
 
   customers() {
-    return { data: this.customerRecords }
+    const session = this.currentSession()
+    return { data: this.customersForSession(session) }
   }
 
   createCustomer(body: CreateCustomerBody = {}) {
@@ -5757,6 +5811,7 @@ export class NorthStarService {
     }
     const customer: CustomerRecord = {
       id: this.customerRecords.some((record) => record.id === id) ? `${id}-${this.customerRecords.length + 1}` : id,
+      organizationId: session.organizationId,
       name,
       group,
       creditLimit,
@@ -5780,7 +5835,7 @@ export class NorthStarService {
   createOrder(body: CreateSalesOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.reserve')
-    const customer = this.customerRecords.find((item) => item.id === body.customerId)
+    const customer = this.customersForSession(session).find((item) => item.id === body.customerId)
     if (!customer) {
       throw new NotFoundException(`Customer ${body.customerId ?? 'unknown'} was not found`)
     }
@@ -5791,7 +5846,7 @@ export class NorthStarService {
     const discountPercent = Math.max(0, Math.min(90, Number(body.discountPercent ?? 0)))
     const taxPercent = Math.max(0, Math.min(30, Number(body.taxPercent ?? 0)))
     const shippingCost = Math.max(0, Number(body.shippingCost ?? 0))
-    const priceList = this.priceListRecords.find(
+    const priceList = this.priceListsForSession(session).find(
       (item) => item.customerGroup === customer.group && item.status === 'ACTIVE',
     )
     const seenSkuIds = new Set<string>()
@@ -5801,7 +5856,7 @@ export class NorthStarService {
         throw new UnprocessableEntityException('Each order SKU line must be unique')
       }
       seenSkuIds.add(skuId)
-      const sku = this.commercialSkuRecords.find((item) => item.id === skuId)
+      const sku = this.commercialSkusForSession(session).find((item) => item.id === skuId)
       if (!sku) {
         throw new NotFoundException(`SKU ${skuId} was not found`)
       }
@@ -5829,6 +5884,7 @@ export class NorthStarService {
     const total = Number((taxed + shippingCost).toFixed(2))
     const order: SalesOrderRecord = {
       id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       skuId: primaryLine.skuId,
       customerId: customer.id,
       customer: customer.name,
@@ -5861,7 +5917,7 @@ export class NorthStarService {
   reserveOrder(id: string, body: ReserveOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.reserve')
-    const order = this.salesOrderRecords.find((item) => item.id === id)
+    const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
@@ -5875,18 +5931,14 @@ export class NorthStarService {
       ? order.lines
       : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity, reservedGrams: 0, fulfilledGrams: 0 }]
     const lineReservations = orderLines.map((line) => {
-      const sku = this.commercialSkuRecords.find((item) => item.id === line.skuId)
+      const sku = this.commercialSkusForSession(session).find((item) => item.id === line.skuId)
       if (!sku) {
         throw new NotFoundException(`SKU ${line.skuId} was not found`)
       }
       const requiredGrams = Math.max(0, sku.packSizeGrams * line.quantity - (line.fulfilledGrams ?? 0))
-      const candidateAllocations = this.pickLotsForMaterial(
-        sku.materialId,
-        requiredGrams,
-        session,
-        false,
-        body.allowPartial === true,
-      )
+      const candidateAllocations = sku.productKind === 'FORMULA' || sku.formulaId
+        ? this.pickFinishedGoodLots(sku, requiredGrams, session, false, body.allowPartial === true)
+        : this.pickLotsForMaterial(sku.materialId, requiredGrams, session, false, body.allowPartial === true)
       const candidateGrams = candidateAllocations.reduce((sum, allocation) => sum + allocation.allocatedGrams, 0)
       const reservableGrams = body.allowPartial
         ? Math.floor(candidateGrams / sku.packSizeGrams) * sku.packSizeGrams
@@ -5911,14 +5963,41 @@ export class NorthStarService {
       fulfilledGrams: reservation.line.fulfilledGrams ?? 0,
     }))
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
-    allocations.forEach((allocation) => {
+    const finishedGoodLotMap = new Map(this.finishedGoodLotsForSession(session).map((lot) => [lot.id, { ...lot }]))
+    const finishedGoodMovements: FinishedGoodMovementRecord[] = []
+    allocations.forEach((allocation, index) => {
+      if (allocation.sourceType === 'FINISHED_GOOD') {
+        const lot = finishedGoodLotMap.get(allocation.lotId)
+        if (!lot) {
+          throw new NotFoundException(`Finished-good lot ${allocation.lotId} was not found`)
+        }
+        lot.reservedGrams += allocation.allocatedGrams
+        finishedGoodMovements.push({
+          id: `FG-MOV-RES-${id}-${index + 1}`,
+          organizationId: session.organizationId,
+          finishedGoodLotId: lot.id,
+          batchId: lot.batchId,
+          formulaId: lot.formulaId,
+          orderId: id,
+          type: 'RESERVATION',
+          direction: 'HOLD',
+          quantityGrams: allocation.allocatedGrams,
+          balanceAfter: lot.quantityGrams - lot.reservedGrams,
+          costPerGram: lot.costPerGram,
+          at: new Date().toISOString(),
+          actor: session.userId,
+        })
+        return
+      }
       const lot = lotMap.get(allocation.lotId)
       if (lot) {
         lot.reservedGrams += allocation.allocatedGrams
       }
     })
     this.replaceLotsForSession(session, Array.from(lotMap.values()))
-    const pickList = this.createOrderDocument(id, 'PICK_LIST', 'READY')
+    this.replaceFinishedGoodLotsForSession(session, Array.from(finishedGoodLotMap.values()))
+    this.finishedGoodMovementRecords = [...finishedGoodMovements, ...this.finishedGoodMovementRecords]
+    const pickList = this.createOrderDocument(id, session.organizationId, 'PICK_LIST', 'READY')
     this.salesOrderRecords = this.salesOrderRecords.map((item) =>
       item.id === id
         ? {
@@ -5938,8 +6017,8 @@ export class NorthStarService {
         allocations,
         document: pickList,
         invariant: fullyReserved
-          ? 'reservation changes reserved stock but creates no InventoryMovement'
-          : 'partial reservation creates a backorder for remaining demand without creating InventoryMovement',
+          ? 'reservation changes reserved stock but creates no InventoryMovement; finished-good reservations append a dedicated finished-good ledger event'
+          : 'partial reservation creates a backorder for remaining demand and records every finished-good hold in its ledger',
       },
     }
   }
@@ -5947,7 +6026,7 @@ export class NorthStarService {
   cancelOrder(id: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.reserve')
-    const order = this.salesOrderRecords.find((item) => item.id === id)
+    const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
@@ -5960,13 +6039,40 @@ export class NorthStarService {
     const allocations = order.reservationAllocations ?? []
     if (allocations.length > 0) {
       const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
-      allocations.forEach((allocation) => {
+      const finishedGoodLotMap = new Map(this.finishedGoodLotsForSession(session).map((lot) => [lot.id, { ...lot }]))
+      const finishedGoodMovements: FinishedGoodMovementRecord[] = []
+      allocations.forEach((allocation, index) => {
+        if (allocation.sourceType === 'FINISHED_GOOD') {
+          const lot = finishedGoodLotMap.get(allocation.lotId)
+          if (!lot) {
+            throw new NotFoundException(`Finished-good lot ${allocation.lotId} was not found`)
+          }
+          lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
+          finishedGoodMovements.push({
+            id: `FG-MOV-REL-${id}-${index + 1}`,
+            organizationId: session.organizationId,
+            finishedGoodLotId: lot.id,
+            batchId: lot.batchId,
+            formulaId: lot.formulaId,
+            orderId: id,
+            type: 'RESERVATION_RELEASE',
+            direction: 'RELEASE',
+            quantityGrams: allocation.allocatedGrams,
+            balanceAfter: lot.quantityGrams - lot.reservedGrams,
+            costPerGram: lot.costPerGram,
+            at: new Date().toISOString(),
+            actor: session.userId,
+          })
+          return
+        }
         const lot = lotMap.get(allocation.lotId)
         if (lot) {
           lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
         }
       })
       this.replaceLotsForSession(session, Array.from(lotMap.values()))
+      this.replaceFinishedGoodLotsForSession(session, Array.from(finishedGoodLotMap.values()))
+      this.finishedGoodMovementRecords = [...finishedGoodMovements, ...this.finishedGoodMovementRecords]
     }
     this.salesOrderRecords = this.salesOrderRecords.map((item) =>
       item.id === id
@@ -5984,7 +6090,7 @@ export class NorthStarService {
         orderId: id,
         releasedAllocations: allocations,
         audit,
-        invariant: 'cancellation releases reservation without creating InventoryMovement',
+        invariant: 'cancellation releases reservation without creating InventoryMovement for material lots; finished-good release events remain append-only for traceability',
       },
     }
   }
@@ -5992,7 +6098,7 @@ export class NorthStarService {
   packOrder(id: string, body: PackOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.fulfill')
-    const order = this.salesOrderRecords.find((item) => item.id === id)
+    const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
@@ -6003,9 +6109,10 @@ export class NorthStarService {
     if (allocations.length === 0) {
       throw new UnprocessableEntityException(`Sales order ${id} has no reservation allocation trace`)
     }
-    const packingSlip = this.createOrderDocument(id, 'PACKING_SLIP', 'READY')
+    const packingSlip = this.createOrderDocument(id, session.organizationId, 'PACKING_SLIP', 'READY')
     const shipment: ShipmentRecord = {
       id: `SHP-2026-${String(this.shipmentRecords.length + 41).padStart(3, '0')}`,
+      organizationId: session.organizationId,
       orderId: id,
       carrier: order.carrier ?? 'DHL',
       trackingNumber: order.trackingNumber ?? 'Pending',
@@ -6039,7 +6146,7 @@ export class NorthStarService {
   shipOrder(id: string, body: ShipOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.fulfill')
-    const order = this.salesOrderRecords.find((item) => item.id === id)
+    const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
@@ -6077,7 +6184,7 @@ export class NorthStarService {
     return {
       data: {
         orderId: id,
-        shipment: this.shipmentRecords.find((shipment) => shipment.id === order.shipmentId),
+        shipment: this.shipmentsForSession(session).find((shipment) => shipment.id === order.shipmentId),
         audit,
         invariant: 'shipment records carrier and tracking while reserved stock remains untouched until fulfillment',
       },
@@ -6087,7 +6194,7 @@ export class NorthStarService {
   fulfillOrder(id: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.fulfill')
-    const order = this.salesOrderRecords.find((item) => item.id === id)
+    const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
@@ -6102,15 +6209,47 @@ export class NorthStarService {
               ? order.lines
               : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
             return orderLines.flatMap((line) => {
-              const sku = this.commercialSkuRecords.find((item) => item.id === line.skuId)
+              const sku = this.commercialSkusForSession(session).find((item) => item.id === line.skuId)
               if (!sku) {
                 throw new NotFoundException(`SKU ${line.skuId} was not found`)
               }
-              return this.pickLotsForMaterial(sku.materialId, sku.packSizeGrams * line.quantity, session, true)
+              return sku.productKind === 'FORMULA' || sku.formulaId
+                ? this.pickFinishedGoodLots(sku, sku.packSizeGrams * line.quantity, session, true)
+                : this.pickLotsForMaterial(sku.materialId, sku.packSizeGrams * line.quantity, session, true)
             })
           })()
     const lotMap = new Map(this.lotsForSession(session).map((lot) => [lot.id, { ...lot }]))
-    const movements: InventoryMovement[] = allocations.map((allocation, index) => {
+    const finishedGoodLotMap = new Map(this.finishedGoodLotsForSession(session).map((lot) => [lot.id, { ...lot }]))
+    const finishedGoodMovements: FinishedGoodMovementRecord[] = []
+    const movements: InventoryMovement[] = allocations.flatMap((allocation, index) => {
+      if (allocation.sourceType === 'FINISHED_GOOD') {
+        const lot = finishedGoodLotMap.get(allocation.lotId)
+        if (!lot) {
+          throw new NotFoundException(`Finished-good lot ${allocation.lotId} was not found`)
+        }
+        if (lot.reservedGrams + 0.0001 < allocation.allocatedGrams) {
+          throw new UnprocessableEntityException(`Finished-good lot ${allocation.lotNumber} reservation is below fulfillment allocation`)
+        }
+        lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
+        lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
+        finishedGoodMovements.push({
+          id: `FG-MOV-FUL-${id}-${index + 1}`,
+          organizationId: session.organizationId,
+          finishedGoodLotId: lot.id,
+          batchId: lot.batchId,
+          formulaId: lot.formulaId,
+          orderId: id,
+          type: 'FULFILLMENT',
+          direction: 'OUT',
+          quantityGrams: allocation.allocatedGrams,
+          balanceAfter: lot.quantityGrams,
+          costPerGram: lot.costPerGram,
+          cogsAmount: Number((allocation.allocatedGrams * lot.costPerGram).toFixed(6)),
+          at: new Date().toISOString(),
+          actor: session.userId,
+        })
+        return []
+      }
       const lot = lotMap.get(allocation.lotId)
       if (!lot) {
         throw new NotFoundException(`Lot ${allocation.lotId} was not found`)
@@ -6120,7 +6259,7 @@ export class NorthStarService {
       }
       lot.quantityGrams = Math.max(0, lot.quantityGrams - allocation.allocatedGrams)
       lot.reservedGrams = Math.max(0, lot.reservedGrams - allocation.allocatedGrams)
-      return {
+      return [{
         id: `MOV-FUL-${id}-${index + 1}`,
         at: new Date().toISOString(),
         type: 'FULFILLMENT',
@@ -6131,12 +6270,14 @@ export class NorthStarService {
         balanceAfter: lot.quantityGrams,
         ref: id,
         actor: session.userId,
-      }
+      }]
     })
     this.replaceLotsForSession(session, Array.from(lotMap.values()))
+    this.replaceFinishedGoodLotsForSession(session, Array.from(finishedGoodLotMap.values()))
     this.movements = [...movements, ...this.movements]
-    const invoice = this.createOrderDocument(id, 'INVOICE', 'READY')
-    const coa = this.createOrderDocument(id, 'COA', 'READY')
+    this.finishedGoodMovementRecords = [...finishedGoodMovements, ...this.finishedGoodMovementRecords]
+    const invoice = this.createOrderDocument(id, session.organizationId, 'INVOICE', 'READY')
+    const coa = this.createOrderDocument(id, session.organizationId, 'COA', 'READY')
     if (order.shipmentId) {
       this.shipmentRecords = this.shipmentRecords.map((shipment) =>
         shipment.id === order.shipmentId
@@ -6158,7 +6299,7 @@ export class NorthStarService {
       reservedGrams: 0,
     }))
     const fulfilledGrams = updatedLines.reduce((sum, line) => sum + (line.fulfilledGrams ?? 0), 0)
-    const totalRequiredGrams = orderRequiredGrams(order, this.commercialSkuRecords)
+    const totalRequiredGrams = orderRequiredGrams(order, this.commercialSkusForSession(session))
     const fullyFulfilled = fulfilledGrams + 0.0001 >= totalRequiredGrams
     this.salesOrderRecords = this.salesOrderRecords.map((item) =>
       item.id === id
@@ -6178,21 +6319,48 @@ export class NorthStarService {
       data: {
         orderId: id,
         movements,
+        finishedGoodMovements,
         documents: [invoice, coa],
-        shipment: order.shipmentId ? this.shipmentRecords.find((shipment) => shipment.id === order.shipmentId) : undefined,
+        shipment: order.shipmentId ? this.shipmentsForSession(session).find((shipment) => shipment.id === order.shipmentId) : undefined,
         invariant: fullyFulfilled
-          ? 'fulfillment creates OUT movement after reservation and preserves lot traceability on shipment'
-          : 'partial fulfillment creates OUT movements only for reserved stock and keeps remaining demand on backorder',
+          ? 'fulfillment writes an OUT ledger entry against the reserved source lot and preserves lot traceability with source COGS'
+          : 'partial fulfillment writes ledger entries only for reserved stock and keeps remaining demand on backorder',
       },
     }
   }
 
   shipments() {
-    return { data: this.shipmentRecords }
+    const session = this.currentSession()
+    return { data: this.shipmentsForSession(session) }
   }
 
   orderDocuments() {
-    return { data: this.orderDocumentRecords }
+    const session = this.currentSession()
+    return { data: this.orderDocumentsForSession(session) }
+  }
+
+  finishedGoodLots() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.view')
+    return { data: this.finishedGoodLotsForSession(session) }
+  }
+
+  finishedGoodCosting() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'costing.view')
+    const lots = this.finishedGoodLotsForSession(session)
+    const movements = this.finishedGoodMovementRecords.filter((movement) => movement.organizationId === session.organizationId)
+    const cogs = movements
+      .filter((movement) => movement.type === 'FULFILLMENT')
+      .reduce((total, movement) => total + (movement.cogsAmount ?? 0), 0)
+    return {
+      data: {
+        lots,
+        movements,
+        cogs: Number(cogs.toFixed(6)),
+        invariant: 'finished-good cost is sourced from released production batch cost and COGS is written only on finished-good fulfillment',
+      },
+    }
   }
 
   costingOverview() {
@@ -6210,7 +6378,7 @@ export class NorthStarService {
         this.movementsForLots(this.lotsForSession(session)),
         formulas,
         this.materialRecords,
-        this.commercialSkuRecords,
+        this.commercialSkusForSession(session),
         this.priceHistoryForSession(session),
       ),
     }
@@ -6295,7 +6463,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'finance.viewMargin')
     const report = skuMarginReports(
-      this.commercialSkuRecords,
+      this.commercialSkusForSession(session),
       this.materialRecords,
       this.lotsForSession(session),
       this.priceHistoryForSession(session),
@@ -6322,7 +6490,7 @@ export class NorthStarService {
         this.movementsForLots(lots),
         this.materialRecords,
         this.priceHistoryForSession(session),
-        this.scheduledReportRecords,
+        this.scheduledReportsForSession(session),
       ),
     }
   }
@@ -6363,13 +6531,13 @@ export class NorthStarService {
   analyticsReports() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'analytics.view')
-    return { data: this.scheduledReportRecords }
+    return { data: this.scheduledReportsForSession(session) }
   }
 
   runAnalyticsReport(id: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'analytics.view')
-    const report = this.scheduledReportRecords.find((item) => item.id === id)
+    const report = this.scheduledReportsForSession(session).find((item) => item.id === id)
     if (!report) {
       throw new NotFoundException(`Scheduled report ${id} was not found`)
     }
@@ -9922,6 +10090,97 @@ export class NorthStarService {
       .map((lot) => ({ ...lot, organizationId: lot.organizationId || 'org-nxl' }))
   }
 
+  private finishedGoodLotsForSession(session: AuthSession) {
+    return this.finishedGoodLotRecords
+      .filter((lot) => lot.organizationId === session.organizationId)
+      .map((lot) => ({ ...lot }))
+  }
+
+  private replaceFinishedGoodLotsForSession(session: AuthSession, lots: FinishedGoodLotRecord[]) {
+    this.finishedGoodLotRecords = [
+      ...lots.map((lot) => ({ ...lot, organizationId: session.organizationId })),
+      ...this.finishedGoodLotRecords.filter((lot) => lot.organizationId !== session.organizationId),
+    ]
+  }
+
+  private catalogSkuAvailability(skus: CommercialSkuRecord[], session: AuthSession) {
+    const materialSkus = skus.filter((sku) => sku.productKind !== 'FORMULA' && !sku.formulaId)
+    const materialAvailability = new Map(
+      skuAvailability(materialSkus, this.lotsForSession(session), this.materialCatalogForSession(session)).map((sku) => [sku.id, sku]),
+    )
+    const finishedGoods = this.finishedGoodLotsForSession(session)
+    return skus.map((sku) => {
+      if (sku.productKind !== 'FORMULA' && !sku.formulaId) {
+        return materialAvailability.get(sku.id) ?? { ...sku, availableGrams: 0, canSellPacks: 0 }
+      }
+      const availableGrams = finishedGoods
+        .filter((lot) => lot.formulaId === sku.formulaId && lot.qualityStatus === 'RELEASED')
+        .reduce((total, lot) => total + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
+      return {
+        ...sku,
+        productKind: 'FORMULA' as const,
+        availableGrams: Number(availableGrams.toFixed(3)),
+        canSellPacks: Math.floor(availableGrams / sku.packSizeGrams),
+      }
+    })
+  }
+
+  private ensureFinishedGoodLot(batch: ProductionBatchRecord, session: AuthSession) {
+    const outputLot = batch.outputLot
+    if (!outputLot || outputLot.qualityStatus !== 'RELEASED') {
+      throw new UnprocessableEntityException(`Production batch ${batch.id} must have a released output lot`)
+    }
+    const existing = this.finishedGoodLotRecords.find(
+      (lot) => lot.organizationId === session.organizationId && lot.batchId === batch.id,
+    )
+    if (existing) {
+      return existing
+    }
+    const formulas = this.formulaCatalogForSession(session)
+    const cost = batchCostReport(
+      batch.id,
+      this.productionBatchRecords,
+      formulas,
+      this.materialRecords,
+      this.lotsForSession(session),
+      this.priceHistoryForSession(session),
+      this.movementsForLots(this.lotsForSession(session)),
+    )
+    const costPerGram = Number((cost.costPerGram ?? 0).toFixed(6))
+    const finishedGood: FinishedGoodLotRecord = {
+      id: outputLot.id,
+      organizationId: session.organizationId,
+      batchId: batch.id,
+      formulaId: batch.formulaId,
+      formulaCode: batch.formulaCode,
+      lotNumber: outputLot.lotNumber,
+      quantityGrams: outputLot.quantityGrams,
+      reservedGrams: 0,
+      qualityStatus: 'RELEASED',
+      releasedAt: outputLot.releasedAt ?? new Date().toISOString(),
+      costPerGram,
+      currency: 'USD',
+      location: 'Finished Goods',
+    }
+    const movement: FinishedGoodMovementRecord = {
+      id: `FG-MOV-OUT-${batch.id}`,
+      organizationId: session.organizationId,
+      finishedGoodLotId: finishedGood.id,
+      batchId: batch.id,
+      formulaId: batch.formulaId,
+      type: 'PRODUCTION_OUTPUT',
+      direction: 'IN',
+      quantityGrams: finishedGood.quantityGrams,
+      balanceAfter: finishedGood.quantityGrams,
+      costPerGram,
+      at: finishedGood.releasedAt,
+      actor: session.userId,
+    }
+    this.finishedGoodLotRecords = [finishedGood, ...this.finishedGoodLotRecords]
+    this.finishedGoodMovementRecords = [movement, ...this.finishedGoodMovementRecords]
+    return finishedGood
+  }
+
   private suppliersForSession(session: AuthSession) {
     return this.supplierRecords.filter((supplier) =>
       (supplier.organizationId || 'org-nxl') === session.organizationId,
@@ -9938,6 +10197,46 @@ export class NorthStarService {
     return this.priceHistoryRecords.filter((record) =>
       (record.organizationId || 'org-nxl') === session.organizationId,
     )
+  }
+
+  private commerceRecordsForSession<T extends { organizationId?: string }>(records: T[], session: AuthSession) {
+    return records.filter((record) => (record.organizationId || 'org-nxl') === session.organizationId)
+  }
+
+  private commercialSkusForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.commercialSkuRecords, session)
+  }
+
+  private priceListsForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.priceListRecords, session)
+  }
+
+  private quotesForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.quoteRecords, session)
+  }
+
+  private samplesForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.sampleRequestRecords, session)
+  }
+
+  private customersForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.customerRecords, session)
+  }
+
+  private ordersForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.salesOrderRecords, session)
+  }
+
+  private shipmentsForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.shipmentRecords, session)
+  }
+
+  private orderDocumentsForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.orderDocumentRecords, session)
+  }
+
+  private scheduledReportsForSession(session: AuthSession) {
+    return this.commerceRecordsForSession(this.scheduledReportRecords, session)
   }
 
   private lotForSession(id: string | undefined, session: AuthSession) {
@@ -10251,6 +10550,7 @@ export class NorthStarService {
       allocations.push({
         materialId,
         materialName: material.name,
+        sourceType: 'MATERIAL',
         requiredGrams,
         lotId: lot.id,
         lotNumber: lot.lotNumber,
@@ -10268,6 +10568,51 @@ export class NorthStarService {
       })
     }
 
+    return allocations
+  }
+
+  private pickFinishedGoodLots(
+    sku: CommercialSkuRecord,
+    requiredGrams: number,
+    session: AuthSession,
+    reservedOnly = false,
+    allowPartial = false,
+  ) {
+    if (!sku.formulaId) {
+      throw new UnprocessableEntityException(`Formula SKU ${sku.id} is missing its formula reference`)
+    }
+    const formula = this.formulaForSession(sku.formulaId, session)
+    const allocations: Allocation[] = []
+    let remaining = requiredGrams
+    this.finishedGoodLotsForSession(session)
+      .filter((lot) => lot.formulaId === sku.formulaId && lot.qualityStatus === 'RELEASED')
+      .sort((a, b) => a.releasedAt.localeCompare(b.releasedAt) || a.lotNumber.localeCompare(b.lotNumber))
+      .forEach((lot) => {
+        if (remaining <= 0) return
+        const available = reservedOnly ? lot.reservedGrams : Math.max(0, lot.quantityGrams - lot.reservedGrams)
+        const allocatedGrams = Math.min(available, remaining)
+        if (allocatedGrams <= 0) return
+        remaining -= allocatedGrams
+        allocations.push({
+          materialId: sku.materialId,
+          materialName: formula.name,
+          sourceType: 'FINISHED_GOOD',
+          formulaId: sku.formulaId,
+          requiredGrams,
+          lotId: lot.id,
+          lotNumber: lot.lotNumber,
+          allocatedGrams,
+          balanceAfter: lot.quantityGrams - allocatedGrams,
+        })
+      })
+    if (remaining > 0.0001 && !allowPartial) {
+      throw new UnprocessableEntityException({
+        message: 'Insufficient released finished goods',
+        formulaId: sku.formulaId,
+        requiredGrams,
+        availableGrams: requiredGrams - remaining,
+      })
+    }
     return allocations
   }
 
@@ -10303,15 +10648,19 @@ export class NorthStarService {
 
   private createOrderDocument(
     orderId: string,
+    organizationId: string,
     type: OrderDocumentRecord['type'],
     status: OrderDocumentRecord['status'] = 'READY',
   ) {
-    const existing = this.orderDocumentRecords.find((document) => document.orderId === orderId && document.type === type)
+    const existing = this.orderDocumentRecords.find(
+      (document) => (document.organizationId || 'org-nxl') === organizationId && document.orderId === orderId && document.type === type,
+    )
     if (existing) {
       return existing
     }
     const document: OrderDocumentRecord = {
       id: `ORD-DOC-${String(this.orderDocumentRecords.length + 1).padStart(3, '0')}`,
+      organizationId,
       orderId,
       type,
       status,
@@ -10479,7 +10828,7 @@ export class NorthStarService {
     }
 
     if (type === 'Invoice') {
-      const order = this.salesOrderRecords.find((item) => item.id === linkedTo)
+      const order = this.ordersForSession(session).find((item) => item.id === linkedTo)
       if (!order) {
         throw new NotFoundException(`Sales order ${linkedTo} was not found`)
       }

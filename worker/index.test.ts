@@ -6,6 +6,8 @@ import {
   type FormulaVersionRecord,
 } from '../src/data/northStar'
 import {
+  auditChainHash,
+  canonicalAuditChainPayload,
   normalizeFormulaPersistenceRecord,
   normalizeFormulaVersionPersistenceRecord,
   isSingleRecoveryCodeConsumption,
@@ -76,5 +78,33 @@ describe('MFA recovery-code persistence', () => {
     expect(
       isSingleRecoveryCodeConsumption(['sha256:a', 'sha256:a'], ['sha256:a']),
     ).toBe(false)
+  })
+})
+
+describe('Audit-chain evidence', () => {
+  const event = {
+    id: 'AUD-200',
+    at: '2026-07-27T10:00:00.000Z',
+    actor: 'usr-owner',
+    action: 'production.batch.release',
+    entity: 'BTH-200',
+    requestId: 'req_200',
+    outcome: 'allowed' as const,
+  }
+
+  it('serializes a stable, versioned payload before hashing', () => {
+    expect(canonicalAuditChainPayload('org-nxl', 2, 'abc123', event)).toBe(
+      '["olfactoryops.audit-chain.v1","org-nxl",2,"abc123","AUD-200","2026-07-27T10:00:00.000Z","usr-owner","production.batch.release","BTH-200","req_200","allowed"]',
+    )
+  })
+
+  it('changes the evidence hash when an audited field or predecessor changes', async () => {
+    const original = await auditChainHash('org-nxl', 2, 'abc123', event)
+    const alteredOutcome = await auditChainHash('org-nxl', 2, 'abc123', { ...event, outcome: 'blocked' })
+    const alteredPredecessor = await auditChainHash('org-nxl', 2, 'def456', event)
+
+    expect(original).toMatch(/^[a-f0-9]{64}$/)
+    expect(alteredOutcome).not.toBe(original)
+    expect(alteredPredecessor).not.toBe(original)
   })
 })

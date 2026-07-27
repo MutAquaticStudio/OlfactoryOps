@@ -34,6 +34,8 @@ import {
   type CustomFieldDefinition,
   type DocumentRecord,
   type FeatureFlagRecord,
+  type FinishedGoodLotRecord,
+  type FinishedGoodMovementRecord,
   type Formula,
   type FormulaVersionRecord,
   type InventoryLot,
@@ -161,6 +163,8 @@ type SnapshotKey =
   | 'customFieldRecords'
   | 'brandingRecord'
   | 'productionBatchRecords'
+  | 'finishedGoodLotRecords'
+  | 'finishedGoodMovementRecords'
   | 'supplierRecords'
   | 'purchaseOrderRecords'
   | 'priceHistoryRecords'
@@ -213,6 +217,8 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   brandingRecord: BrandingConfig
   documentRecords: DocumentRecord[]
   productionBatchRecords: ProductionBatchRecord[]
+  finishedGoodLotRecords: FinishedGoodLotRecord[]
+  finishedGoodMovementRecords: FinishedGoodMovementRecord[]
   supplierRecords: SupplierRecord[]
   purchaseOrderRecords: PurchaseOrderRecord[]
   priceHistoryRecords: PriceHistoryRecord[]
@@ -299,6 +305,8 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'brandingRecord',
   'documentRecords',
   'productionBatchRecords',
+  'finishedGoodLotRecords',
+  'finishedGoodMovementRecords',
   'supplierRecords',
   'purchaseOrderRecords',
   'priceHistoryRecords',
@@ -319,6 +327,14 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'webhookDeliveryRecords',
   'auditExportRecords',
   'notificationRecords',
+  'authCredentialRecords',
+  'passwordResetRecords',
+  'importJobRecords',
+  'legalAcceptanceRecords',
+  'privacyRequestRecords',
+  'customDomainRecords',
+  'inventoryApprovalRequestRecords',
+  'operationApprovalRequestRecords',
   'lots',
   'movements',
   'usageHistory',
@@ -350,6 +366,8 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'customFieldRecords',
   'brandingRecord',
   'productionBatchRecords',
+  'finishedGoodLotRecords',
+  'finishedGoodMovementRecords',
   'supplierRecords',
   'purchaseOrderRecords',
   'priceHistoryRecords',
@@ -380,6 +398,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
 ]
 const SNAPSHOT_KEY_SET = new Set<SnapshotKey>(SNAPSHOT_KEYS)
 const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
+const D1_NORMALIZED_CUTOVER_KEY = 'd1-normalized-state-v1'
 const SEEDED_ADMIN_EMAIL = 'admin@labofscents.org'
 const SEEDED_ADMIN_ORGANIZATION_ID = 'org-nxl'
 const SEEDED_ADMIN_ROLE = 'Admin'
@@ -407,6 +426,8 @@ const NORMALIZED_TABLES = [
   'formula_version_records',
   'document_records',
   'production_batches',
+  'finished_good_lots',
+  'finished_good_movements',
   'suppliers',
   'purchase_orders',
   'price_history',
@@ -427,6 +448,16 @@ const NORMALIZED_TABLES = [
   'webhook_deliveries',
   'audit_export_jobs',
   'notification_outbox',
+  'persistence_metadata',
+  'auth_credentials',
+  'password_reset_records',
+  'import_jobs',
+  'legal_acceptance_records',
+  'privacy_requests',
+  'saas_custom_domains',
+  'inventory_approval_requests',
+  'operation_approval_requests',
+  'audit_chain_events',
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
@@ -436,7 +467,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
   { method: 'GET', pattern: '/status', public: true, hydrateState: false, handler: ({ env }) => publicStatus(env) },
   { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
-  { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-hybrid', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'northstar_snapshots', normalizedTables: NORMALIZED_TABLES }) },
+  { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-normalized', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'legacy-northstar_snapshots-cutover-only', normalizedTables: NORMALIZED_TABLES }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
@@ -523,6 +554,8 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
   { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, persistScope: 'userSettings', handler: ({ service, body }) => service.updateUserSettings(body) },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
+  { method: 'GET', pattern: '/audit/chain/verify', handler: async ({ service, env }) => verifyAuditChain(service, env.DB) },
+  { method: 'GET', pattern: '/audit/chain/evidence', handler: async ({ service, env }) => auditChainEvidence(service, env.DB) },
   { method: 'GET', pattern: '/security/policy', handler: ({ service }) => service.securityPolicy() },
   { method: 'GET', pattern: '/security/tenant-console', handler: ({ service }) => service.tenantConsole() },
   { method: 'GET', pattern: '/security/member-summary', handler: ({ service }) => service.memberSummary() },
@@ -572,6 +605,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/production/batches/:id/consume', mutates: true, handler: ({ service, params }) => service.consumeProductionBatch(params.id) },
   { method: 'POST', pattern: '/production/batches/:id/qc', mutates: true, handler: ({ service, params, body }) => service.qcProductionBatch(params.id, body.result === 'FAILED' ? 'FAILED' : 'PASSED') },
   { method: 'PATCH', pattern: '/production/batches/:id/status', mutates: true, handler: ({ service, params, body }) => service.updateProductionBatchStatus(params.id, readProductionStatus(body.status)) },
+  { method: 'GET', pattern: '/production/finished-goods', handler: ({ service }) => service.finishedGoodLots() },
   { method: 'GET', pattern: '/suppliers', handler: ({ service }) => service.suppliers() },
   { method: 'POST', pattern: '/suppliers', mutates: true, handler: ({ service, body }) => service.createSupplier(body) },
   { method: 'POST', pattern: '/procurement/rfq/compare', mutates: true, handler: ({ service, body }) => service.compareSupplierRfq(body) },
@@ -605,6 +639,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/costing/overview', handler: ({ service }) => service.costingOverview() },
   { method: 'GET', pattern: '/costing/formulas/:id', handler: ({ service, params }) => service.costingFormula(params.id) },
   { method: 'GET', pattern: '/costing/batches/:id', handler: ({ service, params }) => service.costingBatch(params.id) },
+  { method: 'GET', pattern: '/costing/finished-goods', handler: ({ service }) => service.finishedGoodCosting() },
   { method: 'GET', pattern: '/costing/skus/:id', handler: ({ service, params }) => service.costingSku(params.id) },
   { method: 'GET', pattern: '/costing/valuation', handler: ({ service }) => service.costingValuation() },
   { method: 'GET', pattern: '/analytics/dashboard', handler: ({ service }) => service.analyticsDashboard() },
@@ -1782,7 +1817,7 @@ function readCookie(cookieHeader: string | null, name: string) {
 async function assertPersistenceReady(db: D1Database) {
   if (!persistenceReadyPromise) {
     persistenceReadyPromise = db
-      .prepare('SELECT key FROM northstar_snapshots LIMIT 1')
+      .prepare('SELECT metadata_key FROM persistence_metadata LIMIT 1')
       .first()
       .then(() => undefined)
   }
@@ -1887,11 +1922,14 @@ async function hydrateSnapshotStateFromDatabase(db: D1Database, env: Env): Promi
     billingMode: billingModeFromEnv(env),
   })
   const serviceState = service as unknown as ServiceState
-  const snapshotRows = await db.prepare('SELECT key, value, updated_at FROM northstar_snapshots').all<{
-    key: SnapshotKey
-    value: string
-    updated_at: string | null
-  }>()
+  const legacySnapshotReadRequired = !(await isD1NormalizedCutoverComplete(db))
+  const snapshotRows = legacySnapshotReadRequired
+    ? await db.prepare('SELECT key, value, updated_at FROM northstar_snapshots').all<{
+        key: SnapshotKey
+        value: string
+        updated_at: string | null
+      }>()
+    : { results: [] as Array<{ key: SnapshotKey; value: string; updated_at: string | null }> }
 
   let updatedAt = ''
   for (const row of snapshotRows.results ?? []) {
@@ -1904,6 +1942,9 @@ async function hydrateSnapshotStateFromDatabase(db: D1Database, env: Env): Promi
     }
   }
   await hydrateNormalizedState(db, serviceState, env)
+  if (legacySnapshotReadRequired) {
+    await markD1NormalizedCutoverComplete(db)
+  }
   return { loadedAt: Date.now(), updatedAt, state: structuredClone(serviceState) }
 }
 
@@ -1919,6 +1960,9 @@ async function persistSnapshots(db: D1Database, service: NorthStarService) {
   const serviceState = service as unknown as ServiceState
   const updatedAt = new Date().toISOString()
   await persistNormalizedState(db, serviceState, updatedAt)
+  if (SNAPSHOT_PERSIST_KEYS.length === 0) {
+    return
+  }
   const statements = SNAPSHOT_PERSIST_KEYS.map((key) =>
     db
       .prepare(
@@ -1931,12 +1975,32 @@ async function persistSnapshots(db: D1Database, service: NorthStarService) {
   await db.batch(statements)
 }
 
+async function isD1NormalizedCutoverComplete(db: D1Database) {
+  const row = await db
+    .prepare('SELECT metadata_value FROM persistence_metadata WHERE metadata_key = ?1')
+    .bind(D1_NORMALIZED_CUTOVER_KEY)
+    .first<{ metadata_value: string }>()
+  return row?.metadata_value === 'complete'
+}
+
+async function markD1NormalizedCutoverComplete(db: D1Database) {
+  const updatedAt = new Date().toISOString()
+  await db
+    .prepare(
+      `INSERT INTO persistence_metadata (metadata_key, metadata_value, updated_at)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
+    )
+    .bind(D1_NORMALIZED_CUTOVER_KEY, 'complete', updatedAt)
+    .run()
+}
+
 async function persistUserSettingsMutation(db: D1Database, service: NorthStarService) {
   const serviceState = service as unknown as ServiceState
   const updatedAt = new Date().toISOString()
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistMemberships(db, serviceState.membershipRecords, updatedAt)
-  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
@@ -2012,7 +2076,7 @@ async function persistMfaVerificationMutation(
 
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistMemberships(db, serviceState.membershipRecords, updatedAt)
-  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
@@ -2020,7 +2084,7 @@ async function persistMfaVerificationFailureState(db: D1Database, service: North
   const serviceState = service as unknown as ServiceState
   const updatedAt = new Date().toISOString()
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
-  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
@@ -2102,6 +2166,36 @@ type NotificationOutboxRow = {
   email_next_attempt_at: string | null
   email_sent_at: string | null
   updated_at: string
+}
+
+type AuthCredentialRow = {
+  email: string
+  password_hash: string
+  password_set_at: string
+}
+
+type PasswordResetRow = {
+  id: string
+  email: string
+  token_hash: string
+  created_at: string
+  expires_at: string
+  used_at: string | null
+}
+
+type JsonStateRow = {
+  id: string
+  organization_id: string
+  record_json: string
+}
+
+type AuditChainRow = {
+  event_id: string
+  organization_id: string
+  sequence: number
+  previous_hash: string | null
+  event_hash: string
+  recorded_at: string
 }
 
 type OrganizationRow = {
@@ -2276,6 +2370,39 @@ type ProductionBatchRow = {
   genealogy_json: string
 }
 
+type FinishedGoodLotRow = {
+  id: string
+  organization_id: string
+  batch_id: string
+  formula_id: string
+  formula_code: string
+  lot_number: string
+  quantity_grams: number
+  reserved_grams: number
+  quality_status: string
+  released_at: string
+  cost_per_gram: number
+  currency: string
+  location: string
+}
+
+type FinishedGoodMovementRow = {
+  id: string
+  organization_id: string
+  finished_good_lot_id: string
+  batch_id: string
+  formula_id: string
+  order_id: string | null
+  type: string
+  direction: string
+  quantity_grams: number
+  balance_after: number
+  cost_per_gram: number
+  cogs_amount: number | null
+  at: string
+  actor: string
+}
+
 type SupplierRow = {
   id: string
   organization_id: string | null
@@ -2318,6 +2445,7 @@ type PriceHistoryRow = {
 
 type CommercialSkuRow = {
   id: string
+  organization_id: string | null
   material_id: string
   name: string
   description: string
@@ -2328,10 +2456,13 @@ type CommercialSkuRow = {
   status: string
   moq_packs: number
   label_template: string
+  formula_id: string | null
+  product_kind: string | null
 }
 
 type PriceListRow = {
   id: string
+  organization_id: string | null
   name: string
   customer_group: string
   currency: string
@@ -2342,6 +2473,7 @@ type PriceListRow = {
 
 type QuoteRow = {
   id: string
+  organization_id: string | null
   sku_id: string
   customer: string
   customer_group: string
@@ -2356,6 +2488,7 @@ type QuoteRow = {
 
 type SampleRequestRow = {
   id: string
+  organization_id: string | null
   sku_id: string
   customer: string
   packs: number
@@ -2365,6 +2498,7 @@ type SampleRequestRow = {
 
 type CustomerRow = {
   id: string
+  organization_id: string | null
   name: string
   customer_group: string
   credit_limit: number
@@ -2377,6 +2511,7 @@ type CustomerRow = {
 
 type SalesOrderRow = {
   id: string
+  organization_id: string | null
   sku_id: string
   customer_id: string
   customer: string
@@ -2401,6 +2536,7 @@ type SalesOrderRow = {
 
 type ScheduledReportRow = {
   id: string
+  organization_id: string | null
   name: string
   cadence: string
   audience: string
@@ -2522,6 +2658,7 @@ type AuditExportJobRow = {
 
 type ShipmentRow = {
   id: string
+  organization_id: string | null
   order_id: string
   carrier: string
   tracking_number: string
@@ -2534,6 +2671,7 @@ type ShipmentRow = {
 
 type OrderDocumentRow = {
   id: string
+  organization_id: string | null
   order_id: string
   type: string
   status: string
@@ -2651,10 +2789,11 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   if (events.length > 0) {
     serviceState.auditEvents = events
   } else if (Array.isArray(serviceState.auditEvents) && serviceState.auditEvents.length > 0) {
-    await persistAuditEvents(db, serviceState.auditEvents, new Date().toISOString())
+    await persistAuditEvents(db, serviceState.auditEvents, new Date().toISOString(), serviceState)
   }
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+  await hydrateEnterpriseGovernanceState(db, serviceState)
   await hydrateTenantCoreState(db, serviceState)
   await ensureSeededAdminBootstrap(db, serviceState, env.SEEDED_ADMIN_PASSWORD_HASH)
   await hydrateMaterialState(db, serviceState)
@@ -2664,6 +2803,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   await hydrateProcurementState(db, serviceState)
   await hydrateCatalogState(db, serviceState)
   await hydrateProductionState(db, serviceState)
+  await hydrateFinishedGoodState(db, serviceState)
   await hydrateOrderState(db, serviceState)
   await hydrateAnalyticsState(db, serviceState)
   await hydrateBillingState(db, serviceState)
@@ -2676,7 +2816,8 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistMfaEnrollments(db, serviceState.mfaEnrollmentRecords, updatedAt)
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
-  await persistAuditEvents(db, serviceState.auditEvents, updatedAt)
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
+  await persistEnterpriseGovernanceState(db, serviceState, updatedAt)
   await persistTenantCoreState(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
   await persistFormulaState(db, serviceState, updatedAt)
@@ -2685,6 +2826,7 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistProcurementState(db, serviceState, updatedAt)
   await persistCatalogState(db, serviceState, updatedAt)
   await persistProductionBatches(db, serviceState.productionBatchRecords, updatedAt)
+  await persistFinishedGoodState(db, serviceState, updatedAt)
   await persistOrderState(db, serviceState, updatedAt)
   await persistScheduledReports(db, serviceState.scheduledReportRecords, updatedAt)
   await persistBillingState(db, serviceState, updatedAt)
@@ -2693,6 +2835,206 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+function scopedJsonRecords(rows: JsonStateRow[]) {
+  return rows.reduce<unknown[]>((records, row) => {
+    const record = parseJson<Record<string, unknown> | null>(row.record_json, null)
+    if (record && record.organizationId === row.organization_id) {
+      records.push(record)
+    }
+    return records
+  }, [])
+}
+
+function requiredStringRecordField(record: Record<string, unknown>, field: string) {
+  const value = record[field]
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new UnprocessableEntityException(`Persistence record is missing ${field}`)
+  }
+  return value.trim()
+}
+
+async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: ServiceState) {
+  const [credentialRows, resetRows, importRows, legalRows, privacyRows, domainRows, inventoryApprovalRows, operationApprovalRows] = await Promise.all([
+    db.prepare('SELECT email, password_hash, password_set_at FROM auth_credentials ORDER BY email ASC').all<AuthCredentialRow>(),
+    db.prepare('SELECT id, email, token_hash, created_at, expires_at, used_at FROM password_reset_records ORDER BY created_at DESC').all<PasswordResetRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM import_jobs ORDER BY created_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM legal_acceptance_records ORDER BY accepted_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM privacy_requests ORDER BY created_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM saas_custom_domains ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM inventory_approval_requests ORDER BY created_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM operation_approval_requests ORDER BY created_at DESC').all<JsonStateRow>(),
+  ])
+  const updatedAt = new Date().toISOString()
+  if ((credentialRows.results ?? []).length > 0) {
+    serviceState.authCredentialRecords = (credentialRows.results ?? []).map((row) => ({
+      email: row.email,
+      passwordHash: row.password_hash,
+      passwordSetAt: row.password_set_at,
+    }))
+  } else if (serviceState.authCredentialRecords.length > 0) {
+    await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
+  }
+  if ((resetRows.results ?? []).length > 0) {
+    serviceState.passwordResetRecords = (resetRows.results ?? []).map((row) => ({
+      id: row.id,
+      email: row.email,
+      tokenHash: row.token_hash,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      usedAt: row.used_at ?? undefined,
+    }))
+  } else if (serviceState.passwordResetRecords.length > 0) {
+    await persistPasswordResetRecords(db, serviceState.passwordResetRecords, updatedAt)
+  }
+  const hydratedImports = scopedJsonRecords(importRows.results ?? [])
+  if (hydratedImports.length > 0) serviceState.importJobRecords = hydratedImports as DataImportJobRecord[]
+  else if (serviceState.importJobRecords.length > 0) await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
+  const hydratedLegal = scopedJsonRecords(legalRows.results ?? [])
+  if (hydratedLegal.length > 0) serviceState.legalAcceptanceRecords = hydratedLegal as LegalAcceptanceRecord[]
+  else if (serviceState.legalAcceptanceRecords.length > 0) await persistLegalAcceptances(db, serviceState.legalAcceptanceRecords)
+  const hydratedPrivacy = scopedJsonRecords(privacyRows.results ?? [])
+  if (hydratedPrivacy.length > 0) serviceState.privacyRequestRecords = hydratedPrivacy as PrivacyRequestRecord[]
+  else if (serviceState.privacyRequestRecords.length > 0) await persistPrivacyRequests(db, serviceState.privacyRequestRecords, updatedAt)
+  const hydratedDomains = scopedJsonRecords(domainRows.results ?? [])
+  if (hydratedDomains.length > 0) serviceState.customDomainRecords = hydratedDomains as SaasCustomDomainRecord[]
+  else if (serviceState.customDomainRecords.length > 0) await persistCustomDomains(db, serviceState.customDomainRecords, updatedAt)
+  const hydratedInventoryApprovals = scopedJsonRecords(inventoryApprovalRows.results ?? [])
+  if (hydratedInventoryApprovals.length > 0) serviceState.inventoryApprovalRequestRecords = hydratedInventoryApprovals as Array<Record<string, unknown>>
+  else if (serviceState.inventoryApprovalRequestRecords.length > 0) await persistApprovalRequests(db, 'inventory_approval_requests', serviceState.inventoryApprovalRequestRecords, updatedAt)
+  const hydratedOperationApprovals = scopedJsonRecords(operationApprovalRows.results ?? [])
+  if (hydratedOperationApprovals.length > 0) serviceState.operationApprovalRequestRecords = hydratedOperationApprovals as Array<Record<string, unknown>>
+  else if (serviceState.operationApprovalRequestRecords.length > 0) await persistApprovalRequests(db, 'operation_approval_requests', serviceState.operationApprovalRequestRecords, updatedAt)
+}
+
+async function persistEnterpriseGovernanceState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
+  await persistPasswordResetRecords(db, serviceState.passwordResetRecords, updatedAt)
+  await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
+  await persistLegalAcceptances(db, serviceState.legalAcceptanceRecords)
+  await persistPrivacyRequests(db, serviceState.privacyRequestRecords, updatedAt)
+  await persistCustomDomains(db, serviceState.customDomainRecords, updatedAt)
+  await persistApprovalRequests(db, 'inventory_approval_requests', serviceState.inventoryApprovalRequestRecords, updatedAt)
+  await persistApprovalRequests(db, 'operation_approval_requests', serviceState.operationApprovalRequestRecords, updatedAt)
+}
+
+async function persistAuthCredentialRecords(db: D1Database, credentials: Array<Record<string, unknown>>, updatedAt: string) {
+  if (credentials.length === 0) return
+  await runStatementBatches(
+    db,
+    credentials.map((credential) =>
+      db.prepare(
+        `INSERT INTO auth_credentials (email, password_hash, password_set_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(email) DO UPDATE SET password_hash = excluded.password_hash, password_set_at = excluded.password_set_at, updated_at = excluded.updated_at`,
+      ).bind(
+        requiredStringRecordField(credential, 'email').toLowerCase(),
+        requiredStringRecordField(credential, 'passwordHash'),
+        requiredStringRecordField(credential, 'passwordSetAt'),
+        updatedAt,
+      ),
+    ),
+  )
+}
+
+async function persistPasswordResetRecords(db: D1Database, resets: PasswordResetRecord[], updatedAt: string) {
+  if (resets.length === 0) return
+  await runStatementBatches(
+    db,
+    resets.map((reset) =>
+      db.prepare(
+        `INSERT INTO password_reset_records (id, email, token_hash, created_at, expires_at, used_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET used_at = excluded.used_at, updated_at = excluded.updated_at`,
+      ).bind(reset.id, reset.email, reset.tokenHash, reset.createdAt, reset.expiresAt, reset.usedAt ?? null, updatedAt),
+    ),
+  )
+}
+
+async function persistImportJobs(db: D1Database, records: DataImportJobRecord[], updatedAt: string) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((job) => {
+      const record = job as unknown as Record<string, unknown>
+      const organizationId = requiredStringRecordField(record, 'organizationId')
+      return db.prepare(
+        `INSERT INTO import_jobs (id, organization_id, status, idempotency_key, record_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+      ).bind(
+        requiredStringRecordField(record, 'id'), organizationId, requiredStringRecordField(record, 'status'),
+        requiredStringRecordField(record, 'idempotencyKey'), JSON.stringify(record), requiredStringRecordField(record, 'createdAt'), updatedAt,
+      )
+    }),
+  )
+}
+
+async function persistLegalAcceptances(db: D1Database, records: LegalAcceptanceRecord[]) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO legal_acceptance_records (id, organization_id, user_id, document, version, record_json, accepted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO NOTHING`,
+      ).bind(record.id, record.organizationId, record.userId, record.document, record.version, JSON.stringify(record), record.acceptedAt),
+    ),
+  )
+}
+
+async function persistPrivacyRequests(db: D1Database, records: PrivacyRequestRecord[], updatedAt: string) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO privacy_requests (id, organization_id, status, record_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+      ).bind(record.id, record.organizationId, record.status, JSON.stringify(record), record.createdAt, updatedAt),
+    ),
+  )
+}
+
+async function persistCustomDomains(db: D1Database, records: SaasCustomDomainRecord[], updatedAt: string) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO saas_custom_domains (id, organization_id, hostname, provider_id, status, record_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET hostname = excluded.hostname, provider_id = excluded.provider_id,
+           status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+      ).bind(record.id, record.organizationId, record.hostname.toLowerCase(), record.providerId, record.status, JSON.stringify(record), updatedAt),
+    ),
+  )
+}
+
+async function persistApprovalRequests(
+  db: D1Database,
+  table: 'inventory_approval_requests' | 'operation_approval_requests',
+  records: Array<Record<string, unknown>>,
+  updatedAt: string,
+) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO ${table} (id, organization_id, status, requested_by, record_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+      ).bind(
+        requiredStringRecordField(record, 'id'), requiredStringRecordField(record, 'organizationId'),
+        requiredStringRecordField(record, 'status'), requiredStringRecordField(record, 'requestedBy'),
+        JSON.stringify(record), requiredStringRecordField(record, 'createdAt'), updatedAt,
+      ),
+    ),
+  )
 }
 
 async function persistAuthSessions(db: D1Database, sessions: AuthSession[], updatedAt: string) {
@@ -2839,7 +3181,12 @@ async function persistUserSettings(db: D1Database, settings: UserSettingsRecord[
   )
 }
 
-async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedAt: string) {
+async function persistAuditEvents(
+  db: D1Database,
+  events: AuditEvent[],
+  updatedAt: string,
+  serviceState: ServiceState,
+) {
   if (!Array.isArray(events) || events.length === 0) {
     return
   }
@@ -2850,18 +3197,193 @@ async function persistAuditEvents(db: D1Database, events: AuditEvent[], updatedA
         .prepare(
           `INSERT INTO audit_events (id, at, actor, action, entity, request_id, outcome, updated_at)
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-           ON CONFLICT(id) DO UPDATE SET
-             at = excluded.at,
-             actor = excluded.actor,
-             action = excluded.action,
-             entity = excluded.entity,
-             request_id = excluded.request_id,
-             outcome = excluded.outcome,
-             updated_at = excluded.updated_at`,
+           ON CONFLICT(id) DO NOTHING`,
         )
         .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
     ),
   )
+  await persistAuditChainEvents(db, serviceState, updatedAt)
+}
+
+export function canonicalAuditChainPayload(
+  organizationId: string,
+  sequence: number,
+  previousHash: string | null,
+  event: AuditEvent,
+) {
+  return JSON.stringify([
+    'olfactoryops.audit-chain.v1',
+    organizationId,
+    sequence,
+    previousHash ?? '',
+    event.id,
+    event.at,
+    event.actor,
+    event.action,
+    event.entity,
+    event.requestId,
+    event.outcome,
+  ])
+}
+
+export async function auditChainHash(
+  organizationId: string,
+  sequence: number,
+  previousHash: string | null,
+  event: AuditEvent,
+) {
+  const payload = new TextEncoder().encode(canonicalAuditChainPayload(organizationId, sequence, previousHash, event))
+  const digest = await crypto.subtle.digest('SHA-256', payload)
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+function auditChainOrganizationId(event: AuditEvent, serviceState: ServiceState) {
+  const organizationFromEntity = serviceState.organizationRecords.find(
+    (organization) => event.entity === organization.id || event.entity.includes(organization.id),
+  )
+  if (organizationFromEntity) {
+    return organizationFromEntity.id
+  }
+  const actor = event.actor.trim().toLowerCase()
+  const member = serviceState.membershipRecords.find(
+    (membership) =>
+      membership.userId.toLowerCase() === actor ||
+      membership.email.toLowerCase() === actor ||
+      membership.name.toLowerCase() === actor,
+  )
+  if (member) {
+    return member.organizationId
+  }
+  const entityMember = serviceState.membershipRecords.find(
+    (membership) => membership.userId === event.entity || membership.email.toLowerCase() === event.entity.toLowerCase(),
+  )
+  return entityMember?.organizationId ?? 'platform'
+}
+
+async function persistAuditChainEvents(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [eventRows, chainRows] = await Promise.all([
+      db.prepare('SELECT id, at, actor, action, entity, request_id, outcome FROM audit_events ORDER BY at ASC, id ASC').all<AuditEventRow>(),
+      db.prepare('SELECT event_id, organization_id, sequence, previous_hash, event_hash, recorded_at FROM audit_chain_events').all<AuditChainRow>(),
+    ])
+    const existingEventIds = new Set((chainRows.results ?? []).map((row) => row.event_id))
+    const chained = (chainRows.results ?? []).reduce((byOrganization, row) => {
+      const current = byOrganization.get(row.organization_id)
+      if (!current || row.sequence > current.sequence) {
+        byOrganization.set(row.organization_id, row)
+      }
+      return byOrganization
+    }, new Map<string, AuditChainRow>())
+    const pending = (eventRows.results ?? [])
+      .map(auditEventFromRow)
+      .filter((event) => !existingEventIds.has(event.id))
+      .sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id))
+    if (pending.length === 0) {
+      return
+    }
+    const statements: D1PreparedStatement[] = []
+    for (const event of pending) {
+      const organizationId = auditChainOrganizationId(event, serviceState)
+      const previous = chained.get(organizationId)
+      const sequence = (previous?.sequence ?? 0) + 1
+      const previousHash = previous?.event_hash ?? null
+      const eventHash = await auditChainHash(organizationId, sequence, previousHash, event)
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO audit_chain_events (event_id, organization_id, sequence, previous_hash, event_hash, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+          )
+          .bind(event.id, organizationId, sequence, previousHash, eventHash, updatedAt),
+      )
+      chained.set(organizationId, {
+        event_id: event.id,
+        organization_id: organizationId,
+        sequence,
+        previous_hash: previousHash,
+        event_hash: eventHash,
+        recorded_at: updatedAt,
+      })
+    }
+    try {
+      await db.batch(statements)
+      return
+    } catch (error) {
+      if (attempt === 2) {
+        throw error
+      }
+    }
+  }
+}
+
+async function verifyAuditChain(service: NorthStarService, db: D1Database) {
+  const { organizationId } = service.auditChainAccess().data
+  const rows = await db
+    .prepare(
+      `SELECT c.event_id, c.organization_id, c.sequence, c.previous_hash, c.event_hash, c.recorded_at,
+        e.id, e.at, e.actor, e.action, e.entity, e.request_id, e.outcome
+       FROM audit_chain_events c
+       INNER JOIN audit_events e ON e.id = c.event_id
+       WHERE c.organization_id = ?1
+       ORDER BY c.sequence ASC`,
+    )
+    .bind(organizationId)
+    .all<AuditChainRow & AuditEventRow>()
+  let previousHash: string | null = null
+  let expectedSequence = 1
+  for (const row of rows.results ?? []) {
+    const event = auditEventFromRow(row)
+    const expectedHash = await auditChainHash(organizationId, expectedSequence, previousHash, event)
+    if (row.sequence !== expectedSequence || row.previous_hash !== previousHash || row.event_hash !== expectedHash) {
+      return {
+        data: {
+          organizationId,
+          valid: false,
+          eventCount: expectedSequence - 1,
+          failedEventId: row.event_id,
+          checkedAt: new Date().toISOString(),
+        },
+      }
+    }
+    previousHash = row.event_hash
+    expectedSequence += 1
+  }
+  return {
+    data: {
+      organizationId,
+      valid: true,
+      eventCount: expectedSequence - 1,
+      tailHash: previousHash,
+      checkedAt: new Date().toISOString(),
+    },
+  }
+}
+
+async function auditChainEvidence(service: NorthStarService, db: D1Database) {
+  const { organizationId } = service.auditChainAccess().data
+  const rows = await db
+    .prepare(
+      `SELECT event_id, organization_id, sequence, previous_hash, event_hash, recorded_at
+       FROM audit_chain_events
+       WHERE organization_id = ?1
+       ORDER BY sequence DESC
+       LIMIT 250`,
+    )
+    .bind(organizationId)
+    .all<AuditChainRow>()
+  const verification = await verifyAuditChain(service, db)
+  return {
+    data: {
+      ...verification.data,
+      evidence: (rows.results ?? []).map((row) => ({
+        eventId: row.event_id,
+        sequence: row.sequence,
+        previousHash: row.previous_hash,
+        eventHash: row.event_hash,
+        recordedAt: row.recorded_at,
+      })),
+    },
+  }
 }
 
 async function ensureSeededAdminBootstrap(
@@ -2978,14 +3500,7 @@ async function ensureSeededAdminBootstrap(
         (credential) => String(credential.email ?? '').toLowerCase() !== SEEDED_ADMIN_EMAIL,
       ),
     ]
-    await db
-      .prepare(
-        `INSERT INTO northstar_snapshots (key, value, updated_at)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-      )
-      .bind('authCredentialRecords', JSON.stringify(serviceState.authCredentialRecords), updatedAt)
-      .run()
+    await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
 
     const revokedAdminSessions = serviceState.sessions
       .filter((session) => session.email.toLowerCase() === SEEDED_ADMIN_EMAIL && session.status === 'ACTIVE')
@@ -3013,7 +3528,7 @@ async function ensureSeededAdminBootstrap(
     }
     serviceState.auditCounter = nextAuditCounter
     serviceState.auditEvents = [auditEvent, ...serviceState.auditEvents]
-    await persistAuditEvents(db, [auditEvent], updatedAt)
+    await persistAuditEvents(db, [auditEvent], updatedAt, serviceState)
   }
 }
 
@@ -4104,8 +4619,8 @@ async function persistPriceHistory(db: D1Database, records: PriceHistoryRecord[]
 async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
   const skuRows = await db
     .prepare(
-      `SELECT id, material_id, name, description, pack_size_grams, price, currency,
-        tier, status, moq_packs, label_template
+      `SELECT id, organization_id, material_id, name, description, pack_size_grams, price, currency,
+        tier, status, moq_packs, label_template, formula_id, product_kind
        FROM commercial_skus
        ORDER BY name ASC`,
     )
@@ -4119,7 +4634,7 @@ async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
 
   const priceListRows = await db
     .prepare(
-      `SELECT id, name, customer_group, currency, multiplier, sample_eligible, status
+      `SELECT id, organization_id, name, customer_group, currency, multiplier, sample_eligible, status
        FROM price_lists
        ORDER BY customer_group ASC, id ASC`,
     )
@@ -4133,7 +4648,7 @@ async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
 
   const quoteRows = await db
     .prepare(
-      `SELECT id, sku_id, customer, customer_group, quantity_packs, unit_price,
+      `SELECT id, organization_id, sku_id, customer, customer_group, quantity_packs, unit_price,
         total, currency, status, created_at, lines_json
        FROM quotes
        ORDER BY created_at DESC, id DESC`,
@@ -4148,7 +4663,7 @@ async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
 
   const sampleRows = await db
     .prepare(
-      `SELECT id, sku_id, customer, packs, status, created_at
+      `SELECT id, organization_id, sku_id, customer, packs, status, created_at
        FROM sample_requests
        ORDER BY created_at DESC, id DESC`,
     )
@@ -4162,7 +4677,7 @@ async function hydrateCatalogState(db: D1Database, serviceState: ServiceState) {
 
   const customerRows = await db
     .prepare(
-      `SELECT id, name, customer_group, credit_limit, payment_terms, contact_email,
+      `SELECT id, organization_id, name, customer_group, credit_limit, payment_terms, contact_email,
         billing_address_json, shipping_address_json, status
        FROM customers
        ORDER BY name ASC`,
@@ -4194,11 +4709,12 @@ async function persistCommercialSkus(db: D1Database, skus: CommercialSkuRecord[]
       db
         .prepare(
           `INSERT INTO commercial_skus (
-            id, material_id, name, description, pack_size_grams, price, currency,
-            tier, status, moq_packs, label_template, updated_at
+            id, organization_id, material_id, name, description, pack_size_grams, price, currency,
+            tier, status, moq_packs, label_template, formula_id, product_kind, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             material_id = excluded.material_id,
             name = excluded.name,
             description = excluded.description,
@@ -4209,10 +4725,13 @@ async function persistCommercialSkus(db: D1Database, skus: CommercialSkuRecord[]
             status = excluded.status,
             moq_packs = excluded.moq_packs,
             label_template = excluded.label_template,
+            formula_id = excluded.formula_id,
+            product_kind = excluded.product_kind,
             updated_at = excluded.updated_at`,
         )
         .bind(
           sku.id,
+          sku.organizationId ?? 'org-nxl',
           sku.materialId,
           sku.name,
           sku.description,
@@ -4223,6 +4742,8 @@ async function persistCommercialSkus(db: D1Database, skus: CommercialSkuRecord[]
           sku.status,
           sku.moqPacks,
           sku.labelTemplate,
+          sku.formulaId ?? null,
+          sku.productKind ?? (sku.formulaId ? 'FORMULA' : 'MATERIAL'),
           updatedAt,
         ),
     ),
@@ -4239,10 +4760,11 @@ async function persistPriceLists(db: D1Database, priceLists: PriceListRecord[], 
       db
         .prepare(
           `INSERT INTO price_lists (
-            id, name, customer_group, currency, multiplier, sample_eligible, status, updated_at
+            id, organization_id, name, customer_group, currency, multiplier, sample_eligible, status, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             name = excluded.name,
             customer_group = excluded.customer_group,
             currency = excluded.currency,
@@ -4253,6 +4775,7 @@ async function persistPriceLists(db: D1Database, priceLists: PriceListRecord[], 
         )
         .bind(
           priceList.id,
+          priceList.organizationId ?? 'org-nxl',
           priceList.name,
           priceList.customerGroup,
           priceList.currency,
@@ -4275,11 +4798,12 @@ async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: s
       db
         .prepare(
           `INSERT INTO quotes (
-            id, sku_id, customer, customer_group, quantity_packs, unit_price,
+            id, organization_id, sku_id, customer, customer_group, quantity_packs, unit_price,
             total, currency, status, created_at, lines_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             sku_id = excluded.sku_id,
             customer = excluded.customer,
             customer_group = excluded.customer_group,
@@ -4294,6 +4818,7 @@ async function persistQuotes(db: D1Database, quotes: QuoteRecord[], updatedAt: s
         )
         .bind(
           quote.id,
+          quote.organizationId ?? 'org-nxl',
           quote.skuId,
           quote.customer,
           quote.customerGroup,
@@ -4319,9 +4844,10 @@ async function persistSampleRequests(db: D1Database, samples: SampleRequestRecor
     samples.map((sample) =>
       db
         .prepare(
-          `INSERT INTO sample_requests (id, sku_id, customer, packs, status, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          `INSERT INTO sample_requests (id, organization_id, sku_id, customer, packs, status, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
            ON CONFLICT(id) DO UPDATE SET
+             organization_id = excluded.organization_id,
              sku_id = excluded.sku_id,
              customer = excluded.customer,
              packs = excluded.packs,
@@ -4329,7 +4855,7 @@ async function persistSampleRequests(db: D1Database, samples: SampleRequestRecor
              created_at = excluded.created_at,
              updated_at = excluded.updated_at`,
         )
-        .bind(sample.id, sample.skuId, sample.customer, sample.packs, sample.status, sample.createdAt, updatedAt),
+        .bind(sample.id, sample.organizationId ?? 'org-nxl', sample.skuId, sample.customer, sample.packs, sample.status, sample.createdAt, updatedAt),
     ),
   )
 }
@@ -4344,11 +4870,12 @@ async function persistCustomers(db: D1Database, customers: CustomerRecord[], upd
       db
         .prepare(
           `INSERT INTO customers (
-            id, name, customer_group, credit_limit, payment_terms, contact_email,
+            id, organization_id, name, customer_group, credit_limit, payment_terms, contact_email,
             billing_address_json, shipping_address_json, status, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             name = excluded.name,
             customer_group = excluded.customer_group,
             credit_limit = excluded.credit_limit,
@@ -4361,6 +4888,7 @@ async function persistCustomers(db: D1Database, customers: CustomerRecord[], upd
         )
         .bind(
           customer.id,
+          customer.organizationId ?? 'org-nxl',
           customer.name,
           customer.group,
           customer.creditLimit,
@@ -4448,7 +4976,7 @@ async function persistProductionBatches(db: D1Database, batches: ProductionBatch
 async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
   const orderRows = await db
     .prepare(
-      `SELECT id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
+      `SELECT id, organization_id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
         tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
         carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, lines_json, created_at
        FROM sales_orders
@@ -4464,7 +4992,7 @@ async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
 
   const shipmentRows = await db
     .prepare(
-      `SELECT id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
+      `SELECT id, organization_id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
         weight_grams, allocations_json
        FROM order_shipments
        ORDER BY id DESC`,
@@ -4479,7 +5007,7 @@ async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
 
   const documentRows = await db
     .prepare(
-      `SELECT id, order_id, type, status, url, created_at
+      `SELECT id, organization_id, order_id, type, status, url, created_at
        FROM order_documents
        ORDER BY created_at DESC, id DESC`,
     )
@@ -4508,13 +5036,14 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
       db
         .prepare(
           `INSERT INTO sales_orders (
-            id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
+            id, organization_id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
             tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
             carrier, tracking_number, reservation_allocations_json, shipment_id,
             document_ids_json, lines_json, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             sku_id = excluded.sku_id,
             customer_id = excluded.customer_id,
             customer = excluded.customer,
@@ -4539,6 +5068,7 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
         )
         .bind(
           order.id,
+          order.organizationId ?? 'org-nxl',
           order.skuId,
           order.customerId,
           order.customer,
@@ -4575,11 +5105,12 @@ async function persistShipments(db: D1Database, shipments: ShipmentRecord[], upd
       db
         .prepare(
           `INSERT INTO order_shipments (
-            id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
+            id, organization_id, order_id, carrier, tracking_number, status, shipped_at, delivered_at,
             weight_grams, allocations_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             order_id = excluded.order_id,
             carrier = excluded.carrier,
             tracking_number = excluded.tracking_number,
@@ -4592,6 +5123,7 @@ async function persistShipments(db: D1Database, shipments: ShipmentRecord[], upd
         )
         .bind(
           shipment.id,
+          shipment.organizationId ?? 'org-nxl',
           shipment.orderId,
           shipment.carrier,
           shipment.trackingNumber,
@@ -4615,9 +5147,10 @@ async function persistOrderDocuments(db: D1Database, documents: OrderDocumentRec
     documents.map((document) =>
       db
         .prepare(
-          `INSERT INTO order_documents (id, order_id, type, status, url, created_at, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          `INSERT INTO order_documents (id, organization_id, order_id, type, status, url, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
            ON CONFLICT(id) DO UPDATE SET
+             organization_id = excluded.organization_id,
              order_id = excluded.order_id,
              type = excluded.type,
              status = excluded.status,
@@ -4625,7 +5158,7 @@ async function persistOrderDocuments(db: D1Database, documents: OrderDocumentRec
              created_at = excluded.created_at,
              updated_at = excluded.updated_at`,
         )
-        .bind(document.id, document.orderId, document.type, document.status, document.url, document.createdAt, updatedAt),
+        .bind(document.id, document.organizationId ?? 'org-nxl', document.orderId, document.type, document.status, document.url, document.createdAt, updatedAt),
     ),
   )
 }
@@ -4633,7 +5166,7 @@ async function persistOrderDocuments(db: D1Database, documents: OrderDocumentRec
 async function hydrateAnalyticsState(db: D1Database, serviceState: ServiceState) {
   const rows = await db
     .prepare(
-      `SELECT id, name, cadence, audience, format, status, last_run_at
+      `SELECT id, organization_id, name, cadence, audience, format, status, last_run_at
        FROM scheduled_reports
        ORDER BY id ASC`,
     )
@@ -4656,10 +5189,11 @@ async function persistScheduledReports(db: D1Database, reports: ScheduledReportR
       db
         .prepare(
           `INSERT INTO scheduled_reports (
-            id, name, cadence, audience, format, status, last_run_at, updated_at
+            id, organization_id, name, cadence, audience, format, status, last_run_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
           ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
             name = excluded.name,
             cadence = excluded.cadence,
             audience = excluded.audience,
@@ -4670,6 +5204,7 @@ async function persistScheduledReports(db: D1Database, reports: ScheduledReportR
         )
         .bind(
           report.id,
+          report.organizationId ?? 'org-nxl',
           report.name,
           report.cadence,
           report.audience,
@@ -4872,6 +5407,104 @@ async function persistNotificationOutbox(db: D1Database, notifications: AppNotif
         ),
     ),
   )
+}
+
+async function hydrateFinishedGoodState(db: D1Database, serviceState: ServiceState) {
+  const [lotRows, movementRows] = await Promise.all([
+    db
+      .prepare(
+        `SELECT id, organization_id, batch_id, formula_id, formula_code, lot_number,
+          quantity_grams, reserved_grams, quality_status, released_at, cost_per_gram, currency, location
+         FROM finished_good_lots
+         ORDER BY released_at DESC, id DESC`,
+      )
+      .all<FinishedGoodLotRow>(),
+    db
+      .prepare(
+        `SELECT id, organization_id, finished_good_lot_id, batch_id, formula_id, order_id, type,
+          direction, quantity_grams, balance_after, cost_per_gram, cogs_amount, at, actor
+         FROM finished_good_movements
+         ORDER BY at DESC, id DESC`,
+      )
+      .all<FinishedGoodMovementRow>(),
+  ])
+  serviceState.finishedGoodLotRecords = (lotRows.results ?? []).map(finishedGoodLotFromRow)
+  serviceState.finishedGoodMovementRecords = (movementRows.results ?? []).map(finishedGoodMovementFromRow)
+}
+
+async function persistFinishedGoodState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  if (serviceState.finishedGoodLotRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.finishedGoodLotRecords.map((lot) =>
+        db
+          .prepare(
+            `INSERT INTO finished_good_lots (
+              id, organization_id, batch_id, formula_id, formula_code, lot_number, quantity_grams,
+              reserved_grams, quality_status, released_at, cost_per_gram, currency, location, updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            ON CONFLICT(id) DO UPDATE SET
+              quantity_grams = excluded.quantity_grams,
+              reserved_grams = excluded.reserved_grams,
+              quality_status = excluded.quality_status,
+              cost_per_gram = excluded.cost_per_gram,
+              currency = excluded.currency,
+              location = excluded.location,
+              updated_at = excluded.updated_at`,
+          )
+          .bind(
+            lot.id,
+            lot.organizationId,
+            lot.batchId,
+            lot.formulaId,
+            lot.formulaCode,
+            lot.lotNumber,
+            lot.quantityGrams,
+            lot.reservedGrams,
+            lot.qualityStatus,
+            lot.releasedAt,
+            lot.costPerGram,
+            lot.currency,
+            lot.location,
+            updatedAt,
+          ),
+      ),
+    )
+  }
+  if (serviceState.finishedGoodMovementRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.finishedGoodMovementRecords.map((movement) =>
+        db
+          .prepare(
+            `INSERT INTO finished_good_movements (
+              id, organization_id, finished_good_lot_id, batch_id, formula_id, order_id, type,
+              direction, quantity_grams, balance_after, cost_per_gram, cogs_amount, at, actor, updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            ON CONFLICT(id) DO NOTHING`,
+          )
+          .bind(
+            movement.id,
+            movement.organizationId,
+            movement.finishedGoodLotId,
+            movement.batchId,
+            movement.formulaId,
+            movement.orderId ?? null,
+            movement.type,
+            movement.direction,
+            movement.quantityGrams,
+            movement.balanceAfter,
+            movement.costPerGram,
+            movement.cogsAmount ?? null,
+            movement.at,
+            movement.actor,
+            updatedAt,
+          ),
+      ),
+    )
+  }
 }
 
 async function persistBillingSubscriptions(db: D1Database, subscriptions: BillingSubscriptionRecord[], updatedAt: string) {
@@ -5767,10 +6400,56 @@ function productionBatchFromRow(row: ProductionBatchRow): ProductionBatchRecord 
   }
 }
 
+function finishedGoodLotFromRow(row: FinishedGoodLotRow): FinishedGoodLotRecord {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    batchId: row.batch_id,
+    formulaId: row.formula_id,
+    formulaCode: row.formula_code,
+    lotNumber: row.lot_number,
+    quantityGrams: Number(row.quantity_grams),
+    reservedGrams: Number(row.reserved_grams),
+    qualityStatus: row.quality_status === 'HOLD' ? 'HOLD' : 'RELEASED',
+    releasedAt: row.released_at,
+    costPerGram: Number(row.cost_per_gram),
+    currency: row.currency,
+    location: row.location,
+  }
+}
+
+function finishedGoodMovementFromRow(row: FinishedGoodMovementRow): FinishedGoodMovementRecord {
+  const type = row.type === 'RESERVATION' || row.type === 'RESERVATION_RELEASE' || row.type === 'FULFILLMENT'
+    ? row.type
+    : 'PRODUCTION_OUTPUT'
+  const direction = row.direction === 'HOLD' || row.direction === 'RELEASE' || row.direction === 'OUT'
+    ? row.direction
+    : 'IN'
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    finishedGoodLotId: row.finished_good_lot_id,
+    batchId: row.batch_id,
+    formulaId: row.formula_id,
+    orderId: row.order_id ?? undefined,
+    type,
+    direction,
+    quantityGrams: Number(row.quantity_grams),
+    balanceAfter: Number(row.balance_after),
+    costPerGram: Number(row.cost_per_gram),
+    cogsAmount: row.cogs_amount ?? undefined,
+    at: row.at,
+    actor: row.actor,
+  }
+}
+
 function commercialSkuFromRow(row: CommercialSkuRow): CommercialSkuRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     materialId: row.material_id,
+    formulaId: row.formula_id ?? undefined,
+    productKind: row.product_kind === 'FORMULA' || row.formula_id ? 'FORMULA' : 'MATERIAL',
     name: row.name,
     description: row.description,
     packSizeGrams: Number(row.pack_size_grams),
@@ -5786,6 +6465,7 @@ function commercialSkuFromRow(row: CommercialSkuRow): CommercialSkuRecord {
 function priceListFromRow(row: PriceListRow): PriceListRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     name: row.name,
     customerGroup: readCustomerGroup(row.customer_group),
     currency: row.currency,
@@ -5798,6 +6478,7 @@ function priceListFromRow(row: PriceListRow): PriceListRecord {
 function quoteFromRow(row: QuoteRow): QuoteRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     skuId: row.sku_id,
     customer: row.customer,
     customerGroup: readCustomerGroup(row.customer_group),
@@ -5814,6 +6495,7 @@ function quoteFromRow(row: QuoteRow): QuoteRecord {
 function sampleRequestFromRow(row: SampleRequestRow): SampleRequestRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     skuId: row.sku_id,
     customer: row.customer,
     packs: Number(row.packs),
@@ -5825,6 +6507,7 @@ function sampleRequestFromRow(row: SampleRequestRow): SampleRequestRecord {
 function customerFromRow(row: CustomerRow): CustomerRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     name: row.name,
     group: readCustomerGroup(row.customer_group),
     creditLimit: Number(row.credit_limit),
@@ -5851,6 +6534,7 @@ function customerFromRow(row: CustomerRow): CustomerRecord {
 function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     skuId: row.sku_id,
     customerId: row.customer_id,
     customer: row.customer,
@@ -5879,6 +6563,7 @@ function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
 function scheduledReportFromRow(row: ScheduledReportRow): ScheduledReportRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     name: row.name,
     cadence: readScheduledReportCadence(row.cadence),
     audience: row.audience,
@@ -6054,6 +6739,7 @@ function notificationFromRow(row: NotificationOutboxRow): AppNotificationRecord 
 function shipmentFromRow(row: ShipmentRow): ShipmentRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     orderId: row.order_id,
     carrier: readShipmentCarrier(row.carrier),
     trackingNumber: row.tracking_number,
@@ -6068,6 +6754,7 @@ function shipmentFromRow(row: ShipmentRow): ShipmentRecord {
 function orderDocumentFromRow(row: OrderDocumentRow): OrderDocumentRecord {
   return {
     id: row.id,
+    organizationId: row.organization_id ?? 'org-nxl',
     orderId: row.order_id,
     type: readOrderDocumentType(row.type),
     status: readOrderDocumentStatus(row.status),
