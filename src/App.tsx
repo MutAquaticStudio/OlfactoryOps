@@ -115,7 +115,6 @@ import {
   type BrandingConfig,
   type BillingActionResponse,
   type BillingConsoleResponse,
-  type BillingPlanRecord,
   type BillingSubscriptionRecord,
   type CommercialSkuRecord,
   type CostingOverview,
@@ -146,6 +145,7 @@ import {
   type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
+  type IntegrationReadinessResponse,
   type LabWeighingSession,
   type LegalAcceptanceRecord,
   type PrivacyRequestRecord,
@@ -272,28 +272,6 @@ const clientFallbackDocumentDashboard: DocumentComplianceDashboard = {
   requirements: [],
   expiringDocuments: [],
   invariant: 'client fallback contains no document seed; API is source of truth',
-}
-
-const clientFallbackPlan: BillingPlanRecord = {
-  id: 'PLAN-CLIENT-FALLBACK',
-  name: 'API managed',
-  seats: 0,
-  storageGb: 0,
-  apiQuota: 0,
-  monthlyPrice: 0,
-  currency: 'USD',
-  limits: {
-    seats: 0,
-    materials: 0,
-    formulas: 0,
-    lots: 0,
-    documents: 0,
-    storageGb: 0,
-    apiCalls: 0,
-    webhooks: 0,
-    auditRetentionDays: 0,
-  },
-  features: [],
 }
 
 const clientFallbackSso: SsoConfigRecord = {
@@ -13494,63 +13472,13 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const internalAdminView = isInternalAdminSession(session)
-  const consoleApiLabel = internalAdminView ? 'Commercial console API' : 'Workspace access API'
   const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Workspace access synced from live API'
   const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading workspace access controls'
   const fallbackMessage = internalAdminView
-    ? 'Using local SaaS readiness seed until API is reachable'
-    : 'Using local workspace access seed until API is reachable'
-  const fallback = useMemo<SaasConsoleResponse>(() => ({
-    plans: [clientFallbackPlan],
-    plan: clientFallbackPlan,
-    subscription: {
-      id: 'SUB-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      planId: clientFallbackPlan.id,
-      provider: 'manual',
-      collectionMode: 'manual_invoice',
-      status: 'trialing',
-      currentPeriodStart: 'client-fallback',
-      currentPeriodEnd: 'client-fallback',
-      canWrite: false,
-      canExport: true,
-      nextInvoiceAt: 'client-fallback',
-      updatedAt: 'client-fallback',
-    },
-    usage: {
-      id: 'USG-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      periodStart: 'client-fallback',
-      periodEnd: 'client-fallback',
-      activeSeats: 0,
-      materials: 0,
-      formulas: 0,
-      lots: 0,
-      documents: 0,
-      storageGb: 0,
-      apiCalls: 0,
-      webhooks: 0,
-      auditEvents: 0,
-      lastCalculatedAt: 'client-fallback',
-    },
-    limitChecks: [],
-    invoices: [],
-    sso: clientFallbackSso,
-    apiKeys: [],
-    webhooks: [],
-    webhookDeliveries: [],
-    auditExports: [],
-    readiness: [
-      {
-        key: 'api-offline',
-        label: consoleApiLabel,
-        status: 'warning',
-        detail: 'Client fallback is active until API is reachable',
-      },
-    ],
-    invariant: 'client fallback contains no commercial state; API is source of truth',
-  }), [consoleApiLabel, session.organizationId])
-  const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
+    ? 'Live commercial readiness API is unavailable'
+    : 'Live workspace access API is unavailable'
+  const [saasData, setSaasData] = useState<SaasConsoleResponse | null>(null)
+  const [integrationReadiness, setIntegrationReadiness] = useState<IntegrationReadinessResponse | null>(null)
   const [statusMessage, setStatusMessage] = useState(loadingMessage)
   const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
   const [billingAction, setBillingAction] = useState<BillingActionResponse | null>(null)
@@ -13559,13 +13487,13 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   const [trustBusyAction, setTrustBusyAction] = useState<string | null>(null)
   const [trustSecret, setTrustSecret] = useState<{ label: string; value: string } | null>(null)
   const [ssoDraft, setSsoDraft] = useState({
-    domain: fallback.sso.domain,
-    issuerUrl: fallback.sso.issuerUrl,
-    metadataUrl: fallback.sso.metadataUrl ?? '',
-    clientId: fallback.sso.clientId ?? '',
-    enforceSso: fallback.sso.enforceSso,
-    scimEnabled: fallback.sso.scim.enabled,
-    roleMapping: Object.entries(fallback.sso.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
+    domain: clientFallbackSso.domain,
+    issuerUrl: clientFallbackSso.issuerUrl,
+    metadataUrl: clientFallbackSso.metadataUrl ?? '',
+    clientId: clientFallbackSso.clientId ?? '',
+    enforceSso: clientFallbackSso.enforceSso,
+    scimEnabled: clientFallbackSso.scim.enabled,
+    roleMapping: Object.entries(clientFallbackSso.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
   })
   const [apiKeyDraft, setApiKeyDraft] = useState({
     label: 'Operations integration',
@@ -13578,11 +13506,11 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   const [customDomainDraft, setCustomDomainDraft] = useState('')
   const [customDomainProvisioning, setCustomDomainProvisioning] = useState<SaasCustomDomainRecord | null>(null)
   const [customDomains, setCustomDomains] = useState<SaasCustomDomainRecord[]>([])
-  const activeSeats = saasData.usage.activeSeats
-  const storageUsedGb = saasData.usage.storageGb
-  const apiUsage = saasData.usage.apiCalls
-  const saasHealth = useMemo(() => buildSaasHealthSummary(saasData), [saasData])
-  const saasHealthSource = statusMessage.toLowerCase().includes('fallback') ? 'Local seed' : 'Live API'
+  const activeSeats = saasData?.usage.activeSeats ?? 0
+  const storageUsedGb = saasData?.usage.storageGb ?? 0
+  const apiUsage = saasData?.usage.apiCalls ?? 0
+  const saasHealth = useMemo(() => saasData ? buildSaasHealthSummary(saasData) : null, [saasData])
+  const saasHealthSource = saasData ? 'Live API' : 'Unavailable'
   const canProvisionCustomDomain = session.role === 'Owner' || session.role === 'Admin'
 
   function syncSsoDraft(next: SsoConfigRecord) {
@@ -13616,10 +13544,20 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         setSaasData(payload)
         syncSsoDraft(payload.sso)
         await loadCustomDomains(controller.signal)
+        if (canProvisionCustomDomain) {
+          try {
+            const readiness = await requestApi<IntegrationReadinessResponse>('/integrations/readiness', { signal: controller.signal })
+            setIntegrationReadiness(readiness)
+          } catch {
+            setIntegrationReadiness(null)
+          }
+        }
         setStatusMessage(syncedMessage)
-      } catch {
+      } catch (error) {
         if (!controller.signal.aborted) {
-          setStatusMessage(fallbackMessage)
+          setSaasData(null)
+          setIntegrationReadiness(null)
+          setStatusMessage(error instanceof Error ? `Workspace services unavailable: ${error.message}` : fallbackMessage)
         }
       }
     }
@@ -13627,13 +13565,21 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     void loadSaasConsole()
 
     return () => controller.abort()
-  }, [fallbackMessage, loadCustomDomains, syncedMessage])
+  }, [canProvisionCustomDomain, fallbackMessage, loadCustomDomains, syncedMessage])
 
   async function refreshSaasConsole(status?: string) {
     const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
     setSaasData(consolePayload)
     syncSsoDraft(consolePayload.sso)
     await loadCustomDomains()
+    if (canProvisionCustomDomain) {
+      try {
+        const readiness = await requestApi<IntegrationReadinessResponse>('/integrations/readiness')
+        setIntegrationReadiness(readiness)
+      } catch {
+        setIntegrationReadiness(null)
+      }
+    }
     if (status) {
       setStatusMessage(status)
     }
@@ -13710,6 +13656,10 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   }
 
   async function saveSsoConfig() {
+    if (!saasData) {
+      setStatusMessage('Live workspace access data is unavailable')
+      return
+    }
     setTrustBusyAction('sso')
     setTrustSecret(null)
     try {
@@ -13909,8 +13859,50 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  if (!saasData || !saasHealth) {
+    return (
+      <div className="workspace-grid saas-grid">
+        <Panel title="Workspace Services" icon={ShieldCheck}>
+          <div className="empty-state">
+            <strong>Live workspace access data is unavailable.</strong>
+            <span>{statusMessage}</span>
+            <span>No local commercial fallback is shown while the API is unavailable.</span>
+          </div>
+          <div className="action-row">
+            <button className="primary-button" type="button" onClick={() => void refreshSaasConsole('Workspace services reloaded from live API')}>
+              Retry live API
+            </button>
+          </div>
+        </Panel>
+      </div>
+    )
+  }
+
   return (
     <div className="workspace-grid saas-grid">
+      {canProvisionCustomDomain && integrationReadiness ? (
+        <Panel className="wide" title="Integration Readiness" icon={Gauge}>
+          <div className="document-list compact-list">
+            {integrationReadiness.checks.map((check) => (
+              <div className="document-row" key={check.key}>
+                <div>
+                  <strong>{check.label}</strong>
+                  <span>{check.detail}</span>
+                </div>
+                <StatusBadge
+                  status={check.status === 'ready' ? 'stable' : check.status === 'blocked' ? 'alert' : 'review'}
+                  label={check.status.replace('_', ' ').toUpperCase()}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="action-row">
+            <DataTag label="Billing mode" value={integrationReadiness.billingMode.replace('_', ' ')} tone="blue" />
+            <DataTag label="Checked" value={new Date(integrationReadiness.checkedAt).toLocaleTimeString()} tone="green" />
+          </div>
+        </Panel>
+      ) : null}
+
       {internalAdminView ? (
         <Panel
           className="wide saas-health-panel"
@@ -14034,20 +14026,22 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </div>
       </Panel>
 
-      <Panel title="Invoices & Collection" icon={ClipboardCheck}>
-        <div className="document-list compact-list">
-          {saasData.invoices.map((invoice) => (
-            <div className="document-row" key={invoice.id}>
-              <div>
-                <strong>{invoice.number}</strong>
-                <span>{formatCurrency(invoice.amountDue)} due {new Date(invoice.dueAt).toLocaleDateString()}</span>
-                <span>{invoice.hostedInvoiceUrl}</span>
+      {saasData.billingMode === 'self_service' ? (
+        <Panel title="Invoices & Collection" icon={ClipboardCheck}>
+          <div className="document-list compact-list">
+            {saasData.invoices.map((invoice) => (
+              <div className="document-row" key={invoice.id}>
+                <div>
+                  <strong>{invoice.number}</strong>
+                  <span>{formatCurrency(invoice.amountDue)} due {new Date(invoice.dueAt).toLocaleDateString()}</span>
+                  <span>{invoice.hostedInvoiceUrl}</span>
+                </div>
+                <StatusBadge status={invoice.status === 'paid' ? 'stable' : 'review'} label={invoice.status.toUpperCase()} />
               </div>
-              <StatusBadge status={invoice.status === 'paid' ? 'stable' : 'review'} label={invoice.status.toUpperCase()} />
-            </div>
-          ))}
-        </div>
-      </Panel>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
 
       {canProvisionCustomDomain ? (
         <Panel title="Custom Domain" icon={Globe2}>

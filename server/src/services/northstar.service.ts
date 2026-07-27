@@ -95,6 +95,7 @@ import {
   type AuthSession,
   type BillingActionResponse,
   type BillingConsoleResponse,
+  type BillingMode,
   type BillingInvoiceRecord,
   type BillingLimitCheck,
   type BillingPlanRecord,
@@ -123,6 +124,7 @@ import {
   type InventoryAgingRecord,
   type InventoryMovement,
   type InventoryReorderSuggestion,
+  type IntegrationReadinessResponse,
   type LegalAcceptanceRecord,
   type LegalDocumentKind,
   type LabUsagePurpose,
@@ -274,6 +276,15 @@ export type MfaEnrollmentRecord = {
 type NorthStarServiceOptions = {
   authCredentials?: AuthCredentialRecord[]
   mfaEncryptionKey?: string
+  billingMode?: BillingMode
+}
+
+export type IntegrationReadinessConfig = {
+  documentsAvailable: boolean
+  emailConfigured: boolean
+  cloudflareSaasConfigured: boolean
+  betaHostnameConfigured: boolean
+  betaHostnameReachable?: boolean
 }
 
 type CreatePurchaseOrderBody = {
@@ -754,8 +765,10 @@ export class NorthStarService {
   private auditCounter = auditEvents.length
   private activeSessionId: string | null = null
   private securityStateDirty = false
+  private readonly billingMode: BillingMode
 
   constructor(options: NorthStarServiceOptions = {}) {
+    this.billingMode = options.billingMode === 'self_service' ? 'self_service' : 'managed_beta'
     this.documentRecords = this.documentRecords.map((document) => ({
       ...document,
       organizationId: document.organizationId || 'org-nxl',
@@ -6573,19 +6586,54 @@ export class NorthStarService {
     return { data: { updated, audit: this.recordAudit('notification.readAll', session.userId, session.userId, 'allowed') } }
   }
 
-  notificationEmailOutbox(limit = 10) {
+  notificationEmailOutbox(now = new Date().toISOString(), limit = 10) {
     return this.notificationRecords
-      .filter((item) => item.emailStatus === 'queued')
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .filter((item) => item.emailStatus === 'queued' && (!item.emailNextAttemptAt || item.emailNextAttemptAt <= now))
+      .sort((left, right) => (left.emailNextAttemptAt ?? left.createdAt).localeCompare(right.emailNextAttemptAt ?? right.createdAt))
       .slice(0, Math.max(1, Math.min(limit, 25)))
   }
 
-  setNotificationEmailStatus(id: string, status: 'sent' | 'failed', error?: string) {
+  recordNotificationEmailAttempt(id: string, result: { delivered: boolean; error?: string }, attemptedAt = new Date().toISOString()) {
+    const current = this.notificationRecords.find((item) => item.id === id)
+    if (!current || current.emailStatus !== 'queued') {
+      return undefined
+    }
+    const emailAttempts = (current.emailAttempts ?? 0) + 1
+    const emailError = result.error?.replace(/\s+/g, ' ').trim().slice(0, 180)
+    const nextAttemptAt = result.delivered || emailAttempts >= 5
+      ? undefined
+      : new Date(new Date(attemptedAt).getTime() + [2, 10, 30, 120][Math.min(emailAttempts - 1, 3)] * 60_000).toISOString()
+    const updated: AppNotificationRecord = {
+      ...current,
+      emailStatus: result.delivered ? 'sent' : emailAttempts >= 5 ? 'failed' : 'queued',
+      emailError: result.delivered ? undefined : emailError || 'Email provider delivery failed',
+      emailAttempts,
+      emailLastAttemptAt: attemptedAt,
+      emailNextAttemptAt: nextAttemptAt,
+      emailSentAt: result.delivered ? attemptedAt : undefined,
+    }
     this.notificationRecords = this.notificationRecords.map((item) =>
-      item.id === id
-        ? { ...item, emailStatus: status, emailError: error?.slice(0, 180) }
-        : item,
+      item.id === id ? updated : item,
     )
+    return updated
+  }
+
+  setNotificationEmailStatus(id: string, status: 'sent' | 'failed', error?: string) {
+    if (status === 'sent') {
+      return this.recordNotificationEmailAttempt(id, { delivered: true })
+    }
+    const current = this.notificationRecords.find((item) => item.id === id)
+    if (!current) return undefined
+    const terminal: AppNotificationRecord = {
+      ...current,
+      emailStatus: 'failed',
+      emailError: error?.replace(/\s+/g, ' ').trim().slice(0, 180) || 'Email provider delivery failed',
+      emailAttempts: Math.max(5, current.emailAttempts ?? 0),
+      emailLastAttemptAt: new Date().toISOString(),
+      emailNextAttemptAt: undefined,
+    }
+    this.notificationRecords = this.notificationRecords.map((item) => item.id === id ? terminal : item)
+    return terminal
   }
 
   legalStatus() {
@@ -6832,6 +6880,8 @@ export class NorthStarService {
       href,
       createdAt: new Date().toISOString(),
       emailStatus: shouldEmail ? 'queued' : 'in_app',
+      emailAttempts: 0,
+      emailNextAttemptAt: shouldEmail ? new Date().toISOString() : undefined,
     }
     this.notificationRecords = [notification, ...this.notificationRecords]
     return notification
@@ -6913,10 +6963,12 @@ export class NorthStarService {
   }
 
   billingPlan() {
+    this.requireSelfServiceBilling()
     return { data: this.planForSubscription(this.currentSubscription()) }
   }
 
   billingPlans() {
+    this.requireSelfServiceBilling()
     return { data: billingPlans }
   }
 
@@ -6930,19 +6982,88 @@ export class NorthStarService {
     const invoices = this.invoicesForSubscription(subscription.id)
     return {
       data: {
-        plans: billingPlans,
+        billingMode: this.billingMode,
+        plans: this.billingMode === 'self_service' ? billingPlans : [],
         plan,
         subscription,
         usage,
         limitChecks,
-        invoices,
+        invoices: this.billingMode === 'self_service' ? invoices : [],
         sso: this.publicSsoConfig(this.ssoConfigForOrganization(subscription.organizationId)),
         apiKeys: this.publicApiKeysForOrganization(subscription.organizationId),
         webhooks: this.webhooksForOrganization(subscription.organizationId),
         webhookDeliveries: this.webhookDeliveriesForOrganization(subscription.organizationId),
         auditExports: this.auditExportsForOrganization(subscription.organizationId),
         readiness: this.commercialReadinessChecks(limitChecks, subscription, invoices),
-        invariant: 'subscription status and plan limits are enforced server-side before commercial writes',
+        invariant: this.billingMode === 'self_service'
+          ? 'subscription status and plan limits are enforced server-side before commercial writes'
+          : 'beta workspace access and quota are server-enforced while self-service billing remains disabled',
+      },
+    }
+  }
+
+  integrationReadiness(config: IntegrationReadinessConfig = {
+    documentsAvailable: false,
+    emailConfigured: false,
+    cloudflareSaasConfigured: false,
+    betaHostnameConfigured: false,
+  }): { data: IntegrationReadinessResponse } {
+    const session = this.currentSession()
+    if (!['Owner', 'Admin', 'Platform Admin'].includes(session.role)) {
+      throw new ForbiddenException('Only workspace administrators can view integration readiness')
+    }
+    const betaHostnameStatus = !config.betaHostnameConfigured
+      ? 'not_configured'
+      : config.betaHostnameReachable === false ? 'blocked' : 'ready'
+    return {
+      data: {
+        billingMode: this.billingMode,
+        checks: [
+          {
+            key: 'billing',
+            label: 'Self-service billing',
+            status: this.billingMode === 'self_service' ? 'ready' : 'not_configured',
+            detail: this.billingMode === 'self_service'
+              ? 'Checkout and provider webhooks are enabled for this environment.'
+              : 'Beta access is managed directly; Stripe checkout, portal, plans, and invoices are disabled.',
+          },
+          {
+            key: 'documents',
+            label: 'Document storage',
+            status: config.documentsAvailable ? 'ready' : 'blocked',
+            detail: config.documentsAvailable
+              ? 'R2 document storage binding is available.'
+              : 'R2 document storage is unavailable. Enable R2 and bind the beta bucket before document upload goes live.',
+          },
+          {
+            key: 'email',
+            label: 'Transactional email',
+            status: config.emailConfigured ? 'ready' : 'not_configured',
+            detail: config.emailConfigured
+              ? 'Resend delivery is configured; failures remain in the durable retry outbox.'
+              : 'Resend is not configured. Notifications remain in-app and queued email is not sent.',
+          },
+          {
+            key: 'cloudflare_saas',
+            label: 'Custom domains',
+            status: config.cloudflareSaasConfigured ? 'ready' : 'not_configured',
+            detail: config.cloudflareSaasConfigured
+              ? 'Cloudflare for SaaS provisioning is configured for tenant-owned hostnames.'
+              : 'Cloudflare for SaaS credentials are not configured for this environment.',
+          },
+          {
+            key: 'beta_hostname',
+            label: 'Beta hostname',
+            status: betaHostnameStatus,
+            detail: betaHostnameStatus === 'ready'
+              ? 'beta.labofscents.org is configured and reachable over HTTPS.'
+              : betaHostnameStatus === 'blocked'
+                ? 'beta.labofscents.org is configured but has not completed DNS or HTTPS validation.'
+                : 'beta.labofscents.org is not configured for this environment.',
+          },
+        ],
+        checkedAt: new Date().toISOString(),
+        invariant: 'integration readiness exposes configuration status only and never returns provider credentials or secret values',
       },
     }
   }
@@ -6956,11 +7077,13 @@ export class NorthStarService {
   }
 
   billingInvoices() {
+    this.requireSelfServiceBilling()
     const subscription = this.currentSubscription()
     return { data: this.invoicesForSubscription(subscription.id) }
   }
 
   stripeCheckoutContext(body: { planId?: string } = {}) {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const subscription = this.currentSubscription()
@@ -6983,6 +7106,7 @@ export class NorthStarService {
   }
 
   stripePortalContext() {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const subscription = this.currentSubscription()
@@ -7010,7 +7134,10 @@ export class NorthStarService {
     if (collision) {
       throw new UnprocessableEntityException('Custom domain is already assigned to another workspace')
     }
-    return { data: { hostname, organizationId: session.organizationId, requestedBy: session.userId } }
+    const existingDomain = this.customDomainRecords.find(
+      (domain) => domain.organizationId === session.organizationId && domain.hostname.toLowerCase() === hostname,
+    )
+    return { data: { hostname, organizationId: session.organizationId, requestedBy: session.userId, existingDomain } }
   }
 
   completeCloudflareSaasProvisioning(hostname: string, providerId: string, validation: Record<string, string>) {
@@ -7024,7 +7151,7 @@ export class NorthStarService {
     }
     const now = new Date().toISOString()
     const existing = this.customDomainRecords.find(
-      (domain) => domain.organizationId === session.organizationId && domain.providerId === providerId,
+      (domain) => domain.organizationId === session.organizationId && (domain.providerId === providerId || domain.hostname.toLowerCase() === hostname),
     )
     const domain: SaasCustomDomainRecord = {
       id: existing?.id ?? `DOM-${this.shortId()}`,
@@ -7248,6 +7375,7 @@ export class NorthStarService {
   }
 
   selectBillingPlan(body: { planId?: string; billingCycle?: 'monthly' | 'annual' } = {}) {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const plan = this.billingPlanForId(body.planId?.trim() || 'PLAN-APPRENTICE')
@@ -7269,6 +7397,7 @@ export class NorthStarService {
   }
 
   startBillingCheckout(body: { planId?: string; mode?: 'checkout' | 'manual_sales' } = {}) {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const subscription = this.currentSubscription()
@@ -7290,6 +7419,7 @@ export class NorthStarService {
   }
 
   openBillingPortal() {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const subscription = this.currentSubscription()
@@ -7306,6 +7436,7 @@ export class NorthStarService {
   }
 
   freezeSubscription(body: { reason?: string } = {}) {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const reason = body.reason?.trim() || 'Manual billing freeze'
@@ -7331,6 +7462,7 @@ export class NorthStarService {
   }
 
   reactivateSubscription() {
+    this.requireSelfServiceBilling()
     const session = this.currentSession()
     this.requirePermission(session.role, 'billing.manage')
     const subscription = {
@@ -9289,6 +9421,12 @@ export class NorthStarService {
       throw new UnauthorizedException('Invalid or expired session')
     }
     return securedSession
+  }
+
+  private requireSelfServiceBilling() {
+    if (this.billingMode !== 'self_service') {
+      throw new UnprocessableEntityException('Self-service billing is disabled while beta access is managed directly by OlfactoryOps')
+    }
   }
 
   private normalizeOptionalBrandLogoUrl(value: unknown, fallback?: string) {

@@ -1300,6 +1300,24 @@ export interface BillingActionResponse {
 export type NotificationCategory = 'security' | 'billing' | 'inventory' | 'workspace' | 'system'
 export type NotificationDeliveryStatus = 'in_app' | 'queued' | 'sent' | 'failed'
 
+export type BillingMode = 'managed_beta' | 'self_service'
+
+export type IntegrationReadinessStatus = 'ready' | 'not_configured' | 'blocked'
+
+export interface IntegrationReadinessCheck {
+  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname'
+  label: string
+  status: IntegrationReadinessStatus
+  detail: string
+}
+
+export interface IntegrationReadinessResponse {
+  billingMode: BillingMode
+  checks: IntegrationReadinessCheck[]
+  checkedAt: string
+  invariant: string
+}
+
 export interface AppNotificationRecord {
   id: string
   organizationId: string
@@ -1312,6 +1330,10 @@ export interface AppNotificationRecord {
   readAt?: string
   emailStatus: NotificationDeliveryStatus
   emailError?: string
+  emailAttempts?: number
+  emailLastAttemptAt?: string
+  emailNextAttemptAt?: string
+  emailSentAt?: string
 }
 
 export interface DataImportIssue {
@@ -1369,6 +1391,7 @@ export interface GlobalSearchResult {
 }
 
 export interface BillingConsoleResponse {
+  billingMode: BillingMode
   plans: BillingPlanRecord[]
   plan: BillingPlanRecord
   subscription: BillingSubscriptionRecord

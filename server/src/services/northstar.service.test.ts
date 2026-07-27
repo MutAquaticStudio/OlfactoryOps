@@ -35,6 +35,7 @@ function createTestService() {
       },
     ],
     mfaEncryptionKey: testMfaEncryptionKey,
+    billingMode: 'self_service',
   })
 }
 
@@ -2475,6 +2476,7 @@ describe('NorthStarService', () => {
     expect(provisioned.domain.status).toBe('pending_validation')
     expect(provisioned.organization.customDomain).not.toBe('app.example-perfume.test')
     expect(service.customDomains().data.domains).toHaveLength(1)
+    expect(service.cloudflareSaasProvisioningContext({ hostname: 'app.example-perfume.test' }).data.existingDomain?.id).toBe(provisioned.domain.id)
 
     const activated = service.applyCloudflareSaasRefresh(provisioned.domain.id, {
       providerStatus: 'active',
@@ -2508,6 +2510,68 @@ describe('NorthStarService', () => {
     expect(service.billingSubscription().data.provider).toBe('stripe')
     expect(service.billingSubscription().data.providerSubscriptionId).toBe('sub_test_123')
     expect(service.billingSubscription().data.status).toBe('active')
+  })
+
+  it('keeps beta billing managed server-side and exposes credential-free integration readiness', () => {
+    const service = new NorthStarService({
+      authCredentials: [
+        {
+          email: adminEmail,
+          passwordHash: testPasswordHashForEmail(adminEmail, adminPassword),
+          passwordSetAt: fixedSessionFixtureNow.toISOString(),
+        },
+      ],
+      mfaEncryptionKey: testMfaEncryptionKey,
+    })
+    const login = service.login(adminEmail, adminPassword).data
+    service.authenticateSession(login.session.id)
+
+    const consoleState = service.billingConsole().data
+    expect(consoleState.billingMode).toBe('managed_beta')
+    expect(consoleState.plans).toEqual([])
+    expect(consoleState.invoices).toEqual([])
+    expect(() => service.billingPlans()).toThrow(UnprocessableEntityException)
+    expect(() => service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' })).toThrow(UnprocessableEntityException)
+    expect(() => service.openBillingPortal()).toThrow(UnprocessableEntityException)
+    expect(() => service.freezeSubscription()).toThrow(UnprocessableEntityException)
+    expect(() => service.reactivateSubscription()).toThrow(UnprocessableEntityException)
+
+    const readiness = service.integrationReadiness({
+      documentsAvailable: false,
+      emailConfigured: false,
+      cloudflareSaasConfigured: false,
+      betaHostnameConfigured: true,
+      betaHostnameReachable: false,
+    }).data
+    expect(readiness.checks.find((check) => check.key === 'beta_hostname')?.status).toBe('blocked')
+    expect(JSON.stringify(readiness)).not.toContain('STRIPE_SECRET_KEY')
+  })
+
+  it('keeps email delivery retry evidence durable and does not retry before the due time', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as {
+      queueNotification: (
+        organizationId: string,
+        recipientEmail: string,
+        category: 'security',
+        title: string,
+        body: string,
+        href?: string,
+        shouldEmail?: boolean,
+      ) => { id: string; createdAt: string }
+    }
+    const notification = internals.queueNotification('org-nxl', adminEmail, 'security', 'Device sign-in', 'A new device signed in.', '/security', true)
+
+    expect(service.notificationEmailOutbox(notification.createdAt)).toHaveLength(1)
+    const failed = service.recordNotificationEmailAttempt(notification.id, { delivered: false, error: 'provider timeout' }, notification.createdAt)
+    expect(failed?.emailStatus).toBe('queued')
+    expect(failed?.emailAttempts).toBe(1)
+    expect(failed?.emailNextAttemptAt).toBeDefined()
+    expect(service.notificationEmailOutbox(notification.createdAt)).toHaveLength(0)
+
+    const delivered = service.recordNotificationEmailAttempt(notification.id, { delivered: true }, failed?.emailNextAttemptAt)
+    expect(delivered?.emailStatus).toBe('sent')
+    expect(delivered?.emailSentAt).toBeDefined()
   })
 })
 

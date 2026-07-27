@@ -1158,6 +1158,11 @@ export class NorthStarController {
     return this.northStar.billingInvoices()
   }
 
+  @Get('integrations/readiness')
+  integrationReadiness() {
+    return this.northStar.integrationReadiness()
+  }
+
   @Post('billing/checkout')
   startBillingCheckout(@Body() body: { planId?: string; mode?: 'checkout' | 'manual_sales' }) {
     return this.northStar.startBillingCheckout(body)

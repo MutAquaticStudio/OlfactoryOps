@@ -1,5 +1,13 @@
 import { NorthStarService, type MfaEnrollmentRecord, type PasswordResetRecord } from '../server/src/services/northstar.service.js'
 import {
+  cloudflareValidation as providerCloudflareValidation,
+  cloudflareVerificationErrors as providerCloudflareVerificationErrors,
+  probeHttpsOrigin,
+  requestCloudflareSaas,
+  requestStripeForm,
+  sendResendEmail,
+} from './provider-adapters.js'
+import {
   PayloadTooLargeException,
   ForbiddenException,
   TooManyRequestsException,
@@ -76,6 +84,8 @@ type Env = {
   STRIPE_PRICE_ATELIER?: string
   STRIPE_PRICE_MAISON?: string
   BILLING_RETURN_URL?: string
+  BILLING_MODE?: 'managed_beta' | 'self_service'
+  BETA_APP_ORIGIN?: string
   RESEND_API_KEY?: string
   EMAIL_FROM?: string
   SENTRY_DSN?: string
@@ -308,6 +318,7 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'webhookRecords',
   'webhookDeliveryRecords',
   'auditExportRecords',
+  'notificationRecords',
   'lots',
   'movements',
   'usageHistory',
@@ -415,6 +426,7 @@ const NORMALIZED_TABLES = [
   'webhooks',
   'webhook_deliveries',
   'audit_export_jobs',
+  'notification_outbox',
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
@@ -610,6 +622,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/billing/subscription', handler: ({ service }) => service.billingSubscription() },
   { method: 'GET', pattern: '/billing/usage', handler: ({ service }) => service.billingUsage() },
   { method: 'GET', pattern: '/billing/invoices', handler: ({ service }) => service.billingInvoices() },
+  { method: 'GET', pattern: '/integrations/readiness', handler: async ({ service, env }) => integrationReadiness(service, env) },
   { method: 'POST', pattern: '/billing/checkout', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body, env, request }) => startStripeCheckout(service, body, env, request) },
   { method: 'POST', pattern: '/billing/subscription/select-plan', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.selectBillingPlan(body) },
   { method: 'POST', pattern: '/billing/portal', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, env, request }) => startStripePortal(service, env, request) },
@@ -681,6 +694,7 @@ export default {
       service = new NorthStarService({
         authCredentials: seededAdminCredentialsForEnv(env),
         mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+        billingMode: billingModeFromEnv(env),
       })
       if (match.route.hydrateState !== false) {
         await hydrateSnapshots(env.DB, service, env)
@@ -794,11 +808,13 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
     const service = new NorthStarService({
       authCredentials: seededAdminCredentialsForEnv(env),
       mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+      billingMode: billingModeFromEnv(env),
     })
     await hydrateSnapshots(env.DB, service, env)
     const scheduledAt = new Date(controller.scheduledTime).toISOString()
     const result = service.runDueAnalyticsReports(scheduledAt)
-    if (result.data.reports.length > 0) {
+    const emailDelivery = await deliverNotificationOutbox(service, env)
+    if (result.data.reports.length > 0 || emailDelivery.changed) {
       await persistSnapshots(env.DB, service)
       refreshCachedSnapshotState(service)
     }
@@ -817,6 +833,22 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
     ])
     throw error
   }
+}
+
+function billingModeFromEnv(env: Env) {
+  return env.BILLING_MODE === 'self_service' ? 'self_service' : 'managed_beta'
+}
+
+async function integrationReadiness(service: NorthStarService, env: Env) {
+  const betaHostnameConfigured = Boolean(env.BETA_APP_ORIGIN?.trim())
+  const betaHostnameReachable = await probeHttpsOrigin(fetch, env.BETA_APP_ORIGIN)
+  return service.integrationReadiness({
+    documentsAvailable: Boolean(env.DOCUMENTS),
+    emailConfigured: Boolean(env.RESEND_API_KEY?.trim() && env.EMAIL_FROM?.trim()),
+    cloudflareSaasConfigured: Boolean(env.CLOUDFLARE_API_TOKEN?.trim() && env.CLOUDFLARE_SAAS_ZONE_ID?.trim()),
+    betaHostnameConfigured,
+    betaHostnameReachable,
+  })
 }
 
 async function publicStatus(env: Env) {
@@ -862,38 +894,20 @@ async function publicStatus(env: Env) {
 
 async function deliverNotificationOutbox(service: NorthStarService, env: Env) {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) {
-    return
+    return { attempted: 0, changed: false }
   }
   const notifications = service.notificationEmailOutbox()
   for (const notification of notifications) {
-    try {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: env.EMAIL_FROM,
-          to: [notification.recipientEmail],
-          subject: notification.title,
-          text: notification.href ? `${notification.body}\n\nOpen OlfactoryOps: ${notification.href}` : notification.body,
-        }),
-      })
-      if (!response.ok) {
-        const message = (await response.text()).slice(0, 180)
-        service.setNotificationEmailStatus(notification.id, 'failed', message || `Resend returned ${response.status}`)
-        continue
-      }
-      service.setNotificationEmailStatus(notification.id, 'sent')
-    } catch (error) {
-      service.setNotificationEmailStatus(
-        notification.id,
-        'failed',
-        error instanceof Error ? error.message : 'Notification provider request failed',
-      )
-    }
+    const result = await sendResendEmail(fetch, {
+      apiKey: env.RESEND_API_KEY,
+      from: env.EMAIL_FROM,
+      to: notification.recipientEmail,
+      subject: notification.title,
+      text: notification.href ? `${notification.body}\n\nOpen OlfactoryOps: ${notification.href}` : notification.body,
+    })
+    service.recordNotificationEmailAttempt(notification.id, result)
   }
+  return { attempted: notifications.length, changed: notifications.length > 0 }
 }
 
 async function startStripeCheckout(
@@ -928,17 +942,14 @@ async function startStripeCheckout(
   } else {
     form.set('customer_email', prepared.customerEmail)
   }
-  const response = await fetch('https://api.stripe.com/v1/checkout/sessions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: form,
-  })
-  const payload = await readProviderJson(response)
-  if (!response.ok || typeof payload.url !== 'string') {
-    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Stripe could not create a Checkout session'))
+  let payload: Record<string, unknown>
+  try {
+    payload = await requestStripeForm(fetch, env.STRIPE_SECRET_KEY, 'https://api.stripe.com/v1/checkout/sessions', form)
+  } catch (error) {
+    throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stripe could not create a Checkout session')
+  }
+  if (typeof payload.url !== 'string') {
+    throw new UnprocessableEntityException('Stripe could not create a Checkout session')
   }
   return {
     data: {
@@ -962,32 +973,14 @@ async function startPasswordReset(
   if (prepared.delivery && env.RESEND_API_KEY && env.EMAIL_FROM) {
     const resetUrl = new URL('/', billingReturnOrigin(request, env))
     resetUrl.searchParams.set('reset', prepared.delivery.token)
-    try {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: env.EMAIL_FROM,
-          to: [prepared.delivery.recipientEmail],
-          subject: 'Reset your OlfactoryOps password',
-          text: `A password reset was requested for your OlfactoryOps account. This link expires in 30 minutes and can be used once:\n\n${resetUrl.toString()}`,
-        }),
-      })
-      service.setNotificationEmailStatus(
-        prepared.delivery.notificationId ?? '',
-        response.ok ? 'sent' : 'failed',
-        response.ok ? undefined : `Resend returned ${response.status}`,
-      )
-    } catch (error) {
-      service.setNotificationEmailStatus(
-        prepared.delivery.notificationId ?? '',
-        'failed',
-        error instanceof Error ? error.message : 'Password reset email failed',
-      )
-    }
+    const result = await sendResendEmail(fetch, {
+      apiKey: env.RESEND_API_KEY,
+      from: env.EMAIL_FROM,
+      to: prepared.delivery.recipientEmail,
+      subject: 'Reset your OlfactoryOps password',
+      text: `A password reset was requested for your OlfactoryOps account. This link expires in 30 minutes and can be used once:\n\n${resetUrl.toString()}`,
+    })
+    service.recordNotificationEmailAttempt(prepared.delivery.notificationId ?? '', result)
   }
   return { data: prepared.data }
 }
@@ -1001,17 +994,14 @@ async function startStripePortal(service: NorthStarService, env: Env, request: R
     customer: prepared.subscription.providerCustomerId || '',
     return_url: billingReturnOrigin(request, env),
   })
-  const response = await fetch('https://api.stripe.com/v1/billing_portal/sessions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: form,
-  })
-  const payload = await readProviderJson(response)
-  if (!response.ok || typeof payload.url !== 'string') {
-    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Stripe could not open the billing portal'))
+  let payload: Record<string, unknown>
+  try {
+    payload = await requestStripeForm(fetch, env.STRIPE_SECRET_KEY, 'https://api.stripe.com/v1/billing_portal/sessions', form)
+  } catch (error) {
+    throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Stripe could not open the billing portal')
+  }
+  if (typeof payload.url !== 'string') {
+    throw new UnprocessableEntityException('Stripe could not open the billing portal')
   }
   return {
     data: {
@@ -1121,26 +1111,34 @@ async function provisionCloudflareCustomDomain(
     requestBody.custom_origin_server = env.CLOUDFLARE_SAAS_ORIGIN.trim()
     requestBody.custom_origin_sni = env.CLOUDFLARE_SAAS_ORIGIN.trim()
   }
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-        'Content-Type': 'application/json',
+  if (context.existingDomain && context.existingDomain.status !== 'failed') {
+    return {
+      data: {
+        domain: context.existingDomain,
+        idempotent: true,
+        invariant: 'an existing custom hostname is returned without creating a duplicate Cloudflare provider record',
       },
-      body: JSON.stringify(requestBody),
-    },
-  )
-  const payload = await readProviderJson(response)
+    }
+  }
+  let payload: Record<string, unknown>
+  try {
+    payload = await requestCloudflareSaas(
+      fetch,
+      env.CLOUDFLARE_API_TOKEN,
+      `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames`,
+      { method: 'POST', body: JSON.stringify(requestBody) },
+    )
+  } catch (error) {
+    throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Cloudflare could not provision the custom hostname')
+  }
   const result = isRecord(payload.result) ? payload.result : undefined
-  if (!response.ok || !result || typeof result.id !== 'string') {
-    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Cloudflare could not provision the custom hostname'))
+  if (!result || typeof result.id !== 'string') {
+    throw new UnprocessableEntityException('Cloudflare could not provision the custom hostname')
   }
   return service.completeCloudflareSaasProvisioning(
     context.hostname,
     result.id,
-    cloudflareValidation(result),
+    providerCloudflareValidation(result),
   )
 }
 
@@ -1149,55 +1147,33 @@ async function refreshCloudflareCustomDomain(service: NorthStarService, id: stri
   if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_SAAS_ZONE_ID) {
     throw new UnprocessableEntityException('Cloudflare for SaaS is not configured for this environment')
   }
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames/${encodeURIComponent(context.domain.providerId)}`,
-    { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } },
-  )
-  const payload = await readProviderJson(response)
+  let payload: Record<string, unknown>
+  try {
+    payload = await requestCloudflareSaas(
+      fetch,
+      env.CLOUDFLARE_API_TOKEN,
+      `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(env.CLOUDFLARE_SAAS_ZONE_ID)}/custom_hostnames/${encodeURIComponent(context.domain.providerId)}`,
+    )
+  } catch (error) {
+    throw new UnprocessableEntityException(error instanceof Error ? error.message : 'Cloudflare could not refresh the custom hostname')
+  }
   const result = isRecord(payload.result) ? payload.result : undefined
-  if (!response.ok || !result) {
-    throw new UnprocessableEntityException(providerErrorMessage(payload, 'Cloudflare could not refresh the custom hostname'))
+  if (!result) {
+    throw new UnprocessableEntityException('Cloudflare could not refresh the custom hostname')
   }
   const ssl = isRecord(result.ssl) ? result.ssl : undefined
   return service.applyCloudflareSaasRefresh(id, {
     providerStatus: typeof result.status === 'string' ? result.status : undefined,
     sslStatus: typeof ssl?.status === 'string' ? ssl.status : undefined,
-    validation: cloudflareValidation(result),
-    verificationErrors: cloudflareVerificationErrors(result),
+    validation: providerCloudflareValidation(result),
+    verificationErrors: providerCloudflareVerificationErrors(result),
   })
 }
 
-function cloudflareValidation(result: Record<string, unknown>) {
-  const validation: Record<string, string> = {}
-  const ownership = isRecord(result.ownership_verification) ? result.ownership_verification : undefined
-  if (ownership && typeof ownership.name === 'string' && typeof ownership.value === 'string') {
-    validation.type = typeof ownership.type === 'string' ? ownership.type.toUpperCase() : 'TXT'
-    validation.name = ownership.name
-    validation.value = ownership.value
-  }
-  const validationRecords = Array.isArray(result.validation_records) ? result.validation_records : []
-  const txtRecord = validationRecords.find((entry) => isRecord(entry) && typeof entry.txt_name === 'string')
-  if (isRecord(txtRecord)) {
-    validation.type = 'TXT'
-    validation.name = typeof txtRecord.txt_name === 'string' ? txtRecord.txt_name : validation.name || ''
-    validation.value = typeof txtRecord.txt_value === 'string'
-      ? txtRecord.txt_value
-      : typeof txtRecord.txt_record === 'string' ? txtRecord.txt_record : validation.value || ''
-  }
-  return validation
-}
-
-function cloudflareVerificationErrors(result: Record<string, unknown>) {
-  const errors = Array.isArray(result.verification_errors) ? result.verification_errors : []
-  const ssl = isRecord(result.ssl) ? result.ssl : undefined
-  const validationErrors = ssl && Array.isArray(ssl.validation_errors) ? ssl.validation_errors : []
-  return [...errors, ...validationErrors]
-    .map((entry) => typeof entry === 'string' ? entry : isRecord(entry) && typeof entry.message === 'string' ? entry.message : '')
-    .filter(Boolean)
-    .slice(0, 8)
-}
-
 async function handleStripeWebhook(service: NorthStarService, env: Env, request: Request, rawBody: string) {
+  if (billingModeFromEnv(env) !== 'self_service') {
+    throw new UnprocessableEntityException('Stripe billing is disabled while beta access is managed directly by OlfactoryOps')
+  }
   const signature = request.headers.get('Stripe-Signature')
   if (!env.STRIPE_WEBHOOK_SECRET || !signature || !(await verifyStripeSignature(rawBody, signature, env.STRIPE_WEBHOOK_SECRET))) {
     throw new ForbiddenException('Stripe webhook signature is invalid')
@@ -1258,21 +1234,6 @@ async function claimBillingWebhookEvent(db: D1Database, provider: string, eventI
     .bind(provider, eventId, new Date().toISOString())
     .run()
   return (result.meta.changes ?? 0) > 0
-}
-
-async function readProviderJson(response: Response) {
-  try {
-    const payload: unknown = await response.json()
-    return isRecord(payload) ? payload : {}
-  } catch {
-    return {}
-  }
-}
-
-function providerErrorMessage(payload: Record<string, unknown>, fallback: string) {
-  const error = payload.error
-  if (isRecord(error) && typeof error.message === 'string') return error.message.slice(0, 300)
-  return fallback
 }
 
 function resolveRateLimitPolicy(route: Route) {
@@ -1925,6 +1886,7 @@ async function hydrateSnapshotStateFromDatabase(db: D1Database, env: Env): Promi
   const service = new NorthStarService({
     authCredentials: seededAdminCredentialsForEnv(env),
     mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+    billingMode: billingModeFromEnv(env),
   })
   const serviceState = service as unknown as ServiceState
   const snapshotRows = await db.prepare('SELECT key, value, updated_at FROM northstar_snapshots').all<{
@@ -2123,6 +2085,25 @@ type AuditEventRow = {
   entity: string
   request_id: string
   outcome: string
+}
+
+type NotificationOutboxRow = {
+  id: string
+  organization_id: string
+  recipient_email: string
+  category: string
+  title: string
+  body: string
+  href: string | null
+  created_at: string
+  read_at: string | null
+  email_status: string
+  email_error: string | null
+  email_attempts: number
+  email_last_attempt_at: string | null
+  email_next_attempt_at: string | null
+  email_sent_at: string | null
+  updated_at: string
 }
 
 type OrganizationRow = {
@@ -2688,6 +2669,7 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   await hydrateOrderState(db, serviceState)
   await hydrateAnalyticsState(db, serviceState)
   await hydrateBillingState(db, serviceState)
+  await hydrateNotificationState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
 }
@@ -2708,6 +2690,7 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistOrderState(db, serviceState, updatedAt)
   await persistScheduledReports(db, serviceState.scheduledReportRecords, updatedAt)
   await persistBillingState(db, serviceState, updatedAt)
+  await persistNotificationOutbox(db, serviceState.notificationRecords, updatedAt)
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
@@ -4821,6 +4804,78 @@ async function persistBillingState(db: D1Database, serviceState: ServiceState, u
   await persistAuditExportJobs(db, serviceState.auditExportRecords, updatedAt)
 }
 
+async function hydrateNotificationState(db: D1Database, serviceState: ServiceState) {
+  const rows = await db
+    .prepare(
+      `SELECT id, organization_id, recipient_email, category, title, body, href, created_at,
+        read_at, email_status, email_error, email_attempts, email_last_attempt_at,
+        email_next_attempt_at, email_sent_at, updated_at
+       FROM notification_outbox
+       ORDER BY created_at DESC, id DESC`,
+    )
+    .all<NotificationOutboxRow>()
+  const notifications = (rows.results ?? []).map(notificationFromRow)
+  if (notifications.length > 0) {
+    serviceState.notificationRecords = notifications
+  } else if (Array.isArray(serviceState.notificationRecords) && serviceState.notificationRecords.length > 0) {
+    await persistNotificationOutbox(db, serviceState.notificationRecords, new Date().toISOString())
+  }
+}
+
+async function persistNotificationOutbox(db: D1Database, notifications: AppNotificationRecord[], updatedAt: string) {
+  if (!Array.isArray(notifications) || notifications.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    notifications.map((notification) =>
+      db
+        .prepare(
+          `INSERT INTO notification_outbox (
+            id, organization_id, recipient_email, category, title, body, href, created_at,
+            read_at, email_status, email_error, email_attempts, email_last_attempt_at,
+            email_next_attempt_at, email_sent_at, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          ON CONFLICT(id) DO UPDATE SET
+            organization_id = excluded.organization_id,
+            recipient_email = excluded.recipient_email,
+            category = excluded.category,
+            title = excluded.title,
+            body = excluded.body,
+            href = excluded.href,
+            created_at = excluded.created_at,
+            read_at = excluded.read_at,
+            email_status = excluded.email_status,
+            email_error = excluded.email_error,
+            email_attempts = excluded.email_attempts,
+            email_last_attempt_at = excluded.email_last_attempt_at,
+            email_next_attempt_at = excluded.email_next_attempt_at,
+            email_sent_at = excluded.email_sent_at,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          notification.id,
+          notification.organizationId,
+          notification.recipientEmail,
+          notification.category,
+          notification.title,
+          notification.body,
+          notification.href ?? null,
+          notification.createdAt,
+          notification.readAt ?? null,
+          notification.emailStatus,
+          notification.emailError ?? null,
+          notification.emailAttempts ?? 0,
+          notification.emailLastAttemptAt ?? null,
+          notification.emailNextAttemptAt ?? null,
+          notification.emailSentAt ?? null,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
 async function persistBillingSubscriptions(db: D1Database, subscriptions: BillingSubscriptionRecord[], updatedAt: string) {
   if (!Array.isArray(subscriptions) || subscriptions.length === 0) {
     return
@@ -5969,6 +6024,32 @@ function auditExportJobFromRow(row: AuditExportJobRow): AuditExportJobRecord {
     completedAt: row.completed_at ?? undefined,
     expiresAt: row.expires_at,
     auditEventId: row.audit_event_id,
+  }
+}
+
+function notificationFromRow(row: NotificationOutboxRow): AppNotificationRecord {
+  const category = ['security', 'billing', 'inventory', 'workspace', 'system'].includes(row.category)
+    ? row.category as AppNotificationRecord['category']
+    : 'system'
+  const emailStatus = ['in_app', 'queued', 'sent', 'failed'].includes(row.email_status)
+    ? row.email_status as AppNotificationRecord['emailStatus']
+    : 'in_app'
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    recipientEmail: row.recipient_email,
+    category,
+    title: row.title,
+    body: row.body,
+    href: row.href ?? undefined,
+    createdAt: row.created_at,
+    readAt: row.read_at ?? undefined,
+    emailStatus,
+    emailError: row.email_error ?? undefined,
+    emailAttempts: Number(row.email_attempts),
+    emailLastAttemptAt: row.email_last_attempt_at ?? undefined,
+    emailNextAttemptAt: row.email_next_attempt_at ?? undefined,
+    emailSentAt: row.email_sent_at ?? undefined,
   }
 }
 

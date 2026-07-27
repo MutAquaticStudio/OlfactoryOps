@@ -88,7 +88,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, and `migrations/0023_procurement_tenant_scope.sql`, before enabling billing webhooks. For the test Worker:
+Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, and `migrations/0024_notification_outbox.sql`, before enabling billing webhooks or transactional email. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
@@ -117,6 +117,8 @@ Configure Stripe's webhook endpoint as:
 https://<worker-host>/api/v1/billing/stripe/webhook
 ```
 
+Keep `BILLING_MODE = "managed_beta"` until Stripe is ready. In this mode no customer can open Checkout, a billing portal, select a plan, or apply a Stripe webhook. When Stripe is configured, set `BILLING_MODE = "self_service"` in the Worker environment before enabling the webhook.
+
 Subscribe it to at least `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, and `invoice.payment_failed`. The Worker verifies the signed raw payload, rejects signatures older than five minutes, and atomically claims each provider event ID in D1 before applying a subscription or invoice change.
 
 The Worker creates Stripe Checkout Sessions in subscription mode, uses Stripe Price IDs instead of client-provided amounts, passes tenant metadata only from server state, enables Stripe automatic tax, and opens the Customer Portal from the stored Stripe customer ID. Upgrade/downgrade proration and retry/dunning behavior are configured in the Stripe Billing Dashboard and reflected through the same verified webhook flow.
@@ -125,11 +127,11 @@ Set `BILLING_RETURN_URL` to the deployed frontend origin, not the Worker hostnam
 
 For Cloudflare for SaaS, the token needs the zone permission `SSL and Certificates Write`. The custom-domain endpoint posts to Cloudflare Custom Hostnames only after an Owner or Admin request. It returns the required TXT/DCV record to the caller; use the Custom Domain panel's **Refresh** action after DNS changes. The Worker reads the provider's hostname and SSL state from Cloudflare and changes the workspace hostname only when both are active. Pending or failed validation stays visible to the requester instead of being treated as live.
 
-For Resend, verify the sending domain that is used in `EMAIL_FROM`. Delivery failures are recorded on the notification outbox and do not roll back a business mutation. The current outbox covers workspace invitations, new-device security events, billing payment alerts, and privacy requests.
+For Resend, verify the sending domain that is used in `EMAIL_FROM`. Delivery failures are recorded in the normalized `notification_outbox` table, retried at 2, 10, 30, and 120 minute intervals, and marked failed after the fifth attempt. A provider failure never rolls back a business mutation. The current outbox covers workspace invitations, new-device security events, billing payment alerts, and privacy requests.
 
 Password reset is a separate transactional flow: `POST /api/v1/auth/password-reset/request` always returns a generic result, hashes the one-time token in D1 snapshot persistence, and sends the only raw token in the Resend email. `POST /api/v1/auth/password-reset/confirm` accepts the link token and a strong new password, expires tokens after 30 minutes, and revokes all active sessions for that account.
 
-The Worker runs its analytics scheduler hourly through the `crons` trigger in `wrangler.toml`. It evaluates daily, weekly, and monthly report cadences, persists only `lastRunAt` and audit evidence, and never mutates inventory, costing inputs, or order state.
+The Worker runs its analytics scheduler hourly through the `crons` trigger in `wrangler.toml`. It evaluates daily, weekly, and monthly report cadences, drains due transactional email retry records, persists only report/email evidence, and never mutates inventory, costing inputs, or order state.
 
 ## 3. Deploy Worker API
 
@@ -187,6 +189,26 @@ Recommended Pages custom domains:
 - `www.labofscents.org`
 - Optional admin app domain: `app.labofscents.org`
 
+### Beta Release Gate
+
+Use an isolated Pages project for beta rather than changing the existing preview branch. Build with the test API origin and deploy that artifact to the dedicated project:
+
+```bash
+npm run build:test
+npx wrangler pages project create olfactoryops-beta --production-branch beta
+npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta
+```
+
+Then add `beta.labofscents.org` as a custom domain for the `olfactoryops-beta` Pages project and create the DNS record Cloudflare requests. Set `BETA_APP_ORIGIN=https://beta.labofscents.org` in the test Worker configuration. The owner-only **Integration Readiness** panel must show the hostname as reachable before beta is announced.
+
+Before deploying the Worker, enable R2 in the Cloudflare account and create the bound test bucket:
+
+```bash
+npx wrangler r2 bucket create olfactoryops-documents-test
+```
+
+Do not deploy the Worker if this command or the subsequent R2 binding check fails. The Worker requires D1 migrations to be applied first and document uploads must not silently fall back to browser-only storage.
+
 The repo includes:
 
 - `public/_redirects` for SPA fallback.
@@ -238,26 +260,19 @@ Remove-Item Env:FORMULA_TEST_URL
 
 Use a disposable test-tenant owner with MFA not yet enrolled. The harness never writes the TOTP setup key or recovery codes to its JSON report.
 
-## Beta: Vercel Frontend With Cloudflare API
+## Beta: Pages Frontend With Cloudflare API
 
-The beta can use Vercel for the Vite frontend while Cloudflare remains the API and persistence boundary:
+The beta uses a dedicated Cloudflare Pages project while Cloudflare remains the API and persistence boundary:
 
-- `https://olfactoryops-beta.vercel.app`: Vercel beta frontend, built with `npm run build:test`.
+- `olfactoryops-beta`: isolated Pages beta project, built with `npm run build:test` and deployed from the `beta` branch.
 - `https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1`: Cloudflare Worker test API backed by the isolated `olfactoryops-test` D1 database.
-- `https://beta.labofscents.org`: recommended customer-facing beta hostname after it is added to the Vercel project and its Cloudflare DNS record is created.
+- `https://beta.labofscents.org`: customer-facing beta hostname after it is added to the dedicated Pages project and its Cloudflare DNS record is created.
 
-`vercel.json` supplies SPA fallback and the same browser security headers used by Pages. The test Worker allowlists only the named Vercel and beta origins; do not allow `*.vercel.app`, because credentialed CORS must remain restricted to trusted frontend hosts.
+The test Worker allowlists only the named Pages and beta origins. Do not add wildcard third-party preview origins, because credentialed CORS must remain restricted to trusted frontend hosts.
 
 Keep the beta hostname under `labofscents.org` when possible. It is same-site with `api.labofscents.org`, which makes the secure session cookie more reliable than using an unrelated `vercel.app` hostname.
 
-For the Vercel project currently used by this repository, add the following Cloudflare DNS-only record, then run `vercel domains verify beta.labofscents.org --scope noxelis`:
-
-```text
-Type: A
-Name: beta
-Target: 76.76.21.21
-Proxy status: DNS only
-```
+After the Pages project is deployed, add `beta.labofscents.org` in the Pages custom-domain settings and create the DNS record Cloudflare requests. Verify the hostname over HTTPS, then set `BETA_APP_ORIGIN=https://beta.labofscents.org` for `olfactoryops-api-test` and redeploy that Worker.
 
 ### Supabase Boundary
 
