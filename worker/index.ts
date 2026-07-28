@@ -181,7 +181,7 @@ type SnapshotKey =
   | 'sessions'
   | 'userSettingsRecords'
   | 'rolePolicyRecords'
-  | 'settingsRecord'
+  | 'tenantSettingsRecords'
   | 'flagRecords'
   | 'sequences'
   | 'customFieldRecords'
@@ -241,7 +241,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   stockTakeRecords: StockTakeRecord[]
   formulaRecords: Formula[]
   formulaVersionRecords: FormulaVersionRecord[]
-  settingsRecord: TenantSettingsRecord
+  tenantSettingsRecords: TenantSettingsRecord[]
   flagRecords: FeatureFlagRecord[]
   sequences: NumberingSequenceRecord[]
   customFieldRecords: CustomFieldDefinition[]
@@ -336,7 +336,7 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'stockTakeRecords',
   'formulaRecords',
   'formulaVersionRecords',
-  'settingsRecord',
+  'tenantSettingsRecords',
   'flagRecords',
   'sequences',
   'customFieldRecords',
@@ -405,7 +405,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'sessions',
   'userSettingsRecords',
   'rolePolicyRecords',
-  'settingsRecord',
+  'tenantSettingsRecords',
   'flagRecords',
   'sequences',
   'customFieldRecords',
@@ -457,12 +457,15 @@ const NORMALIZED_TABLES = [
   'auth_sessions',
   'mfa_enrollments',
   'user_settings',
-  'audit_events',
+  'tenant_audit_events',
+  'platform_audit_events',
+  'tenant_audit_chain_events',
   'security_rate_limits',
   'tenant_organizations',
   'tenant_brands',
   'tenant_memberships',
-  'role_policies',
+  'tenant_role_policies',
+  'platform_role_policies',
   'material_records',
   'material_compliance_profiles',
   'supplier_material_profiles',
@@ -470,9 +473,9 @@ const NORMALIZED_TABLES = [
   'storage_locations',
   'stock_take_records',
   'tenant_settings',
-  'feature_flags',
-  'numbering_sequences',
-  'custom_fields',
+  'tenant_feature_flags',
+  'tenant_numbering_sequences',
+  'tenant_custom_fields',
   'tenant_branding',
   'formula_records',
   'formula_version_records',
@@ -515,7 +518,6 @@ const NORMALIZED_TABLES = [
   'saas_custom_domains',
   'inventory_approval_requests',
   'operation_approval_requests',
-  'audit_chain_events',
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
@@ -2049,6 +2051,8 @@ async function assertPersistenceReady(db: D1Database) {
     persistenceReadyPromise = Promise.all([
       db.prepare('SELECT metadata_key FROM persistence_metadata LIMIT 1').first(),
       db.prepare('SELECT session_id FROM auth_session_credentials LIMIT 1').first(),
+      db.prepare('SELECT organization_id FROM tenant_role_policies LIMIT 1').first(),
+      db.prepare('SELECT organization_id FROM tenant_audit_events LIMIT 1').first(),
     ]).then(() => undefined)
   }
   try {
@@ -2171,7 +2175,7 @@ async function hydrateSnapshotStateFromDatabase(db: D1Database, env: Env): Promi
       updatedAt = row.updated_at
     }
   }
-  await hydrateNormalizedState(db, serviceState, env)
+  await hydrateNormalizedState(db, service, serviceState, env)
   if (legacySnapshotReadRequired) {
     await markD1NormalizedCutoverComplete(db)
   }
@@ -2370,6 +2374,7 @@ type UserSettingsRow = {
 }
 
 type AuditEventRow = {
+  organization_id?: string | null
   id: string
   at: string
   actor: string
@@ -2462,6 +2467,7 @@ type MembershipRow = {
 }
 
 type RolePolicyRow = {
+  organization_id?: string | null
   role: string
   scope: string
   mfa_required: number
@@ -2498,6 +2504,7 @@ type TenantSettingsRow = {
 }
 
 type FeatureFlagRow = {
+  organization_id: string
   flag_key: string
   label: string
   enabled: number
@@ -2505,6 +2512,7 @@ type FeatureFlagRow = {
 }
 
 type NumberingSequenceRow = {
+  organization_id: string
   sequence_key: string
   pattern: string
   next_value: number
@@ -2512,6 +2520,7 @@ type NumberingSequenceRow = {
 }
 
 type CustomFieldRow = {
+  organization_id: string
   id: string
   entity: string
   field_key: string
@@ -2966,7 +2975,12 @@ type LabUsageRecordRow = {
   reversal_movements_json: string | null
 }
 
-async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState, env: Env) {
+async function hydrateNormalizedState(
+  db: D1Database,
+  service: NorthStarService,
+  serviceState: ServiceState,
+  env: Env,
+) {
   const sessionRows = await db
     .prepare(
       `SELECT id, user_id, email, organization_id, brand_id, role, issued_at, last_seen_at,
@@ -3019,19 +3033,28 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
     await persistUserSettings(db, serviceState.userSettingsRecords, new Date().toISOString())
   }
 
-  const auditRows = await db
-    .prepare(
-      `SELECT id, at, actor, action, entity, request_id, outcome
-       FROM audit_events
-       ORDER BY at DESC`,
-    )
-    .all<AuditEventRow>()
-  const events = (auditRows.results ?? []).map(auditEventFromRow)
-  if (events.length > 0) {
-    serviceState.auditEvents = events
-  } else if (Array.isArray(serviceState.auditEvents) && serviceState.auditEvents.length > 0) {
-    await persistAuditEvents(db, serviceState.auditEvents, new Date().toISOString(), serviceState)
-  }
+  const [tenantAuditRows, platformAuditRows] = await Promise.all([
+    db
+      .prepare(
+        `SELECT organization_id, id, at, actor, action, entity, request_id, outcome
+         FROM tenant_audit_events
+         ORDER BY at DESC, id DESC`,
+      )
+      .all<AuditEventRow>(),
+    db
+      .prepare(
+        `SELECT id, at, actor, action, entity, request_id, outcome
+         FROM platform_audit_events
+         ORDER BY at DESC, id DESC`,
+      )
+      .all<AuditEventRow>(),
+  ])
+  // Legacy audit rows are deliberately not hydrated. Ownership was not encoded
+  // before migration 0029, so they remain in the quarantine table for review.
+  serviceState.auditEvents = [
+    ...(tenantAuditRows.results ?? []).map((row) => auditEventFromRow(row, 'tenant')),
+    ...(platformAuditRows.results ?? []).map((row) => auditEventFromRow(row, 'platform')),
+  ].sort((left, right) => right.at.localeCompare(left.at) || right.id.localeCompare(left.id))
 
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
   await hydrateEnterpriseGovernanceState(db, serviceState)
@@ -3041,6 +3064,15 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   await hydrateOperationalP1State(db, serviceState)
   await hydrateFormulaState(db, serviceState)
   await hydrateCustomizationState(db, serviceState)
+  const seededTenantDefaults = serviceState.organizationRecords.reduce(
+    (changed, organization) => service.ensureTenantScopedDefaults(organization.id) || changed,
+    false,
+  )
+  if (seededTenantDefaults) {
+    const updatedAt = new Date().toISOString()
+    await persistRolePolicies(db, serviceState.rolePolicyRecords, updatedAt)
+    await persistCustomizationState(db, serviceState, updatedAt)
+  }
   await hydrateDocumentState(db, serviceState)
   await hydrateProcurementState(db, serviceState)
   await hydrateCatalogState(db, serviceState)
@@ -3428,24 +3460,56 @@ async function persistAuditEvents(
   db: D1Database,
   events: AuditEvent[],
   updatedAt: string,
-  serviceState: ServiceState,
+  _serviceState: ServiceState,
 ) {
   if (!Array.isArray(events) || events.length === 0) {
     return
   }
-  await runStatementBatches(
-    db,
-    events.map((event) =>
-      db
-        .prepare(
-          `INSERT INTO audit_events (id, at, actor, action, entity, request_id, outcome, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-           ON CONFLICT(id) DO NOTHING`,
-        )
-        .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
-    ),
-  )
-  await persistAuditChainEvents(db, serviceState, updatedAt)
+  const tenantEvents = events.filter((event) => event.scope === 'tenant' && Boolean(event.organizationId))
+  const platformEvents = events.filter((event) => event.scope === 'platform')
+  if (tenantEvents.length > 0) {
+    await runStatementBatches(
+      db,
+      tenantEvents.map((event) =>
+        db
+          .prepare(
+            `INSERT INTO tenant_audit_events (
+              organization_id, id, at, actor, action, entity, request_id, outcome, updated_at
+            )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(organization_id, id) DO NOTHING`,
+          )
+          .bind(
+            event.organizationId,
+            event.id,
+            event.at,
+            event.actor,
+            event.action,
+            event.entity,
+            event.requestId,
+            event.outcome,
+            updatedAt,
+          ),
+      ),
+    )
+    await persistAuditChainEvents(db, updatedAt)
+  }
+  if (platformEvents.length > 0) {
+    await runStatementBatches(
+      db,
+      platformEvents.map((event) =>
+        db
+          .prepare(
+            `INSERT INTO platform_audit_events (
+              id, at, actor, action, entity, request_id, outcome, updated_at
+            )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO NOTHING`,
+          )
+          .bind(event.id, event.at, event.actor, event.action, event.entity, event.requestId, event.outcome, updatedAt),
+      ),
+    )
+  }
 }
 
 export function canonicalAuditChainPayload(
@@ -3480,34 +3544,22 @@ export async function auditChainHash(
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
-function auditChainOrganizationId(event: AuditEvent, serviceState: ServiceState) {
-  const organizationFromEntity = serviceState.organizationRecords.find(
-    (organization) => event.entity === organization.id || event.entity.includes(organization.id),
-  )
-  if (organizationFromEntity) {
-    return organizationFromEntity.id
-  }
-  const actor = event.actor.trim().toLowerCase()
-  const member = serviceState.membershipRecords.find(
-    (membership) =>
-      membership.userId.toLowerCase() === actor ||
-      membership.email.toLowerCase() === actor ||
-      membership.name.toLowerCase() === actor,
-  )
-  if (member) {
-    return member.organizationId
-  }
-  const entityMember = serviceState.membershipRecords.find(
-    (membership) => membership.userId === event.entity || membership.email.toLowerCase() === event.entity.toLowerCase(),
-  )
-  return entityMember?.organizationId ?? 'platform'
-}
-
-async function persistAuditChainEvents(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+async function persistAuditChainEvents(db: D1Database, updatedAt: string) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const [eventRows, chainRows] = await Promise.all([
-      db.prepare('SELECT id, at, actor, action, entity, request_id, outcome FROM audit_events ORDER BY at ASC, id ASC').all<AuditEventRow>(),
-      db.prepare('SELECT event_id, organization_id, sequence, previous_hash, event_hash, recorded_at FROM audit_chain_events').all<AuditChainRow>(),
+      db
+        .prepare(
+          `SELECT organization_id, id, at, actor, action, entity, request_id, outcome
+           FROM tenant_audit_events
+           ORDER BY at ASC, id ASC`,
+        )
+        .all<AuditEventRow>(),
+      db
+        .prepare(
+          `SELECT event_id, organization_id, sequence, previous_hash, event_hash, recorded_at
+           FROM tenant_audit_chain_events`,
+        )
+        .all<AuditChainRow>(),
     ])
     const existingEventIds = new Set((chainRows.results ?? []).map((row) => row.event_id))
     const chained = (chainRows.results ?? []).reduce((byOrganization, row) => {
@@ -3518,7 +3570,7 @@ async function persistAuditChainEvents(db: D1Database, serviceState: ServiceStat
       return byOrganization
     }, new Map<string, AuditChainRow>())
     const pending = (eventRows.results ?? [])
-      .map(auditEventFromRow)
+      .map((row) => auditEventFromRow(row, 'tenant'))
       .filter((event) => !existingEventIds.has(event.id))
       .sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id))
     if (pending.length === 0) {
@@ -3526,7 +3578,10 @@ async function persistAuditChainEvents(db: D1Database, serviceState: ServiceStat
     }
     const statements: D1PreparedStatement[] = []
     for (const event of pending) {
-      const organizationId = auditChainOrganizationId(event, serviceState)
+      const organizationId = event.organizationId
+      if (!organizationId) {
+        continue
+      }
       const previous = chained.get(organizationId)
       const sequence = (previous?.sequence ?? 0) + 1
       const previousHash = previous?.event_hash ?? null
@@ -3534,7 +3589,7 @@ async function persistAuditChainEvents(db: D1Database, serviceState: ServiceStat
       statements.push(
         db
           .prepare(
-            `INSERT INTO audit_chain_events (event_id, organization_id, sequence, previous_hash, event_hash, recorded_at)
+            `INSERT INTO tenant_audit_chain_events (event_id, organization_id, sequence, previous_hash, event_hash, recorded_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
           )
           .bind(event.id, organizationId, sequence, previousHash, eventHash, updatedAt),
@@ -3565,8 +3620,9 @@ async function verifyAuditChain(service: NorthStarService, db: D1Database) {
     .prepare(
       `SELECT c.event_id, c.organization_id, c.sequence, c.previous_hash, c.event_hash, c.recorded_at,
         e.id, e.at, e.actor, e.action, e.entity, e.request_id, e.outcome
-       FROM audit_chain_events c
-       INNER JOIN audit_events e ON e.id = c.event_id
+       FROM tenant_audit_chain_events c
+       INNER JOIN tenant_audit_events e
+         ON e.organization_id = c.organization_id AND e.id = c.event_id
        WHERE c.organization_id = ?1
        ORDER BY c.sequence ASC`,
     )
@@ -3575,7 +3631,7 @@ async function verifyAuditChain(service: NorthStarService, db: D1Database) {
   let previousHash: string | null = null
   let expectedSequence = 1
   for (const row of rows.results ?? []) {
-    const event = auditEventFromRow(row)
+    const event = auditEventFromRow(row, 'tenant')
     const expectedHash = await auditChainHash(organizationId, expectedSequence, previousHash, event)
     if (row.sequence !== expectedSequence || row.previous_hash !== previousHash || row.event_hash !== expectedHash) {
       return {
@@ -3607,7 +3663,7 @@ async function auditChainEvidence(service: NorthStarService, db: D1Database) {
   const rows = await db
     .prepare(
       `SELECT event_id, organization_id, sequence, previous_hash, event_hash, recorded_at
-       FROM audit_chain_events
+       FROM tenant_audit_chain_events
        WHERE organization_id = ?1
        ORDER BY sequence DESC
        LIMIT 250`,
@@ -3691,37 +3747,24 @@ async function ensureSeededAdminBootstrap(
     }
   }
 
-  if (seedAdminPolicy) {
-    const existingAdminPolicy = serviceState.rolePolicyRecords.find(
-      (policy) => policy.role === seedAdminPolicy.role && policy.scope === seedAdminPolicy.scope,
-    )
-    if (!existingAdminPolicy || JSON.stringify(existingAdminPolicy) !== JSON.stringify(seedAdminPolicy)) {
-      serviceState.rolePolicyRecords = [
-        seedAdminPolicy,
-        ...serviceState.rolePolicyRecords.filter(
-          (policy) => !(policy.role === seedAdminPolicy.role && policy.scope === seedAdminPolicy.scope),
-        ),
-      ]
-      await persistRolePolicies(db, [seedAdminPolicy], updatedAt)
-    }
-  }
-
   const seedOwnerPolicy = seedRolePolicies.find(
     (policy) => policy.role === 'Owner' && policy.scope === 'organization',
   )
-  if (seedOwnerPolicy) {
-    const existingOwnerPolicy = serviceState.rolePolicyRecords.find(
-      (policy) => policy.role === seedOwnerPolicy.role && policy.scope === seedOwnerPolicy.scope,
-    )
-    if (!existingOwnerPolicy || JSON.stringify(existingOwnerPolicy) !== JSON.stringify(seedOwnerPolicy)) {
-      serviceState.rolePolicyRecords = [
-        seedOwnerPolicy,
-        ...serviceState.rolePolicyRecords.filter(
-          (policy) => !(policy.role === seedOwnerPolicy.role && policy.scope === seedOwnerPolicy.scope),
+  const bootstrapPolicies = [seedAdminPolicy, seedOwnerPolicy]
+    .filter((policy): policy is RolePolicy => Boolean(policy))
+    .map((policy) => ({ ...policy, organizationId: SEEDED_ADMIN_ORGANIZATION_ID }))
+    .filter(
+      (policy) =>
+        !serviceState.rolePolicyRecords.some(
+          (existing) =>
+            existing.organizationId === policy.organizationId &&
+            existing.scope === policy.scope &&
+            existing.role === policy.role,
         ),
-      ]
-      await persistRolePolicies(db, [seedOwnerPolicy], updatedAt)
-    }
+    )
+  if (bootstrapPolicies.length > 0) {
+    serviceState.rolePolicyRecords = [...bootstrapPolicies, ...serviceState.rolePolicyRecords]
+    await persistRolePolicies(db, bootstrapPolicies, updatedAt)
   }
 
   const existingAdminCredential = serviceState.authCredentialRecords.find(
@@ -3761,13 +3804,15 @@ async function ensureSeededAdminBootstrap(
 
     const nextAuditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
     const auditEvent: AuditEvent = {
-      id: `AUD-${nextAuditCounter}`,
+      id: `AUD-TEN-${nextAuditCounter}`,
       at: updatedAt,
       actor: 'system:worker',
       action: credentialWasRotated ? 'security.adminCredential.rotate' : 'security.adminCredential.bootstrap',
-      entity: SEEDED_ADMIN_EMAIL,
+      entity: 'seeded-admin-credential',
       requestId: `req_admin_credential_${nextAuditCounter}`,
       outcome: 'allowed',
+      organizationId: SEEDED_ADMIN_ORGANIZATION_ID,
+      scope: 'tenant',
     }
     serviceState.auditCounter = nextAuditCounter
     serviceState.auditEvents = [auditEvent, ...serviceState.auditEvents]
@@ -3827,32 +3872,32 @@ async function hydrateTenantCoreState(db: D1Database, serviceState: ServiceState
     await persistMemberships(db, serviceState.membershipRecords, new Date().toISOString())
   }
 
-  const roleRows = await db
-    .prepare(
-      `SELECT role, scope, mfa_required, permissions_json
-       FROM role_policies
-       ORDER BY scope ASC, role ASC`,
-    )
-    .all<RolePolicyRow>()
-  const rolePolicies = (roleRows.results ?? []).map(rolePolicyFromRow)
-  if (rolePolicies.length > 0) {
-    const ownerDefault = seedRolePolicies.find((policy) => policy.scope === 'organization' && policy.role === 'Owner')
-    const ownerPolicy = rolePolicies.find((policy) => policy.scope === 'organization' && policy.role === 'Owner')
-    const ownerNeedsMemberSummary = Boolean(
-      ownerDefault?.permissions.includes('security.viewMembers') && !ownerPolicy?.permissions.includes('security.viewMembers'),
-    )
-    serviceState.rolePolicyRecords = ownerNeedsMemberSummary
-      ? rolePolicies.map((policy) =>
-          policy.scope === 'organization' && policy.role === 'Owner'
-            ? { ...policy, permissions: [...policy.permissions, 'security.viewMembers'] }
-            : policy,
-        )
-      : rolePolicies
-    if (ownerNeedsMemberSummary) {
-      await persistRolePolicies(db, serviceState.rolePolicyRecords, new Date().toISOString())
-    }
-  } else if (Array.isArray(serviceState.rolePolicyRecords) && serviceState.rolePolicyRecords.length > 0) {
-    await persistRolePolicies(db, serviceState.rolePolicyRecords, new Date().toISOString())
+  const [tenantRoleRows, platformRoleRows] = await Promise.all([
+    db
+      .prepare(
+        `SELECT organization_id, role, 'organization' AS scope, mfa_required, permissions_json
+         FROM tenant_role_policies
+         ORDER BY organization_id ASC, role ASC`,
+      )
+      .all<RolePolicyRow>(),
+    db
+      .prepare(
+        `SELECT NULL AS organization_id, role, 'platform' AS scope, mfa_required, permissions_json
+         FROM platform_role_policies
+         ORDER BY role ASC`,
+      )
+      .all<RolePolicyRow>(),
+  ])
+  const rolePolicies = [
+    ...(tenantRoleRows.results ?? []).map(rolePolicyFromRow),
+    ...(platformRoleRows.results ?? []).map(rolePolicyFromRow),
+  ]
+  const missingPlatformDefaults = seedRolePolicies
+    .filter((policy) => policy.scope === 'platform')
+    .filter((policy) => !rolePolicies.some((persisted) => persisted.scope === 'platform' && persisted.role === policy.role))
+  serviceState.rolePolicyRecords = [...rolePolicies, ...missingPlatformDefaults]
+  if (missingPlatformDefaults.length > 0) {
+    await persistRolePolicies(db, missingPlatformDefaults, new Date().toISOString())
   }
 }
 
@@ -4327,46 +4372,34 @@ async function hydrateCustomizationState(db: D1Database, serviceState: ServiceSt
        ORDER BY organization_id ASC`,
     )
     .all<TenantSettingsRow>()
-  const settings = settingsRows.results?.[0]
-  if (settings) {
-    serviceState.settingsRecord = tenantSettingsFromRow(settings)
-  } else if (serviceState.settingsRecord) {
-    await persistTenantSettings(db, serviceState.settingsRecord, new Date().toISOString())
-  }
+  serviceState.tenantSettingsRecords = (settingsRows.results ?? []).map(tenantSettingsFromRow)
 
   const flagRows = await db
-    .prepare('SELECT flag_key, label, enabled, phase FROM feature_flags ORDER BY phase ASC, flag_key ASC')
+    .prepare(
+      `SELECT organization_id, flag_key, label, enabled, phase
+       FROM tenant_feature_flags
+       ORDER BY organization_id ASC, phase ASC, flag_key ASC`,
+    )
     .all<FeatureFlagRow>()
-  const flags = (flagRows.results ?? []).map(featureFlagFromRow)
-  if (flags.length > 0) {
-    serviceState.flagRecords = flags
-  } else if (Array.isArray(serviceState.flagRecords) && serviceState.flagRecords.length > 0) {
-    await persistFeatureFlags(db, serviceState.flagRecords, new Date().toISOString())
-  }
+  serviceState.flagRecords = (flagRows.results ?? []).map(featureFlagFromRow)
 
   const sequenceRows = await db
-    .prepare('SELECT sequence_key, pattern, next_value, scope FROM numbering_sequences ORDER BY sequence_key ASC')
+    .prepare(
+      `SELECT organization_id, sequence_key, pattern, next_value, scope
+       FROM tenant_numbering_sequences
+       ORDER BY organization_id ASC, sequence_key ASC`,
+    )
     .all<NumberingSequenceRow>()
-  const sequences = (sequenceRows.results ?? []).map(numberingSequenceFromRow)
-  if (sequences.length > 0) {
-    serviceState.sequences = sequences
-  } else if (Array.isArray(serviceState.sequences) && serviceState.sequences.length > 0) {
-    await persistNumberingSequences(db, serviceState.sequences, new Date().toISOString())
-  }
+  serviceState.sequences = (sequenceRows.results ?? []).map(numberingSequenceFromRow)
 
   const fieldRows = await db
     .prepare(
-      `SELECT id, entity, field_key, label, field_type, required, options_json, status
-       FROM custom_fields
-       ORDER BY entity ASC, id ASC`,
+      `SELECT organization_id, id, entity, field_key, label, field_type, required, options_json, status
+       FROM tenant_custom_fields
+       ORDER BY organization_id ASC, entity ASC, id ASC`,
     )
     .all<CustomFieldRow>()
-  const fields = (fieldRows.results ?? []).map(customFieldFromRow)
-  if (fields.length > 0) {
-    serviceState.customFieldRecords = fields
-  } else if (Array.isArray(serviceState.customFieldRecords) && serviceState.customFieldRecords.length > 0) {
-    await persistCustomFields(db, serviceState.customFieldRecords, new Date().toISOString())
-  }
+  serviceState.customFieldRecords = (fieldRows.results ?? []).map(customFieldFromRow)
 
   const brandingRows = await db
     .prepare(
@@ -4384,101 +4417,108 @@ async function hydrateCustomizationState(db: D1Database, serviceState: ServiceSt
 }
 
 async function persistCustomizationState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
-  await persistTenantSettings(db, serviceState.settingsRecord, updatedAt)
+  await persistTenantSettings(db, serviceState.tenantSettingsRecords, updatedAt)
   await persistFeatureFlags(db, serviceState.flagRecords, updatedAt)
   await persistNumberingSequences(db, serviceState.sequences, updatedAt)
   await persistCustomFields(db, serviceState.customFieldRecords, updatedAt)
   await persistBranding(db, serviceState.brandingRecord, updatedAt)
 }
 
-async function persistTenantSettings(db: D1Database, settings: TenantSettingsRecord, updatedAt: string) {
-  if (!settings) {
-    return
-  }
-  await db
-    .prepare(
-      `INSERT INTO tenant_settings (
-        organization_id, locale, timezone, currency, default_unit, default_dilution_percent, updated_at
-      )
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-      ON CONFLICT(organization_id) DO UPDATE SET
-        locale = excluded.locale,
-        timezone = excluded.timezone,
-        currency = excluded.currency,
-        default_unit = excluded.default_unit,
-        default_dilution_percent = excluded.default_dilution_percent,
-        updated_at = excluded.updated_at`,
-    )
-    .bind(
-      settings.organizationId,
-      settings.locale,
-      settings.timezone,
-      settings.currency,
-      settings.defaultUnit,
-      settings.defaultDilutionPercent,
-      updatedAt,
-    )
-    .run()
-}
-
-async function persistFeatureFlags(db: D1Database, flags: FeatureFlagRecord[], updatedAt: string) {
-  if (!Array.isArray(flags) || flags.length === 0) {
+async function persistTenantSettings(db: D1Database, settingsRecords: TenantSettingsRecord[], updatedAt: string) {
+  if (!Array.isArray(settingsRecords) || settingsRecords.length === 0) {
     return
   }
   await runStatementBatches(
     db,
-    flags.map((flag) =>
+    settingsRecords.map((settings) =>
       db
         .prepare(
-          `INSERT INTO feature_flags (flag_key, label, enabled, phase, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5)
-           ON CONFLICT(flag_key) DO UPDATE SET
+          `INSERT INTO tenant_settings (
+            organization_id, locale, timezone, currency, default_unit, default_dilution_percent, updated_at
+          )
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          ON CONFLICT(organization_id) DO UPDATE SET
+            locale = excluded.locale,
+            timezone = excluded.timezone,
+            currency = excluded.currency,
+            default_unit = excluded.default_unit,
+            default_dilution_percent = excluded.default_dilution_percent,
+            updated_at = excluded.updated_at`,
+        )
+        .bind(
+          settings.organizationId,
+          settings.locale,
+          settings.timezone,
+          settings.currency,
+          settings.defaultUnit,
+          settings.defaultDilutionPercent,
+          updatedAt,
+        ),
+    ),
+  )
+}
+
+async function persistFeatureFlags(db: D1Database, flags: FeatureFlagRecord[], updatedAt: string) {
+  const scopedFlags = (flags ?? []).filter((flag) => Boolean(flag.organizationId))
+  if (scopedFlags.length === 0) {
+    return
+  }
+  await runStatementBatches(
+    db,
+    scopedFlags.map((flag) =>
+      db
+        .prepare(
+          `INSERT INTO tenant_feature_flags (organization_id, flag_key, label, enabled, phase, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(organization_id, flag_key) DO UPDATE SET
              label = excluded.label,
              enabled = excluded.enabled,
              phase = excluded.phase,
              updated_at = excluded.updated_at`,
         )
-        .bind(flag.key, flag.label, flag.enabled ? 1 : 0, flag.phase, updatedAt),
+        .bind(flag.organizationId, flag.key, flag.label, flag.enabled ? 1 : 0, flag.phase, updatedAt),
     ),
   )
 }
 
 async function persistNumberingSequences(db: D1Database, sequences: NumberingSequenceRecord[], updatedAt: string) {
-  if (!Array.isArray(sequences) || sequences.length === 0) {
+  const scopedSequences = (sequences ?? []).filter((sequence) => Boolean(sequence.organizationId))
+  if (scopedSequences.length === 0) {
     return
   }
   await runStatementBatches(
     db,
-    sequences.map((sequence) =>
+    scopedSequences.map((sequence) =>
       db
         .prepare(
-          `INSERT INTO numbering_sequences (sequence_key, pattern, next_value, scope, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5)
-           ON CONFLICT(sequence_key) DO UPDATE SET
+          `INSERT INTO tenant_numbering_sequences (organization_id, sequence_key, pattern, next_value, scope, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(organization_id, sequence_key) DO UPDATE SET
              pattern = excluded.pattern,
              next_value = excluded.next_value,
              scope = excluded.scope,
              updated_at = excluded.updated_at`,
         )
-        .bind(sequence.key, sequence.pattern, sequence.nextValue, sequence.scope, updatedAt),
+        .bind(sequence.organizationId, sequence.key, sequence.pattern, sequence.nextValue, sequence.scope, updatedAt),
     ),
   )
 }
 
 async function persistCustomFields(db: D1Database, fields: CustomFieldDefinition[], updatedAt: string) {
-  if (!Array.isArray(fields) || fields.length === 0) {
+  const scopedFields = (fields ?? []).filter((field) => Boolean(field.organizationId))
+  if (scopedFields.length === 0) {
     return
   }
   await runStatementBatches(
     db,
-    fields.map((field) =>
+    scopedFields.map((field) =>
       db
         .prepare(
-          `INSERT INTO custom_fields (
-            id, entity, field_key, label, field_type, required, options_json, status, updated_at
+          `INSERT INTO tenant_custom_fields (
+            organization_id, id, entity, field_key, label, field_type, required, options_json, status, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-          ON CONFLICT(id) DO UPDATE SET
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+          ON CONFLICT(organization_id, id) DO UPDATE SET
             entity = excluded.entity,
             field_key = excluded.field_key,
             label = excluded.label,
@@ -4489,6 +4529,7 @@ async function persistCustomFields(db: D1Database, fields: CustomFieldDefinition
             updated_at = excluded.updated_at`,
         )
         .bind(
+          field.organizationId,
           field.id,
           field.entity,
           field.key,
@@ -4645,21 +4686,50 @@ async function persistRolePolicies(db: D1Database, rolePolicies: RolePolicy[], u
   if (!Array.isArray(rolePolicies) || rolePolicies.length === 0) {
     return
   }
-  await runStatementBatches(
-    db,
-    rolePolicies.map((policy) =>
+  const tenantPolicies = rolePolicies.filter(
+    (policy) => policy.scope === 'organization' && Boolean(policy.organizationId),
+  )
+  const platformPolicies = rolePolicies.filter((policy) => policy.scope === 'platform')
+  if (tenantPolicies.length > 0) {
+    await runStatementBatches(
+      db,
+      tenantPolicies.map((policy) =>
+        db
+          .prepare(
+            `INSERT INTO tenant_role_policies (organization_id, role, mfa_required, permissions_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(organization_id, role) DO UPDATE SET
+               mfa_required = excluded.mfa_required,
+               permissions_json = excluded.permissions_json,
+               updated_at = excluded.updated_at`,
+          )
+          .bind(
+            policy.organizationId,
+            policy.role,
+            policy.mfaRequired ? 1 : 0,
+            JSON.stringify(policy.permissions),
+            updatedAt,
+          ),
+      ),
+    )
+  }
+  if (platformPolicies.length > 0) {
+    await runStatementBatches(
+      db,
+      platformPolicies.map((policy) =>
       db
         .prepare(
-          `INSERT INTO role_policies (role, scope, mfa_required, permissions_json, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5)
-           ON CONFLICT(role, scope) DO UPDATE SET
+          `INSERT INTO platform_role_policies (role, mfa_required, permissions_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4)
+           ON CONFLICT(role) DO UPDATE SET
              mfa_required = excluded.mfa_required,
              permissions_json = excluded.permissions_json,
              updated_at = excluded.updated_at`,
         )
-        .bind(policy.role, policy.scope, policy.mfaRequired ? 1 : 0, JSON.stringify(policy.permissions), updatedAt),
-    ),
-  )
+        .bind(policy.role, policy.mfaRequired ? 1 : 0, JSON.stringify(policy.permissions), updatedAt),
+      ),
+    )
+  }
 }
 
 async function hydrateDocumentState(db: D1Database, serviceState: ServiceState) {
@@ -6435,7 +6505,7 @@ function userSettingsFromRow(row: UserSettingsRow): UserSettingsRecord {
   }
 }
 
-function auditEventFromRow(row: AuditEventRow): AuditEvent {
+function auditEventFromRow(row: AuditEventRow, scope: 'tenant' | 'platform' = row.organization_id ? 'tenant' : 'platform'): AuditEvent {
   return {
     id: row.id,
     at: row.at,
@@ -6444,6 +6514,8 @@ function auditEventFromRow(row: AuditEventRow): AuditEvent {
     entity: row.entity,
     requestId: row.request_id,
     outcome: readAuditOutcome(row.outcome),
+    organizationId: scope === 'tenant' ? row.organization_id?.trim() || undefined : undefined,
+    scope,
   }
 }
 
@@ -6488,6 +6560,7 @@ function membershipFromRow(row: MembershipRow): MembershipRecord {
 
 function rolePolicyFromRow(row: RolePolicyRow): RolePolicy {
   return {
+    organizationId: row.organization_id?.trim() || undefined,
     role: row.role,
     scope: readRolePolicyScope(row.scope),
     mfaRequired: row.mfa_required === 1,
@@ -6510,6 +6583,7 @@ function tenantSettingsFromRow(row: TenantSettingsRow): TenantSettingsRecord {
 
 function featureFlagFromRow(row: FeatureFlagRow): FeatureFlagRecord {
   return {
+    organizationId: row.organization_id,
     key: row.flag_key,
     label: row.label,
     enabled: row.enabled === 1,
@@ -6519,6 +6593,7 @@ function featureFlagFromRow(row: FeatureFlagRow): FeatureFlagRecord {
 
 function numberingSequenceFromRow(row: NumberingSequenceRow): NumberingSequenceRecord {
   return {
+    organizationId: row.organization_id,
     key: row.sequence_key,
     pattern: row.pattern,
     nextValue: Number(row.next_value),
@@ -6528,6 +6603,7 @@ function numberingSequenceFromRow(row: NumberingSequenceRow): NumberingSequenceR
 
 function customFieldFromRow(row: CustomFieldRow): CustomFieldDefinition {
   return {
+    organizationId: row.organization_id,
     id: row.id,
     entity: readCustomFieldEntity(row.entity),
     key: row.field_key,

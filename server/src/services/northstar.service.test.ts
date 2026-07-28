@@ -1259,6 +1259,76 @@ describe('NorthStarService', () => {
     expect(branding.audit.action).toBe('customization.branding.update')
   })
 
+  it('keeps role policies, tenant audit, and customization records isolated between workspaces', () => {
+    const service = createAuthenticatedService()
+    const nxlViewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    service.setRolePermissions('Viewer', [...(nxlViewer?.allowedPermissions ?? []), 'inventory.adjust'])
+    service.updateSettings({ currency: 'EUR', defaultDilutionPercent: 12 })
+    service.updateFeatureFlag('formulaCostVisibility', false)
+    const nxlNumber = service.nextNumber('formula').data
+    service.createCustomField({ entity: 'supplier', label: 'NOXELIS review owner', fieldType: 'text' })
+
+    const signup = service.signup({
+      organizationName: 'Isolation Atelier',
+      workspaceSlug: 'isolation-atelier',
+      email: 'owner@isolation-atelier.test',
+      name: 'Isolation Owner',
+      password: 'IsolationAtelier2026!',
+    }).data
+    const internals = service as unknown as {
+      sessions: Array<{ id: string; role: string }>
+      membershipRecords: Array<{ id: string; organizationId: string; role: string }>
+    }
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === signup.session.id ? { ...session, role: 'Admin' } : session,
+    )
+    internals.membershipRecords = internals.membershipRecords.map((membership) =>
+      membership.organizationId === signup.organization.id && membership.id === signup.membership.id
+        ? { ...membership, role: 'Admin' }
+        : membership,
+    )
+
+    const atelierViewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    service.setRolePermissions('Viewer', [...(atelierViewer?.allowedPermissions ?? []), 'production.qc'])
+    service.updateSettings({ currency: 'GBP', defaultDilutionPercent: 18 })
+    service.updateFeatureFlag('formulaCostVisibility', true)
+    const atelierNumber = service.nextNumber('formula').data
+    service.createCustomField({ entity: 'supplier', label: 'Atelier release code', fieldType: 'text' })
+    const atelierAudit = service.auditLogs().data
+
+    expect(atelierNumber.value).toBe('FRM-0422')
+    expect(atelierAudit.length).toBeGreaterThan(0)
+    expect(atelierAudit.every((event) => event.organizationId === signup.organization.id && event.scope === 'tenant')).toBe(true)
+
+    service.login(adminEmail, adminPassword)
+    const nxlMatrix = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    const nxlCustomization = service.customizationConsole().data
+    const nxlAudit = service.auditLogs().data
+    const nxlExport = service.auditExport().data
+
+    expect(nxlNumber.value).toBe('FRM-0422')
+    expect(nxlMatrix?.allowedPermissions).toContain('inventory.adjust')
+    expect(nxlMatrix?.allowedPermissions).not.toContain('production.qc')
+    expect(nxlCustomization.settings.currency).toBe('EUR')
+    expect(nxlCustomization.featureFlags.find((flag) => flag.key === 'formulaCostVisibility')?.enabled).toBe(false)
+    expect(nxlCustomization.customFields.some((field) => field.label === 'NOXELIS review owner')).toBe(true)
+    expect(nxlCustomization.customFields.some((field) => field.label === 'Atelier release code')).toBe(false)
+    expect(nxlAudit.every((event) => event.organizationId === 'org-nxl' && event.scope === 'tenant')).toBe(true)
+    expect(nxlExport.organizationId).toBe('org-nxl')
+    expect(() => service.tenantProbe(signup.organization.id)).toThrow(ForbiddenException)
+
+    service.login('owner@isolation-atelier.test', 'IsolationAtelier2026!')
+    const restoredAtelierMatrix = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    const restoredAtelierCustomization = service.customizationConsole().data
+
+    expect(restoredAtelierMatrix?.allowedPermissions).toContain('production.qc')
+    expect(restoredAtelierMatrix?.allowedPermissions).not.toContain('inventory.adjust')
+    expect(restoredAtelierCustomization.settings.currency).toBe('GBP')
+    expect(restoredAtelierCustomization.featureFlags.find((flag) => flag.key === 'formulaCostVisibility')?.enabled).toBe(true)
+    expect(restoredAtelierCustomization.customFields.some((field) => field.label === 'Atelier release code')).toBe(true)
+    expect(restoredAtelierCustomization.customFields.some((field) => field.label === 'NOXELIS review owner')).toBe(false)
+  })
+
   it('exposes workspace branding to signed-in members and validates shared names', () => {
     const service = createAuthenticatedService()
 

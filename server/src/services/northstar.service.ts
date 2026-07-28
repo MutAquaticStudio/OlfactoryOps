@@ -819,7 +819,7 @@ export class NorthStarService {
   private sessions: AuthSession[] = structuredClone(authSessions)
   private userSettingsRecords: UserSettingsRecord[] = structuredClone(userSettings)
   private rolePolicyRecords: RolePolicy[] = structuredClone(rolePolicies)
-  private settingsRecord: TenantSettingsRecord = structuredClone(tenantSettings)
+  private tenantSettingsRecords: TenantSettingsRecord[] = [structuredClone(tenantSettings)]
   private flagRecords: FeatureFlagRecord[] = structuredClone(featureFlags)
   private sequences: NumberingSequenceRecord[] = structuredClone(numberingSequences)
   private customFieldRecords: CustomFieldDefinition[] = structuredClone(customFields)
@@ -3148,7 +3148,7 @@ export class NorthStarService {
     const normalizedEmail = email.trim().toLowerCase()
     const membership = this.membershipRecords.find((item) => item.email.toLowerCase() === normalizedEmail)
     if (!membership || membership.status !== 'ACTIVE') {
-      this.recordAudit('auth.login', normalizedEmail, 'api:auth', 'blocked')
+      this.recordAudit('auth.login', normalizedEmail, 'api:auth', 'blocked', { platform: true })
       throw new ForbiddenException('Tenant membership must be active before login')
     }
     const credential = this.authCredentialRecords.find((item) => item.email === normalizedEmail)
@@ -3156,7 +3156,7 @@ export class NorthStarService {
       ? this.verifyPasswordCredential(credential, normalizedEmail, password ?? '')
       : { valid: false, needsRehash: false }
     if (!credential || !passwordVerification.valid) {
-      this.recordAudit('auth.login', normalizedEmail, 'api:auth', 'blocked')
+      this.recordAudit('auth.login', normalizedEmail, 'api:auth', 'blocked', { organizationId: membership.organizationId })
       throw new ForbiddenException('Email or password is invalid')
     }
     if (passwordVerification.needsRehash) {
@@ -3236,7 +3236,7 @@ export class NorthStarService {
 
     const session = this.sessions.find((item) => item.id === normalizedSessionId && item.status === 'ACTIVE')
     if (!session) {
-      this.recordAudit('auth.session', normalizedSessionId, 'api:auth', 'blocked')
+      this.recordAudit('auth.session', normalizedSessionId, 'api:auth', 'blocked', { platform: true })
       throw new UnauthorizedException('Invalid or expired session')
     }
 
@@ -3289,7 +3289,7 @@ export class NorthStarService {
       organizationId,
       name: organizationName,
       status: 'ACTIVE',
-      defaultCurrency: this.settingsRecord.currency,
+      defaultCurrency: this.tenantSettingsForOrganization(organizationId).currency,
     }
     const membership: MembershipRecord = {
       id: `MBR-${workspaceSlug.toUpperCase()}`,
@@ -3312,6 +3312,7 @@ export class NorthStarService {
       { email, passwordHash: this.passwordHashForEmail(email, password), passwordSetAt: createdAt },
       ...this.authCredentialRecords.filter((credential) => credential.email !== email),
     ]
+    this.ensureTenantScopedDefaults(organizationId)
     this.upsertUserSettings(this.defaultUserSettingsForMembership(membership, createdAt))
     const subscription = this.createSubscriptionRecord(organization.id, 'PLAN-APPRENTICE', createdAt)
     this.upsertSubscription(subscription)
@@ -3606,11 +3607,11 @@ export class NorthStarService {
         brands: this.brandRecords.filter((item) => item.organizationId === session.organizationId),
         memberships: this.membershipRecords.filter((item) => item.organizationId === session.organizationId),
         sessions: this.exposeSessions(this.sessions.filter((item) => item.organizationId === session.organizationId)),
-        rolePolicies: this.organizationRolePolicies(),
+        rolePolicies: this.organizationRolePolicies(session.organizationId),
         permissionCatalog: this.organizationPermissionCatalog(),
-        permissionMatrix: this.buildPermissionMatrix(this.organizationRolePolicies()),
+        permissionMatrix: this.buildPermissionMatrix(this.organizationRolePolicies(session.organizationId)),
         securityPolicy: this.fullSecurityPolicyForSession(session),
-        audit: this.auditEvents
+        audit: this.auditEventsForSession(session)
           .filter((event) =>
             ['auth.login', 'auth.logout', 'auth.newDevice', 'membership.invite', 'membership.status.update', 'session.revoke', 'session.revokeAll', 'session.touch', 'session.expire', 'security.tenantProbe', 'security.permissionProbe', 'role.permissions.update'].includes(
               event.action,
@@ -3734,7 +3735,13 @@ export class NorthStarService {
         false,
       )
       : undefined
-    const audit = this.recordAudit('auth.passwordReset.request', normalizedEmail, 'api:auth', 'allowed')
+    const audit = this.recordAudit(
+      'auth.passwordReset.request',
+      normalizedEmail,
+      'api:auth',
+      'allowed',
+      membership ? { organizationId: membership.organizationId } : { platform: true },
+    )
     return {
       data: { accepted: true, audit },
       delivery: { recipientEmail: normalizedEmail, token, notificationId: notification?.id },
@@ -3770,7 +3777,14 @@ export class NorthStarService {
         ? { ...session, status: 'REVOKED', revokedAt: updatedAt, revokedReason: 'password reset' }
         : session,
     )
-    const audit = this.recordAudit('auth.passwordReset.complete', reset.email, 'api:auth', 'allowed')
+    const membership = this.membershipRecords.find((item) => item.email === reset.email)
+    const audit = this.recordAudit(
+      'auth.passwordReset.complete',
+      reset.email,
+      'api:auth',
+      'allowed',
+      membership ? { organizationId: membership.organizationId } : { platform: true },
+    )
     return {
       data: {
         accepted: true,
@@ -3817,7 +3831,9 @@ export class NorthStarService {
     }
 
     const role = body.role?.trim() || 'Viewer'
-    const rolePolicy = this.rolePolicyRecords.find((item) => item.role === role && item.scope === 'organization')
+    const rolePolicy = this.rolePolicyRecords.find(
+      (item) => item.organizationId === session.organizationId && item.role === role && item.scope === 'organization',
+    )
     if (!rolePolicy) {
       throw new UnprocessableEntityException('Invite role must be an organization role')
     }
@@ -4017,7 +4033,7 @@ export class NorthStarService {
   permissionMatrix() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'security.manageUsers')
-    const rolePolicyRows = this.organizationRolePolicies()
+    const rolePolicyRows = this.organizationRolePolicies(session.organizationId)
     return {
       data: {
         permissionCatalog: this.organizationPermissionCatalog(),
@@ -4033,7 +4049,7 @@ export class NorthStarService {
     this.requirePermission(session.role, 'security.manageUsers')
     const normalizedRole = decodeURIComponent(role).trim()
     const target = this.rolePolicyRecords.find(
-      (item) => item.role === normalizedRole && item.scope === 'organization',
+      (item) => item.organizationId === session.organizationId && item.role === normalizedRole && item.scope === 'organization',
     )
     if (!target) {
       throw new NotFoundException(`Role ${normalizedRole} was not found`)
@@ -4059,7 +4075,9 @@ export class NorthStarService {
       .filter((permission) => requested.has(permission))
     const updatedPolicy = { ...target, permissions: orderedPermissions }
     this.rolePolicyRecords = this.rolePolicyRecords.map((policy) =>
-      policy.role === target.role && policy.scope === target.scope ? updatedPolicy : policy,
+      policy.organizationId === session.organizationId && policy.role === target.role && policy.scope === target.scope
+        ? updatedPolicy
+        : policy,
     )
     const audit = this.recordAudit('role.permissions.update', target.role, session.userId, 'allowed')
 
@@ -4067,7 +4085,7 @@ export class NorthStarService {
       data: {
         rolePolicy: updatedPolicy,
         permissionCatalog: this.organizationPermissionCatalog(),
-        matrix: this.buildPermissionMatrix(this.organizationRolePolicies()),
+        matrix: this.buildPermissionMatrix(this.organizationRolePolicies(session.organizationId)),
         audit,
         invariant: 'role permission updates are tenant-scoped, validated against catalog, and audited',
       },
@@ -4085,7 +4103,8 @@ export class NorthStarService {
   }
 
   permissionProbe(permission: string, role = 'Viewer') {
-    const decision = this.permissionDecision(role, permission)
+    const session = this.currentSession()
+    const decision = this.permissionDecision(role, permission, session.organizationId)
     this.recordAudit('security.permissionProbe', permission, role, decision.allowed ? 'allowed' : 'blocked')
     if (!decision.knownRole) {
       throw new NotFoundException(`Role ${role} was not found`)
@@ -4102,19 +4121,23 @@ export class NorthStarService {
   settings() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    return { data: this.settingsRecord }
+    return { data: this.tenantSettingsForOrganization(session.organizationId) }
   }
 
   updateSettings(patch: Partial<TenantSettingsRecord>) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    this.settingsRecord = {
-      ...this.settingsRecord,
+    const current = this.tenantSettingsForOrganization(session.organizationId)
+    const updated = {
+      ...current,
       ...patch,
-      organizationId: this.settingsRecord.organizationId,
+      organizationId: session.organizationId,
     }
-    const audit = this.recordAudit('customization.settings.update', this.settingsRecord.organizationId, session.userId, 'allowed')
-    return { data: { settings: this.settingsRecord, audit, invariant: 'tenant settings update by config, not forked code' } }
+    this.tenantSettingsRecords = this.tenantSettingsRecords.map((settings) =>
+      settings.organizationId === session.organizationId ? updated : settings,
+    )
+    const audit = this.recordAudit('customization.settings.update', updated.organizationId, session.userId, 'allowed')
+    return { data: { settings: updated, audit, invariant: 'tenant settings update by config, not forked code' } }
   }
 
   customizationConsole() {
@@ -4122,12 +4145,12 @@ export class NorthStarService {
     this.requirePermission(session.role, 'customization.manage')
     return {
       data: {
-        settings: this.settingsRecord,
-        featureFlags: this.flagRecords,
-        numberingSequences: this.sequences,
-        customFields: this.customFieldRecords,
+        settings: this.tenantSettingsForOrganization(session.organizationId),
+        featureFlags: this.featureFlagsForOrganization(session.organizationId),
+        numberingSequences: this.numberingSequencesForOrganization(session.organizationId),
+        customFields: this.customFieldsForOrganization(session.organizationId),
         branding: this.workspaceBrandingForOrganization(session.organizationId),
-        audit: this.auditEvents
+        audit: this.auditEventsForSession(session)
           .filter((event) => event.action.startsWith('customization.'))
           .slice(0, 8),
         invariant: 'tenant customization is config-driven and audit logged',
@@ -4143,12 +4166,14 @@ export class NorthStarService {
   updateFeatureFlag(key: string, enabled: boolean) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    const flag = this.flagRecords.find((item) => item.key === key)
+    const flag = this.featureFlagsForOrganization(session.organizationId).find((item) => item.key === key)
     if (!flag) {
       throw new NotFoundException(`Feature flag ${key} was not found`)
     }
     const updated = { ...flag, enabled }
-    this.flagRecords = this.flagRecords.map((item) => (item.key === key ? updated : item))
+    this.flagRecords = this.flagRecords.map((item) =>
+      item.organizationId === session.organizationId && item.key === key ? updated : item,
+    )
     const audit = this.recordAudit('customization.featureFlag.update', key, session.userId, 'allowed')
     return { data: { featureFlag: updated, audit, invariant: 'feature flags change tenant behavior without code forks' } }
   }
@@ -4156,7 +4181,7 @@ export class NorthStarService {
   updateNumberingSequence(key: string, patch: Partial<NumberingSequenceRecord>) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    const sequence = this.sequences.find((item) => item.key === key)
+    const sequence = this.numberingSequencesForOrganization(session.organizationId).find((item) => item.key === key)
     if (!sequence) {
       throw new NotFoundException(`Numbering sequence ${key} was not found`)
     }
@@ -4174,7 +4199,9 @@ export class NorthStarService {
       nextValue: Math.floor(nextValue),
       scope: patch.scope === 'organization' || patch.scope === 'brand' ? patch.scope : sequence.scope,
     }
-    this.sequences = this.sequences.map((item) => (item.key === key ? updated : item))
+    this.sequences = this.sequences.map((item) =>
+      item.organizationId === session.organizationId && item.key === key ? updated : item,
+    )
     const audit = this.recordAudit('customization.sequence.update', key, session.userId, 'allowed')
     return {
       data: {
@@ -4189,7 +4216,7 @@ export class NorthStarService {
   previewNumber(key: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    const sequence = this.sequences.find((item) => item.key === key)
+    const sequence = this.numberingSequencesForOrganization(session.organizationId).find((item) => item.key === key)
     if (!sequence) {
       throw new NotFoundException(`Numbering sequence ${key} was not found`)
     }
@@ -4215,7 +4242,8 @@ export class NorthStarService {
     if (!key) {
       throw new UnprocessableEntityException('Custom field key is required')
     }
-    const duplicate = this.customFieldRecords.some(
+    const customFields = this.customFieldsForOrganization(session.organizationId)
+    const duplicate = customFields.some(
       (item) => item.entity === entity && item.key.toLowerCase() === key.toLowerCase(),
     )
     if (duplicate) {
@@ -4225,7 +4253,8 @@ export class NorthStarService {
       ? body.fieldType!
       : 'text'
     const field: CustomFieldDefinition = {
-      id: `CF-${entity.toUpperCase()}-${String(this.customFieldRecords.length + 1).padStart(4, '0')}`,
+      organizationId: session.organizationId,
+      id: `CF-${entity.toUpperCase()}-${String(customFields.length + 1).padStart(4, '0')}`,
       entity,
       key,
       label,
@@ -4275,29 +4304,32 @@ export class NorthStarService {
   featureFlags() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    return { data: this.flagRecords }
+    return { data: this.featureFlagsForOrganization(session.organizationId) }
   }
 
   numberingSequences() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    return { data: this.sequences }
+    return { data: this.numberingSequencesForOrganization(session.organizationId) }
   }
 
   nextNumber(key: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'customization.manage')
-    return this.consumeSequenceNumber(key, session.userId)
+    return this.consumeSequenceNumber(key, session.userId, session.organizationId)
   }
 
-  private consumeSequenceNumber(key: string, actor: string) {
-    const sequence = this.sequences.find((item) => item.key === key)
+  private consumeSequenceNumber(key: string, actor: string, organizationId?: string) {
+    const scopedOrganizationId = organizationId ?? this.currentSession().organizationId
+    const sequence = this.numberingSequencesForOrganization(scopedOrganizationId).find((item) => item.key === key)
     if (!sequence) {
       throw new NotFoundException(`Numbering sequence ${key} was not found`)
     }
     const value = formatSequenceValue(sequence)
     this.sequences = this.sequences.map((item) =>
-      item.key === key ? { ...item, nextValue: item.nextValue + 1 } : item,
+      item.organizationId === scopedOrganizationId && item.key === key
+        ? { ...item, nextValue: item.nextValue + 1 }
+        : item,
     )
     this.recordAudit('customization.sequence.next', key, actor, 'allowed')
     return { data: { key, value, invariant: 'numbering increments through a single sequence service' } }
@@ -4665,7 +4697,7 @@ export class NorthStarService {
     this.requirePermission(session.role, 'documents.view')
     const documentIds = new Set(this.documentsForSession(session).map((document) => document.id))
     return {
-      data: this.auditEvents.filter((event) =>
+      data: this.auditEventsForSession(session).filter((event) =>
         ['document.download', 'document.generate', 'document.approve', 'document.externalShare', 'document.upload', 'document.scan.clean', 'document.scan.blocked', 'document.archive'].includes(event.action) &&
         documentIds.has(event.entity),
       ),
@@ -8861,7 +8893,7 @@ export class NorthStarService {
     }
     const format = body.format === 'CSV' ? 'CSV' : 'JSON'
     const scope = body.scope?.trim().slice(0, 80) || session.organizationId
-    const tenantEvents = this.auditEvents.filter((event) => event.entity.includes(session.organizationId) || event.actor === session.userId || event.actor === 'api:auth' || event.actor === 'api:owner')
+    const tenantEvents = this.auditEventsForSession(session)
     const audit = this.recordAudit('audit.export', session.organizationId, session.userId, 'allowed')
     const createdAt = new Date().toISOString()
     const completedAt = new Date(Date.now() + 1500).toISOString()
@@ -9929,7 +9961,8 @@ export class NorthStarService {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return fallback
     }
-    const allowedRoles = new Set(this.organizationRolePolicies().map((policy) => policy.role))
+    const organizationId = this.currentSession().organizationId
+    const allowedRoles = new Set(this.organizationRolePolicies(organizationId).map((policy) => policy.role))
     const entries = Object.entries(value as Record<string, unknown>)
       .map(([group, role]) => [group.trim().slice(0, 80), typeof role === 'string' ? role.trim() : ''] as const)
       .filter(([group, role]) => group && allowedRoles.has(role))
@@ -10280,8 +10313,8 @@ export class NorthStarService {
         .filter((membership) => membership.organizationId === organizationId)
         .flatMap((membership) => [membership.userId, membership.email]),
     )
-    const auditEvents = this.auditEvents.filter(
-      (event) => event.entity.includes(organizationId) || tenantActors.has(event.actor),
+    const auditEvents = this.auditEvents.filter((event) =>
+      event.scope === 'tenant' && event.organizationId === organizationId && tenantActors.has(event.actor),
     )
     const documentStorageGb = documents.reduce((total, document) => total + document.sizeKb, 0) / 1024 / 1024
     return {
@@ -10411,12 +10444,16 @@ export class NorthStarService {
     outcome: AuditEvent['outcome'],
   ) {
     this.auditCounter += 1
+    const organizationId = document.organizationId ?? this.activeSessionOrganizationId()
+    const tenantScoped = Boolean(organizationId)
     const event: AuditEvent = {
-      id: `AUD-DOC-${String(this.auditCounter).padStart(4, '0')}`,
+      id: `${tenantScoped ? 'AUD-TEN-DOC' : 'AUD-PLT-DOC'}-${String(this.auditCounter).padStart(4, '0')}`,
+      organizationId,
+      scope: tenantScoped ? 'tenant' : 'platform',
       at: new Date().toISOString(),
-      actor,
+      actor: tenantScoped ? actor : 'system',
       action: 'document.download',
-      entity: document.id,
+      entity: tenantScoped ? document.id : 'document',
       requestId: `req_doc_${String(this.auditCounter).padStart(4, '0')}`,
       outcome,
     }
@@ -10483,6 +10520,77 @@ export class NorthStarService {
     }
   }
 
+  /**
+   * Creates a tenant's initial configuration only when the tenant has no record
+   * for that item. Legacy global settings are intentionally never used here.
+   */
+  ensureTenantScopedDefaults(organizationId: string) {
+    let changed = false
+    if (!this.tenantSettingsRecords.some((settings) => settings.organizationId === organizationId)) {
+      this.tenantSettingsRecords = [
+        { ...structuredClone(tenantSettings), organizationId },
+        ...this.tenantSettingsRecords,
+      ]
+      changed = true
+    }
+
+    for (const policy of rolePolicies.filter((item) => item.scope === 'organization')) {
+      if (!this.rolePolicyRecords.some((item) => item.organizationId === organizationId && item.role === policy.role)) {
+        this.rolePolicyRecords = [
+          { ...structuredClone(policy), organizationId },
+          ...this.rolePolicyRecords,
+        ]
+        changed = true
+      }
+    }
+
+    for (const flag of featureFlags) {
+      if (!this.flagRecords.some((item) => item.organizationId === organizationId && item.key === flag.key)) {
+        this.flagRecords = [{ ...structuredClone(flag), organizationId }, ...this.flagRecords]
+        changed = true
+      }
+    }
+
+    for (const sequence of numberingSequences) {
+      if (!this.sequences.some((item) => item.organizationId === organizationId && item.key === sequence.key)) {
+        this.sequences = [{ ...structuredClone(sequence), organizationId }, ...this.sequences]
+        changed = true
+      }
+    }
+
+    for (const field of customFields) {
+      if (!this.customFieldRecords.some((item) => item.organizationId === organizationId && item.id === field.id)) {
+        this.customFieldRecords = [{ ...structuredClone(field), organizationId }, ...this.customFieldRecords]
+        changed = true
+      }
+    }
+    return changed
+  }
+
+  private tenantSettingsForOrganization(organizationId: string) {
+    this.ensureTenantScopedDefaults(organizationId)
+    const settings = this.tenantSettingsRecords.find((item) => item.organizationId === organizationId)
+    if (!settings) {
+      throw new NotFoundException(`Tenant settings for ${organizationId} were not found`)
+    }
+    return settings
+  }
+
+  private featureFlagsForOrganization(organizationId: string) {
+    this.ensureTenantScopedDefaults(organizationId)
+    return this.flagRecords.filter((item) => item.organizationId === organizationId)
+  }
+
+  private numberingSequencesForOrganization(organizationId: string) {
+    this.ensureTenantScopedDefaults(organizationId)
+    return this.sequences.filter((item) => item.organizationId === organizationId)
+  }
+
+  private customFieldsForOrganization(organizationId: string) {
+    this.ensureTenantScopedDefaults(organizationId)
+    return this.customFieldRecords.filter((item) => item.organizationId === organizationId)
+  }
+
   private publicSecurityPolicyForSession(session: AuthSession) {
     return {
       ...tenantSecurityPolicy,
@@ -10499,14 +10607,7 @@ export class NorthStarService {
   }
 
   private auditEventsForSession(session: AuthSession) {
-    return this.auditEvents.filter(
-      (event) =>
-        event.entity.includes(session.organizationId) ||
-        event.actor === session.userId ||
-        event.actor === session.email ||
-        event.actor === session.role ||
-        event.actor === 'api:auth',
-    )
+    return this.auditEvents.filter((event) => event.scope === 'tenant' && event.organizationId === session.organizationId)
   }
 
   private exposeSession(session: AuthSession) {
@@ -10572,19 +10673,31 @@ export class NorthStarService {
     }
   }
 
-  private roleHasPermission(role: string, permission: string) {
+  private roleHasPermission(role: string, permission: string, organizationId = this.activeSessionOrganizationId()) {
     role = this.normalizeRoleForPermission(role)
     return this.rolePolicyRecords.some(
-      (policy) => policy.role === role && policy.permissions.includes(permission),
+      (policy) =>
+        policy.role === role &&
+        policy.permissions.includes(permission) &&
+        (policy.scope === 'platform' || policy.organizationId === organizationId),
     )
+  }
+
+  private activeSessionOrganizationId() {
+    return this.activeSessionId
+      ? this.sessions.find((session) => session.id === this.activeSessionId)?.organizationId
+      : undefined
   }
 
   private normalizeRoleForPermission(role: string) {
     return role.trim()
   }
 
-  private organizationRolePolicies() {
-    return this.rolePolicyRecords.filter((item) => item.scope === 'organization')
+  private organizationRolePolicies(organizationId: string) {
+    this.ensureTenantScopedDefaults(organizationId)
+    return this.rolePolicyRecords.filter(
+      (item) => item.scope === 'organization' && item.organizationId === organizationId,
+    )
   }
 
   private organizationPermissionCatalog() {
@@ -10617,8 +10730,10 @@ export class NorthStarService {
     })
   }
 
-  private permissionDecision(role: string, permission: string) {
-    const rolePolicy = this.rolePolicyRecords.find((policy) => policy.role === role)
+  private permissionDecision(role: string, permission: string, organizationId = this.activeSessionOrganizationId()) {
+    const rolePolicy = this.rolePolicyRecords.find(
+      (policy) => policy.role === role && (policy.scope === 'platform' || policy.organizationId === organizationId),
+    )
     const permissionDefinition = permissionCatalog.find((item) => item.key === permission)
     const allowed = Boolean(rolePolicy?.permissions.includes(permission))
     return {
@@ -10932,8 +11047,10 @@ export class NorthStarService {
     })
   }
 
-  private permissionsForRole(role: string) {
-    return this.rolePolicyRecords.find((policy) => policy.role === role)?.permissions ?? []
+  private permissionsForRole(role: string, organizationId = this.activeSessionOrganizationId()) {
+    return this.rolePolicyRecords.find(
+      (policy) => policy.role === role && (policy.scope === 'platform' || policy.organizationId === organizationId),
+    )?.permissions ?? []
   }
 
   private safeMaterialNumber(value: unknown, fallback: number) {
@@ -11907,18 +12024,29 @@ export class NorthStarService {
     entity: string,
     actor: string,
     outcome: AuditEvent['outcome'],
+    context: { organizationId?: string; platform?: boolean } = {},
   ) {
     this.auditCounter += 1
+    const organizationId = context.platform ? undefined : context.organizationId ?? this.activeSessionOrganizationId()
+    const tenantScoped = Boolean(organizationId)
     const event: AuditEvent = {
-      id: `AUD-GEN-${String(this.auditCounter).padStart(4, '0')}`,
+      id: `${tenantScoped ? 'AUD-TEN' : 'AUD-PLT'}-${String(this.auditCounter).padStart(4, '0')}`,
+      organizationId,
+      scope: tenantScoped ? 'tenant' : 'platform',
       at: new Date().toISOString(),
-      actor,
+      actor: tenantScoped ? actor : 'system',
       action,
-      entity,
+      entity: tenantScoped ? entity : this.platformAuditEntity(action),
       requestId: `req_gen_${String(this.auditCounter).padStart(4, '0')}`,
       outcome,
     }
     this.auditEvents = [event, ...this.auditEvents]
     return event
+  }
+
+  private platformAuditEntity(action: string) {
+    if (action.startsWith('auth.')) return 'authentication'
+    if (action.startsWith('billing.')) return 'billing-provider'
+    return 'platform-operation'
   }
 }

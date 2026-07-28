@@ -609,6 +609,9 @@ export interface DocumentShareLink {
 
 export interface AuditEvent {
   id: string
+  /** Tenant events must carry an organization id. Platform events are redacted and never appear in a tenant feed. */
+  organizationId?: string
+  scope?: 'tenant' | 'platform'
   at: string
   actor: string
   action: string
@@ -670,6 +673,8 @@ export interface MembershipRecord {
 }
 
 export interface RolePolicy {
+  /** Organization policies are scoped to one tenant; platform policies deliberately omit this value. */
+  organizationId?: string
   role: string
   scope: 'organization' | 'platform'
   mfaRequired: boolean
@@ -776,6 +781,7 @@ export interface TenantSettingsRecord {
 }
 
 export interface FeatureFlagRecord {
+  organizationId?: string
   key: string
   label: string
   enabled: boolean
@@ -783,6 +789,7 @@ export interface FeatureFlagRecord {
 }
 
 export interface NumberingSequenceRecord {
+  organizationId?: string
   key: string
   pattern: string
   nextValue: number
@@ -790,6 +797,7 @@ export interface NumberingSequenceRecord {
 }
 
 export interface CustomFieldDefinition {
+  organizationId?: string
   id: string
   entity: 'material' | 'formula' | 'lot' | 'document' | 'supplier' | 'order'
   key: string
@@ -2960,7 +2968,12 @@ export const rolePolicies: RolePolicy[] = [
     mfaRequired: true,
     permissions: ['platform.tenants.manage', 'platform.flags.manage', 'platform.impersonation.audit'],
   },
-]
+].map((policy) => {
+  const typedPolicy = policy as RolePolicy
+  return typedPolicy.scope === 'organization'
+    ? { ...typedPolicy, organizationId: 'org-nxl' }
+    : typedPolicy
+})
 
 export const tenantSecurityPolicy: TenantSecurityPolicy = {
   organizationId: 'org-nxl',
@@ -3086,20 +3099,21 @@ export const userSettings: UserSettingsRecord[] = [
 ]
 
 export const featureFlags: FeatureFlagRecord[] = [
-  { key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
-  { key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
-  { key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
+  { organizationId: 'org-nxl', key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
+  { organizationId: 'org-nxl', key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
+  { organizationId: 'org-nxl', key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
 ]
 
 export const numberingSequences: NumberingSequenceRecord[] = [
-  { key: 'formula', pattern: 'FRM-####', nextValue: 422, scope: 'brand' },
-  { key: 'batch', pattern: 'BTH-YYYY-###', nextValue: 119, scope: 'brand' },
-  { key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
-  { key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
+  { organizationId: 'org-nxl', key: 'formula', pattern: 'FRM-####', nextValue: 422, scope: 'brand' },
+  { organizationId: 'org-nxl', key: 'batch', pattern: 'BTH-YYYY-###', nextValue: 119, scope: 'brand' },
+  { organizationId: 'org-nxl', key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
+  { organizationId: 'org-nxl', key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
 ]
 
 export const customFields: CustomFieldDefinition[] = [
   {
+    organizationId: 'org-nxl',
     id: 'CF-MAT-ODOUR-FAMILY',
     entity: 'material',
     key: 'odorFamily',
@@ -3110,6 +3124,7 @@ export const customFields: CustomFieldDefinition[] = [
     status: 'ACTIVE',
   },
   {
+    organizationId: 'org-nxl',
     id: 'CF-FRM-BRIEF',
     entity: 'formula',
     key: 'creativeBrief',
@@ -3120,6 +3135,7 @@ export const customFields: CustomFieldDefinition[] = [
     status: 'ACTIVE',
   },
   {
+    organizationId: 'org-nxl',
     id: 'CF-LOT-QC-DATE',
     entity: 'lot',
     key: 'qcReleaseDate',
