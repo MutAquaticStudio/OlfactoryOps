@@ -3,16 +3,8 @@ import { ArgumentsHost, Catch, ExceptionFilter, HttpException } from '@nestjs/co
 import { NestFactory } from '@nestjs/core'
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify'
 import { AppModule } from './modules/app.module.js'
+import { resolveLocalApiConfig } from './modules/local-api-config.js'
 import { isAppHttpError } from './shared/http-error.js'
-
-const LOCAL_CORS_ORIGINS = ['http://127.0.0.1:5173', 'http://localhost:5173']
-
-function parseCsvEnv(value: string | undefined) {
-  return (value ?? '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-}
 
 @Catch()
 class AppHttpErrorFilter implements ExceptionFilter {
@@ -35,14 +27,13 @@ class AppHttpErrorFilter implements ExceptionFilter {
 }
 
 async function bootstrap() {
+  const config = resolveLocalApiConfig()
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
     logger: ['log', 'warn', 'error'],
   })
 
-  const corsOrigins = parseCsvEnv(process.env.CORS_ORIGINS)
-
   app.enableCors({
-    origin: corsOrigins.length > 0 ? corsOrigins : LOCAL_CORS_ORIGINS,
+    origin: config.corsOrigins,
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
@@ -50,9 +41,7 @@ async function bootstrap() {
   app.useGlobalFilters(new AppHttpErrorFilter())
   app.setGlobalPrefix('api/v1')
 
-  const port = Number(process.env.PORT ?? 4000)
-  const host = process.env.HOST ?? '0.0.0.0'
-  await app.listen(port, host)
+  await app.listen(config.port, config.host)
 }
 
 bootstrap().catch((error) => {

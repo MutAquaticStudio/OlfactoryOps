@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   formulaVersions,
   formulas,
@@ -8,8 +8,13 @@ import {
 import {
   auditChainHash,
   canonicalAuditChainPayload,
+  buildCorsHeaders,
+  createSessionCredential,
+  hashSessionCredential,
+  isOpaqueSessionCredential,
   normalizeFormulaPersistenceRecord,
   normalizeFormulaVersionPersistenceRecord,
+  resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
 } from './index'
 
@@ -78,6 +83,65 @@ describe('MFA recovery-code persistence', () => {
     expect(
       isSingleRecoveryCodeConsumption(['sha256:a', 'sha256:a'], ['sha256:a']),
     ).toBe(false)
+  })
+})
+
+describe('Worker session credentials', () => {
+  it('uses an opaque random secret instead of the predictable audit session ID', async () => {
+    const sessionSecret = createSessionCredential()
+    const secretHash = await hashSessionCredential(sessionSecret)
+
+    expect(isOpaqueSessionCredential(sessionSecret)).toBe(true)
+    expect(sessionSecret).not.toContain('SES-')
+    expect(secretHash).toMatch(/^sha256:v1:[a-f0-9]{64}$/)
+    expect(secretHash).not.toContain(sessionSecret)
+    expect(isOpaqueSessionCredential('SES-0001')).toBe(false)
+  })
+
+  it('resolves only a hashed opaque credential and rejects a legacy session ID', async () => {
+    const sessionSecret = createSessionCredential()
+    const secretHash = await hashSessionCredential(sessionSecret)
+    const first = vi.fn().mockResolvedValue({
+      id: 'SES-0007',
+      status: 'ACTIVE',
+      idle_expires_at: '2099-01-01T00:00:00.000Z',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    })
+    const bind = vi.fn().mockReturnValue({ first })
+    const prepare = vi.fn().mockReturnValue({ bind })
+    const db = { prepare } as unknown as D1Database
+
+    await expect(
+      resolveActiveSessionCredential(db, { sessionSecret, source: 'bearer' }),
+    ).resolves.toMatchObject({ sessionId: 'SES-0007', source: 'bearer' })
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining('auth_session_credentials'))
+    expect(bind).toHaveBeenCalledWith(secretHash)
+    expect(JSON.stringify(prepare.mock.calls)).not.toContain(sessionSecret)
+
+    const legacyPrepare = vi.fn()
+    const legacyDb = { prepare: legacyPrepare } as unknown as D1Database
+    await expect(
+      resolveActiveSessionCredential(legacyDb, { sessionSecret: 'SES-0007', source: 'bearer' }),
+    ).rejects.toMatchObject({ statusCode: 401 })
+    expect(legacyPrepare).not.toHaveBeenCalled()
+  })
+})
+
+describe('credentialed CORS', () => {
+  it('allows only exact configured origins and rejects wildcard Pages origins', () => {
+    const exact = buildCorsHeaders(
+      'https://test.labofscents.pages.dev',
+      'https://test.labofscents.pages.dev,https://olfactoryops-beta.pages.dev',
+    )
+    expect(exact['Access-Control-Allow-Origin']).toBe('https://test.labofscents.pages.dev')
+    expect(exact['Access-Control-Allow-Credentials']).toBe('true')
+
+    const wildcard = buildCorsHeaders(
+      'https://preview.labofscents.pages.dev',
+      'https://*.labofscents.pages.dev',
+    )
+    expect(wildcard['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(wildcard['Access-Control-Allow-Credentials']).toBeUndefined()
   })
 })
 

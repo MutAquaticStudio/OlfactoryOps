@@ -9,7 +9,7 @@ workers_dev = true
 crons = ["0 * * * *"]
 
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev,https://*.labofscents.pages.dev"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev"
 BILLING_MODE = "managed_beta"
 
 [[routes]]

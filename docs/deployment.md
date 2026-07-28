@@ -90,7 +90,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, and `migrations/0026_finished_goods_operational_trace.sql`, before enabling billing webhooks, transactional email, or finished-good commerce. For the test Worker:
+Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, `migrations/0026_finished_goods_operational_trace.sql`, `migrations/0027_operational_p1_enterprise.sql`, and `migrations/0028_auth_session_credentials.sql`, before enabling billing webhooks, transactional email, or finished-good commerce. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
@@ -141,7 +141,7 @@ The Worker runs its analytics scheduler hourly through the `crons` trigger in `w
 
 ```toml
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev,https://*.labofscents.pages.dev"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev"
 
 [[routes]]
 pattern = "api.labofscents.org"
@@ -272,7 +272,7 @@ The beta uses a dedicated Cloudflare Pages project while Cloudflare remains the 
 - `https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1`: Cloudflare Worker test API backed by the isolated `olfactoryops-test` D1 database.
 - `https://beta.labofscents.org`: customer-facing beta hostname after it is added to the dedicated Pages project and its Cloudflare DNS record is created.
 
-The test Worker allowlists only the named Pages and beta origins. Do not add wildcard third-party preview origins, because credentialed CORS must remain restricted to trusted frontend hosts.
+The test Worker allowlists only the named Pages origins (`labofscents.pages.dev`, `test.labofscents.pages.dev`, and `olfactoryops-beta.pages.dev`) and `beta.labofscents.org`. Do not add wildcard Pages or third-party preview origins, because credentialed CORS uses exact trusted frontend hosts only.
 
 Keep the beta hostname under `labofscents.org` when possible. It is same-site with `api.labofscents.org`, which makes the secure session cookie more reliable than using an unrelated `vercel.app` hostname.
 
@@ -286,7 +286,8 @@ Supabase is not connected to the live beta write path yet. Cloudflare D1 is the 
 
 - D1 is SQLite-compatible, not Postgres. Sell-ready Formula and operational state use normalized D1 tables including `formula_records`, `formula_version_records`, `mfa_enrollments`, `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `material_records`, `molecule_components`, `storage_locations`, `stock_take_records`, `tenant_settings`, `feature_flags`, `numbering_sequences`, `custom_fields`, `tenant_branding`, `document_records`, `production_batches`, `suppliers`, `purchase_orders`, `price_history`, `commercial_skus`, `price_lists`, `quotes`, `sample_requests`, `customers`, `sales_orders`, `order_shipments`, `order_documents`, `scheduled_reports`, `billing_subscriptions`, `billing_invoices`, `sso_configs`, `api_keys`, `webhooks`, `webhook_deliveries`, `audit_export_jobs`, `inventory_lots`, `inventory_movements`, and `lab_usage_records`.
 - Apply D1 migrations before deploying Worker code that depends on new normalized tables.
-- Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only.
+- `0028_auth_session_credentials.sql` revokes every legacy session whose cookie previously contained an audit session ID. The Worker stores only a SHA-256 hash of a new opaque credential, so users must sign in again after the migration.
+- Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only. Bearer credentials are the same opaque values used for automation; audit session IDs are never accepted as credentials.
 - Keep document binaries and generated PDFs out of D1. During beta, store them in the private Workers KV namespace and keep only metadata/signed URL evidence in D1. Move these immutable blobs to R2 before high-volume production usage.
 - The next persistence hardening target is the remaining approval-request and bootstrap metadata still served by the hybrid snapshot adapter.
 

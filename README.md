@@ -110,6 +110,7 @@ The full production checklist, security requirements, custom domain guidance, an
 
 - Apply D1 migrations before deploying a Worker. `0025_enterprise_persistence_audit_chain.sql` completes the normalized-state cutover and adds append-only audit-chain evidence. `0026_finished_goods_operational_trace.sql` adds finished-good lots, finished-good ledger/COGS, formula SKU support, and organization scope for commerce records.
 - `0027_operational_p1_enterprise.sql` adds tenant-scoped material compliance, approved supplier offers, quarantined receipt/inspection/RMA records, immutable landed-cost allocations, structured QC specifications/results, yield reconciliation, and operation idempotency records. Apply it before a Worker that exposes the Operational P1 routes.
+- `0028_auth_session_credentials.sql` replaces legacy session-ID credentials with opaque, one-way-hashed Worker credentials and revokes pre-migration sessions. Users must sign in again after it is applied.
 - A production batch can create a finished-good lot only after approved formula input, raw-material consumption, QC pass, and release. Formula SKUs reserve released finished-good lots using FEFO and write COGS only when fulfilled.
 - `GET /api/v1/audit/chain/verify` and `GET /api/v1/audit/chain/evidence` are Owner/Admin-only evidence endpoints. They never return provider secrets.
 - Beta integrations are honest by default: integration readiness returns `Not configured` until its Worker secret and any DNS/HTTPS dependency are active. `managed_beta` continues to reject all Stripe customer-payment mutations server-side.
@@ -137,7 +138,8 @@ The P1 routes require `Idempotency-Key` on mutations in the Worker. Retrying the
 ## Data And Security Notes
 
 - Tenant access, sessions, permissions, and audit events are server-enforced.
-- Mutating cookie-authenticated API calls require a CSRF token.
+- Worker cookies carry an opaque session credential, never the displayed audit session ID. Mutating cookie-authenticated API calls require a CSRF token; opaque bearer credentials remain available only for non-browser tooling.
+- The local Nest/Fastify API is development/test-only and binds to `127.0.0.1` by default. It refuses production runtime and non-loopback `HOST` values.
 - D1 stores structured operational metadata; beta SDS/CoA binaries live in a private Cloudflare Workers KV namespace, while document metadata and signed-access evidence remain in D1.
 - Generated functional reports, browser evidence, `.env*` files, and credentials are intentionally ignored by Git.
 

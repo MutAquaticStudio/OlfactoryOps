@@ -131,8 +131,9 @@ type Route = {
   handler: (context: RouteContext) => unknown
 }
 
-type AuthCredential = {
+export type AuthCredential = {
   sessionId?: string
+  sessionSecret?: string
   source: 'cookie' | 'bearer' | 'none'
 }
 
@@ -768,6 +769,7 @@ export default {
     let mfaVerificationRequest = false
     let idempotencyClaim: OperationIdempotencyClaim | undefined
     let mutationPersisted = false
+    let issuedSessionCredential: string | undefined
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: buildApiSecurityHeaders(corsHeaders) })
@@ -795,8 +797,7 @@ export default {
       }
       let credential: AuthCredential = { source: 'none' }
       if (!match.route.public) {
-        credential = readSessionCredential(request.headers)
-        await assertSessionCredentialActive(env.DB, credential.sessionId)
+        credential = await resolveActiveSessionCredential(env.DB, readSessionCredential(request.headers))
       }
       if (match.route.public && match.route.rateLimit) {
         await assertRateLimit(env.DB, match.route.rateLimit, request, body, credential)
@@ -896,10 +897,17 @@ export default {
         refreshCachedSnapshotState(service)
         refreshWorkspaceBrandingCache(service, credential.sessionId)
       }
+      if (match.route.sessionCookie === 'set' && !(result instanceof Response)) {
+        const sessionId = readResultSessionId(result)
+        if (!sessionId) {
+          throw new UnauthorizedException('Authenticated session issuance failed')
+        }
+        issuedSessionCredential = await issueSessionCredential(env.DB, sessionId)
+      }
 
       const response = result instanceof Response
         ? withApiSecurityHeaders(result, corsHeaders)
-        : json(result, 200, buildResponseHeaders(corsHeaders, match.route, result))
+        : json(result, 200, buildResponseHeaders(corsHeaders, match.route, result, issuedSessionCredential))
       const durationMs = Date.now() - startedAt
       if (durationMs >= 1200) {
         ctx.waitUntil(recordRuntimeEvent(env.DB, { route: routeLabel, status: response.status, durationMs, category: 'latency' }))
@@ -1363,6 +1371,14 @@ function secureEqual(left: string, right: string) {
 
 function hex(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function base64Url(bytes: Uint8Array) {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
 }
 
 async function claimBillingWebhookEvent(db: D1Database, provider: string, eventId: string) {
@@ -1922,7 +1938,9 @@ function readPurchaseOrderStatus(value: unknown) {
   return 'SENT'
 }
 
-function readBearerSessionId(authorization: string | null) {
+const opaqueSessionCredentialPattern = /^oo_s1_[A-Za-z0-9_-]{43}$/
+
+function readBearerSessionSecret(authorization: string | null) {
   const [scheme, token] = authorization?.trim().split(/\s+/, 2) ?? []
   if (scheme?.toLowerCase() !== 'bearer' || !token) {
     return undefined
@@ -1931,30 +1949,47 @@ function readBearerSessionId(authorization: string | null) {
 }
 
 function readSessionCredential(headers: Headers): AuthCredential {
-  const cookieSessionId = readCookie(headers.get('Cookie'), 'oo_session')
-  if (cookieSessionId) {
-    return { sessionId: cookieSessionId, source: 'cookie' }
+  const cookieSessionSecret = readCookie(headers.get('Cookie'), 'oo_session')
+  if (cookieSessionSecret) {
+    return { sessionSecret: cookieSessionSecret, source: 'cookie' }
   }
-  const bearerSessionId = readBearerSessionId(headers.get('Authorization'))
-  if (bearerSessionId) {
-    return { sessionId: bearerSessionId, source: 'bearer' }
+  const bearerSessionSecret = readBearerSessionSecret(headers.get('Authorization'))
+  if (bearerSessionSecret) {
+    return { sessionSecret: bearerSessionSecret, source: 'bearer' }
   }
   return { source: 'none' }
 }
 
-async function assertSessionCredentialActive(db: D1Database, sessionId: string | undefined) {
-  if (!sessionId) {
+export function createSessionCredential() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  return `oo_s1_${base64Url(bytes)}`
+}
+
+export function isOpaqueSessionCredential(value: string | undefined): value is string {
+  return typeof value === 'string' && opaqueSessionCredentialPattern.test(value)
+}
+
+export async function hashSessionCredential(sessionSecret: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionSecret))
+  return `sha256:v1:${hex(digest)}`
+}
+
+export async function resolveActiveSessionCredential(db: D1Database, credential: AuthCredential): Promise<AuthCredential> {
+  const sessionSecret = credential.sessionSecret
+  if (!isOpaqueSessionCredential(sessionSecret)) {
     throw new UnauthorizedException('Authentication required')
   }
+  const secretHash = await hashSessionCredential(sessionSecret)
   const row = await db
     .prepare(
-      `SELECT status, idle_expires_at, expires_at
-       FROM auth_sessions
-       WHERE id = ?1
+      `SELECT sessions.id, sessions.status, sessions.idle_expires_at, sessions.expires_at
+       FROM auth_session_credentials AS credentials
+       INNER JOIN auth_sessions AS sessions ON sessions.id = credentials.session_id
+       WHERE credentials.secret_hash = ?1
        LIMIT 1`,
     )
-    .bind(sessionId)
-    .first<{ status: string; idle_expires_at: string; expires_at: string }>()
+    .bind(secretHash)
+    .first<{ id: string; status: string; idle_expires_at: string; expires_at: string }>()
   const now = Date.now()
   const idleExpiresAt = row ? Date.parse(row.idle_expires_at) : Number.NaN
   const expiresAt = row ? Date.parse(row.expires_at) : Number.NaN
@@ -1968,6 +2003,30 @@ async function assertSessionCredentialActive(db: D1Database, sessionId: string |
   ) {
     throw new UnauthorizedException('Authentication required')
   }
+  return { ...credential, sessionId: row.id }
+}
+
+async function issueSessionCredential(db: D1Database, sessionId: string) {
+  const sessionSecret = createSessionCredential()
+  const secretHash = await hashSessionCredential(sessionSecret)
+  const issuedAt = new Date().toISOString()
+  await db
+    .prepare(
+      `INSERT INTO auth_session_credentials (
+         session_id, secret_hash, credential_version, issued_at, revoked_at, revoked_reason, updated_at
+       )
+       VALUES (?1, ?2, 1, ?3, NULL, NULL, ?3)
+       ON CONFLICT(session_id) DO UPDATE SET
+         secret_hash = excluded.secret_hash,
+         credential_version = excluded.credential_version,
+         issued_at = excluded.issued_at,
+         revoked_at = NULL,
+         revoked_reason = NULL,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(sessionId, secretHash, issuedAt)
+    .run()
+  return sessionSecret
 }
 
 function readCookie(cookieHeader: string | null, name: string) {
@@ -1975,7 +2034,11 @@ function readCookie(cookieHeader: string | null, name: string) {
   for (const cookie of cookies) {
     const [rawKey, ...rawValue] = cookie.trim().split('=')
     if (rawKey === name) {
-      return decodeURIComponent(rawValue.join('='))
+      try {
+        return decodeURIComponent(rawValue.join('='))
+      } catch {
+        return undefined
+      }
     }
   }
   return undefined
@@ -1983,10 +2046,10 @@ function readCookie(cookieHeader: string | null, name: string) {
 
 async function assertPersistenceReady(db: D1Database) {
   if (!persistenceReadyPromise) {
-    persistenceReadyPromise = db
-      .prepare('SELECT metadata_key FROM persistence_metadata LIMIT 1')
-      .first()
-      .then(() => undefined)
+    persistenceReadyPromise = Promise.all([
+      db.prepare('SELECT metadata_key FROM persistence_metadata LIMIT 1').first(),
+      db.prepare('SELECT session_id FROM auth_session_credentials LIMIT 1').first(),
+    ]).then(() => undefined)
   }
   try {
     await persistenceReadyPromise
@@ -2917,6 +2980,17 @@ async function hydrateNormalizedState(db: D1Database, serviceState: ServiceState
   if (sessions.length > 0) {
     serviceState.sessions = sessions
   } else if (Array.isArray(serviceState.sessions) && serviceState.sessions.length > 0) {
+    const revokedAt = new Date().toISOString()
+    serviceState.sessions = serviceState.sessions.map((session) =>
+      session.status === 'ACTIVE'
+        ? {
+            ...session,
+            status: 'REVOKED',
+            revokedAt,
+            revokedReason: 'LEGACY_SESSION_CREDENTIAL_REVOKED',
+          }
+        : session,
+    )
     await persistAuthSessions(db, serviceState.sessions, new Date().toISOString())
   }
   const mfaRows = await db
@@ -7488,7 +7562,7 @@ function trailingNumber(value: string) {
   return match ? Number(match[1]) : 0
 }
 
-function buildCorsHeaders(origin: string | null, configuredOrigins: string | undefined) {
+export function buildCorsHeaders(origin: string | null, configuredOrigins: string | undefined) {
   const allowedOrigins = parseCsv(configuredOrigins)
   const effectiveOrigins = allowedOrigins.length > 0 ? allowedOrigins : LOCAL_CORS_ORIGINS
   const headers: Record<string, string> = { Vary: 'Origin' }
@@ -7503,12 +7577,17 @@ function buildCorsHeaders(origin: string | null, configuredOrigins: string | und
   return headers
 }
 
-function buildResponseHeaders(headers: HeadersInit, route: Route, result: unknown) {
+function buildResponseHeaders(
+  headers: HeadersInit,
+  route: Route,
+  result: unknown,
+  issuedSessionCredential?: string,
+) {
   const responseHeaders = new Headers(headers)
   if (route.sessionCookie === 'set') {
     const sessionId = readResultSessionId(result)
-    if (sessionId) {
-      responseHeaders.set('Set-Cookie', buildSessionCookie(sessionId, tenantSessionCookieMaxAgeSeconds))
+    if (sessionId && issuedSessionCredential) {
+      responseHeaders.set('Set-Cookie', buildSessionCookie(issuedSessionCredential, tenantSessionCookieMaxAgeSeconds))
     }
   }
   if (route.sessionCookie === 'clear') {
@@ -7530,31 +7609,28 @@ function buildSessionCookie(value: string, maxAgeSeconds: number) {
   return `oo_session=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=None`
 }
 
-function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]) {
-  return allowedOrigins.some((allowedOrigin) => {
-    if (allowedOrigin === origin) {
-      return true
-    }
-    if (!allowedOrigin.includes('*')) {
-      return false
-    }
-    return wildcardOriginMatches(origin, allowedOrigin)
-  })
-}
-
-function wildcardOriginMatches(origin: string, allowedOrigin: string) {
+export function isAllowedCorsOrigin(origin: string, allowedOrigins: string[]) {
   try {
     const parsedOrigin = new URL(origin)
-    const parsedAllowed = new URL(allowedOrigin.replace('*.', 'wildcard.'))
-    const allowedHost = parsedAllowed.hostname.replace(/^wildcard\./, '')
-
-    return (
-      parsedOrigin.protocol === parsedAllowed.protocol &&
-      parsedOrigin.hostname.endsWith(`.${allowedHost}`) &&
-      !parsedOrigin.username &&
-      !parsedOrigin.password &&
-      parsedOrigin.port === parsedAllowed.port
-    )
+    if (parsedOrigin.origin !== origin || parsedOrigin.username || parsedOrigin.password) {
+      return false
+    }
+    return allowedOrigins.some((allowedOrigin) => {
+      if (!allowedOrigin || allowedOrigin.includes('*')) {
+        return false
+      }
+      try {
+        const parsedAllowed = new URL(allowedOrigin)
+        return (
+          parsedAllowed.origin === allowedOrigin &&
+          !parsedAllowed.username &&
+          !parsedAllowed.password &&
+          parsedAllowed.origin === parsedOrigin.origin
+        )
+      } catch {
+        return false
+      }
+    })
   } catch {
     return false
   }

@@ -92,13 +92,13 @@ const testCases = [
       `POST /auth/login with ${loginEmail}.`,
       'Inspect Set-Cookie security attributes.',
       'Call GET /me with the cookie.',
-      'Call GET /me with bearer fallback for tooling compatibility.',
+      'Call GET /me with the opaque bearer credential only for tooling compatibility.',
     ],
     assertions: [
       'Login returns a session for org-nxl Admin.',
       'Set-Cookie includes HttpOnly, Secure, SameSite=None, and oo_session.',
       '/me works with cookie auth.',
-      '/me works with bearer fallback.',
+      '/me works with the opaque bearer fallback, while the audit session ID is rejected as a credential.',
     ],
     execute: async () => {
       const login = await apiFetch(
@@ -116,13 +116,15 @@ const testCases = [
       assert(/HttpOnly/i.test(setCookie), 'session cookie should be HttpOnly')
       assert(/Secure/i.test(setCookie), 'session cookie should be Secure')
       assert(/SameSite=None/i.test(setCookie), 'session cookie should use SameSite=None')
-      const sessionId = cookieJar.get('oo_session')
-      assert(sessionId, 'cookie jar should capture oo_session')
+      const sessionCredential = cookieJar.get('oo_session')
+      assert(sessionCredential, 'cookie jar should capture oo_session')
 
       const session = login.json?.data?.session
+      const sessionId = session?.id
       assert(session?.email === loginEmail, 'login session should match requested email')
       assert(session?.organizationId === 'org-nxl', 'admin demo should be scoped to org-nxl')
       assert(session?.role === 'Admin', 'admin demo should have Admin role')
+      assert(sessionCredential !== sessionId, 'opaque cookie credential must not equal the audit session ID')
       csrfToken = login.json?.data?.csrfToken ?? null
       assert(csrfToken && csrfToken.startsWith('csrf_'), 'login should return a session-bound CSRF token')
 
@@ -131,11 +133,13 @@ const testCases = [
       assert(meByCookie.json?.data?.session?.id === sessionId, '/me should resolve the same cookie session')
       assert(meByCookie.json?.data?.csrfToken === csrfToken, '/me should return the same CSRF token for the session')
 
-      const meByBearer = await apiFetch('/me', { headers: { Authorization: `Bearer ${sessionId}` } }, { useCookie: false })
-      assertStatus(meByBearer, 200, '/me should keep bearer fallback for test tooling')
+      const meByBearer = await apiFetch('/me', { headers: { Authorization: `Bearer ${sessionCredential}` } }, { useCookie: false })
+      assertStatus(meByBearer, 200, '/me should keep opaque bearer fallback for test tooling')
+      const meByLegacyId = await apiFetch('/me', { headers: { Authorization: `Bearer ${sessionId}` } }, { useCookie: false })
+      assertStatus(meByLegacyId, 401, '/me must reject the audit session ID as a credential')
 
       return [
-        `Session id: ${sessionId}`,
+        `Session record: ${sessionId}`,
         `Tenant: ${session.organizationId}`,
         `Role: ${session.role}`,
       ]

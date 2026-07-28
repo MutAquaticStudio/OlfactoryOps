@@ -73,7 +73,7 @@ try {
     assert(/HttpOnly/i.test(setCookie), 'signup cookie should be HttpOnly')
     assert(/Secure/i.test(setCookie), 'signup cookie should be Secure')
     assert(/SameSite=None/i.test(setCookie), 'signup cookie should use SameSite=None')
-    assert(cookieJar.get('oo_session') === signupData.session.id, 'cookie jar should capture the signup session')
+    assert(cookieJar.get('oo_session') !== signupData.session.id, 'signup cookie must use an opaque credential, not the session record ID')
   } else {
     evidence.push('Signup cookie: not emitted by local Nest API; Worker edge wrapper owns cookie issuance')
   }
