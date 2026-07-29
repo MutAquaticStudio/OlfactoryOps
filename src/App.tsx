@@ -3455,7 +3455,7 @@ function Sidebar({
             {!collapsed && (
               <div>
                 <div className="wordmark">{brandName}</div>
-                <div className="mono-small">{isSystemBrand ? 'OlfactoryOps OS' : uiText('Powered by OlfactoryOps')}</div>
+                <div className="mono-small">{isSystemBrand ? uiText('Fragrance operations') : uiText('Powered by OlfactoryOps')}</div>
               </div>
             )}
           </>
@@ -3480,7 +3480,7 @@ function Sidebar({
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
               const displayDomain = domain ? domainDisplayForSession(domain, session) : undefined
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? uiText('OlfactoryOps Console') : displayDomain?.shortName ?? key
+              const label = key === 'dashboard' ? uiText('Workspace overview') : displayDomain?.shortName ?? key
               const isActive = activeKey === key
               return (
                 <button
@@ -3492,9 +3492,6 @@ function Sidebar({
                 >
                   <Icon size={18} />
                   {!collapsed && <span>{label}</span>}
-                  {!collapsed && displayDomain && isInternalAdminSession(session) && (
-                    <StatusDot status={displayDomain.status} />
-                  )}
                 </button>
               )
             })}
@@ -3545,7 +3542,7 @@ function Topbar({
       </button>
       <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
-        <h1>{displayDomain ? displayDomain.name : uiText('OlfactoryOps Console')}</h1>
+        <h1>{displayDomain ? displayDomain.name : uiText('Workspace overview')}</h1>
       </div>
       <button className="command-button" type="button" onClick={onCommand}>
         <Search size={17} />
@@ -3554,7 +3551,7 @@ function Topbar({
       </button>
       <div className="topbar-actions">
         {isInternalAdminSession(session) ? (
-          <DataTag icon={ShieldCheck} label="Workspace guard" value="On" tone="green" />
+          <DataTag icon={ShieldCheck} label={uiText('Secure workspace')} value={uiText('Protected')} tone="green" />
         ) : null}
         <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label={uiText('Open user settings')}>
           <span className="user-avatar">{userSettings.displayName.slice(0, 1).toUpperCase()}</span>
@@ -3874,7 +3871,7 @@ function UserSettingsForm({
                 setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
               }
             >
-              <option value="dashboard">OlfactoryOps Console</option>
+              <option value="dashboard">Workspace overview</option>
               {landingDomains.map((domain) => {
                 const displayDomain = domainDisplayForSession(domain, session)
                 return (
@@ -4217,7 +4214,7 @@ function AuthGateway({
               </div>
               <div>
                 <div className="wordmark">OlfactoryOps</div>
-                <div className="mono-small">OlfactoryOps OS</div>
+                <div className="mono-small">Fragrance operations</div>
               </div>
             </div>
             <h1>
@@ -4230,7 +4227,7 @@ function AuthGateway({
                     : 'Choose a new password')}
             </h1>
             <p className="lead">
-              Secure access starts here. We confirm your account, role, and workspace settings before opening OlfactoryOps.
+              Secure access for your workspace. We confirm your account, role, and workspace settings before you begin.
             </p>
             {mode === 'login' || mode === 'signup' ? (
               <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
@@ -4392,7 +4389,7 @@ const Dashboard = memo(function Dashboard({
     <div className={`dashboard-grid${canViewUserOverview ? ' has-owner-user-overview' : ''}`}>
       <Panel
         className="hero-panel"
-        title="OlfactoryOps Console"
+        title="Workspace overview"
         icon={Gauge}
         right={internalAdminView ? <StatusBadge status="active" /> : undefined}
       >
@@ -4400,13 +4397,13 @@ const Dashboard = memo(function Dashboard({
           <div>
             <p className="lead">
               {internalAdminView
-                ? 'Full SaaS operating layer across the operating domains, with the core R&D value stream live inside the broader enterprise product surface.'
-                : 'Full OlfactoryOps operating layer across the operating domains, with the core R&D value stream live inside the broader business product surface.'}
+                ? 'A clear view of your studio, from creative work through material readiness and fulfilment. Administrative controls stay available without taking over the everyday workspace.'
+                : 'Start with the work that matters today, then move naturally from formulas to materials, inventory and production.'}
             </p>
             <div className="hero-actions">
               {primaryDomain ? (
                 <button className="primary-button" type="button" onClick={() => onNavigate(primaryDomain.key)}>
-                  Open {primaryDomainDisplay?.shortName ?? primaryDomain.name}
+                  Continue in {primaryDomainDisplay?.shortName ?? primaryDomain.name}
                   <ChevronRight size={16} />
                 </button>
               ) : null}
@@ -4420,9 +4417,9 @@ const Dashboard = memo(function Dashboard({
           <div className="hero-metrics">
             {internalAdminView ? (
               <>
-                <Metric label="Modules live" value={`${stats.done}/16`} />
-                <Metric label="Avg coverage" value={`${stats.avgCoverage}%`} />
-                <Metric label="Risk flags" value={String(stats.risks)} />
+                <Metric label="Workspaces ready" value={`${stats.done}/16`} />
+                <Metric label="Coverage" value={`${stats.avgCoverage}%`} />
+                <Metric label="Needs attention" value={String(stats.risks)} />
               </>
             ) : (
               <Metric label="Modules" value={String(visibleModuleCount)} />
@@ -4434,19 +4431,19 @@ const Dashboard = memo(function Dashboard({
       {canViewUserOverview ? <OwnerUserOverview session={session} onNavigate={onNavigate} /> : null}
 
       {visibleWorkflowNodes.length > 0 ? (
-        <Panel className="workflow-panel" title="Operating Value Stream" icon={Activity}>
+        <Panel className="workflow-panel" title="How work moves" icon={Activity}>
           <WorkflowGraph nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
         </Panel>
       ) : null}
 
-      <Panel className="matrix-panel" title={internalAdminView ? 'Domain Health Matrix' : 'Workspace Modules'} icon={Database}>
+      <Panel className="matrix-panel" title={internalAdminView ? 'Workspace map' : 'Your modules'} icon={Database}>
         <DomainMatrix session={session} onNavigate={onNavigate} />
       </Panel>
 
       {canViewEnterpriseReadiness ? <EnterpriseReadiness session={session} onOpenModal={onOpenModal} /> : null}
 
       {canViewMovementLedger ? (
-        <Panel className="ledger-panel" title="Movement Ledger" icon={Boxes}>
+        <Panel className="ledger-panel" title="Recent material activity" icon={Boxes}>
           <MovementTable movements={movements.slice(0, 6)} />
         </Panel>
       ) : null}
@@ -10326,6 +10323,10 @@ const localeChangeEvent = 'olfactoryops.locale.change'
 const localeStorageKey = 'olfactoryops.locale'
 
 const vietnameseUiText: Record<string, string> = {
+  'Workspace overview': 'Tổng quan workspace',
+  'Fragrance operations': 'Vận hành nước hoa',
+  'Secure workspace': 'Workspace an toàn',
+  Protected: 'Đã bảo vệ',
   Command: 'Điều hành',
   'R&D Spine': 'Nghiên cứu',
   Operations: 'Vận hành',
@@ -16696,7 +16697,7 @@ function CommandPalette({
     internalAdminView && (domainVisibleForSession('saas', session) || sessionHasPermission(session, 'audit.export'))
   const commands = useMemo(
     () => [
-      { label: 'Open OlfactoryOps Console', detail: 'Dashboard', action: () => onNavigate('dashboard') },
+      { label: 'Open workspace overview', detail: 'Overview', action: () => onNavigate('dashboard') },
       ...commandDomains.map((domain) => {
         const displayDomain = domainDisplayForSession(domain, session)
         return {
