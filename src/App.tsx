@@ -4925,6 +4925,7 @@ function MaterialWorkspace({
   const selectedStock = stockByMaterialId.get(selected.id)
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
+  const [catalogueEnriching, setCatalogueEnriching] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
   const [compliance, setCompliance] = useState<MaterialComplianceProfile | null>(null)
   const [complianceSaving, setComplianceSaving] = useState(false)
@@ -5286,6 +5287,32 @@ function MaterialWorkspace({
     }
   }
 
+  async function enrichFromLluchCatalogue() {
+    if (!canUpdateMaterials) {
+      setMaterialStatus('Current role is not authorized to enrich material metadata.')
+      return
+    }
+    setCatalogueEnriching(true)
+    setMaterialStatus('Applying Lluch catalogue references and curated olfactive profiles...')
+    try {
+      const payload = await requestApi<{ updated: number; materials: Material[]; source: { catalogueVersion: string } }>('/materials/catalogues/lluch-2026/enrich', {
+        method: 'POST',
+        headers: idempotencyHeaders(),
+      })
+      const refreshed = await requestApi<Material[]>('/materials')
+      onMaterialsChange(refreshed)
+      setMaterialStatus(
+        payload.updated > 0
+          ? `Lluch ${payload.source.catalogueVersion} enriched ${payload.updated} matching material record(s).`
+          : 'Lluch catalogue enrichment is already current for this workspace.',
+      )
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Lluch catalogue enrichment could not be completed')
+    } finally {
+      setCatalogueEnriching(false)
+    }
+  }
+
   async function fillFromPubChem() {
     if (!canUpdateMaterials) {
       setMaterialStatus('Current role is not authorized to enrich data from PubChem.')
@@ -5437,6 +5464,20 @@ function MaterialWorkspace({
               Commit valid rows
             </button>
           </div>
+          <div className="catalogue-enrichment-row">
+            <div>
+              <strong>Lluch catalogue enrichment</strong>
+              <p>Updates only matching materials with supplier references and curated olfactive metadata. It never changes CAS, IFRA, cost, compliance, lots, or stock.</p>
+            </div>
+            <button
+              className="ghost-button small"
+              type="button"
+              disabled={!canUpdateMaterials || catalogueEnriching}
+              onClick={() => void enrichFromLluchCatalogue()}
+            >
+              {catalogueEnriching ? 'Updating...' : 'Apply Lluch 2026'}
+            </button>
+          </div>
           <p className="muted-copy">{importStatus}</p>
           {importEntity === 'lots' ? <p className="muted-copy">Map one material identifier: Material ID, CAS, or material name. Expiry must be YYYY-MM-DD; QC status defaults to QUARANTINE.</p> : null}
           {importJob?.errors.length ? (
@@ -5489,6 +5530,40 @@ function MaterialWorkspace({
             <span key={tag}>{tag}</span>
           ))}
         </div>
+        {selected.olfactiveProfile ? (
+          <section className="olfactive-profile" aria-label="Olfactive profile">
+            <div className="section-heading compact-heading">
+              <div>
+                <span className="eyebrow">Olfactive profile</span>
+                <strong>{selected.olfactiveProfile.primaryFamily}</strong>
+              </div>
+              <StatusBadge
+                status={selected.olfactiveProfile.status === 'CURATED' ? 'stable' : 'review'}
+                label={selected.olfactiveProfile.status === 'CURATED' ? 'Curated' : 'Review required'}
+              />
+            </div>
+            <p>{selected.olfactiveProfile.description}</p>
+            <div className="tag-row">
+              {selected.olfactiveProfile.facets.map((facet) => <DataTag key={facet} label="Facet" value={facet} />)}
+            </div>
+            <small>{selected.olfactiveProfile.source} / {selected.olfactiveProfile.version}</small>
+          </section>
+        ) : null}
+        {selected.supplierCatalogueReferences?.length ? (
+          <section className="catalogue-reference-list" aria-label="Supplier catalogue references">
+            <span className="eyebrow">Supplier catalogue reference</span>
+            {selected.supplierCatalogueReferences.map((reference) => (
+              <div className="catalogue-reference" key={`${reference.supplier}-${reference.catalogueVersion}-${reference.productName}`}>
+                <div>
+                  <strong>{reference.productName}</strong>
+                  <span>{reference.supplier} / {reference.category} / p. {reference.page}</span>
+                </div>
+                <DataTag label={reference.match === 'EXACT_PRODUCT' ? 'Match' : 'Reference'} value={reference.productCas} tone={reference.match === 'RELATED_VARIANT' ? 'amber' : 'blue'} />
+                {reference.note ? <p>{reference.note}</p> : null}
+              </div>
+            ))}
+          </section>
+        ) : null}
         <div className="material-form-grid">
           <label className="field-row">
             <span>Family</span>

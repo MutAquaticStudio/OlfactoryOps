@@ -7,6 +7,7 @@ import {
 } from '../shared/http-error.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { internalPhases } from '../data/internal-phases.js'
+import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source } from '../../../src/data/lluch-catalogue-2026.js'
 import {
   auditEvents,
   auditExportJobs,
@@ -1551,6 +1552,35 @@ export class NorthStarService {
     this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
     const audit = this.recordAudit('material.update', id, session.userId, 'allowed')
     return { data: { material: updated, audit, invariant: 'material edits preserve field provenance' } }
+  }
+
+  enrichMaterialsFromLluchCatalogue() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    let updated = 0
+    const enrichedMaterials: Material[] = []
+    this.materialRecords = this.materialRecords.map((material) => {
+      if ((material.organizationId || 'org-nxl') !== session.organizationId) {
+        return material
+      }
+      const enrichment = enrichMaterialFromLluchCatalogue(material)
+      if (!enrichment.changed) {
+        return material
+      }
+      updated += 1
+      enrichedMaterials.push(enrichment.material)
+      return enrichment.material
+    })
+    const audit = this.recordAudit('material.catalogue.enrich', `lluch:${lluchCatalogue2026Source.catalogueVersion}`, session.userId, 'allowed')
+    return {
+      data: {
+        updated,
+        materials: enrichedMaterials,
+        source: lluchCatalogue2026Source,
+        audit,
+        invariant: 'Catalogue enrichment is tenant-scoped, idempotent, and does not alter CAS, cost, IFRA, compliance, lots, or inventory movements',
+      },
+    }
   }
 
   ingestMaterialDocument(id: string, body: MaterialIngestionBody) {

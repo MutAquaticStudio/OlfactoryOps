@@ -1385,6 +1385,25 @@ describe('NorthStarService', () => {
     )
   })
 
+  it('enriches only tenant-visible materials from the Lluch catalogue without changing controlled data', () => {
+    const service = createAuthenticatedService()
+    const before = service.material('mat-bergamot').data
+
+    const result = service.enrichMaterialsFromLluchCatalogue().data
+    const bergamot = service.material('mat-bergamot').data
+    const vanillin = service.material('mat-vanillin').data
+
+    expect(result.updated).toBeGreaterThan(0)
+    expect(result.source.catalogueVersion).toBe('2026-07-16')
+    expect(bergamot.cas).toBe(before.cas)
+    expect(bergamot.ifraLimit).toBe(before.ifraLimit)
+    expect(bergamot.costPerGram).toBe(before.costPerGram)
+    expect(bergamot.supplierCatalogueReferences?.[0]?.productName).toContain('BERGAMOT FUROC./FREE')
+    expect(bergamot.olfactiveProfile?.status).toBe('REVIEW_REQUIRED')
+    expect(vanillin.supplierCatalogueReferences?.[0]?.match).toBe('EXACT_PRODUCT')
+    expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(0)
+  })
+
   it('allows Manager role to update material metadata', () => {
     const service = createTestService()
     service.login(adminEmail, adminPassword)

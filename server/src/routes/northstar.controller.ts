@@ -230,6 +230,11 @@ export class NorthStarController {
     return this.northStar.updateMaterial(id, body)
   }
 
+  @Post('materials/catalogues/lluch-2026/enrich')
+  enrichMaterialsFromLluchCatalogue() {
+    return this.northStar.enrichMaterialsFromLluchCatalogue()
+  }
+
   @Post('materials/:id/ingest')
   ingestMaterialDocument(
     @Param('id') id: string,

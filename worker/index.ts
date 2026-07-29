@@ -556,6 +556,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
+  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/enrich', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service }) => service.enrichMaterialsFromLluchCatalogue() },
   { method: 'GET', pattern: '/materials/:id', handler: ({ service, params }) => service.material(params.id) },
   { method: 'PATCH', pattern: '/materials/:id', mutates: true, handler: ({ service, params, body }) => service.updateMaterial(params.id, body) },
   { method: 'GET', pattern: '/materials/:id/compliance', handler: ({ service, params }) => service.materialCompliance(params.id) },

@@ -72,7 +72,36 @@ export interface Material {
   ifraLimit: number
   costPerGram: number
   odor: string[]
+  /** Curated sensory metadata. It is descriptive only and never compliance evidence. */
+  olfactiveProfile?: MaterialOlfactiveProfile
+  /** Supplier catalogue references are traceable sourcing metadata, not an approved supplier designation. */
+  supplierCatalogueReferences?: MaterialSupplierCatalogueReference[]
   provenance: MaterialProvenance[]
+}
+
+export interface MaterialOlfactiveProfile {
+  primaryFamily: string
+  descriptors: string[]
+  facets: string[]
+  description: string
+  status: 'CURATED' | 'REVIEW_REQUIRED'
+  source: string
+  version: string
+  reviewedAt: string
+}
+
+export interface MaterialSupplierCatalogueReference {
+  supplier: string
+  catalogue: string
+  catalogueVersion: string
+  category: 'Synthetic aroma chemical' | 'Natural aroma chemical' | 'Natural product' | 'Organic product'
+  productName: string
+  productCas: string
+  einecs?: string
+  fema?: string
+  page: number
+  match: 'EXACT_PRODUCT' | 'CAS_EQUIVALENT' | 'RELATED_VARIANT'
+  note?: string
 }
 
 export interface MaterialProvenance {

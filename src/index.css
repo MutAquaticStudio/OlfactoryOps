@@ -3432,6 +3432,102 @@ kbd {
   margin-bottom: 12px;
 }
 
+.catalogue-enrichment-row,
+.olfactive-profile,
+.catalogue-reference-list,
+.catalogue-reference {
+  min-width: 0;
+}
+
+.catalogue-enrichment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.catalogue-enrichment-row strong,
+.olfactive-profile strong,
+.catalogue-reference strong {
+  display: block;
+}
+
+.catalogue-enrichment-row p,
+.olfactive-profile p,
+.catalogue-reference p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.catalogue-enrichment-row p {
+  max-width: 580px;
+}
+
+.olfactive-profile,
+.catalogue-reference-list {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.olfactive-profile > small {
+  display: block;
+  margin-top: 10px;
+  color: var(--text-3);
+  font-size: 0.76rem;
+}
+
+.catalogue-reference-list {
+  display: grid;
+  gap: 8px;
+}
+
+.catalogue-reference {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  align-items: start;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.catalogue-reference > p {
+  grid-column: 1 / -1;
+}
+
+.catalogue-reference span:not(.data-tag) {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 640px) {
+  .catalogue-enrichment-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .catalogue-enrichment-row > button {
+    width: 100%;
+  }
+
+  .catalogue-reference {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .catalogue-reference > .data-tag {
+    justify-self: start;
+  }
+}
+
 .production-timeline {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
