@@ -86,6 +86,12 @@ function FormulaArtifact({ artifact }: { artifact: AgentArtifact }) {
   if (artifact.type === 'formula_revision_comparison') {
     return <div className="agent-artifact-list">{artifact.data.summary.map((line) => <p key={line}>{line}</p>)}</div>
   }
+  if (artifact.type === 'design_directions') {
+    return <div className="agent-artifact-list">{artifact.data.directions.map((direction) => <div key={direction.directionId}><strong>{direction.title}</strong><span>{direction.pyramidSummary} / {direction.availability} / {direction.complianceStatus}</span></div>)}</div>
+  }
+  if (artifact.type === 'optimizer_candidates') {
+    return <div className="agent-artifact-list">{artifact.data.candidates.map((candidate) => <div key={candidate.candidateId}><strong>{candidate.title}</strong><span>Score {candidate.score.toFixed(1)} / {candidate.complianceStatus} / {candidate.availability}</span></div>)}</div>
+  }
   return <div className="agent-artifact-list">{artifact.data.assumptions.map((line) => <p key={line}>{line}</p>)}{artifact.data.warnings.map((line) => <small key={line}>{line}</small>)}</div>
 }
 

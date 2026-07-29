@@ -13,7 +13,15 @@ import {
   configuredAgentProvider,
   ensureAgentReadAccess,
   executeDeterministicAgentRun,
+  type AgentActor,
 } from './agent-runtime.js'
+import {
+  FormulaIntelligenceStore,
+  auditFormulaIntelligence,
+  createDesignProjectRun,
+  createOptimizerRun,
+  executeFormulaIntelligenceRun,
+} from './formula-intelligence.js'
 import {
   PayloadTooLargeException,
   ForbiddenException,
@@ -558,6 +566,15 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/imports/preview', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.previewImport(body) },
   { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
+  { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
+  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/generate', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => generateFormulaDesignDirections(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/share', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => shareFormulaDesignDirection(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/feedback', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => submitFormulaDesignFeedback(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestFormulaDesignDraftSave(context) },
+  { method: 'POST', pattern: '/formula-intelligence/optimizer/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => startFormulaOptimizer(context) },
+  { method: 'POST', pattern: '/formula-intelligence/optimizer/runs/:id/candidates/:candidateId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestOptimizerDraftSave(context) },
   { method: 'POST', pattern: '/agent/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createAgentRun(context) },
   { method: 'GET', pattern: '/agent/runs', persistState: false, handler: ({ service, env }) => new AgentRuntimeStore(env.DB).list(ensureAgentReadAccess(service)) },
   { method: 'GET', pattern: '/agent/runs/:id', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).detail(ensureAgentReadAccess(service), params.id) },
@@ -800,7 +817,7 @@ async function createAgentRun(context: RouteContext) {
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.create(actor, context.body, configuredAgentProvider(context.env))
   const runId = result.data.run.id
-  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, runId))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, runId))
   return result
 }
 
@@ -808,7 +825,7 @@ async function resumeAgentRun(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.resume(actor, context.params.id)
-  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, context.params.id))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id))
   return result
 }
 
@@ -816,16 +833,33 @@ async function retryAgentNode(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.retryNode(actor, context.params.id, context.params.nodeId)
-  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, context.params.id))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id))
   return result
 }
 
 async function restartAgentRun(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
-  const prior = await new AgentRuntimeStore(context.env.DB).detail(actor, context.params.id)
-  const result = await new AgentRuntimeStore(context.env.DB).create(actor, { brief: prior.data.run.input_brief }, configuredAgentProvider(context.env))
-  context.ctx.waitUntil(executeDeterministicAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id))
+  const agentStore = new AgentRuntimeStore(context.env.DB)
+  const prior = await agentStore.detail(actor, context.params.id)
+  const result = await agentStore.create(actor, { brief: prior.data.run.input_brief }, configuredAgentProvider(context.env))
+  const intelligence = new FormulaIntelligenceStore(context.env.DB)
+  const mapped = await context.env.DB.prepare(
+    `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
+  ).bind(context.params.id, actor.organizationId, actor.userId).first()
+  if (mapped) {
+    const priorConfig = await intelligence.configForRun(actor, context.params.id)
+    await intelligence.createRunConfig(actor, result.data.run.id, priorConfig.config, formulaIntelligenceIdempotencyKey(context.request))
+  }
+  context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id))
   return { data: { previousRunId: context.params.id, run: result.data.run } }
+}
+
+async function executeAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string) {
+  const mapped = await store.database.prepare(
+    `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
+  ).bind(runId, actor.organizationId, actor.userId).first()
+  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId)
+  return executeDeterministicAgentRun(store, service, actor, runId)
 }
 
 async function resolveAgentConfirmation(context: RouteContext) {
@@ -859,6 +893,7 @@ async function resolveAgentConfirmation(context: RouteContext) {
     })),
   }).data.formula
   await store.attachSavedFormula(actor, context.params.id, context.params.confirmationId, updated.id)
+  await new FormulaIntelligenceStore(context.env.DB).markSavedFormula(actor, context.params.id, updated.id)
   return {
     data: {
       formula: updated,
@@ -866,6 +901,116 @@ async function resolveAgentConfirmation(context: RouteContext) {
       invariant: 'agent confirmation creates one editable draft and does not reserve or consume inventory',
     },
   }
+}
+
+function formulaIntelligenceIdempotencyKey(request: Request) {
+  const key = request.headers.get('Idempotency-Key')?.trim() ?? ''
+  if (key.length < 8 || key.length > 160) throw new UnprocessableEntityException('Idempotency-Key header must be between 8 and 160 characters')
+  return key
+}
+
+function formulaIntelligenceCanEdit(service: NorthStarService) {
+  return service.me().data.permissions.includes('formulas.edit')
+}
+
+function formulaIntelligenceCanView(service: NorthStarService) {
+  return service.me().data.permissions.includes('formulas.view')
+}
+
+function ensureFormulaIntelligencePermission(service: NorthStarService, permission: 'view' | 'edit') {
+  const allowed = permission === 'edit' ? formulaIntelligenceCanEdit(service) : formulaIntelligenceCanView(service)
+  if (!allowed) throw new ForbiddenException(`Formula Intelligence requires formulas.${permission}`)
+}
+
+function ensureFormulaIntelligenceExecutionAccess(service: NorthStarService) {
+  const granted = new Set(service.me().data.permissions)
+  for (const permission of ['formulas.viewSensitive', 'materials.view']) {
+    if (!granted.has(permission)) throw new ForbiddenException(`Formula Intelligence execution requires ${permission}`)
+  }
+}
+
+async function listDesignProjects(service: NorthStarService, env: Env) {
+  ensureFormulaIntelligencePermission(service, 'view')
+  const actor = ensureAgentReadAccess(service)
+  return { data: await new FormulaIntelligenceStore(env.DB).listDesignProjects(actor, formulaIntelligenceCanEdit(service)) }
+}
+
+async function createFormulaDesignProject(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'view')
+  const actor = ensureAgentReadAccess(context.service)
+  const project = await new FormulaIntelligenceStore(context.env.DB).createDesignProject(
+    actor,
+    context.body,
+    formulaIntelligenceIdempotencyKey(context.request),
+    context.service.me().data.session.brandId,
+  )
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.project.create', project.id)
+  return { data: { project } }
+}
+
+async function getFormulaDesignProject(service: NorthStarService, env: Env, projectId: string) {
+  ensureFormulaIntelligencePermission(service, 'view')
+  const actor = ensureAgentReadAccess(service)
+  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(actor, projectId, formulaIntelligenceCanEdit(service)) } }
+}
+
+async function generateFormulaDesignDirections(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  ensureFormulaIntelligenceExecutionAccess(context.service)
+  const actor = ensureAgentReadAccess(context.service)
+  const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request))
+  context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+  return { data: result }
+}
+
+async function shareFormulaDesignDirection(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  const actor = ensureAgentReadAccess(context.service)
+  await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId)
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.share', context.params.directionId)
+  return { data: { shared: true } }
+}
+
+async function submitFormulaDesignFeedback(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'view')
+  const actor = ensureAgentReadAccess(context.service)
+  await new FormulaIntelligenceStore(context.env.DB).feedback(actor, context.params.id, context.params.directionId, context.body)
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.feedback.create', context.params.directionId)
+  return { data: { accepted: true } }
+}
+
+async function requestFormulaDesignDraftSave(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  const actor = ensureAgentReadAccess(context.service)
+  const result = await new FormulaIntelligenceStore(context.env.DB).requestDirectionDraftSave(
+    actor, context.params.id, context.params.directionId, new AgentRuntimeStore(context.env.DB),
+  )
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.save.requested', context.params.directionId)
+  return { data: result }
+}
+
+async function startFormulaOptimizer(context: RouteContext) {
+  ensureFormulaIntelligenceExecutionAccess(context.service)
+  const actor = ensureAgentReadAccess(context.service)
+  const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request))
+  context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+  return { data: result }
+}
+
+async function requestOptimizerDraftSave(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  const actor = ensureAgentReadAccess(context.service)
+  let result
+  try {
+    result = await new FormulaIntelligenceStore(context.env.DB).requestCandidateDraftSave(
+      actor, context.params.id, context.params.candidateId, new AgentRuntimeStore(context.env.DB), context.service,
+    )
+  } catch (error) {
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.optimizer.candidate.save.denied', context.params.candidateId, 'blocked')
+    throw error
+  }
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.optimizer.candidate.save.requested', context.params.candidateId)
+  return { data: result }
 }
 
 export default {
@@ -1077,7 +1222,7 @@ async function runScheduledAgentRecovery(env: Env) {
       await hydrateSnapshots(env.DB, service, env)
       service.authenticateSession(run.session_id)
       const actor = actorFromService(service)
-      await executeDeterministicAgentRun(store, service, actor, job.run_id)
+      await executeAgentRun(store, service, actor, job.run_id)
     } catch (error) {
       console.error('Scheduled agent resume failed', error)
     }
@@ -7780,7 +7925,7 @@ export function buildCorsHeaders(origin: string | null, configuredOrigins: strin
   }
   headers['Access-Control-Allow-Origin'] = origin
   headers['Access-Control-Allow-Methods'] = 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS'
-  headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token'
+  headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token, Idempotency-Key'
   headers['Access-Control-Expose-Headers'] = 'Retry-After'
   headers['Access-Control-Allow-Credentials'] = 'true'
   return headers

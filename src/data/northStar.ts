@@ -8,6 +8,8 @@ export type DomainKey =
   | 'materials'
   | 'formulas'
   | 'formulaAgent'
+  | 'formulaDesignStudio'
+  | 'reformulationOptimizer'
   | 'inventory'
   | 'labUsage'
   | 'documents'
@@ -1884,6 +1886,42 @@ export const domains: DomainModule[] = [
     activity: 'Research runs are persisted, replayable, and require confirmation before an editable formula draft is saved',
   },
   {
+    key: 'formulaDesignStudio',
+    phase: 'AI Design',
+    name: 'Formula Design Studio',
+    shortName: 'Design Studio',
+    responsibility: 'Brand briefs, deterministic fragrance directions, perfumer sharing, and explicit draft save',
+    status: 'active',
+    health: 88,
+    risk: 'Deterministic mock mode is active; provider mode remains disabled until explicitly configured',
+    owner: 'Perfumer Team',
+    entities: ['DesignProject', 'CreativeBrief', 'Direction', 'BrandFeedback', 'AgentRun'],
+    features: ['Structured brand brief', 'Availability-first ranking', 'Creative directions', 'Safe sharing', 'Feedback', 'Explicit draft confirmation'],
+    invariants: ['Brand users cannot edit ratios or save formulas', 'Commercial evidence is capability-scoped', 'Draft save is non-consuming'],
+    apis: ['/api/v1/formula-intelligence/design-projects', '/api/v1/agent/runs/:id'],
+    permissions: ['formulas.view'],
+    screens: ['Brand brief', 'Direction review', 'Perfumer handoff', 'Draft confirmation'],
+    activity: 'Directions are generated from approved workspace materials and shared deliberately for brand review',
+  },
+  {
+    key: 'reformulationOptimizer',
+    phase: 'AI Optimize',
+    name: 'Reformulation Optimizer',
+    shortName: 'Optimizer',
+    responsibility: 'Immutable baseline comparisons for compliance, feasibility, cost, and composition change',
+    status: 'active',
+    health: 88,
+    risk: 'Candidate evidence is redacted without current cost or inventory permission',
+    owner: 'Perfumer Team',
+    entities: ['FormulaVersion', 'OptimizerRun', 'Candidate', 'Substitution', 'Confirmation'],
+    features: ['Immutable baseline', 'Compliance alternatives', 'Inventory recovery', 'Cost recovery', 'Candidate comparison', 'Explicit draft confirmation'],
+    invariants: ['No blocked materials in accepted candidates', 'Locked materials are preserved', 'No reservation or consumption on save'],
+    apis: ['/api/v1/formula-intelligence/optimizer/runs', '/api/v1/agent/runs/:id'],
+    permissions: ['formulas.viewSensitive'],
+    screens: ['Baseline selector', 'Candidate comparison', 'Evidence summary', 'Draft confirmation'],
+    activity: 'Candidates rank compliance feasibility, eligible availability, cost evidence, and composition change',
+  },
+  {
     key: 'inventory',
     phase: '6',
     name: 'Lab Inventory Core',
@@ -3752,6 +3790,12 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
   ],
   formulaAgent: [
     { id: 'AGENT-RUN', label: 'Formula research workflow', status: 'active', amount: 'Structured artifacts', owner: 'Perfumer' },
+  ],
+  formulaDesignStudio: [
+    { id: 'DESIGN-BRIEF', label: 'Formula design project', status: 'active', amount: 'Brand to perfumer', owner: 'Perfumer' },
+  ],
+  reformulationOptimizer: [
+    { id: 'OPT-RUN', label: 'Reformulation candidate run', status: 'active', amount: 'Immutable baseline', owner: 'Perfumer' },
   ],
   inventory: [
     { id: 'L-ISO-031', label: 'Iso E Super lot', status: 'stable', amount: '250g', owner: 'Inventory' },

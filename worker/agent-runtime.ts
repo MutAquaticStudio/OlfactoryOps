@@ -450,7 +450,7 @@ export class AgentRuntimeStore {
     return updated.meta.changes ? { ...job, leaseToken } : undefined
   }
 
-  async completeJob(runId: string, organizationId: string, status: 'WAITING' | 'FAILED' | 'CANCELLED') {
+  async completeJob(runId: string, organizationId: string, status: 'WAITING' | 'COMPLETED' | 'FAILED' | 'CANCELLED') {
     await this.db.prepare(
       `UPDATE agent_jobs SET status = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
        WHERE run_id = ? AND organization_id = ?`,
@@ -685,6 +685,8 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
     const inventoryId = await store.createNode(run, 'check_inventory', { proposal })
     await store.startNode(run, inventoryId, 'check_inventory')
     const preview = service.previewAgentFormula(proposal).data
+    if (!preview.cost) throw new UnprocessableEntityException('Legacy formula research requires costing access')
+    const cost = preview.cost
     await logTool(store, run, inventoryId, 'check_inventory', { proposal }, { availability: preview.availability })
     await store.completeNode(run, inventoryId, 'check_inventory', { availability: preview.availability }, 42)
     const formulaId = await store.createNode(run, 'generate_formula', { proposal })
@@ -701,7 +703,7 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
     const resultId = await store.createNode(run, 'prepare_result', { proposal })
     await store.startNode(run, resultId, 'prepare_result')
     const materialById = new Map(service.materials().data.map((material) => [material.id, material]))
-    const costById = new Map(preview.cost.lines.map((line) => [line.materialId, line]))
+    const costById = new Map(cost.lines.map((line) => [line.materialId, line]))
     await store.createArtifact(run, {
       type: 'formula_table', version: 1,
       data: {
@@ -716,12 +718,12 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
             availableGrams: availability?.availableGrams, estimatedUnitCost: cost?.unitCost, estimatedCost: cost?.lineCost,
             currency: 'USD', warnings: [] }
         }),
-        totalPercentage: 100, totalWeightGrams: proposal.targetGrams, totalEstimatedCost: preview.cost.totalCost, currency: 'USD',
+        totalPercentage: 100, totalWeightGrams: proposal.targetGrams, totalEstimatedCost: cost.totalCost, currency: 'USD',
       },
     })
     await store.createArtifact(run, { type: 'inventory_report', version: 1, data: { eligible: preview.availability } })
     await store.createArtifact(run, { type: 'cost_summary', version: 1, data: {
-      totalCost: preview.cost.totalCost, costPerGram: preview.cost.costPerGram, currency: 'USD', mostExpensiveMaterial: preview.cost.mostExpensiveMaterial,
+      totalCost: cost.totalCost, costPerGram: cost.costPerGram, currency: 'USD', mostExpensiveMaterial: cost.mostExpensiveMaterial,
     } })
     await store.createArtifact(run, { type: 'compliance_report', version: 1, data: {
       ifraCategory: proposal.ifraCategory,

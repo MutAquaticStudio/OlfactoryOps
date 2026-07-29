@@ -62,6 +62,71 @@ export type AgentEventType = z.infer<typeof agentEventTypeSchema>
 
 const opaqueRecordSchema = z.record(z.string(), z.unknown())
 
+export const formulaIntelligenceWorkflowKindSchema = z.enum([
+  'RESEARCH',
+  'DESIGN_STUDIO',
+  'REFORMULATION_OPTIMIZER',
+])
+export type FormulaIntelligenceWorkflowKind = z.infer<typeof formulaIntelligenceWorkflowKindSchema>
+
+export const agentFormulaProposalSchema = z.object({
+  name: z.string().min(1).max(240),
+  formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).default('FINE_FRAGRANCE'),
+  targetGrams: z.number().finite().positive().max(100_000),
+  concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).default('EDP'),
+  finalProductConcentrationPercent: z.number().finite().min(0.01).max(100),
+  ifraCategory: z.string().min(1).max(32).default('4'),
+  brief: z.string().max(6000).default(''),
+  ingredients: z.array(z.object({
+    materialId: z.string().min(1).max(160),
+    percentage: z.number().finite().min(0).max(100),
+    pyramidNote: z.enum(['Top', 'Middle', 'Base', 'Solvent']).optional(),
+    dilution: z.number().finite().min(0).max(100).optional(),
+  })).min(1).max(80),
+})
+export type AgentFormulaProposal = z.infer<typeof agentFormulaProposalSchema>
+
+export const formulaDesignBriefSchema = z.object({
+  name: z.string().min(2).max(240),
+  formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).default('FINE_FRAGRANCE'),
+  concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).default('EDP'),
+  finalProductConcentrationPercent: z.number().finite().min(0.01).max(100).default(20),
+  ifraCategory: z.string().min(1).max(32).default('4'),
+  targetMarkets: z.array(z.string().min(1).max(64)).max(12).default(['EU', 'US']),
+  creativeBrief: z.string().min(8).max(6000),
+  desiredNotes: z.array(z.string().min(1).max(80)).max(24).default([]),
+  avoidedNotes: z.array(z.string().min(1).max(80)).max(24).default([]),
+  lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
+  availabilityFirst: z.boolean().default(true),
+  targetGrams: z.number().finite().positive().max(100_000).default(100),
+})
+export type FormulaDesignBrief = z.infer<typeof formulaDesignBriefSchema>
+
+export const formulaOptimizerIntentSchema = z.enum(['COST', 'COMPLIANCE', 'INVENTORY', 'COMBINED'])
+export type FormulaOptimizerIntent = z.infer<typeof formulaOptimizerIntentSchema>
+
+export const formulaOptimizerRequestSchema = z.object({
+  baselineFormulaId: z.string().min(1).max(160),
+  baselineVersion: z.string().min(1).max(80),
+  intent: formulaOptimizerIntentSchema.default('COMBINED'),
+  lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
+  requireEligibleInventory: z.boolean().default(false),
+})
+export type FormulaOptimizerRequest = z.infer<typeof formulaOptimizerRequestSchema>
+
+export const formulaIntelligenceRunConfigSchema = z.discriminatedUnion('workflowKind', [
+  z.object({
+    workflowKind: z.literal('DESIGN_STUDIO'),
+    projectId: z.string().min(1).max(160),
+    brief: formulaDesignBriefSchema,
+  }),
+  z.object({
+    workflowKind: z.literal('REFORMULATION_OPTIMIZER'),
+    request: formulaOptimizerRequestSchema,
+  }),
+])
+export type FormulaIntelligenceRunConfig = z.infer<typeof formulaIntelligenceRunConfigSchema>
+
 export const formulaIngredientSchema = z.object({
   materialId: z.string().min(1).max(160),
   materialName: z.string().min(1).max(240),
@@ -164,6 +229,51 @@ export const formulaRevisionComparisonArtifactSchema = z.object({
   }),
 })
 
+export const designDirectionArtifactSchema = z.object({
+  directionId: z.string().min(1).max(160),
+  title: z.string().min(1).max(240),
+  narrative: z.string().min(1).max(800),
+  pyramidSummary: z.string().min(1).max(500),
+  availability: z.enum(['AVAILABLE', 'MIXED', 'UNKNOWN']),
+  complianceStatus: z.enum(['PASS', 'REVIEW_REQUIRED', 'BLOCKED', 'INSUFFICIENT_DATA']),
+  proposal: agentFormulaProposalSchema,
+  warnings: z.array(z.string().max(500)).max(40),
+})
+export type DesignDirectionArtifact = z.infer<typeof designDirectionArtifactSchema>
+
+export const designDirectionsArtifactSchema = z.object({
+  type: z.literal('design_directions'),
+  version: z.literal(1),
+  data: z.object({
+    projectId: z.string().min(1).max(160),
+    directions: z.array(designDirectionArtifactSchema).min(1).max(3),
+  }),
+})
+
+export const optimizerCandidateArtifactSchema = z.object({
+  candidateId: z.string().min(1).max(160),
+  title: z.string().min(1).max(240),
+  proposal: agentFormulaProposalSchema,
+  complianceStatus: z.enum(['PASS', 'REVIEW_REQUIRED', 'BLOCKED', 'INSUFFICIENT_DATA']),
+  availability: z.enum(['AVAILABLE', 'MIXED', 'UNKNOWN']),
+  costDelta: z.number().finite().optional(),
+  compositionChangePercent: z.number().finite().min(0).max(100),
+  score: z.number().finite().min(0).max(100),
+  summary: z.array(z.string().min(1).max(500)).max(12),
+})
+export type OptimizerCandidateArtifact = z.infer<typeof optimizerCandidateArtifactSchema>
+
+export const optimizerCandidatesArtifactSchema = z.object({
+  type: z.literal('optimizer_candidates'),
+  version: z.literal(1),
+  data: z.object({
+    baselineFormulaId: z.string().min(1).max(160),
+    baselineVersion: z.string().min(1).max(80),
+    intent: formulaOptimizerIntentSchema,
+    candidates: z.array(optimizerCandidateArtifactSchema).min(1).max(3),
+  }),
+})
+
 export const agentArtifactSchema = z.discriminatedUnion('type', [
   formulaTableArtifactSchema,
   inventoryReportArtifactSchema,
@@ -172,6 +282,8 @@ export const agentArtifactSchema = z.discriminatedUnion('type', [
   materialSubstitutionsArtifactSchema,
   assumptionsArtifactSchema,
   formulaRevisionComparisonArtifactSchema,
+  designDirectionsArtifactSchema,
+  optimizerCandidatesArtifactSchema,
 ])
 export type AgentArtifact = z.infer<typeof agentArtifactSchema>
 
@@ -186,23 +298,6 @@ export const agentRuntimeEventSchema = z.object({
   payload: opaqueRecordSchema,
 })
 export type AgentRuntimeEvent = z.infer<typeof agentRuntimeEventSchema>
-
-export const agentFormulaProposalSchema = z.object({
-  name: z.string().min(1).max(240),
-  formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).default('FINE_FRAGRANCE'),
-  targetGrams: z.number().finite().positive().max(100_000),
-  concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).default('EDP'),
-  finalProductConcentrationPercent: z.number().finite().min(0.01).max(100),
-  ifraCategory: z.string().min(1).max(32).default('4'),
-  brief: z.string().max(6000).default(''),
-  ingredients: z.array(z.object({
-    materialId: z.string().min(1).max(160),
-    percentage: z.number().finite().min(0).max(100),
-    pyramidNote: z.enum(['Top', 'Middle', 'Base', 'Solvent']).optional(),
-    dilution: z.number().finite().min(0).max(100).optional(),
-  })).min(1).max(80),
-})
-export type AgentFormulaProposal = z.infer<typeof agentFormulaProposalSchema>
 
 export const agentToolNameSchema = z.enum([
   'search_materials',

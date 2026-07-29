@@ -1928,12 +1928,10 @@ export class NorthStarService {
    * The proposal contains only tenant material IDs and percentages; all derived values remain
    * deterministic domain calculations.
    */
-  previewAgentFormula(proposalInput: AgentFormulaProposal) {
+  previewFormulaIntelligence(proposalInput: AgentFormulaProposal) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'formulas.viewSensitive')
     this.requirePermission(session.role, 'materials.view')
-    this.requirePermission(session.role, 'inventory.view')
-    this.requirePermission(session.role, 'costing.view')
     const proposal = agentFormulaProposalSchema.parse(proposalInput)
     const materialCatalog = this.materialCatalogForSession(session)
     const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
@@ -1974,9 +1972,13 @@ export class NorthStarService {
     const formulas = [formula, ...this.formulaCatalogForSession(session)]
     const lots = this.lotsForSession(session)
     const leaves = resolveFormulaWithCatalog(formula.id, formulas, materialCatalog)
-    const cost = formulaCostReport(formula.id, formulas, materialCatalog, lots, this.priceHistoryForSession(session))
+    const canViewInventory = this.permissionDecision(session.role, 'inventory.view', session.organizationId).allowed
+    const canViewCost = this.permissionDecision(session.role, 'costing.view', session.organizationId).allowed
+    const cost = canViewCost
+      ? formulaCostReport(formula.id, formulas, materialCatalog, lots, this.priceHistoryForSession(session))
+      : undefined
     const ifra = evaluateFormulaIfra(formula, leaves, materialCatalog)
-    const availability = leaves.map((leaf) => {
+    const fullAvailability = leaves.map((leaf) => {
       const eligibleLots = lots.filter((lot) => lot.materialId === leaf.materialId && isLotEligibleForInventory(lot))
       const availableGrams = eligibleLots.reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
       return {
@@ -1995,7 +1997,15 @@ export class NorthStarService {
     const reviewMaterialIds = profiles.filter((profile) => profile?.status === 'REVIEW_REQUIRED').map((profile) => profile!.materialId)
     return {
       data: {
-        formula, leaves, cost, ifra, availability,
+        formula,
+        leaves,
+        ...(cost ? { cost } : {}),
+        ifra,
+        availability: canViewInventory ? fullAvailability : [],
+        availabilitySummary: canViewInventory
+          ? fullAvailability.map((item) => ({ materialId: item.materialId, status: item.status }))
+          : [],
+        visibility: { canViewInventory, canViewCost },
         compliance: {
           blockedMaterialIds, reviewMaterialIds,
           status: blockedMaterialIds.length > 0 || ifra.blockerCount > 0
@@ -2005,6 +2015,13 @@ export class NorthStarService {
         invariant: 'agent preview is advisory only and never reserves or consumes inventory',
       },
     }
+  }
+
+  previewAgentFormula(proposalInput: AgentFormulaProposal) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'inventory.view')
+    this.requirePermission(session.role, 'costing.view')
+    return this.previewFormulaIntelligence(proposalInput)
   }
 
   materialCompliance(id: string) {
@@ -3659,6 +3676,16 @@ export class NorthStarService {
       throw new ForbiddenException(`Role ${session.role} cannot perform audit.view`)
     }
     return { data: this.auditEventsForSession(session) }
+  }
+
+  recordIntegrationAudit(action: string, entity: string, outcome: 'allowed' | 'review' | 'blocked' = 'allowed') {
+    const session = this.currentSession()
+    const safeAction = action.trim().slice(0, 120)
+    const safeEntity = entity.trim().slice(0, 240)
+    if (!safeAction || !safeEntity) {
+      throw new UnprocessableEntityException('Audit action and entity are required')
+    }
+    return { data: { audit: this.recordAudit(safeAction, safeEntity, session.userId, outcome) } }
   }
 
   auditChainAccess() {

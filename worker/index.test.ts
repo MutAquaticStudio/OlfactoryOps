@@ -135,6 +135,7 @@ describe('credentialed CORS', () => {
     )
     expect(exact['Access-Control-Allow-Origin']).toBe('https://test.labofscents.pages.dev')
     expect(exact['Access-Control-Allow-Credentials']).toBe('true')
+    expect(exact['Access-Control-Allow-Headers']).toContain('Idempotency-Key')
 
     const wildcard = buildCorsHeaders(
       'https://preview.labofscents.pages.dev',

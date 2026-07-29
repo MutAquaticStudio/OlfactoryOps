@@ -1,4 +1,4 @@
-# AI Formula Research Agent
+# AI Formula Intelligence Runtime
 
 ## Architecture
 
@@ -58,3 +58,28 @@ the executor through an existing domain service, adding its event lifecycle,
 and writing unit plus tenant-isolation coverage. Add a node through the
 versioned node registry; add an artifact through the allow-listed React renderer
 registry. Never permit provider-produced markup or executable code.
+
+## Formula Intelligence Workflows
+
+The runtime powers two separate tenant-safe modules while the legacy
+`/ai/formula-agent` URL redirects to Formula Design Studio for compatibility.
+
+- **Formula Design Studio** stores a structured brand brief and produces three
+  deterministic directions from compliance-approved workspace materials. Brand
+  users can create a brief and review only deliberately shared safe summaries.
+  Perfumers with `formulas.edit`, `formulas.viewSensitive`, and
+  `materials.view` generate directions, share them, and request an explicit
+  non-consuming formula-draft confirmation.
+- **Reformulation Optimizer** requires an immutable material-only formula
+  version. It creates candidate proposals for cost, compliance, inventory, or
+  combined intent, then ranks validation feasibility before inventory, cost,
+  and composition change. Cost and lot evidence are omitted when the current
+  role lacks `costing.view` or `inventory.view`.
+
+`migrations/0031_formula_intelligence.sql` adds project, direction, feedback,
+run mapping, and candidate tables. Every record is organization-scoped; a
+brand user may read only their own project and only directions explicitly
+shared with them. Audit-chain events cover project create, generation, share,
+feedback, optimizer runs, save requests, completion, and failures. No workflow
+reserves or consumes inventory until an existing downstream operational flow
+does so explicitly.

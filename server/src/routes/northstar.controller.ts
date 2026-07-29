@@ -279,6 +279,53 @@ export class NorthStarController {
     return this.agentRuntime.create(this.northStar, this.northStar.me().data.session, body)
   }
 
+  @Get('formula-intelligence/design-projects')
+  formulaDesignProjects() {
+    const context = this.northStar.me().data
+    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.edit'))
+  }
+
+  @Post('formula-intelligence/design-projects')
+  createFormulaDesignProject(@Body() body: Record<string, unknown>) {
+    return this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body)
+  }
+
+  @Get('formula-intelligence/design-projects/:projectId')
+  formulaDesignProject(@Param('projectId') projectId: string) {
+    const context = this.northStar.me().data
+    return this.agentRuntime.designProject(this.northStar, context.session, projectId, context.permissions.includes('formulas.edit'))
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/generate')
+  generateFormulaDesignDirections(@Param('projectId') projectId: string) {
+    return this.agentRuntime.generateDesignDirections(this.northStar, this.northStar.me().data.session, projectId)
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/share')
+  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string) {
+    return this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId)
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/feedback')
+  feedbackFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>) {
+    return this.agentRuntime.feedbackDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body)
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/save')
+  saveFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string) {
+    return this.agentRuntime.requestDesignDraftSave(this.northStar, this.northStar.me().data.session, projectId, directionId)
+  }
+
+  @Post('formula-intelligence/optimizer/runs')
+  startFormulaOptimizer(@Body() body: Record<string, unknown>) {
+    return this.agentRuntime.startOptimizer(this.northStar, this.northStar.me().data.session, body)
+  }
+
+  @Post('formula-intelligence/optimizer/runs/:runId/candidates/:candidateId/save')
+  saveFormulaOptimizerCandidate(@Param('runId') runId: string, @Param('candidateId') candidateId: string) {
+    return this.agentRuntime.requestOptimizerDraftSave(this.northStar, this.northStar.me().data.session, runId, candidateId)
+  }
+
   @Get('agent/runs/:id')
   agentRun(@Param('id') id: string) {
     return this.agentRuntime.detail(this.northStar.me().data.session, id)

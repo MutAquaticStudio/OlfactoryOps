@@ -71,7 +71,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { FormulaAgentWorkspace } from './features/ai-formula-agent/FormulaAgentWorkspace'
+import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
 import {
   auditEvents,
   commercialSkus,
@@ -1070,6 +1070,8 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   materials: Atom,
   formulas: FlaskConical,
   formulaAgent: Sparkles,
+  formulaDesignStudio: Sparkles,
+  reformulationOptimizer: SlidersHorizontal,
   inventory: Boxes,
   labUsage: Beaker,
   documents: FileLock2,
@@ -1084,7 +1086,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
 
 const navGroups: { title: string; keys: DomainKey[] }[] = [
   { title: 'Command', keys: ['dashboard', 'platform', 'identity', 'customization'] },
-  { title: 'R&D Spine', keys: ['materials', 'formulas', 'formulaAgent', 'inventory', 'labUsage'] },
+  { title: 'R&D Spine', keys: ['materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'inventory', 'labUsage'] },
   { title: 'Operations', keys: ['production', 'procurement', 'commerce', 'orders'] },
   { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
 ]
@@ -1581,7 +1583,20 @@ function visibleNavGroupsForSession(session: AuthSession) {
 }
 
 function safeLandingForSession(key: DomainKey, session: AuthSession) {
-  return domainVisibleForSession(key, session) ? key : 'dashboard'
+  const normalized = key === 'formulaAgent' ? 'formulaDesignStudio' : key
+  return domainVisibleForSession(normalized, session) ? normalized : 'dashboard'
+}
+
+function domainKeyForPath(pathname: string): DomainKey {
+  if (pathname === '/ai/formula-agent' || pathname === '/ai/formula-design-studio') return 'formulaDesignStudio'
+  if (pathname === '/ai/reformulation-optimizer') return 'reformulationOptimizer'
+  return 'dashboard'
+}
+
+function pathForDomainKey(key: DomainKey) {
+  if (key === 'formulaAgent' || key === 'formulaDesignStudio') return '/ai/formula-design-studio'
+  if (key === 'reformulationOptimizer') return '/ai/reformulation-optimizer'
+  return '/'
 }
 
 function visibleWorkflowNodesForSession(session: AuthSession) {
@@ -1819,7 +1834,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 }
 
 function App() {
-  const [activeKey, setActiveKey] = useState<DomainKey>(() => window.location.pathname === '/ai/formula-agent' ? 'formulaAgent' : 'dashboard')
+  const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
@@ -1992,7 +2007,7 @@ function App() {
   const navigateToDomain = useCallback(
     (key: DomainKey) => {
       setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
-      const path = key === 'formulaAgent' ? '/ai/formula-agent' : '/'
+      const path = pathForDomainKey(key)
       if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
       setMobileNavOpen(false)
     },
@@ -2051,7 +2066,7 @@ function App() {
   }, [activeKey, currentSession])
 
   useEffect(() => {
-    const handlePopState = () => setActiveKey(window.location.pathname === '/ai/formula-agent' ? 'formulaAgent' : 'dashboard')
+    const handlePopState = () => setActiveKey(domainKeyForPath(window.location.pathname))
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
@@ -2881,11 +2896,25 @@ function App() {
                   onOpenModal={setModal}
                 />
               </motion.div>
-            ) : activeKey === 'formulaAgent' ? (
-              <motion.div key="formula-agent" {...shellMotionPreset}>
-                <FormulaAgentWorkspace
-                  apiBaseUrl={apiBaseUrl}
+            ) : activeKey === 'formulaDesignStudio' ? (
+              <motion.div key="formula-design-studio" {...shellMotionPreset}>
+                <FormulaDesignStudioWorkspace
                   requestApi={requestApi}
+                  materialRecords={materialRecords}
+                  canEditFormula={sessionHasPermission(currentSession, 'formulas.edit')}
+                  onFormulaSaved={(formula) => {
+                    setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
+                    setActiveFormulaId(formula.id)
+                  }}
+                />
+              </motion.div>
+            ) : activeKey === 'reformulationOptimizer' ? (
+              <motion.div key="reformulation-optimizer" {...shellMotionPreset}>
+                <ReformulationOptimizerWorkspace
+                  requestApi={requestApi}
+                  formulaRecords={scopedFormulaRecords}
+                  materialRecords={materialRecords}
+                  canEditFormula={sessionHasPermission(currentSession, 'formulas.edit')}
                   onFormulaSaved={(formula) => {
                     setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
                     setActiveFormulaId(formula.id)

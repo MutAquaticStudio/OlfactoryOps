@@ -1539,6 +1539,8 @@ describe('NorthStarService', () => {
         { materialId: 'mat-iso', percentage: 25, pyramidNote: 'Base' },
       ],
     }).data
+    expect(preview.cost).toBeDefined()
+    if (!preview.cost) throw new Error('Expected legacy agent preview to include cost evidence')
     expect(preview.formula.lines).toHaveLength(3)
     expect(preview.availability).toHaveLength(3)
     expect(preview.cost.totalCost).toBeGreaterThan(0)
