@@ -5370,6 +5370,22 @@ function MaterialWorkspace({
   return (
     <div className="workspace-grid material-intelligence-grid">
       <Panel className="material-directory-panel" title="Materials" icon={Atom}>
+        <section className="catalogue-enrichment-row material-catalogue-action" aria-label="Supplier catalogue enrichment">
+          <div>
+            <span className="eyebrow">Supplier catalogue</span>
+            <strong>Lluch Essence 2026</strong>
+            <p>Adds verified supplier references and curated olfactive profiles to matching materials. Inventory, costs, compliance, and lot records remain unchanged.</p>
+          </div>
+          <button
+            className="ghost-button small"
+            data-testid="material-apply-lluch-catalogue"
+            type="button"
+            disabled={!canUpdateMaterials || catalogueEnriching}
+            onClick={() => void enrichFromLluchCatalogue()}
+          >
+            {catalogueEnriching ? 'Updating...' : 'Update from Lluch'}
+          </button>
+        </section>
         <div className="material-form-grid">
           <label className="field-row">
             <span>Name</span>
@@ -5462,20 +5478,6 @@ function MaterialWorkspace({
             </button>
             <button className="primary-button small" type="button" disabled={importBusy || importJob?.status !== 'VALIDATED'} onClick={() => void commitDataImport()}>
               Commit valid rows
-            </button>
-          </div>
-          <div className="catalogue-enrichment-row">
-            <div>
-              <strong>Lluch catalogue enrichment</strong>
-              <p>Updates only matching materials with supplier references and curated olfactive metadata. It never changes CAS, IFRA, cost, compliance, lots, or stock.</p>
-            </div>
-            <button
-              className="ghost-button small"
-              type="button"
-              disabled={!canUpdateMaterials || catalogueEnriching}
-              onClick={() => void enrichFromLluchCatalogue()}
-            >
-              {catalogueEnriching ? 'Updating...' : 'Apply Lluch 2026'}
             </button>
           </div>
           <p className="muted-copy">{importStatus}</p>
