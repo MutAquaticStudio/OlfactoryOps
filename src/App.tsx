@@ -4925,7 +4925,6 @@ function MaterialWorkspace({
   const selectedStock = stockByMaterialId.get(selected.id)
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
-  const [catalogueEnriching, setCatalogueEnriching] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
   const [compliance, setCompliance] = useState<MaterialComplianceProfile | null>(null)
   const [complianceSaving, setComplianceSaving] = useState(false)
@@ -5287,32 +5286,6 @@ function MaterialWorkspace({
     }
   }
 
-  async function enrichFromLluchCatalogue() {
-    if (!canUpdateMaterials) {
-      setMaterialStatus('Current role is not authorized to enrich material metadata.')
-      return
-    }
-    setCatalogueEnriching(true)
-    setMaterialStatus('Applying Lluch catalogue references and curated olfactive profiles...')
-    try {
-      const payload = await requestApi<{ updated: number; materials: Material[]; source: { catalogueVersion: string } }>('/materials/catalogues/lluch-2026/enrich', {
-        method: 'POST',
-        headers: idempotencyHeaders(),
-      })
-      const refreshed = await requestApi<Material[]>('/materials')
-      onMaterialsChange(refreshed)
-      setMaterialStatus(
-        payload.updated > 0
-          ? `Lluch ${payload.source.catalogueVersion} enriched ${payload.updated} matching material record(s).`
-          : 'Lluch catalogue enrichment is already current for this workspace.',
-      )
-    } catch (error) {
-      setMaterialStatus(error instanceof Error ? error.message : 'Lluch catalogue enrichment could not be completed')
-    } finally {
-      setCatalogueEnriching(false)
-    }
-  }
-
   async function fillFromPubChem() {
     if (!canUpdateMaterials) {
       setMaterialStatus('Current role is not authorized to enrich data from PubChem.')
@@ -5370,22 +5343,6 @@ function MaterialWorkspace({
   return (
     <div className="workspace-grid material-intelligence-grid">
       <Panel className="material-directory-panel" title="Materials" icon={Atom}>
-        <section className="catalogue-enrichment-row material-catalogue-action" aria-label="Supplier catalogue enrichment">
-          <div>
-            <span className="eyebrow">Supplier catalogue</span>
-            <strong>Lluch Essence 2026</strong>
-            <p>Adds verified supplier references and curated olfactive profiles to matching materials. Inventory, costs, compliance, and lot records remain unchanged.</p>
-          </div>
-          <button
-            className="ghost-button small"
-            data-testid="material-apply-lluch-catalogue"
-            type="button"
-            disabled={!canUpdateMaterials || catalogueEnriching}
-            onClick={() => void enrichFromLluchCatalogue()}
-          >
-            {catalogueEnriching ? 'Updating...' : 'Update from Lluch'}
-          </button>
-        </section>
         <div className="material-form-grid">
           <label className="field-row">
             <span>Name</span>

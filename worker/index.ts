@@ -96,6 +96,7 @@ import {
   type LegalAcceptanceRecord,
   type PrivacyRequestRecord,
 } from '../src/data/northStar.js'
+import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source } from '../src/data/lluch-catalogue-2026.js'
 
 type Env = {
   DB: D1Database
@@ -4304,10 +4305,26 @@ async function hydrateMaterialState(db: D1Database, serviceState: ServiceState) 
   const materials = (materialRows.results ?? [])
     .map((row) => parseJsonOptional<Material>(row.record_json))
     .filter(isDefined)
-  if (materials.length > 0) {
-    serviceState.materialRecords = materials
-  } else if (Array.isArray(serviceState.materialRecords) && serviceState.materialRecords.length > 0) {
-    await persistMaterials(db, serviceState.materialRecords, new Date().toISOString())
+  const sourceMaterials = materials.length > 0
+    ? materials
+    : Array.isArray(serviceState.materialRecords)
+      ? serviceState.materialRecords
+      : []
+  const updatedAt = new Date().toISOString()
+  const changedOrganizations = new Set<string>()
+  const enrichedMaterials = sourceMaterials.map((material) => {
+    const enrichment = enrichMaterialFromLluchCatalogue(material)
+    if (enrichment.changed) {
+      changedOrganizations.add(material.organizationId || SEEDED_ADMIN_ORGANIZATION_ID)
+    }
+    return enrichment.material
+  })
+  serviceState.materialRecords = enrichedMaterials
+  if (materials.length === 0 && enrichedMaterials.length > 0) {
+    await persistMaterials(db, enrichedMaterials, updatedAt)
+  } else if (changedOrganizations.size > 0) {
+    await persistMaterials(db, enrichedMaterials, updatedAt)
+    await recordLluchCatalogueBackfillAudit(db, serviceState, [...changedOrganizations], updatedAt)
   }
 
   const moleculeRows = await db
@@ -4352,6 +4369,34 @@ async function persistMaterialState(db: D1Database, serviceState: ServiceState, 
   await persistMolecules(db, serviceState.moleculeRecords, updatedAt)
   await persistStorageLocations(db, serviceState.locationRecords, updatedAt)
   await persistStockTakes(db, serviceState.stockTakeRecords, updatedAt)
+}
+
+async function recordLluchCatalogueBackfillAudit(
+  db: D1Database,
+  serviceState: ServiceState,
+  organizationIds: string[],
+  updatedAt: string,
+) {
+  const auditEvents: AuditEvent[] = organizationIds.map((organizationId) => {
+    const counter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
+    serviceState.auditCounter = counter
+    return {
+      id: `AUD-TEN-${counter}`,
+      at: updatedAt,
+      actor: 'system:catalogue-backfill',
+      action: 'material.catalogue.backfill',
+      entity: `lluch:${lluchCatalogue2026Source.catalogueVersion}`,
+      requestId: `system_lluch_backfill_${organizationId}_${lluchCatalogue2026Source.catalogueVersion}`,
+      outcome: 'allowed',
+      organizationId,
+      scope: 'tenant',
+    }
+  })
+  if (auditEvents.length === 0) {
+    return
+  }
+  serviceState.auditEvents = [...auditEvents, ...serviceState.auditEvents]
+  await persistAuditEvents(db, auditEvents, updatedAt, serviceState)
 }
 
 async function hydrateOperationalP1State(db: D1Database, serviceState: ServiceState) {

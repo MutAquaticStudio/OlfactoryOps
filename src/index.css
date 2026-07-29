@@ -3432,40 +3432,23 @@ kbd {
   margin-bottom: 12px;
 }
 
-.catalogue-enrichment-row,
 .olfactive-profile,
 .catalogue-reference-list,
 .catalogue-reference {
   min-width: 0;
 }
 
-.catalogue-enrichment-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 12px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
-}
-
-.catalogue-enrichment-row strong,
 .olfactive-profile strong,
 .catalogue-reference strong {
   display: block;
 }
 
-.catalogue-enrichment-row p,
 .olfactive-profile p,
 .catalogue-reference p {
   margin: 4px 0 0;
   color: var(--text-2);
   font-size: 0.82rem;
   line-height: 1.45;
-}
-
-.catalogue-enrichment-row p {
-  max-width: 580px;
 }
 
 .olfactive-profile,
@@ -3510,15 +3493,6 @@ kbd {
 }
 
 @media (max-width: 640px) {
-  .catalogue-enrichment-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .catalogue-enrichment-row > button {
-    width: 100%;
-  }
-
   .catalogue-reference {
     grid-template-columns: minmax(0, 1fr);
   }
