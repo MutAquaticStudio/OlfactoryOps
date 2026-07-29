@@ -71,4 +71,55 @@ describe('AgentLocalRuntimeService', () => {
     })
     await expect(runtime.detail(service.me().data.session, created.data.run.id)).rejects.toThrow('Formula research run was not found')
   })
+
+  it('replays the same local mutation once and rejects conflicting idempotency reuse', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    let writes = 0
+    const first = await runtime.idempotentMutation(session, 'POST:/formula-intelligence/test', 'local-key-001', { name: 'first' }, async () => ({ writes: ++writes }))
+    const replay = await runtime.idempotentMutation(session, 'POST:/formula-intelligence/test', 'local-key-001', { name: 'first' }, async () => ({ writes: ++writes }))
+    expect(first).toEqual({ writes: 1 })
+    expect(replay).toEqual({ writes: 1 })
+    expect(writes).toBe(1)
+    await expect(runtime.idempotentMutation(session, 'POST:/formula-intelligence/test', 'local-key-001', { name: 'changed' }, async () => ({ writes: ++writes })))
+      .rejects.toThrow('Idempotency-Key was already used for a different request')
+  })
+
+  it('rejects sharing a direction to a recipient outside the active project brand', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    for (const material of service.materials().data) {
+      service.upsertMaterialCompliance(material.id, { status: 'APPROVED', source: 'Local test', sourceVersion: 'v1' })
+    }
+    const project = await runtime.createDesignProject(service, session, {
+      name: 'Brand scoped direction',
+      formulaType: 'FINE_FRAGRANCE',
+      concentrationType: 'EDP',
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+      targetMarkets: ['EU'],
+      creativeBrief: 'Citrus amber fragrance direction for a brand review.',
+      desiredNotes: ['citrus'],
+      avoidedNotes: [],
+      lockedMaterialIds: [],
+      availabilityFirst: true,
+      targetGrams: 100,
+    })
+    await runtime.generateDesignDirections(service, session, project.data.project.id)
+    const detail = await runtime.designProject(service, session, project.data.project.id, true)
+    const direction = detail.data.project.directions[0]
+    expect(direction).toBeDefined()
+    await expect(runtime.shareDesignDirection(service, session, project.data.project.id, direction!.directionId, {
+      recipientUserIds: ['usr-not-in-brand'],
+      allowMaterialNames: false,
+    })).rejects.toThrow('Every recipient must be an active member of this project brand')
+  })
 })

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
 import { AgentLocalRuntimeService } from '../services/agent-local-runtime.service.js'
 
@@ -155,6 +155,10 @@ export class NorthStarController {
     @Inject(AgentLocalRuntimeService) private readonly agentRuntime: AgentLocalRuntimeService,
   ) {}
 
+  private formulaIntelligenceMutation<T>(route: string, idempotencyKey: string | undefined, body: unknown, mutation: () => Promise<T>) {
+    return this.agentRuntime.idempotentMutation(this.northStar.me().data.session, route, idempotencyKey, body, mutation)
+  }
+
   @Get('phases')
   phases() {
     return this.northStar.phases()
@@ -275,8 +279,8 @@ export class NorthStarController {
   }
 
   @Post('agent/runs')
-  createAgentRun(@Body() body: Record<string, unknown>) {
-    return this.agentRuntime.create(this.northStar, this.northStar.me().data.session, body)
+  createAgentRun(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation('POST:/agent/runs', idempotencyKey, body, () => this.agentRuntime.create(this.northStar, this.northStar.me().data.session, body))
   }
 
   @Get('formula-intelligence/design-projects')
@@ -285,9 +289,26 @@ export class NorthStarController {
     return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
   }
 
+  @Get('formula-intelligence/capabilities')
+  formulaIntelligenceCapabilities() {
+    const permissions = new Set(this.northStar.me().data.permissions)
+    const canViewSensitiveComposition = permissions.has('formulas.viewSensitive') && permissions.has('materials.view')
+    return {
+      data: {
+        canCreateBrief: permissions.has('formulas.view'),
+        canGenerateDirections: permissions.has('formulas.edit') && canViewSensitiveComposition,
+        canRunOptimizer: canViewSensitiveComposition,
+        canViewSensitiveComposition,
+        canViewCostEvidence: permissions.has('costing.view'),
+        canViewInventoryEvidence: permissions.has('inventory.view'),
+        canSaveDraft: permissions.has('formulas.edit') && canViewSensitiveComposition,
+      },
+    }
+  }
+
   @Post('formula-intelligence/design-projects')
-  createFormulaDesignProject(@Body() body: Record<string, unknown>) {
-    return this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body)
+  createFormulaDesignProject(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation('POST:/formula-intelligence/design-projects', idempotencyKey, body, () => this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body))
   }
 
   @Get('formula-intelligence/design-projects/:projectId')
@@ -302,38 +323,38 @@ export class NorthStarController {
   }
 
   @Post('formula-intelligence/design-projects/:projectId/generate')
-  generateFormulaDesignDirections(@Param('projectId') projectId: string) {
-    return this.agentRuntime.generateDesignDirections(this.northStar, this.northStar.me().data.session, projectId)
+  generateFormulaDesignDirections(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/generate`, idempotencyKey, {}, () => this.agentRuntime.generateDesignDirections(this.northStar, this.northStar.me().data.session, projectId))
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/share')
-  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>) {
-    return this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body)
+  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/share`, idempotencyKey, body, () => this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/shares/:recipientUserId/revoke')
-  revokeFormulaDesignDirectionShare(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Param('recipientUserId') recipientUserId: string) {
-    return this.agentRuntime.revokeDesignDirectionShare(this.northStar, this.northStar.me().data.session, projectId, directionId, recipientUserId)
+  revokeFormulaDesignDirectionShare(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Param('recipientUserId') recipientUserId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/shares/${recipientUserId}/revoke`, idempotencyKey, {}, () => this.agentRuntime.revokeDesignDirectionShare(this.northStar, this.northStar.me().data.session, projectId, directionId, recipientUserId))
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/feedback')
-  feedbackFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>) {
-    return this.agentRuntime.feedbackDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body)
+  feedbackFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/feedback`, idempotencyKey, body, () => this.agentRuntime.feedbackDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/save')
-  saveFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string) {
-    return this.agentRuntime.requestDesignDraftSave(this.northStar, this.northStar.me().data.session, projectId, directionId)
+  saveFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/save`, idempotencyKey, {}, () => this.agentRuntime.requestDesignDraftSave(this.northStar, this.northStar.me().data.session, projectId, directionId))
   }
 
   @Post('formula-intelligence/optimizer/runs')
-  startFormulaOptimizer(@Body() body: Record<string, unknown>) {
-    return this.agentRuntime.startOptimizer(this.northStar, this.northStar.me().data.session, body)
+  startFormulaOptimizer(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation('POST:/formula-intelligence/optimizer/runs', idempotencyKey, body, () => this.agentRuntime.startOptimizer(this.northStar, this.northStar.me().data.session, body))
   }
 
   @Post('formula-intelligence/optimizer/runs/:runId/candidates/:candidateId/save')
-  saveFormulaOptimizerCandidate(@Param('runId') runId: string, @Param('candidateId') candidateId: string) {
-    return this.agentRuntime.requestOptimizerDraftSave(this.northStar, this.northStar.me().data.session, runId, candidateId)
+  saveFormulaOptimizerCandidate(@Param('runId') runId: string, @Param('candidateId') candidateId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/optimizer/runs/${runId}/candidates/${candidateId}/save`, idempotencyKey, {}, () => this.agentRuntime.requestOptimizerDraftSave(this.northStar, this.northStar.me().data.session, runId, candidateId))
   }
 
   @Get('agent/runs/:id')
@@ -367,28 +388,28 @@ export class NorthStarController {
   }
 
   @Post('agent/runs/:id/cancel')
-  cancelAgentRun(@Param('id') id: string) {
-    return this.agentRuntime.cancel(this.northStar.me().data.session, id)
+  cancelAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/cancel`, idempotencyKey, {}, () => this.agentRuntime.cancel(this.northStar.me().data.session, id))
   }
 
   @Post('agent/runs/:id/resume')
-  resumeAgentRun(@Param('id') id: string) {
-    return this.agentRuntime.resume(this.northStar, this.northStar.me().data.session, id)
+  resumeAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/resume`, idempotencyKey, {}, () => this.agentRuntime.resume(this.northStar, this.northStar.me().data.session, id))
   }
 
   @Post('agent/runs/:id/nodes/:nodeId/retry')
-  retryAgentNode(@Param('id') id: string, @Param('nodeId') nodeId: string) {
-    return this.agentRuntime.retryNode(this.northStar, this.northStar.me().data.session, id, nodeId)
+  retryAgentNode(@Param('id') id: string, @Param('nodeId') nodeId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/nodes/${nodeId}/retry`, idempotencyKey, {}, () => this.agentRuntime.retryNode(this.northStar, this.northStar.me().data.session, id, nodeId))
   }
 
   @Post('agent/runs/:id/restart')
-  restartAgentRun(@Param('id') id: string) {
-    return this.agentRuntime.restart(this.northStar, this.northStar.me().data.session, id)
+  restartAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/restart`, idempotencyKey, {}, () => this.agentRuntime.restart(this.northStar, this.northStar.me().data.session, id))
   }
 
   @Post('agent/runs/:id/confirmations/:confirmationId')
-  resolveAgentConfirmation(@Param('id') id: string, @Param('confirmationId') confirmationId: string, @Body() body: { decision?: string }) {
-    return this.agentRuntime.resolveConfirmation(this.northStar, this.northStar.me().data.session, id, confirmationId, body.decision)
+  resolveAgentConfirmation(@Param('id') id: string, @Param('confirmationId') confirmationId: string, @Body() body: { decision?: string }, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/confirmations/${confirmationId}`, idempotencyKey, body, () => this.agentRuntime.resolveConfirmation(this.northStar, this.northStar.me().data.session, id, confirmationId, body.decision))
   }
 
   @Post('formulas')

@@ -26,6 +26,7 @@ import {
   ConflictException,
   PayloadTooLargeException,
   ForbiddenException,
+  NotFoundException,
   TooManyRequestsException,
   UnprocessableEntityException,
   UnauthorizedException,
@@ -567,6 +568,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/imports/preview', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.previewImport(body) },
   { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
+  { method: 'GET', pattern: '/formula-intelligence/capabilities', persistState: false, handler: ({ service }) => formulaIntelligenceCapabilities(service) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
@@ -870,9 +872,22 @@ async function resolveAgentConfirmation(context: RouteContext) {
   const store = new AgentRuntimeStore(context.env.DB)
   const decision = typeof context.body.decision === 'string' ? context.body.decision : 'accept'
   if (decision === 'reject') return store.rejectConfirmation(actor, context.params.id, context.params.confirmationId)
-  ensureFormulaIntelligencePermission(context.service, 'edit')
-  ensureFormulaIntelligenceExecutionAccess(context.service)
-  const claimed = await store.claimFormulaDraftSave(actor, context.params.id, context.params.confirmationId)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    ensureFormulaIntelligenceExecutionAccess(context.service)
+  } catch (error) {
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.access.denied', context.params.confirmationId, 'blocked')
+    throw error
+  }
+  let claimed: Awaited<ReturnType<AgentRuntimeStore['claimFormulaDraftSave']>>
+  try {
+    claimed = await store.claimFormulaDraftSave(actor, context.params.id, context.params.confirmationId)
+  } catch (error) {
+    if (error instanceof UnprocessableEntityException && error.message === 'FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED') {
+      await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.confirmation.expired', context.params.confirmationId, 'blocked')
+    }
+    throw error
+  }
   if (claimed.completed) {
     const formula = context.service.formulas().data.find((item) => item.id === claimed.formulaId)
     return { data: { duplicate: true, formula, confirmationId: context.params.confirmationId, invariant: 'confirmation ID is idempotent; no additional formula draft was created' } }
@@ -933,6 +948,22 @@ function formulaIntelligenceCanView(service: NorthStarService) {
   return service.me().data.permissions.includes('formulas.view')
 }
 
+function formulaIntelligenceCapabilities(service: NorthStarService) {
+  const granted = new Set(service.me().data.permissions)
+  const canViewSensitiveComposition = granted.has('formulas.viewSensitive') && granted.has('materials.view')
+  return {
+    data: {
+      canCreateBrief: granted.has('formulas.view'),
+      canGenerateDirections: granted.has('formulas.edit') && canViewSensitiveComposition,
+      canRunOptimizer: canViewSensitiveComposition,
+      canViewSensitiveComposition,
+      canViewCostEvidence: granted.has('costing.view'),
+      canViewInventoryEvidence: granted.has('inventory.view'),
+      canSaveDraft: granted.has('formulas.edit') && canViewSensitiveComposition,
+    },
+  }
+}
+
 function ensureFormulaIntelligencePermission(service: NorthStarService, permission: 'view' | 'edit') {
   const allowed = permission === 'edit' ? formulaIntelligenceCanEdit(service) : formulaIntelligenceCanView(service)
   if (!allowed) throw new ForbiddenException(`Formula Intelligence requires formulas.${permission}`)
@@ -945,6 +976,12 @@ function ensureFormulaIntelligenceExecutionAccess(service: NorthStarService) {
   }
 }
 
+async function auditFormulaIntelligenceAccessFailure(context: RouteContext, actor: AgentActor, entity: string, error: unknown) {
+  if (error instanceof ForbiddenException || error instanceof NotFoundException) {
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.access.denied', entity, 'blocked')
+  }
+}
+
 async function listDesignProjects(service: NorthStarService, env: Env) {
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
@@ -952,16 +989,21 @@ async function listDesignProjects(service: NorthStarService, env: Env) {
 }
 
 async function createFormulaDesignProject(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'view')
   const actor = ensureAgentReadAccess(context.service)
-  const project = await new FormulaIntelligenceStore(context.env.DB).createDesignProject(
-    actor,
-    context.body,
-    formulaIntelligenceIdempotencyKey(context.request),
-    context.service.me().data.session.brandId,
-  )
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.project.create', project.id)
-  return { data: { project } }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    const project = await new FormulaIntelligenceStore(context.env.DB).createDesignProject(
+      actor,
+      context.body,
+      formulaIntelligenceIdempotencyKey(context.request),
+      context.service.me().data.session.brandId,
+    )
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.project.create', project.id)
+    return { data: { project } }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, 'design-project', error)
+    throw error
+  }
 }
 
 async function getFormulaDesignProject(service: NorthStarService, env: Env, projectId: string) {
@@ -977,65 +1019,96 @@ async function listFormulaDesignRecipients(service: NorthStarService, env: Env, 
 }
 
 async function generateFormulaDesignDirections(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'edit')
-  ensureFormulaIntelligenceExecutionAccess(context.service)
   const actor = ensureAgentReadAccess(context.service)
-  const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request))
-  context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
-  return { data: result }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    ensureFormulaIntelligenceExecutionAccess(context.service)
+    const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request))
+    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
+    throw error
+  }
 }
 
 async function shareFormulaDesignDirection(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'edit')
   const actor = ensureAgentReadAccess(context.service)
-  const result = await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId, context.body)
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.share', context.params.directionId)
-  return { data: { shared: true, ...result } }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    const result = await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId, context.body)
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.share', context.params.directionId)
+    return { data: { shared: true, ...result } }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
+    throw error
+  }
 }
 
 async function revokeFormulaDesignDirectionShare(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'edit')
   const actor = ensureAgentReadAccess(context.service)
-  await new FormulaIntelligenceStore(context.env.DB).revokeDirectionShare(actor, context.params.id, context.params.directionId, context.params.recipientUserId)
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.revoke', context.params.directionId)
-  return { data: { revoked: true } }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    await new FormulaIntelligenceStore(context.env.DB).revokeDirectionShare(actor, context.params.id, context.params.directionId, context.params.recipientUserId)
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.revoke', context.params.directionId)
+    return { data: { revoked: true } }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
+    throw error
+  }
 }
 
 async function submitFormulaDesignFeedback(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'view')
   const actor = ensureAgentReadAccess(context.service)
-  await new FormulaIntelligenceStore(context.env.DB).feedback(actor, context.params.id, context.params.directionId, context.body)
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.feedback.create', context.params.directionId)
-  return { data: { accepted: true } }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    await new FormulaIntelligenceStore(context.env.DB).feedback(actor, context.params.id, context.params.directionId, context.body)
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.feedback.create', context.params.directionId)
+    return { data: { accepted: true } }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
+    throw error
+  }
 }
 
 async function requestFormulaDesignDraftSave(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'edit')
   const actor = ensureAgentReadAccess(context.service)
-  const result = await new FormulaIntelligenceStore(context.env.DB).requestDirectionDraftSave(
-    actor, context.params.id, context.params.directionId, new AgentRuntimeStore(context.env.DB),
-  )
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.save.requested', context.params.directionId)
-  return { data: result }
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    const result = await new FormulaIntelligenceStore(context.env.DB).requestDirectionDraftSave(
+      actor, context.params.id, context.params.directionId, new AgentRuntimeStore(context.env.DB),
+    )
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.save.requested', context.params.directionId)
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
+    throw error
+  }
 }
 
 async function startFormulaOptimizer(context: RouteContext) {
-  ensureFormulaIntelligenceExecutionAccess(context.service)
   const actor = ensureAgentReadAccess(context.service)
-  const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request))
-  context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
-  return { data: result }
+  try {
+    ensureFormulaIntelligenceExecutionAccess(context.service)
+    const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request))
+    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, 'optimizer', error)
+    throw error
+  }
 }
 
 async function requestOptimizerDraftSave(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'edit')
   const actor = ensureAgentReadAccess(context.service)
   let result
   try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
     result = await new FormulaIntelligenceStore(context.env.DB).requestCandidateDraftSave(
       actor, context.params.id, context.params.candidateId, new AgentRuntimeStore(context.env.DB), context.service,
     )
   } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.candidateId, error)
     await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.optimizer.candidate.save.denied', context.params.candidateId, 'blocked')
     throw error
   }

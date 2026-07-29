@@ -1,4 +1,5 @@
-import { ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
+import { ConflictException, ForbiddenException, Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
@@ -22,6 +23,7 @@ import {
 import {
   buildDesignDirectionProposals,
   buildOptimizerProposals,
+  compareOptimizerCandidates,
   compositionChangePercent,
   proposalFromFormulaVersion,
 } from '../../../src/data/formulaIntelligence.js'
@@ -42,7 +44,13 @@ type LocalDesignDirection = DesignDirectionArtifact & { runId: string; status: '
 type LocalDesignFeedback = { id: string; directionId: string; userId: string; rating?: number; comment: string; selected: boolean; createdAt: string }
 type LocalDesignProject = { id: string; organizationId: string; brandId: string; createdByUserId: string; name: string; brief: FormulaDesignBrief; status: 'BRIEFED' | 'IN_PROGRESS' | 'IN_REVIEW' | 'SELECTED'; selectedDirectionId?: string; directions: LocalDesignDirection[]; feedback: LocalDesignFeedback[]; createdAt: string; updatedAt: string }
 type LocalOptimizerCandidate = OptimizerCandidateArtifact & { status: 'READY' | 'PENDING_SAVE' | 'SAVED'; savedFormulaId?: string }
-type LocalState = { runs: LocalRun[]; projects: LocalDesignProject[]; optimizerCandidates: Record<string, LocalOptimizerCandidate[]> }
+type LocalIdempotencyRecord = { requestHash: string; response: unknown; createdAt: string }
+type LocalState = {
+  runs: LocalRun[]
+  projects: LocalDesignProject[]
+  optimizerCandidates: Record<string, LocalOptimizerCandidate[]>
+  idempotency: Record<string, LocalIdempotencyRecord>
+}
 
 function now() { return new Date().toISOString() }
 function actor(session: AuthSession) { return { organizationId: session.organizationId, userId: session.userId, sessionId: session.id } }
@@ -50,9 +58,50 @@ function actor(session: AuthSession) { return { organizationId: session.organiza
 @Injectable()
 export class AgentLocalRuntimeService {
   private readonly storagePath = join(process.cwd(), '.olfactoryops-agent.local.json')
-  private state: LocalState = { runs: [], projects: [], optimizerCandidates: {} }
+  private state: LocalState = { runs: [], projects: [], optimizerCandidates: {}, idempotency: {} }
   private initialized = false
   private writeQueue: Promise<void> = Promise.resolve()
+  private mutationQueue: Promise<void> = Promise.resolve()
+
+  /**
+   * The local API uses the same identity scope as the Worker so a retry cannot
+   * silently create a second project, run, share, feedback entry, or draft.
+   */
+  async idempotentMutation<T>(
+    session: AuthSession,
+    route: string,
+    idempotencyKey: string | undefined,
+    request: unknown,
+    mutation: () => Promise<T>,
+  ) {
+    await this.ready()
+    const key = idempotencyKey?.trim() ?? ''
+    if (key.length < 8 || key.length > 160) {
+      throw new UnprocessableEntityException('Idempotency-Key header must be between 8 and 160 characters')
+    }
+    const current = actor(session)
+    const scope = `${current.organizationId}:${current.userId}:${route}:${key}`
+    const requestHash = createHash('sha256').update(JSON.stringify(request ?? {})).digest('hex')
+    let release: (() => void) | undefined
+    const predecessor = this.mutationQueue
+    this.mutationQueue = new Promise<void>((resolve) => { release = resolve })
+    await predecessor
+    try {
+      const existing = this.state.idempotency[scope]
+      if (existing) {
+        if (existing.requestHash !== requestHash) {
+          throw new ConflictException('Idempotency-Key was already used for a different request')
+        }
+        return existing.response as T
+      }
+      const response = await mutation()
+      this.state.idempotency[scope] = { requestHash, response, createdAt: now() }
+      await this.persist()
+      return response
+    } finally {
+      release?.()
+    }
+  }
 
   async list(session: AuthSession) {
     await this.ready()
@@ -131,7 +180,13 @@ export class AgentLocalRuntimeService {
     this.requireFormulaPermission(service, 'formulas.viewSensitive')
     this.requireFormulaPermission(service, 'materials.view')
     const project = this.projectFor(session, projectId, true)
-    const run = this.createIntelligenceRun(session, project.brief.creativeBrief, { workflowKind: 'DESIGN_STUDIO', projectId })
+    let run: LocalRun
+    try {
+      run = this.createIntelligenceRun(session, project.brief.creativeBrief, { workflowKind: 'DESIGN_STUDIO', projectId })
+    } catch (error) {
+      service.recordIntegrationAudit('formula-intelligence.run.quota.denied', projectId, 'blocked')
+      throw error
+    }
     project.status = 'IN_PROGRESS'; project.updatedAt = now()
     await this.executeIntelligence(service, run)
     service.recordIntegrationAudit('formula-intelligence.design.run.create', project.id)
@@ -146,6 +201,11 @@ export class AgentLocalRuntimeService {
     if (!direction) throw new NotFoundException('Design direction was not found')
     if (!this.state.runs.some((run) => run.id === direction.runId && run.user_id === session.userId)) throw new ForbiddenException('Only the generating perfumer can share a direction')
     const input = formulaDirectionShareSchema.parse(body)
+    const eligibleRecipientIds = new Set(service.formulaDesignRecipients(project.brandId).data.map((recipient) => recipient.userId))
+    if (input.recipientUserIds.some((recipientUserId) => !eligibleRecipientIds.has(recipientUserId))) {
+      service.recordIntegrationAudit('formula-intelligence.design.direction.share.denied', directionId, 'blocked')
+      throw new UnprocessableEntityException('Every recipient must be an active member of this project brand')
+    }
     const timestamp = now()
     const shares = direction.shares ?? []
     for (const recipientUserId of input.recipientUserIds) {
@@ -216,7 +276,13 @@ export class AgentLocalRuntimeService {
     const request = formulaOptimizerRequestSchema.parse(body)
     const versions = service.formulaVersions(request.baselineFormulaId).data
     if (!versions.versions.some((version) => version.version === request.baselineVersion)) throw new UnprocessableEntityException('Select an immutable formula version before optimizing')
-    const run = this.createIntelligenceRun(session, `Optimize ${versions.formula.name} ${request.baselineVersion}`, { workflowKind: 'REFORMULATION_OPTIMIZER', request })
+    let run: LocalRun
+    try {
+      run = this.createIntelligenceRun(session, `Optimize ${versions.formula.name} ${request.baselineVersion}`, { workflowKind: 'REFORMULATION_OPTIMIZER', request })
+    } catch (error) {
+      service.recordIntegrationAudit('formula-intelligence.run.quota.denied', `${request.baselineFormulaId}:${request.baselineVersion}`, 'blocked')
+      throw error
+    }
     await this.executeIntelligence(service, run)
     service.recordIntegrationAudit('formula-intelligence.reformulation.run.create', `${request.baselineFormulaId}:${request.baselineVersion}`)
     return { data: { run: this.runSummary(run), baseline: { formulaId: request.baselineFormulaId, version: request.baselineVersion } } }
@@ -318,7 +384,7 @@ export class AgentLocalRuntimeService {
     const confirmation = run.confirmation
     if (!confirmation || confirmation.id !== confirmationId) throw new NotFoundException('Agent confirmation was not found')
     if (confirmation.status === 'PENDING' && confirmation.expiresAt <= now()) {
-      confirmation.status = 'EXPIRED'; await this.persist(); throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
+      confirmation.status = 'EXPIRED'; service.recordIntegrationAudit('formula-intelligence.confirmation.expired', confirmationId, 'blocked'); await this.persist(); throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
     }
     if (confirmation.status !== 'PENDING') return { data: { duplicate: true, formulaId: confirmation.savedFormulaId } }
     if (decision === 'reject') {
@@ -326,10 +392,11 @@ export class AgentLocalRuntimeService {
       this.event(run, 'confirmation.rejected', { confirmationId, summary: 'Formula draft was not saved' })
       this.event(run, 'run.completed', { status: 'COMPLETED', progress: 100 }); await this.persist(); return { data: { rejected: true } }
     }
-    const preview = service.previewFormulaIntelligence(confirmation.proposal).data
-    const total = confirmation.proposal.ingredients.reduce((sum, item) => sum + item.percentage, 0)
-    if (Math.abs(total - 100) > 0.05 || preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
-      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
+    try {
+      this.revalidateDraftSave(service, run, confirmation.proposal)
+    } catch (error) {
+      service.recordIntegrationAudit('formula-intelligence.draft.save.denied', confirmationId, 'blocked')
+      throw error
     }
     const created = service.createAgentFormulaDraft(confirmationId, {
       name: confirmation.proposal.name, formulaType: confirmation.proposal.formulaType, targetGrams: confirmation.proposal.targetGrams,
@@ -361,6 +428,7 @@ export class AgentLocalRuntimeService {
   private createIntelligenceRun(session: AuthSession, brief: string, intelligence: NonNullable<LocalRun['intelligence']>) {
     const current = actor(session)
     const timestamp = now()
+    this.assertRunStartAllowed(current, intelligence.workflowKind === 'DESIGN_STUDIO' ? intelligence.projectId : undefined)
     const run: LocalRun = {
       id: crypto.randomUUID(), organization_id: current.organizationId, user_id: current.userId, session_id: current.sessionId,
       status: 'QUEUED', input_brief: brief, progress: 0, provider: 'mock', model_name: 'deterministic-v1',
@@ -371,6 +439,21 @@ export class AgentLocalRuntimeService {
     this.event(run, 'run.created', { status: 'QUEUED', progress: 0 })
     this.event(run, 'run.queued', { status: 'QUEUED', progress: 0 })
     return run
+  }
+
+  private assertRunStartAllowed(current: ReturnType<typeof actor>, projectId?: string) {
+    const activeStatuses = new Set<AgentRunStatus>(['QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION'])
+    const activeRuns = this.state.runs.filter((run) => run.organization_id === current.organizationId && activeStatuses.has(run.status))
+    if (activeRuns.filter((run) => run.user_id === current.userId).length >= 2 || activeRuns.length >= 10) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_RUN_QUOTA_EXHAUSTED')
+    }
+    const cutoff = Date.now() - 15 * 60 * 1000
+    if (this.state.runs.filter((run) => run.organization_id === current.organizationId && run.user_id === current.userId && new Date(run.created_at).getTime() >= cutoff).length >= 5) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_START_RATE_LIMITED')
+    }
+    if (projectId && activeRuns.some((run) => run.intelligence?.workflowKind === 'DESIGN_STUDIO' && run.intelligence.projectId === projectId)) {
+      throw new ConflictException('FORMULA_INTELLIGENCE_PROJECT_GENERATION_IN_PROGRESS')
+    }
   }
 
   private projectFor(session: AuthSession, projectId: string, includeTenantProjects: boolean) {
@@ -418,7 +501,41 @@ export class AgentLocalRuntimeService {
   }
 
   private requireFormulaPermission(service: NorthStarService, permission: string) {
-    if (!service.me().data.permissions.includes(permission)) throw new ForbiddenException(`Formula Intelligence requires ${permission}`)
+    if (!service.me().data.permissions.includes(permission)) {
+      service.recordIntegrationAudit('formula-intelligence.access.denied', permission, 'blocked')
+      throw new ForbiddenException(`Formula Intelligence requires ${permission}`)
+    }
+  }
+
+  private revalidateDraftSave(service: NorthStarService, run: LocalRun, proposal: AgentFormulaProposal) {
+    this.requireFormulaPermission(service, 'formulas.edit')
+    this.requireFormulaPermission(service, 'formulas.viewSensitive')
+    this.requireFormulaPermission(service, 'materials.view')
+    const total = proposal.ingredients.reduce((sum, item) => sum + item.percentage, 0)
+    if (Math.abs(total - 100) > 0.05) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
+    const preview = service.previewFormulaIntelligence(proposal).data
+    if (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
+    }
+    if (run.pendingSave?.kind === 'design' && run.pendingSave.projectId) {
+      const project = this.state.projects.find((item) => item.id === run.pendingSave?.projectId && item.organizationId === run.organization_id)
+      const materials = new Set(proposal.ingredients.map((ingredient) => ingredient.materialId))
+      if (!project || project.brief.lockedMaterialIds.some((materialId) => !materials.has(materialId))) {
+        throw new UnprocessableEntityException('Formula draft does not preserve locked materials from the design brief')
+      }
+    }
+    if (run.pendingSave?.kind === 'optimizer') {
+      const request = run.intelligence?.request
+      const materials = new Set(proposal.ingredients.map((ingredient) => ingredient.materialId))
+      if (!request || request.lockedMaterialIds.some((materialId) => !materials.has(materialId))) {
+        throw new UnprocessableEntityException('Candidate does not preserve all locked materials')
+      }
+      if (request.requireEligibleInventory) {
+        if (!preview.visibility.canViewInventory) throw new ForbiddenException('Inventory permission is required when eligible inventory is mandatory')
+        if (preview.availability.some((item) => item.status !== 'AVAILABLE')) throw new UnprocessableEntityException('Candidate does not have eligible inventory for every material')
+      }
+    }
+    return preview
   }
 
   private async requestLocalConfirmation(
@@ -527,9 +644,9 @@ export class AgentLocalRuntimeService {
       const availability: LocalOptimizerCandidate['availability'] = preview.visibility.canViewInventory ? (preview.availability.every((item) => item.status === 'AVAILABLE') ? 'AVAILABLE' : 'MIXED') : 'UNKNOWN'
       const costDelta = preview.cost && baselineCost !== undefined ? Number((preview.cost.totalCost - baselineCost).toFixed(4)) : undefined
       const change = compositionChangePercent(baselineProposal, candidate.proposal)
-      const score = Number(Math.max(0, Math.min(100, (complianceStatus === 'PASS' ? 60 : complianceStatus === 'REVIEW_REQUIRED' ? 30 : 0) + (availability === 'AVAILABLE' ? 20 : availability === 'MIXED' ? 5 : 10) + (costDelta === undefined ? 0 : costDelta <= 0 ? 15 : 0) + Math.max(0, 5 - change / 20))).toFixed(2))
-      return { candidateId: crypto.randomUUID(), title: candidate.title, proposal: candidate.proposal, complianceStatus, availability, costDelta, compositionChangePercent: change, score, status: 'READY' as const, summary: [`Compliance: ${complianceStatus}.`, `Inventory: ${availability.toLowerCase()}.`, costDelta === undefined ? 'Cost detail is hidden by the current role.' : `Cost delta: ${costDelta.toFixed(2)}.`, `Composition change: ${change.toFixed(2)}%.`] }
-    }).sort((left, right) => right.score - left.score)
+      const score = Number(Math.max(0, Math.min(100, (complianceStatus === 'PASS' ? 60 : complianceStatus === 'REVIEW_REQUIRED' ? 30 : 0) + (availability === 'AVAILABLE' ? 20 : availability === 'MIXED' ? 5 : 0) + (costDelta === undefined ? 0 : costDelta <= 0 ? 15 : 0) + Math.max(0, 5 - change / 20))).toFixed(2))
+      return { candidateId: crypto.randomUUID(), title: candidate.title, proposal: candidate.proposal, complianceStatus, availability, costDelta, compositionChangePercent: change, score, status: 'READY' as const, summary: [`Compliance: ${complianceStatus}.`, `Inventory: ${availability === 'UNKNOWN' ? 'Not evaluated for this role.' : availability.toLowerCase() + '.'}`, costDelta === undefined ? 'Cost: Not evaluated for this role.' : `Cost delta: ${costDelta.toFixed(2)}.`, `Composition change: ${change.toFixed(2)}%.`] }
+    }).sort((left, right) => compareOptimizerCandidates({ ...left, inventoryEvaluated: left.availability !== 'UNKNOWN' }, { ...right, inventoryEvaluated: right.availability !== 'UNKNOWN' }))
     this.state.optimizerCandidates[run.id] = candidates
     this.persistArtifact(run, { type: 'optimizer_candidates', version: 1, data: { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion, intent: request.intent, candidates } })
     this.addNode(run, 'prepare_result', 94, { candidateCount: candidates.length })
@@ -620,8 +737,10 @@ export class AgentLocalRuntimeService {
         runs: Array.isArray(parsed.runs) ? parsed.runs : [],
         projects: Array.isArray(parsed.projects) ? parsed.projects : [],
         optimizerCandidates: parsed.optimizerCandidates && typeof parsed.optimizerCandidates === 'object' ? parsed.optimizerCandidates : {},
+        idempotency: parsed.idempotency && typeof parsed.idempotency === 'object' ? parsed.idempotency : {},
       }
-    } catch { this.state = { runs: [], projects: [], optimizerCandidates: {} } }
+      this.pruneIdempotencyRecords()
+    } catch { this.state = { runs: [], projects: [], optimizerCandidates: {}, idempotency: {} } }
   }
 
   private async persist() {
@@ -633,5 +752,12 @@ export class AgentLocalRuntimeService {
       await rename(temp, this.storagePath)
     })
     return this.writeQueue
+  }
+
+  private pruneIdempotencyRecords() {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000
+    for (const [scope, record] of Object.entries(this.state.idempotency)) {
+      if (!record?.createdAt || Date.parse(record.createdAt) < cutoff) delete this.state.idempotency[scope]
+    }
   }
 }

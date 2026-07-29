@@ -2899,9 +2899,18 @@ function App() {
             ) : activeKey === 'formulaDesignStudio' ? (
               <motion.div key="formula-design-studio" {...shellMotionPreset}>
                 <FormulaDesignStudioWorkspace
+                  apiBaseUrl={apiBaseUrl}
                   requestApi={requestApi}
                   materialRecords={materialRecords}
-                  canEditFormula={sessionHasPermission(currentSession, 'formulas.edit')}
+                  capabilities={{
+                    canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
+                    canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
+                    canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
+                    canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                  }}
                   onFormulaSaved={(formula) => {
                     setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
                     setActiveFormulaId(formula.id)
@@ -2911,10 +2920,19 @@ function App() {
             ) : activeKey === 'reformulationOptimizer' ? (
               <motion.div key="reformulation-optimizer" {...shellMotionPreset}>
                 <ReformulationOptimizerWorkspace
+                  apiBaseUrl={apiBaseUrl}
                   requestApi={requestApi}
                   formulaRecords={scopedFormulaRecords}
                   materialRecords={materialRecords}
-                  canEditFormula={sessionHasPermission(currentSession, 'formulas.edit')}
+                  capabilities={{
+                    canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
+                    canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
+                    canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
+                    canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
+                    canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                  }}
                   onFormulaSaved={(formula) => {
                     setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
                     setActiveFormulaId(formula.id)

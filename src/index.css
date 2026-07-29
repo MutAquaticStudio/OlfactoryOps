@@ -549,6 +549,143 @@ strong {
   line-height: 1.4;
 }
 
+.formula-intelligence-picker,
+.formula-intelligence-run-status {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.formula-intelligence-picker > small,
+.formula-intelligence-brief > small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.formula-intelligence-picker-chips,
+.formula-intelligence-node-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.formula-intelligence-picker-chips button,
+.formula-intelligence-node-list span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 7px;
+  overflow-wrap: anywhere;
+  border: 1px solid rgb(var(--accent-rgb) / 0.3);
+  border-radius: 5px;
+  background: rgb(var(--accent-rgb) / 0.08);
+  color: var(--text-2);
+  font: 0.72rem/1.25 var(--mono-font);
+}
+
+.formula-intelligence-picker-chips button {
+  cursor: pointer;
+}
+
+.formula-intelligence-picker-list,
+.formula-intelligence-recipient-list,
+.formula-intelligence-share-list {
+  display: grid;
+  gap: 6px;
+  max-height: 196px;
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-subtle);
+}
+
+.formula-intelligence-picker-list label,
+.formula-intelligence-recipient-list label,
+.formula-intelligence-share-list > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 4px;
+}
+
+.formula-intelligence-picker-list label:hover,
+.formula-intelligence-recipient-list label:hover {
+  background: rgb(var(--accent-rgb) / 0.07);
+}
+
+.formula-intelligence-recipient-list span {
+  display: grid;
+  min-width: 0;
+}
+
+.formula-intelligence-recipient-list small,
+.formula-intelligence-share-list span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.formula-intelligence-share-list > div {
+  justify-content: space-between;
+}
+
+.formula-intelligence-run-status {
+  padding: 10px;
+  border: 1px solid rgb(var(--accent-rgb) / 0.28);
+  border-radius: 6px;
+  background: rgb(var(--accent-rgb) / 0.055);
+}
+
+.formula-intelligence-run-status > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.formula-intelligence-run-status > div:first-child span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.formula-intelligence-node-list .is-failed {
+  border-color: rgb(251 113 133 / 0.48);
+  color: var(--red);
+}
+
+.formula-intelligence-node-list .is-completed {
+  border-color: rgb(74 222 128 / 0.42);
+}
+
+.formula-intelligence-modal-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+  background: rgb(1 6 8 / 0.72);
+}
+
+.formula-intelligence-modal {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 620px);
+  max-height: min(760px, calc(100dvh - 40px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.4);
+}
+
 .formula-agent-hero,
 .agent-confirmation {
   display: flex;
@@ -800,6 +937,10 @@ strong {
   .formula-intelligence-direction-grid { grid-template-columns: 1fr; }
   .agent-formula-row { grid-template-columns: minmax(0, 1fr) 66px; }
   .agent-formula-row > span:last-child { grid-column: 2; }
+  .formula-intelligence-modal-backdrop { padding: 10px; }
+  .formula-intelligence-modal { max-height: calc(100dvh - 20px); padding: 13px; }
+  .formula-intelligence-share-list > div { align-items: flex-start; }
+  .formula-intelligence-share-list button { flex: 0 0 auto; }
 }
 
 .brand-mark.is-monogram {

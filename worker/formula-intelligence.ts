@@ -432,6 +432,7 @@ export class FormulaIntelligenceStore {
        WHERE organization_id = ? AND status IN (?, ?, ?)`,
     ).bind(actor.userId, actor.organizationId, ...activeStatuses).first<{ user_count: number | null; tenant_count: number | null }>()
     if (Number(active?.user_count ?? 0) >= 2 || Number(active?.tenant_count ?? 0) >= 10) {
+      await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.run.quota.denied', projectId ?? 'tenant', 'blocked')
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_RUN_QUOTA_EXHAUSTED')
     }
     const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString()
@@ -439,14 +440,20 @@ export class FormulaIntelligenceStore {
       `SELECT COUNT(*) AS count FROM formula_intelligence_runs
        WHERE organization_id = ? AND created_by_user_id = ? AND created_at >= ?`,
     ).bind(actor.organizationId, actor.userId, cutoff).first<{ count: number }>()
-    if (Number(starts?.count ?? 0) >= 5) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_START_RATE_LIMITED')
+    if (Number(starts?.count ?? 0) >= 5) {
+      await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.run.rate-limit.denied', projectId ?? 'tenant', 'blocked')
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_START_RATE_LIMITED')
+    }
     if (projectId) {
       const projectRun = await this.db.prepare(
         `SELECT 1 AS found FROM formula_intelligence_runs fi
          JOIN agent_runs ar ON ar.id = fi.run_id AND ar.organization_id = fi.organization_id
          WHERE fi.organization_id = ? AND fi.project_id = ? AND ar.status IN (?, ?, ?) LIMIT 1`,
       ).bind(actor.organizationId, projectId, ...activeStatuses).first<{ found: number }>()
-      if (projectRun) throw new ConflictException('FORMULA_INTELLIGENCE_PROJECT_GENERATION_IN_PROGRESS')
+      if (projectRun) {
+        await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.project.generation.denied', projectId, 'blocked')
+        throw new ConflictException('FORMULA_INTELLIGENCE_PROJECT_GENERATION_IN_PROGRESS')
+      }
     }
   }
 
