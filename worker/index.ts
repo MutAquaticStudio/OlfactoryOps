@@ -8,6 +8,13 @@ import {
   sendResendEmail,
 } from './provider-adapters.js'
 import {
+  AgentRuntimeStore,
+  actorFromService,
+  configuredAgentProvider,
+  ensureAgentReadAccess,
+  executeDeterministicAgentRun,
+} from './agent-runtime.js'
+import {
   PayloadTooLargeException,
   ForbiddenException,
   TooManyRequestsException,
@@ -101,6 +108,10 @@ type Env = {
   CLOUDFLARE_API_TOKEN?: string
   CLOUDFLARE_SAAS_ZONE_ID?: string
   CLOUDFLARE_SAAS_ORIGIN?: string
+  AGENT_PROVIDER?: 'mock' | 'openai'
+  OPENAI_API_KEY?: string
+  OPENAI_FORMULA_AGENT_MODEL?: string
+  AGENT_CONTEXT_ENCRYPTION_KEY?: string
 }
 
 type RouteContext = {
@@ -112,6 +123,7 @@ type RouteContext = {
   formData?: FormData
   env: Env
   request: Request
+  ctx: ExecutionContext
 }
 
 type Route = {
@@ -128,6 +140,7 @@ type Route = {
   rawBody?: boolean
   formData?: boolean
   idempotent?: boolean
+  persistState?: boolean
   handler: (context: RouteContext) => unknown
 }
 
@@ -545,6 +558,18 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/imports/preview', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.previewImport(body) },
   { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
+  { method: 'POST', pattern: '/agent/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createAgentRun(context) },
+  { method: 'GET', pattern: '/agent/runs', persistState: false, handler: ({ service, env }) => new AgentRuntimeStore(env.DB).list(ensureAgentReadAccess(service)) },
+  { method: 'GET', pattern: '/agent/runs/:id', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).detail(ensureAgentReadAccess(service), params.id) },
+  { method: 'GET', pattern: '/agent/runs/:id/events', persistState: false, handler: ({ service, env, params, query }) => new AgentRuntimeStore(env.DB).events(ensureAgentReadAccess(service), params.id, readAgentSequence(query.get('afterSequence'))) },
+  { method: 'GET', pattern: '/agent/runs/:id/artifacts', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).artifacts(ensureAgentReadAccess(service), params.id) },
+  { method: 'GET', pattern: '/agent/runs/:id/artifacts/:artifactId', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).artifact(ensureAgentReadAccess(service), params.id, params.artifactId) },
+  { method: 'GET', pattern: '/agent/runs/:id/stream', persistState: false, handler: ({ service, env, params, query, request }) => new AgentRuntimeStore(env.DB).stream(ensureAgentReadAccess(service), params.id, readAgentStreamSequence(request, query)) },
+  { method: 'POST', pattern: '/agent/runs/:id/cancel', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).cancel(ensureAgentReadAccess(service), params.id) },
+  { method: 'POST', pattern: '/agent/runs/:id/resume', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resumeAgentRun(context) },
+  { method: 'POST', pattern: '/agent/runs/:id/nodes/:nodeId/retry', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => retryAgentNode(context) },
+  { method: 'POST', pattern: '/agent/runs/:id/confirmations/:confirmationId', mutates: true, idempotent: true, writeGate: false, handler: (context) => resolveAgentConfirmation(context) },
+  { method: 'POST', pattern: '/agent/runs/:id/restart', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restartAgentRun(context) },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
   { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/fork', mutates: true, limitKey: 'formulas', handler: ({ service, params, body }) => service.forkFormula(params.id, body) },
@@ -760,6 +785,89 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/audit/export', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.auditExport(body) },
 ]
 
+function readAgentSequence(value: string | null) {
+  const parsed = Number(value ?? '0')
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0
+}
+
+function readAgentStreamSequence(request: Request, query: URLSearchParams) {
+  const header = request.headers.get('Last-Event-ID')
+  return readAgentSequence(header ?? query.get('afterSequence'))
+}
+
+async function createAgentRun(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  const store = new AgentRuntimeStore(context.env.DB)
+  const result = await store.create(actor, context.body, configuredAgentProvider(context.env))
+  const runId = result.data.run.id
+  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, runId))
+  return result
+}
+
+async function resumeAgentRun(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  const store = new AgentRuntimeStore(context.env.DB)
+  const result = await store.resume(actor, context.params.id)
+  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, context.params.id))
+  return result
+}
+
+async function retryAgentNode(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  const store = new AgentRuntimeStore(context.env.DB)
+  const result = await store.retryNode(actor, context.params.id, context.params.nodeId)
+  context.ctx.waitUntil(executeDeterministicAgentRun(store, context.service, actor, context.params.id))
+  return result
+}
+
+async function restartAgentRun(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  const prior = await new AgentRuntimeStore(context.env.DB).detail(actor, context.params.id)
+  const result = await new AgentRuntimeStore(context.env.DB).create(actor, { brief: prior.data.run.input_brief }, configuredAgentProvider(context.env))
+  context.ctx.waitUntil(executeDeterministicAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id))
+  return { data: { previousRunId: context.params.id, run: result.data.run } }
+}
+
+async function resolveAgentConfirmation(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  const store = new AgentRuntimeStore(context.env.DB)
+  const decision = typeof context.body.decision === 'string' ? context.body.decision : 'accept'
+  if (decision === 'reject') return store.rejectConfirmation(actor, context.params.id, context.params.confirmationId)
+  const confirmation = await store.acceptConfirmation(actor, context.params.id, context.params.confirmationId)
+  if (confirmation.alreadyAccepted) {
+    return { data: { duplicate: true, summary: confirmation.summary, invariant: 'confirmation ID is idempotent; no additional formula draft was created' } }
+  }
+  const created = context.service.createFormulaDraft({
+    name: confirmation.proposal.name,
+    formulaType: confirmation.proposal.formulaType,
+    targetGrams: confirmation.proposal.targetGrams,
+    concentrationType: confirmation.proposal.concentrationType,
+    finalProductConcentrationPercent: confirmation.proposal.finalProductConcentrationPercent,
+    ifraCategory: confirmation.proposal.ifraCategory,
+    brief: confirmation.proposal.brief,
+  }).data.formula
+  const materialNames = new Map(context.service.materials().data.map((material) => [material.id, material.name]))
+  const updated = context.service.updateFormulaDraft(created.id, {
+    expectedRevision: created.draftRevision,
+    lines: confirmation.proposal.ingredients.map((ingredient, index) => ({
+      id: `agent-${index + 1}`,
+      label: materialNames.get(ingredient.materialId) ?? ingredient.materialId,
+      materialId: ingredient.materialId,
+      grams: Number((confirmation.proposal.targetGrams * ingredient.percentage / 100).toFixed(4)),
+      concentration: ingredient.dilution ?? 100,
+      pyramidNote: ingredient.pyramidNote,
+    })),
+  }).data.formula
+  await store.attachSavedFormula(actor, context.params.id, context.params.confirmationId, updated.id)
+  return {
+    data: {
+      formula: updated,
+      confirmationId: context.params.confirmationId,
+      invariant: 'agent confirmation creates one editable draft and does not reserve or consume inventory',
+    },
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const startedAt = Date.now()
@@ -868,13 +976,14 @@ export default {
         formData,
         env,
         request,
+        ctx,
       })
       if (match.route.mutates) {
         await deliverNotificationOutbox(service, env)
       }
       let refreshSnapshotCache = false
 
-      if (match.route.mutates || service.hasSecurityStateChanges()) {
+      if ((match.route.mutates && match.route.persistState !== false) || service.hasSecurityStateChanges()) {
         if (match.route.persistScope === 'userSettings') {
           await persistUserSettingsMutation(env.DB, service)
           refreshSnapshotCache = true
@@ -947,8 +1056,32 @@ export default {
     }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(runScheduledAnalytics(controller, env))
+    ctx.waitUntil(Promise.all([runScheduledAnalytics(controller, env), runScheduledAgentRecovery(env)]))
   },
+}
+
+async function runScheduledAgentRecovery(env: Env) {
+  const store = new AgentRuntimeStore(env.DB)
+  const reclaimed = await store.recoverExpiredJobs()
+  for (const job of reclaimed) {
+    const run = await env.DB.prepare(
+      `SELECT session_id FROM agent_runs WHERE id = ? AND organization_id = ?`,
+    ).bind(job.run_id, job.organization_id).first<{ session_id: string }>()
+    if (!run) continue
+    try {
+      const service = new NorthStarService({
+        authCredentials: seededAdminCredentialsForEnv(env),
+        mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
+        billingMode: billingModeFromEnv(env),
+      })
+      await hydrateSnapshots(env.DB, service, env)
+      service.authenticateSession(run.session_id)
+      const actor = actorFromService(service)
+      await executeDeterministicAgentRun(store, service, actor, job.run_id)
+    } catch (error) {
+      console.error('Scheduled agent resume failed', error)
+    }
+  }
 }
 
 async function runScheduledAnalytics(controller: ScheduledController, env: Env) {

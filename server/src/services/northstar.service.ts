@@ -174,6 +174,7 @@ import {
   type WebhookRecord,
   type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
+import { agentFormulaProposalSchema, type AgentFormulaProposal } from '../../../src/data/agentRuntime.js'
 
 const seededAdminEmail = 'admin@labofscents.org'
 const passwordHashAlgorithm = 'sha256'
@@ -1640,7 +1641,9 @@ export class NorthStarService {
       data: {
         materialId: id,
         provenance: material.provenance,
-        documents: this.documentRecords.filter((document) => document.linkedTo === id),
+        documents: this.documentRecords.filter(
+          (document) => document.linkedTo === id && (document.organizationId || 'org-nxl') === session.organizationId,
+        ),
         invariant: 'every sourced material field keeps provenance evidence',
       },
     }
@@ -1916,6 +1919,90 @@ export class NorthStarService {
         invariant: movements.length > 0
           ? 'formula scale updates source-lot consumption through immutable delta movements'
           : 'formula scale updates the draft composition without inventory movement',
+      },
+    }
+  }
+
+  /**
+   * Computes formula-agent evidence without creating a formula, reservation, or movement.
+   * The proposal contains only tenant material IDs and percentages; all derived values remain
+   * deterministic domain calculations.
+   */
+  previewAgentFormula(proposalInput: AgentFormulaProposal) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.viewSensitive')
+    this.requirePermission(session.role, 'materials.view')
+    this.requirePermission(session.role, 'inventory.view')
+    this.requirePermission(session.role, 'costing.view')
+    const proposal = agentFormulaProposalSchema.parse(proposalInput)
+    const materialCatalog = this.materialCatalogForSession(session)
+    const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+    const totalPercent = proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0)
+    if (Math.abs(totalPercent - 100) > 0.05) {
+      throw new UnprocessableEntityException('Agent formula percentages must total 100%')
+    }
+    const seen = new Set<string>()
+    const lines = proposal.ingredients.map((ingredient, index) => {
+      if (seen.has(ingredient.materialId)) {
+        throw new UnprocessableEntityException('Agent formula may include each material only once')
+      }
+      seen.add(ingredient.materialId)
+      const material = materialById.get(ingredient.materialId)
+      if (!material) {
+        throw new NotFoundException(`Material ${ingredient.materialId} was not found in this workspace`)
+      }
+      return {
+        id: `agent-line-${index + 1}`,
+        label: material.name,
+        materialId: material.id,
+        grams: Number(((proposal.targetGrams * ingredient.percentage) / 100).toFixed(4)),
+        concentration: ingredient.dilution ?? 100,
+        pyramidNote: ingredient.pyramidNote,
+      }
+    })
+    const now = new Date().toISOString()
+    const formula: Formula = {
+      id: 'agent-preview', code: 'AGENT-PREVIEW', name: proposal.name, formulaType: proposal.formulaType,
+      version: 'preview', organizationId: session.organizationId, brandId: session.brandId,
+      concentrationType: proposal.concentrationType, finalProductConcentrationPercent: proposal.finalProductConcentrationPercent,
+      targetMarkets: proposal.formulaType === 'ACCORD' ? ['GLOBAL'] : ['EU', 'US'], brief: proposal.brief,
+      inspiration: '', pyramidSummary: '', tags: ['agent-proposal'], project: '', collection: '', density: 1,
+      bottleVolumeMl: 50, bottleCount: 1, ifraCategory: proposal.ifraCategory, workflowStatus: 'DRAFT',
+      draftRevision: 0, updatedAt: now, updatedBy: session.email, approvalHistory: [], status: 'draft',
+      targetGrams: proposal.targetGrams, owner: session.email, lines,
+    }
+    const formulas = [formula, ...this.formulaCatalogForSession(session)]
+    const lots = this.lotsForSession(session)
+    const leaves = resolveFormulaWithCatalog(formula.id, formulas, materialCatalog)
+    const cost = formulaCostReport(formula.id, formulas, materialCatalog, lots, this.priceHistoryForSession(session))
+    const ifra = evaluateFormulaIfra(formula, leaves, materialCatalog)
+    const availability = leaves.map((leaf) => {
+      const eligibleLots = lots.filter((lot) => lot.materialId === leaf.materialId && isLotEligibleForInventory(lot))
+      const availableGrams = eligibleLots.reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
+      return {
+        materialId: leaf.materialId,
+        materialName: leaf.materialName,
+        requiredGrams: leaf.grams,
+        availableGrams: Number(availableGrams.toFixed(4)),
+        lotCount: eligibleLots.length,
+        status: availableGrams <= 0 ? 'UNAVAILABLE' as const : availableGrams + 0.0001 < leaf.grams ? 'SHORTFALL' as const : 'AVAILABLE' as const,
+      }
+    })
+    const profiles = proposal.ingredients.map((ingredient) => this.materialComplianceRecords.find(
+      (profile) => profile.materialId === ingredient.materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
+    ))
+    const blockedMaterialIds = profiles.filter((profile) => profile?.status === 'BLOCKED').map((profile) => profile!.materialId)
+    const reviewMaterialIds = profiles.filter((profile) => profile?.status === 'REVIEW_REQUIRED').map((profile) => profile!.materialId)
+    return {
+      data: {
+        formula, leaves, cost, ifra, availability,
+        compliance: {
+          blockedMaterialIds, reviewMaterialIds,
+          status: blockedMaterialIds.length > 0 || ifra.blockerCount > 0
+            ? 'BLOCKED'
+            : reviewMaterialIds.length > 0 || ifra.nearLimitCount > 0 ? 'REVIEW_REQUIRED' : 'APPROVED',
+        },
+        invariant: 'agent preview is advisory only and never reserves or consumes inventory',
       },
     }
   }
@@ -7423,6 +7510,7 @@ export class NorthStarService {
     }
     if (canView('documents.view')) {
       this.documentRecords
+        .filter((document) => (document.organizationId || 'org-nxl') === session.organizationId)
         .filter((document) => matches([document.title, document.type, document.linkedTo]))
         .forEach((document) => results.push({
           id: document.id,

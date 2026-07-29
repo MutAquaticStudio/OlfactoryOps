@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
+import { AgentLocalRuntimeService } from '../services/agent-local-runtime.service.js'
 
 type LabUsageBody = {
   formulaId?: string
@@ -149,7 +150,10 @@ type ShipOrderBody = {
 
 @Controller()
 export class NorthStarController {
-  constructor(@Inject(NorthStarService) private readonly northStar: NorthStarService) {}
+  constructor(
+    @Inject(NorthStarService) private readonly northStar: NorthStarService,
+    @Inject(AgentLocalRuntimeService) private readonly agentRuntime: AgentLocalRuntimeService,
+  ) {}
 
   @Get('phases')
   phases() {
@@ -263,6 +267,71 @@ export class NorthStarController {
   @Get('formulas')
   formulas() {
     return this.northStar.formulas()
+  }
+
+  @Get('agent/runs')
+  agentRuns() {
+    return this.agentRuntime.list(this.northStar.me().data.session)
+  }
+
+  @Post('agent/runs')
+  createAgentRun(@Body() body: Record<string, unknown>) {
+    return this.agentRuntime.create(this.northStar, this.northStar.me().data.session, body)
+  }
+
+  @Get('agent/runs/:id')
+  agentRun(@Param('id') id: string) {
+    return this.agentRuntime.detail(this.northStar.me().data.session, id)
+  }
+
+  @Get('agent/runs/:id/events')
+  agentEvents(@Param('id') id: string, @Query('afterSequence') afterSequence?: string) {
+    return this.agentRuntime.events(this.northStar.me().data.session, id, Math.max(0, Number(afterSequence ?? '0') || 0))
+  }
+
+  @Get('agent/runs/:id/artifacts')
+  agentArtifacts(@Param('id') id: string) {
+    return this.agentRuntime.artifacts(this.northStar.me().data.session, id)
+  }
+
+  @Get('agent/runs/:id/artifacts/:artifactId')
+  agentArtifact(@Param('id') id: string, @Param('artifactId') artifactId: string) {
+    return this.agentRuntime.artifact(this.northStar.me().data.session, id, artifactId)
+  }
+
+  @Get('agent/runs/:id/stream')
+  async agentStream(@Param('id') id: string, @Query('afterSequence') afterSequence: string | undefined, @Res() reply: any) {
+    const events = await this.agentRuntime.events(this.northStar.me().data.session, id, Math.max(0, Number(afterSequence ?? '0') || 0))
+    reply.header('Cache-Control', 'no-cache, no-transform')
+    reply.header('Connection', 'keep-alive')
+    reply.header('Content-Type', 'text/event-stream; charset=utf-8')
+    reply.raw.write(events.map((event) => `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
+    reply.raw.end(': complete\n\n')
+  }
+
+  @Post('agent/runs/:id/cancel')
+  cancelAgentRun(@Param('id') id: string) {
+    return this.agentRuntime.cancel(this.northStar.me().data.session, id)
+  }
+
+  @Post('agent/runs/:id/resume')
+  resumeAgentRun(@Param('id') id: string) {
+    return this.agentRuntime.resume(this.northStar, this.northStar.me().data.session, id)
+  }
+
+  @Post('agent/runs/:id/nodes/:nodeId/retry')
+  retryAgentNode(@Param('id') id: string, @Param('nodeId') nodeId: string) {
+    return this.agentRuntime.retryNode(this.northStar, this.northStar.me().data.session, id, nodeId)
+  }
+
+  @Post('agent/runs/:id/restart')
+  restartAgentRun(@Param('id') id: string) {
+    return this.agentRuntime.restart(this.northStar, this.northStar.me().data.session, id)
+  }
+
+  @Post('agent/runs/:id/confirmations/:confirmationId')
+  resolveAgentConfirmation(@Param('id') id: string, @Param('confirmationId') confirmationId: string, @Body() body: { decision?: string }) {
+    return this.agentRuntime.resolveConfirmation(this.northStar, this.northStar.me().data.session, id, confirmationId, body.decision)
   }
 
   @Post('formulas')

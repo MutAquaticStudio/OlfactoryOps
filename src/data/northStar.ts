@@ -7,6 +7,7 @@ export type DomainKey =
   | 'customization'
   | 'materials'
   | 'formulas'
+  | 'formulaAgent'
   | 'inventory'
   | 'labUsage'
   | 'documents'
@@ -1863,6 +1864,24 @@ export const domains: DomainModule[] = [
     permissions: ['formulas.view', 'formulas.viewSensitive', 'formulas.export'],
     screens: ['Formula table', 'Accord editor', 'Line controls', 'Resolve preview', 'Version history', 'Approval and export'],
     activity: 'FRM-0421 can snapshot, approve, export, and resolve accord leaves without stock movement',
+  },
+  {
+    key: 'formulaAgent',
+    phase: 'AI',
+    name: 'Formula Research Agent',
+    shortName: 'Formula Agent',
+    responsibility: 'Tenant-scoped research workflow that produces structured, reviewable formula proposals',
+    status: 'active',
+    health: 84,
+    risk: 'Mock mode is available by default; OpenAI mode remains unavailable until Worker secrets are configured',
+    owner: 'Perfumer Team',
+    entities: ['AgentRun', 'WorkflowNode', 'ToolCall', 'Artifact', 'Confirmation'],
+    features: ['Brief analysis', 'Material search', 'Inventory advisory', 'Cost and IFRA preview', 'Explicit draft confirmation'],
+    invariants: ['Agent tools inherit tenant permissions', 'No arbitrary SQL or tools', 'Draft save is non-consuming', 'Confirmation is idempotent'],
+    apis: ['/api/v1/agent/runs', '/api/v1/agent/runs/:id/stream', '/api/v1/agent/runs/:id/confirmations/:confirmationId'],
+    permissions: ['formulas.view'],
+    screens: ['Formula research workspace', 'Workflow progress', 'Structured artifacts', 'Confirmation'],
+    activity: 'Research runs are persisted, replayable, and require confirmation before an editable formula draft is saved',
   },
   {
     key: 'inventory',
@@ -3730,6 +3749,9 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
   formulas: [
     { id: 'FRM-0421', label: 'Nocturne 17', status: 'active', amount: 'v12', owner: 'Perfumer' },
     { id: 'ACC-0007', label: 'Citrus Lift Accord', status: 'stable', amount: '4 leaves', owner: 'Perfumer' },
+  ],
+  formulaAgent: [
+    { id: 'AGENT-RUN', label: 'Formula research workflow', status: 'active', amount: 'Structured artifacts', owner: 'Perfumer' },
   ],
   inventory: [
     { id: 'L-ISO-031', label: 'Iso E Super lot', status: 'stable', amount: '250g', owner: 'Inventory' },

@@ -1522,6 +1522,34 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
+  it('calculates tenant-scoped agent preview evidence without reserving or consuming inventory', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const preview = service.previewAgentFormula({
+      name: 'Agent preview',
+      formulaType: 'FINE_FRAGRANCE',
+      targetGrams: 100,
+      concentrationType: 'EDP',
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+      brief: 'Marine woody research brief',
+      ingredients: [
+        { materialId: 'mat-bergamot', percentage: 40, pyramidNote: 'Top' },
+        { materialId: 'mat-hedione', percentage: 35, pyramidNote: 'Middle' },
+        { materialId: 'mat-iso', percentage: 25, pyramidNote: 'Base' },
+      ],
+    }).data
+    expect(preview.formula.lines).toHaveLength(3)
+    expect(preview.availability).toHaveLength(3)
+    expect(preview.cost.totalCost).toBeGreaterThan(0)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+    expect(() => service.previewAgentFormula({
+      name: 'Invalid agent preview', formulaType: 'ACCORD', targetGrams: 10, concentrationType: 'OTHER',
+      finalProductConcentrationPercent: 100, ifraCategory: '4', brief: 'invalid total',
+      ingredients: [{ materialId: 'mat-iso', percentage: 80 }],
+    })).toThrow(UnprocessableEntityException)
+  })
+
   it('adjusts and reverses inventory when a consumed formula line changes', () => {
     const service = createAuthenticatedService()
     const formula = service.createFormulaDraft({ name: 'Inventory-synced Accord', targetGrams: 60 }).data.formula

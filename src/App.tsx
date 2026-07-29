@@ -71,6 +71,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { FormulaAgentWorkspace } from './features/ai-formula-agent/FormulaAgentWorkspace'
 import {
   auditEvents,
   commercialSkus,
@@ -1068,6 +1069,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   customization: Settings,
   materials: Atom,
   formulas: FlaskConical,
+  formulaAgent: Sparkles,
   inventory: Boxes,
   labUsage: Beaker,
   documents: FileLock2,
@@ -1082,7 +1084,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
 
 const navGroups: { title: string; keys: DomainKey[] }[] = [
   { title: 'Command', keys: ['dashboard', 'platform', 'identity', 'customization'] },
-  { title: 'R&D Spine', keys: ['materials', 'formulas', 'inventory', 'labUsage'] },
+  { title: 'R&D Spine', keys: ['materials', 'formulas', 'formulaAgent', 'inventory', 'labUsage'] },
   { title: 'Operations', keys: ['production', 'procurement', 'commerce', 'orders'] },
   { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
 ]
@@ -1817,7 +1819,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 }
 
 function App() {
-  const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
+  const [activeKey, setActiveKey] = useState<DomainKey>(() => window.location.pathname === '/ai/formula-agent' ? 'formulaAgent' : 'dashboard')
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
@@ -1990,6 +1992,8 @@ function App() {
   const navigateToDomain = useCallback(
     (key: DomainKey) => {
       setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
+      const path = key === 'formulaAgent' ? '/ai/formula-agent' : '/'
+      if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
       setMobileNavOpen(false)
     },
     [currentSession],
@@ -2045,6 +2049,12 @@ function App() {
       setActiveKey('dashboard')
     }
   }, [activeKey, currentSession])
+
+  useEffect(() => {
+    const handlePopState = () => setActiveKey(window.location.pathname === '/ai/formula-agent' ? 'formulaAgent' : 'dashboard')
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   useEffect(() => {
     function handleAuthExpired() {
@@ -2869,6 +2879,17 @@ function App() {
                   session={currentSession}
                   onNavigate={navigateToDomain}
                   onOpenModal={setModal}
+                />
+              </motion.div>
+            ) : activeKey === 'formulaAgent' ? (
+              <motion.div key="formula-agent" {...shellMotionPreset}>
+                <FormulaAgentWorkspace
+                  apiBaseUrl={apiBaseUrl}
+                  requestApi={requestApi}
+                  onFormulaSaved={(formula) => {
+                    setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
+                    setActiveFormulaId(formula.id)
+                  }}
                 />
               </motion.div>
             ) : selectedDomain ? (
