@@ -1,0 +1,451 @@
+.glass,
+.glass-hover:hover {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  box-shadow: none;
+  transform: none;
+}
+
+.glass::before,
+.glass::after {
+  display: none;
+  content: none;
+}
+
+.panel,
+.domain-header {
+  padding: 20px;
+}
+
+.panel-header {
+  min-height: 24px;
+  margin-bottom: 18px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.panel-title-row {
+  gap: 9px;
+}
+
+.panel-title-row h2,
+.panel-title-row h3 {
+  font-weight: 670;
+}
+
+.icon-chip {
+  width: 24px;
+  height: 24px;
+  color: #7dcc99;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.lead,
+.formula-intelligence-copy {
+  color: var(--text-2);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.hero-panel .lead {
+  max-width: 640px;
+  font-size: 1rem;
+}
+
+.hero-actions {
+  margin-top: 22px;
+}
+
+.primary-button,
+.ghost-button {
+  min-height: 38px;
+  border-radius: 8px;
+  font-weight: 650;
+}
+
+.primary-button {
+  color: #f7fff8;
+  border-color: var(--blue);
+  background: var(--blue);
+}
+
+.primary-button:hover {
+  border-color: var(--blue-bright);
+  background: var(--blue-bright);
+}
+
+.metric {
+  gap: 5px;
+  padding: 12px 13px;
+  border-color: #2a342b;
+  border-radius: 8px;
+  background: #0d110d;
+}
+
+.metric span {
+  color: #879187;
+  font-size: 0.72rem;
+}
+
+.metric strong {
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.02rem;
+  font-weight: 680;
+}
+
+.data-tag,
+.status-badge,
+.formula-type-pill,
+.formula-tag-row span,
+.formula-inventory-link {
+  border-radius: 6px;
+}
+
+.data-tag {
+  color: #aeb8ae;
+  border-color: #2d382e;
+  background: #121712;
+  font-family: inherit;
+}
+
+.data-tag strong {
+  font-family: inherit;
+  font-weight: 650;
+}
+
+.data-tag.tone-green {
+  color: #a9dcb7;
+  border-color: #315c40;
+  background: #122217;
+}
+
+.data-tag.tone-amber {
+  color: #e4c179;
+  border-color: #634d22;
+  background: #211b0e;
+}
+
+.data-tag.tone-blue {
+  color: #b9d8c5;
+  border-color: #315848;
+  background: #112019;
+}
+
+.field-row input,
+.field-row select,
+.field-row textarea {
+  min-height: 42px;
+  border-color: #313b32;
+  border-radius: 8px;
+  background: #0c100c;
+  box-shadow: none;
+}
+
+.field-row textarea {
+  font-family: inherit;
+}
+
+.field-row input:focus,
+.field-row select:focus,
+.field-row textarea:focus {
+  border-color: #4f9568;
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.16);
+}
+
+.stock-card,
+.record-card,
+.lot-detail-card,
+.label-preview-card,
+.genealogy-row,
+.shopping-row,
+.tenant-summary,
+.entry-column,
+.timeline-step,
+.permission-role-card,
+.permission-row-card,
+.sequence-preview,
+.branding-preview,
+.readiness-item,
+.audit-row,
+.movement-row,
+.document-row,
+.formula-card,
+.formula-line,
+.lot-row,
+.material-row,
+.workflow-step,
+.domain-cell,
+.resolved-row,
+.text-card,
+.mono-card {
+  border-color: #2a332b;
+  border-radius: 8px;
+  background: #111511;
+}
+
+.workflow-step,
+.domain-cell {
+  text-align: left;
+}
+
+.workflow-step:hover,
+.domain-cell:hover,
+.formula-card:hover,
+.material-row:hover {
+  border-color: #4a7557;
+  background: #151c16;
+}
+
+.formula-lab-library,
+.formula-lab-editor,
+.formula-lab-inspector,
+.formula-lab-details-dock,
+.formula-lab-analysis-card {
+  border-color: #2a332b;
+  border-radius: 10px;
+  background: #111511;
+  box-shadow: none;
+}
+
+.formula-lab-topbar,
+.formula-ledger-section-head {
+  background: #151a15;
+}
+
+.formula-material-avatar {
+  color: #8bc99f;
+  background: #142319;
+}
+
+.timeline-step.is-current {
+  border-color: #3c7650;
+  background: #14261a;
+}
+
+.panel,
+.record-card,
+.lot-detail-card,
+.material-row,
+.formula-line,
+.movement-row,
+.domain-cell,
+.task-shortcut {
+  min-width: 0;
+}
+
+.record-card strong,
+.lot-detail-card strong,
+.material-row strong,
+.formula-line strong,
+.movement-row strong,
+.domain-cell strong,
+.task-shortcut strong {
+  overflow-wrap: anywhere;
+}
+
+/* Shared operational surfaces and transient details. */
+.workspace-panel {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-panel:hover {
+  transform: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.task-shortcut-list {
+  display: grid;
+  gap: 1px;
+  border: 1px solid #2a332b;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #2a332b;
+}
+
+.task-shortcut {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  width: 100%;
+  min-height: 66px;
+  padding: 11px 13px;
+  color: var(--text);
+  border: 0;
+  background: #111511;
+  cursor: pointer;
+  text-align: left;
+}
+
+.task-shortcut:hover {
+  background: #151c16;
+}
+
+.task-shortcut > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.task-shortcut strong {
+  font-size: 0.88rem;
+  font-weight: 660;
+}
+
+.task-shortcut small {
+  color: var(--text-2);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.task-shortcut > svg {
+  color: #869086;
+}
+
+.task-shortcut-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #8bc99f;
+  border: 1px solid #31533c;
+  border-radius: 7px;
+  background: #122017;
+}
+
+.workspace-dialog-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(3 5 3 / 0.76);
+  animation: workspace-dialog-backdrop-in 150ms ease-out both;
+}
+
+.workspace-dialog {
+  width: min(100%, 640px);
+  max-height: min(780px, calc(100dvh - 48px));
+  overflow: auto;
+  border: 1px solid #334035;
+  border-radius: 12px;
+  background: #111511;
+  box-shadow: 0 22px 60px rgb(0 0 0 / 0.42);
+  animation: workspace-dialog-in 180ms ease-out both;
+}
+
+.workspace-dialog-grip {
+  display: none;
+}
+
+.workspace-dialog-header,
+.workspace-dialog-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+}
+
+.workspace-dialog-header {
+  border-bottom: 1px solid #293129;
+}
+
+.workspace-dialog-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 680;
+}
+
+.workspace-dialog-header p {
+  margin: 5px 0 0;
+  color: var(--text-2);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.workspace-dialog-body {
+  padding: 20px;
+}
+
+.workspace-dialog-footer {
+  align-items: center;
+  border-top: 1px solid #293129;
+}
+
+.workspace-dialog .popup-body {
+  padding: 0;
+}
+
+.workspace-dialog.formula-sheet .workspace-dialog-body {
+  padding: 0;
+}
+
+.workspace-dialog .popup-actions {
+  width: 100%;
+  margin: 0;
+}
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #74c592;
+  outline-offset: 2px;
+}
+
+@keyframes workspace-dialog-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes workspace-dialog-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 640px) {
+  .task-shortcut {
+    min-height: 62px;
+    padding: 10px 11px;
+  }
+
+  .workspace-dialog-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .workspace-dialog {
+    width: 100%;
+    max-height: min(84dvh, 720px);
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .workspace-dialog-grip {
+    display: block;
+    width: 38px;
+    height: 4px;
+    margin: 10px auto -4px;
+    border-radius: 999px;
+    background: #495449;
+  }
+
+  .workspace-dialog-header,
+  .workspace-dialog-body,
+  .workspace-dialog-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-dialog-backdrop,
+  .workspace-dialog {
+    animation: none;
+  }
+}

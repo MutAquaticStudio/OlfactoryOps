@@ -72,6 +72,8 @@ import {
   YAxis,
 } from 'recharts'
 import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
+import { WorkspaceDialog } from './ui/WorkspaceDialog'
+import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
 import {
   auditEvents,
   commercialSkus,
@@ -252,7 +254,8 @@ const defaultAccentColor = '#0f766e'
 const showMoleculeSplitPanel = false
 const showInventoryLotComplianceReview = false
 
-const accentColorPresets = ['#0f766e', '#0369a1', '#15803d', '#9a6700', '#b42318', '#7c3aed']
+const accentColorPresets = ['#0f766e', '#0b6b61', '#14705e', '#1a7253', '#1c6656']
+const controlledAccentColors = new Set(accentColorPresets)
 
 const clientFallbackUserSettings: UserSettingsRecord = {
   userId: 'client-fallback',
@@ -1084,27 +1087,33 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   saas: ShieldCheck,
 }
 
-const navGroups: { title: string; keys: DomainKey[] }[] = [
-  { title: 'Command', keys: ['dashboard', 'platform', 'identity', 'customization'] },
-  { title: 'R&D Spine', keys: ['materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'inventory', 'labUsage'] },
-  { title: 'Operations', keys: ['production', 'procurement', 'commerce', 'orders'] },
-  { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
+const navGroups: { title: string; keys: DomainKey[]; internalOnly?: boolean }[] = [
+  {
+    title: 'Workbench',
+    keys: ['dashboard', 'materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'inventory', 'labUsage'],
+  },
+  { title: 'Operations', keys: ['production', 'procurement', 'orders'] },
+  { title: 'Commercial', keys: ['commerce', 'costing'] },
+  { title: 'Insights', keys: ['analytics'] },
+  { title: 'Workspace', keys: ['customization', 'identity', 'saas'] },
+  { title: 'Platform', keys: ['platform'], internalOnly: true },
 ]
 
-const customerNavGroupTitles: Record<string, string> = {
-  Command: 'Home',
-  'R&D Spine': 'Lab',
-  Enterprise: 'Account',
+const navigationLabels: Partial<Record<DomainKey, string>> = {
+  commerce: 'Catalog & quotes',
+  customization: 'Branding',
+  identity: 'Members & security',
+  saas: 'Billing & integrations',
 }
 
 const workflowNodes: { key: DomainKey; label: string; detail: string }[] = [
-  { key: 'materials', label: 'Material', detail: 'SDS, CoA, provenance' },
-  { key: 'formulas', label: 'Formula', detail: 'Accord resolve engine' },
-  { key: 'inventory', label: 'Inventory', detail: 'Lot and movement ledger' },
-  { key: 'labUsage', label: 'Lab Usage', detail: 'Commit and reverse' },
-  { key: 'production', label: 'Production', detail: 'Batch and QC' },
-  { key: 'orders', label: 'Orders', detail: 'Reserve then fulfill' },
-  { key: 'analytics', label: 'Analytics', detail: 'Read-only intelligence' },
+  { key: 'materials', label: 'Materials', detail: 'Review availability and compliance' },
+  { key: 'formulas', label: 'Formulas', detail: 'Create, refine, and submit work' },
+  { key: 'inventory', label: 'Inventory', detail: 'Check lots, stock, and documents' },
+  { key: 'labUsage', label: 'Lab usage', detail: 'Record a measured trial' },
+  { key: 'production', label: 'Production', detail: 'Plan batches and quality review' },
+  { key: 'orders', label: 'Orders', detail: 'Create, reserve, and fulfill' },
+  { key: 'analytics', label: 'Analytics', detail: 'Review operational decisions' },
 ]
 
 const generatedDocumentTypes: { value: DocumentType; label: string; targetScope: 'lot' | 'formula' | 'order' }[] = [
@@ -1574,9 +1583,9 @@ function visibleNavGroupsForSession(session: AuthSession) {
   const internalAdminView = isInternalAdminSession(session)
 
   return navGroups
+    .filter((group) => !group.internalOnly || internalAdminView)
     .map((group) => ({
       ...group,
-      title: internalAdminView ? group.title : (customerNavGroupTitles[group.title] ?? group.title),
       keys: group.keys.filter((key) => domainVisibleForSession(key, session)),
     }))
     .filter((group) => group.keys.length > 0)
@@ -1685,6 +1694,11 @@ function normalizeHexColor(value: string | undefined | null) {
   return null
 }
 
+function controlledAccentColor(value: string | undefined | null) {
+  const normalized = normalizeHexColor(value)
+  return normalized && controlledAccentColors.has(normalized) ? normalized : defaultAccentColor
+}
+
 function normalizeBrandLogoImageUrl(value: string | undefined) {
   if (!value || value.length > 2048) {
     return undefined
@@ -1720,7 +1734,7 @@ function mixHexColor(hexColor: string, targetHexColor: string, weight: number) {
 }
 
 function accentStyleForColor(value: string | undefined | null): CSSProperties {
-  const accentColor = normalizeHexColor(value) ?? defaultAccentColor
+  const accentColor = controlledAccentColor(value)
   const { r, g, b } = hexToRgb(accentColor)
   return {
     '--blue': accentColor,
@@ -1868,7 +1882,7 @@ function App() {
   const [labUsagePurpose, setLabUsagePurpose] = useState<LabUsagePurpose>('trial')
   const [labUsageProjectCode, setLabUsageProjectCode] = useState('RND-PROJECT-001')
   const [labUsageSampleCode, setLabUsageSampleCode] = useState('SAMPLE-001')
-  const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Live API sync pending')
+  const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Preparing the weighing session')
   const [labUsageBusy, setLabUsageBusy] = useState(false)
   const [newFormulaType, setNewFormulaType] = useState<FormulaType>('ACCORD')
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
@@ -3425,12 +3439,13 @@ function Sidebar({
   const isSystemBrand = brandName === 'OlfactoryOps'
   const logoImageUrl = branding.logoMode === 'image' ? normalizeBrandLogoImageUrl(branding.logoImageUrl) : undefined
   const showImageLockup = Boolean(logoImageUrl && !collapsed)
+  const safeBrandAccentColor = controlledAccentColor(branding.accentColor)
 
   return (
-    <aside className="sidebar glass" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
+    <aside className="sidebar glass" data-testid="app-sidebar" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
       <div className="brand-row">
         {showImageLockup ? (
-          <div className="brand-image-lockup" style={{ borderColor: `${branding.accentColor}66` }} title={`${brandName} workspace brand`}>
+          <div className="brand-image-lockup" style={{ borderColor: `${safeBrandAccentColor}66` }} title={`${brandName} workspace brand`}>
             <span aria-hidden="true">{brandName}</span>
             <img alt={`${brandName} logo`} src={logoImageUrl} onError={(event) => { event.currentTarget.hidden = true }} />
           </div>
@@ -3438,7 +3453,7 @@ function Sidebar({
           <>
             <div
               className={`brand-mark ${branding.logoMode === 'monogram' ? 'is-monogram' : ''} ${logoImageUrl ? 'is-image' : ''}`}
-              style={{ background: branding.accentColor }}
+              style={{ background: safeBrandAccentColor }}
               title={`${brandName} workspace brand`}
             >
               {logoImageUrl ? (
@@ -3472,7 +3487,7 @@ function Sidebar({
         </button>
       </div>
 
-      <nav className="nav-stack" id="primary-navigation" aria-label={uiText('Main modules')}>
+      <nav className="nav-stack" id="primary-navigation" data-testid="primary-navigation" aria-label={uiText('Main modules')}>
         {visibleNavGroupsForSession(session).map((group) => (
           <div className="nav-group" key={group.title}>
             {!collapsed && <div className="nav-title">{uiText(group.title)}</div>}
@@ -3480,7 +3495,7 @@ function Sidebar({
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
               const displayDomain = domain ? domainDisplayForSession(domain, session) : undefined
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? uiText('Workspace overview') : displayDomain?.shortName ?? key
+              const label = key === 'dashboard' ? uiText('Home') : uiText(navigationLabels[key] ?? displayDomain?.shortName ?? key)
               const isActive = activeKey === key
               return (
                 <button
@@ -3529,7 +3544,7 @@ function Topbar({
   const displayDomain = activeDomain ? domainDisplayForSession(activeDomain, session) : undefined
 
   return (
-    <header className="topbar glass">
+    <header className="topbar glass" data-testid="app-topbar">
       <button
         className="icon-button mobile-menu"
         type="button"
@@ -3544,7 +3559,7 @@ function Topbar({
         <div className="mono-small">{tenantDisplay.label}</div>
         <h1>{displayDomain ? displayDomain.name : uiText('Workspace overview')}</h1>
       </div>
-      <button className="command-button" type="button" onClick={onCommand}>
+      <button className="command-button" data-testid="command-search" type="button" onClick={onCommand}>
         <Search size={17} />
         <span>{uiText('Search modules, records, actions')}</span>
         <kbd>Ctrl K</kbd>
@@ -3698,7 +3713,8 @@ function UserSettingsForm({
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Changes apply to your account only.')
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
-  const safeDraftAccentColor = normalizedDraftAccentColor ?? defaultAccentColor
+  const hasApprovedDraftAccentColor = normalizedDraftAccentColor !== null && controlledAccentColors.has(normalizedDraftAccentColor)
+  const safeDraftAccentColor = controlledAccentColor(draft.accentColor)
   const accentPreviewStyle = useMemo(() => accentStyleForColor(safeDraftAccentColor), [safeDraftAccentColor])
   const landingDomains = useMemo(() => visibleDomainsForSession(session), [session])
   const draftPreferredLanding = safeLandingForSession(draft.preferredLanding, session)
@@ -3781,7 +3797,7 @@ function UserSettingsForm({
                 aria-label="Interface color picker"
                 type="color"
                 value={safeDraftAccentColor}
-                onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
+                onChange={(event) => setDraft((current) => ({ ...current, accentColor: controlledAccentColor(event.target.value) }))}
               />
               <input
                 aria-label="Interface color hex"
@@ -3789,7 +3805,7 @@ function UserSettingsForm({
                 onBlur={() =>
                   setDraft((current) => ({
                     ...current,
-                    accentColor: normalizeHexColor(current.accentColor) ?? current.accentColor,
+                  accentColor: controlledAccentColor(current.accentColor),
                   }))
                 }
                 onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
@@ -3808,7 +3824,7 @@ function UserSettingsForm({
                 />
               ))}
             </div>
-            {!normalizedDraftAccentColor ? <small className="field-hint is-danger">Use #RRGGBB or #RGB.</small> : null}
+            {!hasApprovedDraftAccentColor ? <small className="field-hint is-danger">Choose one of the approved interface colors.</small> : null}
           </div>
           <label className="field-row">
             <span>Layout density</span>
@@ -3911,7 +3927,7 @@ function UserSettingsForm({
           className="primary-button"
           type="button"
           onClick={() => void saveSettings()}
-          disabled={busy || !draft.displayName.trim() || !normalizedDraftAccentColor}
+          disabled={busy || !draft.displayName.trim() || !hasApprovedDraftAccentColor}
         >
           {busy ? 'Saving...' : 'Save Settings'}
         </button>
@@ -4298,7 +4314,7 @@ function AuthGateway({
                 type="password"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 value={password}
-                placeholder={mode === 'login' ? 'Required for admin and workspace accounts' : 'At least 12 chars, letters and numbers'}
+                placeholder={mode === 'login' ? 'Enter your password' : 'At least 12 chars, letters and numbers'}
                 onChange={(event) => setPassword(event.target.value)}
               />
               {mode === 'login' ? <small className="field-hint">Admin and workspace accounts require a password.</small> : null}
@@ -4389,20 +4405,24 @@ const Dashboard = memo(function Dashboard({
     <div className={`dashboard-grid${canViewUserOverview ? ' has-owner-user-overview' : ''}`}>
       <Panel
         className="hero-panel"
-        title="Workspace overview"
+        title="Today in your workspace"
         icon={Gauge}
-        right={internalAdminView ? <StatusBadge status="active" /> : undefined}
       >
         <div className="hero-content">
           <div>
             <p className="lead">
               {internalAdminView
-                ? 'A clear view of your studio, from creative work through material readiness and fulfilment. Administrative controls stay available without taking over the everyday workspace.'
-                : 'Start with the work that matters today, then move naturally from formulas to materials, inventory and production.'}
+                ? 'Start with the work that needs a decision. Workspace administration stays available in the background, without taking over day-to-day lab work.'
+                : 'Pick up the next dependable step, from a formula brief through material readiness, lab use, and production.'}
             </p>
             <div className="hero-actions">
               {primaryDomain ? (
-                <button className="primary-button" type="button" onClick={() => onNavigate(primaryDomain.key)}>
+                <button
+                  className="primary-button"
+                  data-testid="home-primary-action"
+                  type="button"
+                  onClick={() => onNavigate(primaryDomain.key)}
+                >
                   Continue in {primaryDomainDisplay?.shortName ?? primaryDomain.name}
                   <ChevronRight size={16} />
                 </button>
@@ -4415,15 +4435,8 @@ const Dashboard = memo(function Dashboard({
             </div>
           </div>
           <div className="hero-metrics">
-            {internalAdminView ? (
-              <>
-                <Metric label="Workspaces ready" value={`${stats.done}/16`} />
-                <Metric label="Coverage" value={`${stats.avgCoverage}%`} />
-                <Metric label="Needs attention" value={String(stats.risks)} />
-              </>
-            ) : (
-              <Metric label="Modules" value={String(visibleModuleCount)} />
-            )}
+            <Metric label="Available work areas" value={String(visibleModuleCount)} />
+            {stats.risks > 0 ? <Metric label="Items needing review" value={String(stats.risks)} /> : null}
           </div>
         </div>
       </Panel>
@@ -4431,12 +4444,12 @@ const Dashboard = memo(function Dashboard({
       {canViewUserOverview ? <OwnerUserOverview session={session} onNavigate={onNavigate} /> : null}
 
       {visibleWorkflowNodes.length > 0 ? (
-        <Panel className="workflow-panel" title="How work moves" icon={Activity}>
-          <WorkflowGraph nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
+        <Panel className="workflow-panel" title="Next steps" icon={Activity}>
+          <TaskShortcuts nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
         </Panel>
       ) : null}
 
-      <Panel className="matrix-panel" title={internalAdminView ? 'Workspace map' : 'Your modules'} icon={Database}>
+      <Panel className="matrix-panel" title="Your workspace" icon={Database}>
         <DomainMatrix session={session} onNavigate={onNavigate} />
       </Panel>
 
@@ -4456,6 +4469,32 @@ const Dashboard = memo(function Dashboard({
     </div>
   )
 })
+
+function TaskShortcuts({
+  nodes,
+  onNavigate,
+}: {
+  nodes: { key: DomainKey; label: string; detail: string }[]
+  onNavigate: (key: DomainKey) => void
+}) {
+  return (
+    <div className="task-shortcut-list" aria-label="Suggested work areas">
+      {nodes.map((node) => {
+        const Icon = domainIcons[node.key]
+        return (
+          <button className="task-shortcut" key={node.key} type="button" onClick={() => onNavigate(node.key)}>
+            <span className="task-shortcut-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>
+            <span>
+              <strong>{node.label}</strong>
+              <small>{node.detail}</small>
+            </span>
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 function OwnerUserOverview({
   session,
@@ -4660,7 +4699,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
 
   return (
     <div className="domain-page">
-      <DomainHeader domain={displayDomain} session={session} />
+      <DomainHeader domain={displayDomain} />
 
       {domain.key === 'materials' && (
         <MaterialWorkspace
@@ -4783,22 +4822,10 @@ const DomainWorkspace = memo(function DomainWorkspace({
   )
 })
 
-function DomainHeader({
-  domain,
-  session,
-}: {
-  domain: DomainModule
-  session: AuthSession
-}) {
+function DomainHeader({ domain }: { domain: DomainModule }) {
   const Icon = domainIcons[domain.key]
-  const internalAdminView = isInternalAdminSession(session)
   return (
-    <Panel
-      className="domain-header"
-      title={domain.name}
-      icon={Icon}
-      right={internalAdminView ? <StatusBadge status={domain.status} /> : undefined}
-    >
+    <Panel className="domain-header" title={domain.name} icon={Icon}>
       <div className="domain-header-summary">
         <p>{domain.responsibility}</p>
       </div>
@@ -4886,9 +4913,9 @@ function MaterialWorkspace({
         if (!payload.some((material) => material.id === selectedMaterialId) && payload[0]) {
           onSelectMaterial(payload[0].id)
         }
-        setMaterialStatus('Material catalog synced from API')
+        setMaterialStatus('Material directory is ready')
       } catch {
-        setMaterialStatus('Using local material seed until API is reachable')
+        setMaterialStatus('Material directory is temporarily unavailable. Try again shortly.')
       }
     }
     void loadMaterials()
@@ -5243,7 +5270,7 @@ function MaterialWorkspace({
 
   return (
     <div className="workspace-grid material-intelligence-grid">
-      <Panel title="Material Library" icon={Atom}>
+      <Panel className="material-directory-panel" title="Materials" icon={Atom}>
         <div className="material-form-grid">
           <label className="field-row">
             <span>Name</span>
@@ -5278,6 +5305,7 @@ function MaterialWorkspace({
           </button>
           <button
             className="primary-button"
+            data-testid="material-save-metadata"
             type="button"
             onClick={() => void createMaterialRecord()}
             disabled={!canCreateMaterials || !createName.trim() || !createCas.trim()}
@@ -5347,10 +5375,7 @@ function MaterialWorkspace({
             </div>
           ) : null}
         </section>
-        <ul className="policy-list">
-          <li>{materialStatus}</li>
-          <li>Material master changes do not create stock. Lots and movements stay in Inventory.</li>
-        </ul>
+        <p className="muted-copy" role="status">{materialStatus}</p>
         <div className="material-list">
           {materialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)
@@ -5373,7 +5398,7 @@ function MaterialWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Material Inspector" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
+      <Panel className="material-inspector-panel" title="Details" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
         <div className="tag-row">
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
@@ -5463,6 +5488,7 @@ function MaterialWorkspace({
           </label>
           <button
             className="primary-button"
+            data-testid="production-create-batch"
             type="button"
             onClick={() => void saveMaterialUpdate()}
             disabled={!canUpdateMaterials || materialSaving}
@@ -6815,7 +6841,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
               Workspace
             </button>
             {formulaEditable && canEditFormula && (
-              <button className="ghost-button small" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
+              <button className="ghost-button small" data-testid="formula-save-draft" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
                 <Save size={14} />
                 {metadataSaving ? 'Saving...' : metadataDirty ? 'Save draft' : 'Draft saved'}
               </button>
@@ -6829,6 +6855,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             {formulaEditable && canEditFormula && (
               <button
                 className="primary-button small"
+                data-testid="formula-submit-review"
                 type="button"
                 onClick={beginFormulaReview}
                 disabled={metadataSaving}
@@ -7441,8 +7468,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
       ) : null}
 
       {workspaceSettingsOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet workspace-settings-sheet glass" role="dialog" aria-modal="true" aria-label="Customize Formula Workspace">
+        <FormulaSheetDialog title="Customize Formula Workspace" className="workspace-settings-sheet" onClose={() => setWorkspaceSettingsOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkspaceSettingsOpen(false)}>
               <X size={18} />
@@ -7480,13 +7506,15 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 </button>
               </div>
             </div>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {workflowDialog && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet workflow-sheet glass" role="dialog" aria-modal="true" aria-label="Formula workflow">
+        <FormulaSheetDialog
+          title={workflowDialog === 'review' ? 'Submit for review' : workflowDialog === 'approve' ? 'Approve formula' : 'Request changes'}
+          className="workflow-sheet"
+          onClose={() => setWorkflowDialog(null)}
+        >
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkflowDialog(null)}><X size={18} /></button>
             <h3>{workflowDialog === 'review' ? 'Submit for review' : workflowDialog === 'approve' ? 'Approve formula' : 'Request changes'}</h3>
@@ -7521,7 +7549,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <div className="action-row formula-dialog-actions">
               <button className="ghost-button" type="button" onClick={() => setWorkflowDialog(null)}>Cancel</button>
               {workflowDialog === 'review' && (
-                <button className="primary-button" type="button" onClick={() => void submitFormulaReview()} disabled={!workflowReviewer.trim() || metadataSaving}>Submit review</button>
+                <button className="primary-button" data-testid="formula-submit-review-confirm" type="button" onClick={() => void submitFormulaReview()} disabled={!workflowReviewer.trim() || metadataSaving}>Submit review</button>
               )}
               {workflowDialog === 'approve' && (
                 <button className="primary-button" type="button" onClick={() => void approveFormulaReview()} disabled={!formulaFinalReady || ifraFailCount > 0}>Approve & lock</button>
@@ -7530,13 +7558,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 <button className="primary-button" type="button" onClick={() => void rejectFormulaReview()} disabled={!workflowComment.trim()}>Request changes</button>
               )}
             </div>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {scaleOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet scale-sheet glass" role="dialog" aria-modal="true" aria-label="Scale and print formula">
+        <FormulaSheetDialog title="Scale and print formula" className="scale-sheet" onClose={() => setScaleOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setScaleOpen(false)}><X size={18} /></button>
             <h3>Scale & weighing sheet</h3>
@@ -7609,13 +7635,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 </button>
               </div>
             )}
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {createSheetOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet create-sheet glass" role="dialog" aria-modal="true" aria-label="Create New Formula">
+        <FormulaSheetDialog title="Create New Formula" className="create-sheet" onClose={() => setCreateSheetOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setCreateSheetOpen(false)}>
               <X size={18} />
@@ -7641,13 +7665,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <button className="ghost-button" type="button" onClick={() => setCreateSheetOpen(false)}>
               Maybe later
             </button>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {pickerOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet picker-sheet glass" role="dialog" aria-modal="true" aria-label="Add to formula">
+        <FormulaSheetDialog title="Add to formula" className="picker-sheet" onClose={() => setPickerOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setPickerOpen(false)}>
               <X size={18} />
@@ -7779,13 +7801,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 ))}
               </div>
             )}
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {editingLine && editDraft && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet line-sheet glass" role="dialog" aria-modal="true" aria-label={`Edit ${editingLine.label}`}>
+        <FormulaSheetDialog title={`Edit ${editingLine.label}`} className="line-sheet" onClose={closeLineEditor}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={closeLineEditor}>
               <X size={18} />
@@ -7895,8 +7915,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 Remove Material
               </button>
             </div>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
     </div>
   )
@@ -8507,7 +8526,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         onStorageLocationsChange(payload.locations)
         setStockTakeRecords(payload.stockTakes)
         setReorderSuggestions(payload.reorderSuggestions)
-        setInventoryStatus('Inventory console synced with API')
+        setInventoryStatus('Inventory is up to date')
       })
       .catch(() => {
         if (active) {
@@ -9545,21 +9564,22 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
         </label>
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} />
         <div className="empty-state compact">
-          <strong>Inventory movement log</strong>
+          <strong>Usage is ready to record</strong>
           <span>
-            Actual weights post immutable <code>LAB_CONSUMPTION</code> movements against the allocated inventory lots.
+            Check actual weights, then record this trial against the allocated lots.
           </span>
           <span>{statusMessage}</span>
         </div>
         <div className="action-row">
           <button
             className="primary-button"
+            data-testid="lab-usage-commit"
             type="button"
             onClick={onCommit}
             disabled={!hasPublishedFormula || !weighingReady || busy}
           >
             <Play size={16} />
-            {busy ? 'Working' : 'Post inventory usage'}
+            {busy ? 'Working' : 'Record material usage'}
           </button>
           <button className="ghost-button" type="button" onClick={() => onReverse(latestCommitted?.id)} disabled={!latestCommitted || busy}>
             <RotateCcw size={16} />
@@ -9780,7 +9800,7 @@ function DocumentsWorkspace() {
   const [generationType, setGenerationType] = useState<DocumentType>('CoA')
   const [generationTarget, setGenerationTarget] = useState(initialLots[0]?.id ?? '')
   const [shareRecipient, setShareRecipient] = useState('client@example.com')
-  const [statusMessage, setStatusMessage] = useState('Live API sync pending')
+  const [statusMessage, setStatusMessage] = useState('Preparing document operations')
   const selectedGenerationOption = generatedDocumentTypes.find((option) => option.value === generationType)
   const generationTargets = useMemo(() => {
     if (selectedGenerationOption?.targetScope === 'formula') {
@@ -10323,6 +10343,16 @@ const localeChangeEvent = 'olfactoryops.locale.change'
 const localeStorageKey = 'olfactoryops.locale'
 
 const vietnameseUiText: Record<string, string> = {
+  Home: 'Trang chủ',
+  Workbench: 'Bàn làm việc',
+  Commercial: 'Thương mại',
+  Insights: 'Phân tích',
+  Workspace: 'Không gian làm việc',
+  Platform: 'Nền tảng',
+  'Catalog & quotes': 'Danh mục & báo giá',
+  Branding: 'Thương hiệu',
+  'Members & security': 'Thành viên & bảo mật',
+  'Billing & integrations': 'Thanh toán & tích hợp',
   'Workspace overview': 'Tổng quan workspace',
   'Fragrance operations': 'Vận hành nước hoa',
   'Secure workspace': 'Workspace an toàn',
@@ -10502,7 +10532,7 @@ function ProductionWorkspace({
     try {
       const payload = await requestApi<ProductionBatchRecord[]>('/production/batches')
       setBatches(payload)
-      setStatusMessage('Production batches synced from live API')
+      setStatusMessage('Production batches are up to date')
     } catch (error) {
       setBatches([])
       setStatusMessage(error instanceof Error ? error.message : 'Production batches are unavailable')
@@ -10796,10 +10826,10 @@ function ProductionWorkspace({
             {selectedFormulaHasQcTemplate ? 'QC template ready' : busyId === 'qc-template' ? 'Creating QC template' : 'Create release QC template'}
           </button>
         </div>
-        <ul className="policy-list">
-          <li>Only formulas with an approved version snapshot can enter production.</li>
-          <li>Raw materials are issued to this batch at weighing, separately from R&amp;D sample usage.</li>
-          <li>New P1 batches require a structured release QC template.</li>
+        <ul className="policy-list production-prerequisites">
+          <li>An approved formula is required before a production batch can start.</li>
+          <li>Materials are issued to the batch during weighing, separately from lab trials.</li>
+          <li>A release quality checklist is required before the batch can move through QC.</li>
           <li>{statusMessage}</li>
         </ul>
       </Panel>
@@ -13723,7 +13753,7 @@ function AnalyticsWorkspace() {
         setAnalyticsData(dashboard)
         setOperationalData(operations)
         setLastSyncedAt(new Date().toISOString())
-        setStatusMessage('Live analytics synced from API')
+        setStatusMessage('Analytics refreshed')
       } catch {
         if (!signal?.aborted) {
           setOperationalData(null)
@@ -13948,7 +13978,7 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const internalAdminView = isInternalAdminSession(session)
-  const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Workspace access synced from live API'
+  const syncedMessage = internalAdminView ? 'Commercial controls refreshed' : 'Workspace access refreshed'
   const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading workspace access controls'
   const fallbackMessage = internalAdminView
     ? 'Live commercial readiness API is unavailable'
@@ -14345,8 +14375,8 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <span>No local commercial fallback is shown while the API is unavailable.</span>
           </div>
           <div className="action-row">
-            <button className="primary-button" type="button" onClick={() => void refreshSaasConsole('Workspace services reloaded from live API')}>
-              Retry live API
+            <button className="primary-button" type="button" onClick={() => void refreshSaasConsole('Workspace services refreshed')}>
+              Retry workspace services
             </button>
           </div>
         </Panel>
@@ -14423,7 +14453,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <button
               className="ghost-button"
               type="button"
-              onClick={() => void refreshSaasConsole('SaaS health recalculated from live API')}
+              onClick={() => void refreshSaasConsole('Workspace health refreshed')}
             >
               Refresh health
             </button>
@@ -14947,7 +14977,7 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
     setCustomizationStatus(nextStatus)
   }, [selectedSequenceKey])
 
-  const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization console synced from API') => {
+  const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization settings refreshed') => {
     try {
       const payload = await requestApi<CustomizationConsoleResponse>('/customization-console')
       syncCustomizationData(payload, nextStatus)
@@ -15128,6 +15158,7 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
         body: JSON.stringify({
           ...brandingDraft,
           displayName: brandingDraft.displayName.trim(),
+          accentColor: controlledAccentColor(brandingDraft.accentColor),
           logoImageUrl: brandingDraft.logoImageUrl?.trim() ?? '',
         }),
       })
@@ -15428,8 +15459,8 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
             <input
               aria-label="Branding accent color"
               type="color"
-              value={brandingDraft.accentColor}
-              onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: event.target.value }))}
+              value={controlledAccentColor(brandingDraft.accentColor)}
+              onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: controlledAccentColor(event.target.value) }))}
             />
           </label>
           <label className="field-row">
@@ -15506,10 +15537,10 @@ function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (brandin
             Save workspace branding
           </button>
         </div>
-        <div className="branding-preview" style={{ borderColor: `${brandingDraft.accentColor}66` }}>
+        <div className="branding-preview" style={{ borderColor: `${controlledAccentColor(brandingDraft.accentColor)}66` }}>
           <div>
             <span className="mono-small">Workspace & export preview</span>
-            <strong style={{ color: brandingDraft.accentColor }}>{brandingDraft.displayName}</strong>
+            <strong style={{ color: controlledAccentColor(brandingDraft.accentColor) }}>{brandingDraft.displayName}</strong>
             <span>{brandingDraft.documentFooter}</span>
           </div>
           <div className="branding-preview-media">
@@ -15629,7 +15660,7 @@ function IdentityWorkspace() {
     tenantData.permissionMatrix.find((matrix) => matrix.role === selectedRolePolicy?.role) ?? tenantData.permissionMatrix[0]
   const selectedPermissionKeys = new Set(selectedRolePolicy?.permissions ?? [])
 
-  async function refreshTenantConsole(nextStatus = 'Workspace console synced from API') {
+  async function refreshTenantConsole(nextStatus = 'Workspace settings refreshed') {
     if (tenantPermissionMutationRef.current) {
       return
     }
@@ -16210,35 +16241,7 @@ function IdentityWorkspace() {
   )
 }
 
-function WorkflowGraph({
-  nodes,
-  onNavigate,
-}: {
-  nodes: { key: DomainKey; label: string; detail: string }[]
-  onNavigate: (key: DomainKey) => void
-}) {
-  return (
-    <div className="workflow-graph">
-      {nodes.map((node, index) => {
-        const Icon = domainIcons[node.key]
-        return (
-          <div className="workflow-step-wrap" key={node.key}>
-            <button className="workflow-step" type="button" onClick={() => onNavigate(node.key)}>
-              <Icon size={18} />
-              <strong>{node.label}</strong>
-              <span>{node.detail}</span>
-            </button>
-            {index < nodes.length - 1 && <ChevronRight className="workflow-arrow" size={18} />}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function DomainMatrix({ session, onNavigate }: { session: AuthSession; onNavigate: (key: DomainKey) => void }) {
-  const internalAdminView = isInternalAdminSession(session)
-
   return (
     <div className="domain-matrix">
       {visibleDomainsForSession(session).map((domain) => {
@@ -16249,13 +16252,8 @@ function DomainMatrix({ session, onNavigate }: { session: AuthSession; onNavigat
             <Icon size={18} />
             <div>
               <strong>{displayDomain.shortName}</strong>
-              <span>{internalAdminView ? displayDomain.owner : displayDomain.screens[0]}</span>
+              <span>{displayDomain.screens[0] ?? displayDomain.responsibility}</span>
             </div>
-            {internalAdminView ? (
-              <div className="health-bar">
-                <span style={{ width: `${displayDomain.health}%` }} />
-              </div>
-            ) : null}
           </button>
         )
       })}
@@ -16855,69 +16853,50 @@ function BlackPopup({
   children: ReactNode
 }) {
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div className="modal-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.div
-            className="black-popup glass"
-            role="dialog"
-            aria-modal="true"
-            aria-label={title}
-            initial={{ opacity: 0, scale: 0.96, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 16 }}
-          >
-            <div className="popup-header">
-              <div>
-                <h2>{title}</h2>
-                <p>{description}</p>
-              </div>
-              <button className="icon-button" type="button" onClick={onClose} aria-label="Close dialog">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="popup-body">{children}</div>
-            <div className="popup-actions">
-              <button className="ghost-button" type="button" onClick={onClose}>
-                Cancel
-              </button>
-              <button className="primary-button" type="button" onClick={() => void onAction()} disabled={actionDisabled}>
-                {actionLabel}
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
+    <WorkspaceDialog
+      open={open}
+      title={title}
+      description={description}
+      onClose={onClose}
+      className="black-popup"
+      footer={(
+        <div className="popup-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-button" type="button" onClick={() => void onAction()} disabled={actionDisabled}>
+            {actionLabel}
+          </button>
+        </div>
       )}
-    </AnimatePresence>
+    >
+      <div className="popup-body">{children}</div>
+    </WorkspaceDialog>
   )
 }
 
-function Panel({
+function FormulaSheetDialog({
   title,
-  icon: Icon,
-  right,
-  children,
+  onClose,
   className = '',
+  children,
 }: {
   title: string
-  icon: LucideIcon
-  right?: ReactNode
-  children: ReactNode
+  onClose: () => void
   className?: string
+  children: ReactNode
 }) {
   return (
-    <section className={`panel glass glass-hover ${className}`}>
-      <div className="panel-header">
-        <div className="panel-title-row">
-          <span className="icon-chip">
-            <Icon size={17} />
-          </span>
-          <h2>{title}</h2>
-        </div>
-        {right}
-      </div>
+    <WorkspaceDialog
+      open
+      title={title}
+      onClose={onClose}
+      className={`formula-sheet ${className}`.trim()}
+      showHeader={false}
+      showGrip={false}
+    >
       {children}
-    </section>
+    </WorkspaceDialog>
   )
 }
 

@@ -1,0 +1,299 @@
+/* Formula Intelligence stays approachable: research progress is readable, while technical values remain precise. */
+.formula-intelligence-page {
+  gap: 20px;
+}
+
+.formula-intelligence-hero {
+  padding: 22px;
+  border-color: #2c392e;
+  background: #101610;
+}
+
+.formula-intelligence-hero .mono-small {
+  color: #88b797;
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.formula-intelligence-hero h2 {
+  margin: 6px 0 8px;
+  font-size: clamp(1.2rem, 1.8vw, 1.55rem);
+}
+
+.formula-intelligence-hero .status-chip {
+  align-self: center;
+  border-color: #315c40;
+  background: #122217;
+}
+
+.formula-intelligence-project {
+  gap: 16px;
+}
+
+.formula-intelligence-project-meta {
+  gap: 8px;
+}
+
+.formula-intelligence-project-meta > span:not(.status-chip) {
+  padding: 4px 0;
+  border: 0;
+  border-radius: 0;
+  color: #98a397;
+  font-family: inherit;
+  font-size: 0.76rem;
+}
+
+.formula-intelligence-project-meta > span:not(.status-chip)::after {
+  margin-left: 8px;
+  color: #536053;
+  content: "•";
+}
+
+.formula-intelligence-project-meta > span:not(.status-chip):last-child::after {
+  display: none;
+}
+
+.formula-intelligence-direction-grid {
+  gap: 14px;
+}
+
+.formula-intelligence-direction {
+  gap: 12px;
+  padding: 16px;
+  border-color: #2b352c;
+  border-radius: 10px;
+  background: #0f130f;
+}
+
+.formula-intelligence-direction h4 {
+  font-size: 0.98rem;
+}
+
+.formula-intelligence-lines {
+  gap: 0;
+  padding: 2px 0;
+  border-top: 1px solid #273027;
+  border-bottom: 1px solid #273027;
+}
+
+.formula-intelligence-lines > div {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.formula-intelligence-lines > div + div {
+  border-top: 1px solid #222a22;
+}
+
+.formula-intelligence-lines strong {
+  font-family: var(--mono-font);
+}
+
+.formula-intelligence-score {
+  padding: 4px 7px;
+  border-color: #315c40;
+  border-radius: 6px;
+  color: #a6dcb6;
+  background: #122217;
+  font-family: inherit;
+  font-weight: 700;
+}
+
+.formula-intelligence-picker-chips button,
+.formula-intelligence-node-list span {
+  padding: 5px 8px;
+  border-color: #304533;
+  border-radius: 6px;
+  background: #131b14;
+  color: #b2beb2;
+  font-family: inherit;
+}
+
+.formula-intelligence-picker-list,
+.formula-intelligence-recipient-list,
+.formula-intelligence-share-list {
+  padding: 8px;
+  border-color: #2a342b;
+  border-radius: 8px;
+  background: #0d110d;
+}
+
+.formula-intelligence-run-status,
+.formula-intelligence-confirm {
+  padding: 14px;
+  border-color: #315c40;
+  border-radius: 8px;
+  background: #112017;
+}
+
+.formula-intelligence-modal-backdrop {
+  background: rgb(4 6 4 / 0.74);
+}
+
+.formula-intelligence-modal {
+  padding: 0;
+  border-color: #334035;
+  border-radius: 12px;
+  background: #111511;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.35);
+}
+
+@media (max-width: 960px) {
+  .app-shell,
+  .app-shell.density-compact,
+  .app-shell.is-rail {
+    display: block;
+  }
+
+  .topbar {
+    padding: 12px 18px;
+  }
+
+  .dashboard-grid,
+  .domain-page {
+    padding: 20px 18px 32px;
+  }
+}
+
+/* Details stay available alongside the material directory on wide workspaces. */
+.material-inspector-panel {
+  align-self: start;
+  position: sticky;
+  top: 92px;
+}
+
+.material-directory-panel .material-list {
+  max-height: min(58dvh, 680px);
+  overflow: auto;
+  padding-right: 3px;
+}
+
+/* Tablet has one dependable content column before the navigation becomes an overlay. */
+@media (max-width: 1120px) {
+  .workspace-grid,
+  .material-intelligence-grid,
+  .inventory-grid,
+  .lab-grid,
+  .production-grid,
+  .procurement-grid,
+  .commerce-grid,
+  .orders-grid,
+  .costing-grid,
+  .analytics-grid,
+  .identity-grid,
+  .customization-grid,
+  .saas-grid,
+  .generic-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+  }
+
+  .workspace-grid > *,
+  .wide {
+    grid-column: auto;
+    grid-area: auto;
+    min-width: 0;
+  }
+
+  .formula-labspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .material-inspector-panel {
+    position: static;
+  }
+
+  .formula-lab-library,
+  .formula-lab-summary,
+  .formula-lab-inspector,
+  .formula-lab-details-dock,
+  .formula-lab-analysis-card {
+    grid-column: auto;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    grid-template-columns: 38px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "menu title actions"
+      "command command command";
+    gap: 9px;
+    padding: 10px 12px 12px;
+  }
+
+  .topbar-actions {
+    justify-content: flex-end;
+    margin-left: auto;
+    justify-self: end;
+  }
+
+  .topbar .mobile-menu,
+  .topbar-actions .icon-button,
+  .topbar-actions .user-chip {
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  .topbar-actions .data-tag,
+  .topbar-actions > .ghost-button,
+  .topbar-actions .icon-button:first-of-type {
+    display: none;
+  }
+
+  .topbar-actions .user-chip > span:last-child {
+    display: none;
+  }
+
+  .topbar-title-block h1 {
+    font-size: 1.08rem;
+  }
+
+  .command-button {
+    min-height: 38px;
+  }
+
+  .dashboard-grid,
+  .domain-page {
+    gap: 14px;
+    padding: 16px 12px 28px;
+  }
+
+  .workspace-grid {
+    gap: 14px;
+  }
+
+  .panel,
+  .domain-header,
+  .formula-intelligence-hero {
+    padding: 16px;
+  }
+
+  .hero-content,
+  .owner-user-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-metrics,
+  .owner-user-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .formula-intelligence-hero {
+    align-items: flex-start;
+  }
+
+  .formula-intelligence-hero .status-chip {
+    align-self: flex-start;
+  }
+
+  .formula-intelligence-project-meta > span:not(.status-chip)::after {
+    display: none;
+  }
+}

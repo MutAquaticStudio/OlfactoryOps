@@ -1,0 +1,40 @@
+/* Product workspace refinement: quiet, tactile, and operational rather than a developer console. */
+:root {
+  --bg: #0a0c0a;
+  --panel: #111511;
+  --panel-solid: #111511;
+  --surface-raised: #111511;
+  --surface-muted: #151a15;
+  --surface-subtle: #1a201a;
+  --border: #293129;
+  --border-strong: #3a443a;
+  --text: #f3f5ee;
+  --text-2: #b3b9af;
+  --text-3: #7f897f;
+  --blue: #19744f;
+  --blue-bright: #2b9567;
+  --blue-deep: #12563b;
+  --accent-rgb: 25 116 79;
+  --line: #293129;
+  --muted: #b3b9af;
+  --panel-subtle: #151a15;
+  --mono-font: "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+  --radius: 10px;
+  --shadow-sm: 0 1px 1px rgb(0 0 0 / 0.22);
+  --shadow-md: 0 14px 28px rgb(0 0 0 / 0.22);
+}
+
+html,
+body,
+.lab-backdrop,
+.workspace {
+  background: var(--bg);
+}
+
+.blueprint-grid,
+.orb,
+.molecule-linework,
+.flask-linework,
+.scanline {
+  display: none;
+}
