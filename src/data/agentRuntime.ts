@@ -83,7 +83,7 @@ export const agentFormulaProposalSchema = z.object({
     pyramidNote: z.enum(['Top', 'Middle', 'Base', 'Solvent']).optional(),
     dilution: z.number().finite().min(0).max(100).optional(),
   })).min(1).max(80),
-})
+}).strict()
 export type AgentFormulaProposal = z.infer<typeof agentFormulaProposalSchema>
 
 export const formulaDesignBriefSchema = z.object({
@@ -99,7 +99,7 @@ export const formulaDesignBriefSchema = z.object({
   lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
   availabilityFirst: z.boolean().default(true),
   targetGrams: z.number().finite().positive().max(100_000).default(100),
-})
+}).strict()
 export type FormulaDesignBrief = z.infer<typeof formulaDesignBriefSchema>
 
 export const formulaOptimizerIntentSchema = z.enum(['COST', 'COMPLIANCE', 'INVENTORY', 'COMBINED'])
@@ -111,8 +111,23 @@ export const formulaOptimizerRequestSchema = z.object({
   intent: formulaOptimizerIntentSchema.default('COMBINED'),
   lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
   requireEligibleInventory: z.boolean().default(false),
-})
+}).strict()
 export type FormulaOptimizerRequest = z.infer<typeof formulaOptimizerRequestSchema>
+
+export const formulaDirectionShareSchema = z.object({
+  recipientUserIds: z.array(z.string().min(1).max(160)).min(1).max(24),
+  allowMaterialNames: z.boolean().default(false),
+}).strict()
+export type FormulaDirectionShare = z.infer<typeof formulaDirectionShareSchema>
+
+export const formulaDirectionFeedbackSchema = z.object({
+  rating: z.number().int().min(1).max(5).optional(),
+  comment: z.string().trim().min(1).max(1200).optional(),
+  selected: z.boolean().default(false),
+}).strict().refine((value) => value.rating !== undefined || Boolean(value.comment) || value.selected, {
+  message: 'Add a rating, comment, or direction selection',
+})
+export type FormulaDirectionFeedback = z.infer<typeof formulaDirectionFeedbackSchema>
 
 export const formulaIntelligenceRunConfigSchema = z.discriminatedUnion('workflowKind', [
   z.object({

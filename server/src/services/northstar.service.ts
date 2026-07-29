@@ -1043,6 +1043,31 @@ export class NorthStarService {
     return { data: { formula, invariant: 'formula draft creation does not create inventory movement' } }
   }
 
+  /**
+   * Internal Formula Intelligence save path. The deterministic identity lets a
+   * retried confirmation restore the same draft after a Worker interruption.
+   */
+  createAgentFormulaDraft(confirmationId: string, body: FormulaDraftMutationBody & { formulaType?: FormulaType }) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.edit')
+    const normalizedConfirmationId = confirmationId.trim().toLowerCase()
+    if (!/^[0-9a-f-]{36}$/.test(normalizedConfirmationId)) {
+      throw new UnprocessableEntityException('Agent confirmation identifier is invalid')
+    }
+    const id = `agent-draft-${normalizedConfirmationId}`
+    const existing = this.formulaRecords.find((formula) => formula.id === id && (formula.organizationId || 'org-nxl') === session.organizationId)
+    if (existing) return { data: { formula: existing, invariant: 'agent confirmation draft is idempotent and non-consuming' } }
+    const created = this.createFormulaDraft(body).data.formula
+    const formula = {
+      ...created,
+      id,
+      code: `AGT-${normalizedConfirmationId.slice(0, 8).toUpperCase()}`,
+    }
+    this.formulaRecords = this.formulaRecords.map((item) => item.id === created.id ? formula : item)
+    this.recordAudit('formula.agentDraft.create', formula.code, session.userId, 'allowed')
+    return { data: { formula, invariant: 'agent confirmation draft is idempotent and non-consuming' } }
+  }
+
   updateFormulaDraft(id: string, body: FormulaDraftMutationBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'formulas.edit')
@@ -3734,6 +3759,17 @@ export class NorthStarService {
           .slice(0, 8),
         invariant: 'tenant console reads only the organization bound to the active session',
       },
+    }
+  }
+
+  formulaDesignRecipients(brandId?: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.edit')
+    return {
+      data: this.membershipRecords
+        .filter((member) => member.organizationId === session.organizationId && member.status === 'ACTIVE' && member.userId !== session.userId)
+        .filter((member) => !brandId || member.brandIds.includes(brandId))
+        .map((member) => ({ userId: member.userId, name: member.name, email: member.email })),
     }
   }
 

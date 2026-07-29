@@ -83,3 +83,26 @@ shared with them. Audit-chain events cover project create, generation, share,
 feedback, optimizer runs, save requests, completion, and failures. No workflow
 reserves or consumes inventory until an existing downstream operational flow
 does so explicitly.
+
+## Formula Intelligence Hardening
+
+`migrations/0032_formula_intelligence_hardening.sql` replaces broad direction
+sharing with recipient-scoped shares. A recipient must be an active member of
+the project brand. Material names are withheld unless the perfumer explicitly
+enables that disclosure for a recipient; material IDs, CAS values, ratios,
+costs, lots, and raw validation warnings are never included in the brand
+projection. Revocation immediately removes that projection.
+
+Formula Intelligence mutations use the organization, actor, route, idempotency
+key, and request hash as their idempotency scope. A confirmation is valid for
+24 hours and is linked to a durable deterministic draft identity. The mapping
+uses a short lease so concurrent accepts either return the original draft or a
+stable in-progress response. The proposal is revalidated against current
+permissions, material visibility, formula math, compliance, locks, and any
+requested inventory gate immediately before persistence.
+
+Runs are limited to two active runs per user, ten per tenant, five starts per
+user in fifteen minutes, and one active generation per design project. Worker
+jobs use a lease fence, stop when session authorization changes, and allow the
+initial execution plus two bounded retries. Agent artifacts are retained for
+90 days; append-only audit evidence is retained for at least one year.

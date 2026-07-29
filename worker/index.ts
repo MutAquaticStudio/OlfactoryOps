@@ -23,6 +23,7 @@ import {
   executeFormulaIntelligenceRun,
 } from './formula-intelligence.js'
 import {
+  ConflictException,
   PayloadTooLargeException,
   ForbiddenException,
   TooManyRequestsException,
@@ -569,8 +570,10 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
+  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/recipients', persistState: false, handler: ({ service, env, params }) => listFormulaDesignRecipients(service, env, params.id) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/generate', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => generateFormulaDesignDirections(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/share', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => shareFormulaDesignDirection(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/shares/:recipientUserId/revoke', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => revokeFormulaDesignDirectionShare(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/feedback', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => submitFormulaDesignFeedback(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestFormulaDesignDraftSave(context) },
   { method: 'POST', pattern: '/formula-intelligence/optimizer/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => startFormulaOptimizer(context) },
@@ -585,7 +588,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/agent/runs/:id/cancel', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).cancel(ensureAgentReadAccess(service), params.id) },
   { method: 'POST', pattern: '/agent/runs/:id/resume', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resumeAgentRun(context) },
   { method: 'POST', pattern: '/agent/runs/:id/nodes/:nodeId/retry', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => retryAgentNode(context) },
-  { method: 'POST', pattern: '/agent/runs/:id/confirmations/:confirmationId', mutates: true, idempotent: true, writeGate: false, handler: (context) => resolveAgentConfirmation(context) },
+  { method: 'POST', pattern: '/agent/runs/:id/confirmations/:confirmationId', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resolveAgentConfirmation(context) },
   { method: 'POST', pattern: '/agent/runs/:id/restart', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restartAgentRun(context) },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
   { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
@@ -867,39 +870,47 @@ async function resolveAgentConfirmation(context: RouteContext) {
   const store = new AgentRuntimeStore(context.env.DB)
   const decision = typeof context.body.decision === 'string' ? context.body.decision : 'accept'
   if (decision === 'reject') return store.rejectConfirmation(actor, context.params.id, context.params.confirmationId)
-  const confirmation = await store.acceptConfirmation(actor, context.params.id, context.params.confirmationId)
-  if (confirmation.alreadyAccepted) {
-    return { data: { duplicate: true, summary: confirmation.summary, invariant: 'confirmation ID is idempotent; no additional formula draft was created' } }
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  ensureFormulaIntelligenceExecutionAccess(context.service)
+  const claimed = await store.claimFormulaDraftSave(actor, context.params.id, context.params.confirmationId)
+  if (claimed.completed) {
+    const formula = context.service.formulas().data.find((item) => item.id === claimed.formulaId)
+    return { data: { duplicate: true, formula, confirmationId: context.params.confirmationId, invariant: 'confirmation ID is idempotent; no additional formula draft was created' } }
   }
-  const created = context.service.createFormulaDraft({
-    name: confirmation.proposal.name,
-    formulaType: confirmation.proposal.formulaType,
-    targetGrams: confirmation.proposal.targetGrams,
-    concentrationType: confirmation.proposal.concentrationType,
-    finalProductConcentrationPercent: confirmation.proposal.finalProductConcentrationPercent,
-    ifraCategory: confirmation.proposal.ifraCategory,
-    brief: confirmation.proposal.brief,
-  }).data.formula
-  const materialNames = new Map(context.service.materials().data.map((material) => [material.id, material.name]))
-  const updated = context.service.updateFormulaDraft(created.id, {
-    expectedRevision: created.draftRevision,
-    lines: confirmation.proposal.ingredients.map((ingredient, index) => ({
-      id: `agent-${index + 1}`,
-      label: materialNames.get(ingredient.materialId) ?? ingredient.materialId,
-      materialId: ingredient.materialId,
-      grams: Number((confirmation.proposal.targetGrams * ingredient.percentage / 100).toFixed(4)),
-      concentration: ingredient.dilution ?? 100,
-      pyramidNote: ingredient.pyramidNote,
-    })),
-  }).data.formula
-  await store.attachSavedFormula(actor, context.params.id, context.params.confirmationId, updated.id)
-  await new FormulaIntelligenceStore(context.env.DB).markSavedFormula(actor, context.params.id, updated.id)
-  return {
-    data: {
-      formula: updated,
-      confirmationId: context.params.confirmationId,
-      invariant: 'agent confirmation creates one editable draft and does not reserve or consume inventory',
-    },
+  try {
+    await new FormulaIntelligenceStore(context.env.DB).revalidateDraftSave(actor, context.params.id, claimed.proposal, context.service)
+    const created = context.service.createAgentFormulaDraft(context.params.confirmationId, {
+      name: claimed.proposal.name,
+      formulaType: claimed.proposal.formulaType,
+      targetGrams: claimed.proposal.targetGrams,
+      concentrationType: claimed.proposal.concentrationType,
+      finalProductConcentrationPercent: claimed.proposal.finalProductConcentrationPercent,
+      ifraCategory: claimed.proposal.ifraCategory,
+      brief: claimed.proposal.brief,
+    }).data.formula
+    const materialNames = new Map(context.service.materials().data.map((material) => [material.id, material.name]))
+    const updated = context.service.updateFormulaDraft(created.id, {
+      expectedRevision: created.draftRevision,
+      lines: claimed.proposal.ingredients.map((ingredient, index) => ({
+        id: `agent-${index + 1}`,
+        label: materialNames.get(ingredient.materialId) ?? ingredient.materialId,
+        materialId: ingredient.materialId,
+        grams: Number((claimed.proposal.targetGrams * ingredient.percentage / 100).toFixed(4)),
+        concentration: ingredient.dilution ?? 100,
+        pyramidNote: ingredient.pyramidNote,
+      })),
+    }).data.formula
+    // Persist formula state before finalizing the confirmation mapping. A retry
+    // then resolves the same deterministic formula identity after interruption.
+    await persistSnapshots(context.env.DB, context.service)
+    await store.completeFormulaDraftSave(actor, context.params.id, context.params.confirmationId, updated.id, claimed.leaseToken!)
+    await new FormulaIntelligenceStore(context.env.DB).markSavedFormula(actor, context.params.id, updated.id)
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.draft.save.completed', updated.id)
+    return { data: { formula: updated, confirmationId: context.params.confirmationId, invariant: 'agent confirmation creates one editable draft and does not reserve or consume inventory' } }
+  } catch (error) {
+    await store.failFormulaDraftSave(actor, context.params.id, context.params.confirmationId, claimed.leaseToken!, 'validation_or_persistence_failed')
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.draft.save.denied', context.params.confirmationId, 'blocked')
+    throw error
   }
 }
 
@@ -911,6 +922,11 @@ function formulaIntelligenceIdempotencyKey(request: Request) {
 
 function formulaIntelligenceCanEdit(service: NorthStarService) {
   return service.me().data.permissions.includes('formulas.edit')
+}
+
+function formulaIntelligenceCanViewPrivate(service: NorthStarService) {
+  const granted = new Set(service.me().data.permissions)
+  return granted.has('formulas.viewSensitive') && granted.has('materials.view')
 }
 
 function formulaIntelligenceCanView(service: NorthStarService) {
@@ -932,7 +948,7 @@ function ensureFormulaIntelligenceExecutionAccess(service: NorthStarService) {
 async function listDesignProjects(service: NorthStarService, env: Env) {
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
-  return { data: await new FormulaIntelligenceStore(env.DB).listDesignProjects(actor, formulaIntelligenceCanEdit(service)) }
+  return { data: await new FormulaIntelligenceStore(env.DB).listDesignProjects(actor, formulaIntelligenceCanViewPrivate(service)) }
 }
 
 async function createFormulaDesignProject(context: RouteContext) {
@@ -951,7 +967,13 @@ async function createFormulaDesignProject(context: RouteContext) {
 async function getFormulaDesignProject(service: NorthStarService, env: Env, projectId: string) {
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
-  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(actor, projectId, formulaIntelligenceCanEdit(service)) } }
+  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(actor, projectId, formulaIntelligenceCanViewPrivate(service)) } }
+}
+
+async function listFormulaDesignRecipients(service: NorthStarService, env: Env, projectId: string) {
+  ensureFormulaIntelligencePermission(service, 'edit')
+  const actor = ensureAgentReadAccess(service)
+  return { data: await new FormulaIntelligenceStore(env.DB).eligibleRecipients(actor, projectId) }
 }
 
 async function generateFormulaDesignDirections(context: RouteContext) {
@@ -966,9 +988,17 @@ async function generateFormulaDesignDirections(context: RouteContext) {
 async function shareFormulaDesignDirection(context: RouteContext) {
   ensureFormulaIntelligencePermission(context.service, 'edit')
   const actor = ensureAgentReadAccess(context.service)
-  await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId)
+  const result = await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId, context.body)
   await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.share', context.params.directionId)
-  return { data: { shared: true } }
+  return { data: { shared: true, ...result } }
+}
+
+async function revokeFormulaDesignDirectionShare(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'edit')
+  const actor = ensureAgentReadAccess(context.service)
+  await new FormulaIntelligenceStore(context.env.DB).revokeDirectionShare(actor, context.params.id, context.params.directionId, context.params.recipientUserId)
+  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.revoke', context.params.directionId)
+  return { data: { revoked: true } }
 }
 
 async function submitFormulaDesignFeedback(context: RouteContext) {
@@ -1095,7 +1125,7 @@ export default {
         if (!session) {
           throw new UnauthorizedException('Authentication required')
         }
-        const operation = `${request.method} ${match.route.pattern}`
+        const operation = `${request.method} ${match.route.pattern} actor:${session.userId}`
         const requestHash = await operationRequestHash(request.method, path, body)
         const claim = await claimOperationIdempotency(env.DB, {
           organizationId: session.organizationId,
@@ -1201,8 +1231,14 @@ export default {
     }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.all([runScheduledAnalytics(controller, env), runScheduledAgentRecovery(env)]))
+    ctx.waitUntil(Promise.all([runScheduledAnalytics(controller, env), runScheduledAgentRecovery(env), pruneFormulaIntelligenceRetention(env.DB)]))
   },
+}
+
+async function pruneFormulaIntelligenceRetention(db: D1Database) {
+  // Artifacts are intentionally short-lived. Audit-chain rows are preserved for
+  // at least one year and therefore are never pruned on this scheduled path.
+  await db.prepare(`DELETE FROM agent_artifacts WHERE created_at < ?`).bind(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()).run()
 }
 
 async function runScheduledAgentRecovery(env: Env) {
@@ -1223,8 +1259,9 @@ async function runScheduledAgentRecovery(env: Env) {
       service.authenticateSession(run.session_id)
       const actor = actorFromService(service)
       await executeAgentRun(store, service, actor, job.run_id)
-    } catch (error) {
-      console.error('Scheduled agent resume failed', error)
+    } catch {
+      await store.cancelUnauthorizedRun(job.run_id, job.organization_id).catch(() => undefined)
+      console.error('Scheduled agent resume cancelled after authorization check')
     }
   }
 }
@@ -1922,7 +1959,7 @@ async function claimOperationIdempotency(db: D1Database, claim: OperationIdempot
     .bind(claim.organizationId, claim.operation, claim.key)
     .first<OperationIdempotencyRow>()
   if (!existing || existing.request_hash !== claim.requestHash) {
-    throw new UnprocessableEntityException('Idempotency-Key cannot be reused with a different request payload')
+    throw new ConflictException('Idempotency-Key cannot be reused with a different request payload')
   }
   if (existing.status !== 'COMPLETED' || !existing.response_json) {
     throw new UnprocessableEntityException('An operation with this Idempotency-Key is still processing; retry shortly')
@@ -8028,6 +8065,9 @@ function errorJson(error: unknown, headers: HeadersInit) {
     message?: string
   }
   const status = candidate.getStatus?.() ?? candidate.status ?? candidate.statusCode ?? 500
+  if (status >= 500) {
+    return json({ message: 'Unexpected worker API error', statusCode: status }, status, headers)
+  }
   const response = candidate.getResponse?.()
   const payload =
     typeof response === 'string'

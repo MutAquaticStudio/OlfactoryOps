@@ -282,7 +282,7 @@ export class NorthStarController {
   @Get('formula-intelligence/design-projects')
   formulaDesignProjects() {
     const context = this.northStar.me().data
-    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.edit'))
+    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
   }
 
   @Post('formula-intelligence/design-projects')
@@ -293,7 +293,12 @@ export class NorthStarController {
   @Get('formula-intelligence/design-projects/:projectId')
   formulaDesignProject(@Param('projectId') projectId: string) {
     const context = this.northStar.me().data
-    return this.agentRuntime.designProject(this.northStar, context.session, projectId, context.permissions.includes('formulas.edit'))
+    return this.agentRuntime.designProject(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+  }
+
+  @Get('formula-intelligence/design-projects/:projectId/recipients')
+  formulaDesignRecipients(@Param('projectId') projectId: string) {
+    return this.agentRuntime.designRecipients(this.northStar, this.northStar.me().data.session, projectId)
   }
 
   @Post('formula-intelligence/design-projects/:projectId/generate')
@@ -302,8 +307,13 @@ export class NorthStarController {
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/share')
-  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string) {
-    return this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId)
+  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>) {
+    return this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body)
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/shares/:recipientUserId/revoke')
+  revokeFormulaDesignDirectionShare(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Param('recipientUserId') recipientUserId: string) {
+    return this.agentRuntime.revokeDesignDirectionShare(this.northStar, this.northStar.me().data.session, projectId, directionId, recipientUserId)
   }
 
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/feedback')

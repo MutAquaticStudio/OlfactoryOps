@@ -1,6 +1,8 @@
 import {
   agentFormulaProposalSchema,
   formulaDesignBriefSchema,
+  formulaDirectionFeedbackSchema,
+  formulaDirectionShareSchema,
   formulaIntelligenceRunConfigSchema,
   formulaOptimizerRequestSchema,
   type DesignDirectionArtifact,
@@ -11,11 +13,12 @@ import {
 import {
   buildDesignDirectionProposals,
   buildOptimizerProposals,
+  compareOptimizerCandidates,
   compositionChangePercent,
   proposalFromFormulaVersion,
 } from '../src/data/formulaIntelligence.js'
 import type { Material } from '../src/data/northStar.js'
-import { ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
+import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { AgentRuntimeStore, type AgentActor, type AgentRunRow } from './agent-runtime.js'
 
@@ -46,6 +49,14 @@ type DirectionRow = {
   saved_formula_id: string | null
   created_at: string
   updated_at: string
+}
+
+type DirectionShareRow = {
+  id: string
+  recipient_user_id: string
+  allow_material_names: number
+  shared_at: string
+  revoked_at: string | null
 }
 
 type CandidateRow = {
@@ -135,11 +146,12 @@ function safeDirection(direction: DesignDirectionArtifact) {
   return {
     id: direction.directionId,
     title: direction.title,
-    narrative: direction.narrative,
-    pyramidSummary: direction.pyramidSummary,
+    // Brand projections deliberately omit material names and raw tool output.
+    narrative: 'A perfumer prepared this creative direction for review.',
+    pyramidSummary: 'Creative pyramid available to the assigned reviewer.',
     availability: direction.availability,
     complianceStatus: direction.complianceStatus,
-    warnings: direction.warnings,
+    warnings: [],
   }
 }
 
@@ -151,7 +163,7 @@ export async function auditFormulaIntelligence(db: D1Database, actor: AgentActor
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(organization_id, id) DO NOTHING`,
   ).bind(actor.organizationId, eventId, timestamp, actor.userId, action, entity.slice(0, 240), `formula-intelligence:${eventId}`, outcome, timestamp).run()
-  await chainPendingAuditEvents(db, timestamp)
+  await chainAuditEvent(db, actor.organizationId, eventId, timestamp)
 }
 
 async function auditHash(organizationId: string, sequence: number, previousHash: string | null, event: { id: string; at: string; actor: string; action: string; entity: string; request_id: string; outcome: string }) {
@@ -160,39 +172,40 @@ async function auditHash(organizationId: string, sequence: number, previousHash:
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
 }
 
-async function chainPendingAuditEvents(db: D1Database, timestamp: string) {
+async function chainAuditEvent(db: D1Database, organizationId: string, eventId: string, timestamp: string) {
+  const event = await db.prepare(
+    `SELECT id, at, actor, action, entity, request_id, outcome
+     FROM tenant_audit_events WHERE id = ? AND organization_id = ?`,
+  ).bind(eventId, organizationId).first<{ id: string; at: string; actor: string; action: string; entity: string; request_id: string; outcome: string }>()
+  if (!event) return
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const pending = await db.prepare(
-      `SELECT e.organization_id, e.id, e.at, e.actor, e.action, e.entity, e.request_id, e.outcome
-       FROM tenant_audit_events e
-       LEFT JOIN tenant_audit_chain_events c ON c.event_id = e.id
-       WHERE c.event_id IS NULL
-       ORDER BY e.at ASC, e.id ASC`,
-    ).all<{ organization_id: string; id: string; at: string; actor: string; action: string; entity: string; request_id: string; outcome: string }>()
-    if (!(pending.results?.length)) return
-    const statements: D1PreparedStatement[] = []
-    const tails = new Map<string, { sequence: number; event_hash: string }>()
-    for (const event of pending.results) {
-      let tail = tails.get(event.organization_id)
-      if (!tail) {
-        tail = await db.prepare(
-          `SELECT sequence, event_hash FROM tenant_audit_chain_events WHERE organization_id = ? ORDER BY sequence DESC LIMIT 1`,
-        ).bind(event.organization_id).first<{ sequence: number; event_hash: string }>() ?? { sequence: 0, event_hash: '' }
-      }
-      const sequence = tail.sequence + 1
-      const previousHash = tail.sequence ? tail.event_hash : null
-      const eventHash = await auditHash(event.organization_id, sequence, previousHash, event)
-      statements.push(db.prepare(
-        `INSERT INTO tenant_audit_chain_events (event_id, organization_id, sequence, previous_hash, event_hash, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(event.id, event.organization_id, sequence, previousHash, eventHash, timestamp))
-      tails.set(event.organization_id, { sequence, event_hash: eventHash })
-    }
+    await db.prepare(
+      `INSERT OR IGNORE INTO tenant_audit_chain_heads (organization_id, last_sequence, last_hash, updated_at)
+       VALUES (?, 0, '', ?)`,
+    ).bind(organizationId, timestamp).run()
+    const head = await db.prepare(
+      `SELECT last_sequence, last_hash FROM tenant_audit_chain_heads WHERE organization_id = ?`,
+    ).bind(organizationId).first<{ last_sequence: number; last_hash: string }>()
+    if (!head) return
+    const sequence = head.last_sequence + 1
+    const previousHash = head.last_sequence ? head.last_hash : null
+    const eventHash = await auditHash(organizationId, sequence, previousHash, event)
     try {
-      await db.batch(statements)
-      return
-    } catch (error) {
-      if (attempt === 2) throw error
+      const result = await db.batch([
+        db.prepare(
+          `INSERT OR IGNORE INTO tenant_audit_chain_events (event_id, organization_id, sequence, previous_hash, event_hash, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        ).bind(event.id, organizationId, sequence, previousHash, eventHash, timestamp),
+        db.prepare(
+          `UPDATE tenant_audit_chain_heads SET last_sequence = ?, last_hash = ?, updated_at = ?
+           WHERE organization_id = ? AND last_sequence = ? AND last_hash = ?`,
+        ).bind(sequence, eventHash, timestamp, organizationId, head.last_sequence, head.last_hash),
+      ])
+      if ((result[1]?.meta.changes ?? 0) === 1) return
+      const existing = await db.prepare(`SELECT 1 AS found FROM tenant_audit_chain_events WHERE event_id = ?`).bind(event.id).first<{ found: number }>()
+      if (existing) return
+    } catch {
+      if (attempt === 2) throw new UnprocessableEntityException('Audit evidence could not be recorded')
     }
   }
 }
@@ -202,8 +215,9 @@ export class FormulaIntelligenceStore {
 
   async createDesignProject(actor: AgentActor, briefInput: unknown, idempotencyKey: string, brandId: string) {
     const brief = formulaDesignBriefSchema.parse(briefInput)
-    const key = idempotencyKey.trim().slice(0, 200)
-    if (!key) throw new UnprocessableEntityException('Idempotency-Key is required for a design brief')
+    const rawKey = idempotencyKey.trim().slice(0, 160)
+    const key = `design-project:${actor.userId}:${rawKey}`
+    if (!rawKey) throw new UnprocessableEntityException('Idempotency-Key is required for a design brief')
     const existing = await this.db.prepare(
       `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
        FROM formula_design_projects WHERE organization_id = ? AND idempotency_key = ?`,
@@ -221,26 +235,37 @@ export class FormulaIntelligenceStore {
     return this.projectPayload(project, actor, false)
   }
 
-  async listDesignProjects(actor: AgentActor, includeTenantProjects: boolean) {
-    const result = includeTenantProjects
-      ? await this.db.prepare(
-        `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
-         FROM formula_design_projects WHERE organization_id = ? ORDER BY updated_at DESC LIMIT 80`,
-      ).bind(actor.organizationId).all<ProjectRow>()
-      : await this.db.prepare(
-        `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
-         FROM formula_design_projects WHERE organization_id = ? AND created_by_user_id = ? ORDER BY updated_at DESC LIMIT 80`,
-      ).bind(actor.organizationId, actor.userId).all<ProjectRow>()
-    return Promise.all((result.results ?? []).map((project) => this.projectPayload(project, actor, includeTenantProjects)))
+  async listDesignProjects(actor: AgentActor, canViewPrivate: boolean) {
+    const result = await this.db.prepare(
+      `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.selected_direction_id, p.created_at, p.updated_at
+       FROM formula_design_projects p
+       LEFT JOIN formula_design_direction_shares s
+         ON s.project_id = p.id AND s.organization_id = p.organization_id AND s.recipient_user_id = ? AND s.revoked_at IS NULL
+       LEFT JOIN formula_intelligence_runs r
+         ON r.project_id = p.id AND r.organization_id = p.organization_id AND r.created_by_user_id = ?
+       WHERE p.organization_id = ? AND (p.created_by_user_id = ? OR s.id IS NOT NULL OR r.run_id IS NOT NULL)
+       ORDER BY p.updated_at DESC LIMIT 80`,
+    ).bind(actor.userId, actor.userId, actor.organizationId, actor.userId).all<ProjectRow>()
+    return Promise.all((result.results ?? []).map((project) => this.projectPayload(project, actor, canViewPrivate)))
   }
 
-  async designProject(actor: AgentActor, projectId: string, includePrivate: boolean) {
-    const project = await this.projectForActor(actor, projectId, includePrivate)
-    return this.projectPayload(project, actor, includePrivate)
+  async designProject(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
+    const project = await this.projectForActor(actor, projectId)
+    return this.projectPayload(project, actor, canViewPrivate)
+  }
+
+  async designProjectForGeneration(actor: AgentActor, projectId: string) {
+    const project = await this.db.prepare(
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+       FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
+    ).bind(projectId, actor.organizationId).first<ProjectRow>()
+    if (!project) throw new NotFoundException('Design project was not found')
+    return project
   }
 
   async createRunConfig(actor: AgentActor, runId: string, config: FormulaIntelligenceRunConfig, idempotencyKey: string) {
     const timestamp = now()
+    const scopedKey = `formula-intelligence:${actor.userId}:${idempotencyKey.trim().slice(0, 160)}`
     await this.db.prepare(
       `INSERT INTO formula_intelligence_runs (run_id, organization_id, workflow_kind, config_json, project_id, baseline_formula_id, baseline_version, created_by_user_id, idempotency_key, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -249,7 +274,7 @@ export class FormulaIntelligenceStore {
       config.workflowKind === 'DESIGN_STUDIO' ? config.projectId : null,
       config.workflowKind === 'REFORMULATION_OPTIMIZER' ? config.request.baselineFormulaId : null,
       config.workflowKind === 'REFORMULATION_OPTIMIZER' ? config.request.baselineVersion : null,
-      actor.userId, idempotencyKey, timestamp, timestamp,
+      actor.userId, scopedKey, timestamp, timestamp,
     ).run()
   }
 
@@ -285,24 +310,64 @@ export class FormulaIntelligenceStore {
     ).bind(candidate.candidateId, actor.organizationId, runId, request.baselineFormulaId, request.baselineVersion, index + 1, JSON.stringify(candidate), JSON.stringify(candidate.proposal), timestamp, timestamp)))
   }
 
-  async shareDirection(actor: AgentActor, projectId: string, directionId: string) {
-    await this.projectForActor(actor, projectId, true)
+  async shareDirection(actor: AgentActor, projectId: string, directionId: string, body: unknown) {
+    const project = await this.projectForActor(actor, projectId)
+    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can share it')
+    const input = formulaDirectionShareSchema.parse(body)
+    const direction = await this.directionForProject(actor, projectId, directionId, true)
+    const recipients = await this.activeRecipients(actor, project, input.recipientUserIds)
+    if (recipients.length !== input.recipientUserIds.length) throw new UnprocessableEntityException('Every recipient must be an active member of this project brand')
     const timestamp = now()
-    const result = await this.db.prepare(
+    const statements = recipients.map((recipient) => this.db.prepare(
+      `INSERT INTO formula_design_direction_shares (
+        id, organization_id, project_id, direction_id, recipient_user_id, allow_material_names,
+        shared_by_user_id, shared_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(direction_id, recipient_user_id) DO UPDATE SET
+        allow_material_names = excluded.allow_material_names, shared_by_user_id = excluded.shared_by_user_id,
+        shared_at = excluded.shared_at, revoked_at = NULL, revoked_by_user_id = NULL, updated_at = excluded.updated_at`,
+    ).bind(uuid(), actor.organizationId, projectId, direction.id, recipient, input.allowMaterialNames ? 1 : 0, actor.userId, timestamp, timestamp, timestamp))
+    statements.push(this.db.prepare(
       `UPDATE formula_design_directions SET status = 'SHARED', shared_by_user_id = ?, shared_at = ?, updated_at = ?
        WHERE id = ? AND project_id = ? AND organization_id = ?`,
-    ).bind(actor.userId, timestamp, timestamp, directionId, projectId, actor.organizationId).run()
-    if (!result.meta.changes) throw new NotFoundException('Design direction was not found')
+    ).bind(actor.userId, timestamp, timestamp, directionId, projectId, actor.organizationId))
+    await this.db.batch(statements)
+    return { recipients: recipients.length, allowMaterialNames: input.allowMaterialNames }
   }
 
-  async feedback(actor: AgentActor, projectId: string, directionId: string, body: Record<string, unknown>) {
-    const project = await this.projectForActor(actor, projectId, false)
+  async revokeDirectionShare(actor: AgentActor, projectId: string, directionId: string, recipientUserId: string) {
+    const project = await this.projectForActor(actor, projectId)
+    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can revoke a share')
+    const result = await this.db.prepare(
+      `UPDATE formula_design_direction_shares SET revoked_at = ?, revoked_by_user_id = ?, updated_at = ?
+       WHERE organization_id = ? AND project_id = ? AND direction_id = ? AND recipient_user_id = ? AND revoked_at IS NULL`,
+    ).bind(now(), actor.userId, now(), actor.organizationId, projectId, directionId, recipientUserId).run()
+    if (!result.meta.changes) throw new NotFoundException('Active direction share was not found')
+  }
+
+  async eligibleRecipients(actor: AgentActor, projectId: string) {
+    const project = await this.projectForActor(actor, projectId)
+    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the generating perfumer can select direction recipients')
+    const rows = await this.db.prepare(
+      `SELECT user_id, name, email, brand_ids_json FROM tenant_memberships
+       WHERE organization_id = ? AND status = 'ACTIVE' AND user_id != ? ORDER BY name ASC, email ASC`,
+    ).bind(actor.organizationId, actor.userId).all<{ user_id: string; name: string; email: string; brand_ids_json: string }>()
+    return (rows.results ?? []).filter((row) => !project.brand_id || parseJson<string[]>(row.brand_ids_json, []).includes(project.brand_id)).map((row) => ({
+      userId: row.user_id,
+      name: row.name,
+      email: row.email,
+    }))
+  }
+
+  async feedback(actor: AgentActor, projectId: string, directionId: string, body: unknown) {
+    const project = await this.projectForActor(actor, projectId)
     const direction = await this.directionForProject(actor, projectId, directionId, false)
-    if (!direction.shared_at) throw new ForbiddenException('A perfumer must share a direction before brand feedback is accepted')
-    const rating = body.rating === undefined ? null : Math.max(1, Math.min(5, Math.round(Number(body.rating))))
-    const comment = typeof body.comment === 'string' ? body.comment.trim().slice(0, 1200) : ''
-    const selected = body.selected === true
-    if (!comment && !selected && rating === null) throw new UnprocessableEntityException('Add a rating, comment, or direction selection')
+    const share = await this.activeShare(actor, direction.id)
+    if (!share) throw new ForbiddenException('This direction is not shared with the current member')
+    const input = formulaDirectionFeedbackSchema.parse(body)
+    const rating = input.rating ?? null
+    const comment = input.comment ?? ''
+    const selected = input.selected
     const timestamp = now()
     await this.db.batch([
       ...(selected ? [
@@ -319,7 +384,8 @@ export class FormulaIntelligenceStore {
   }
 
   async requestDirectionDraftSave(actor: AgentActor, projectId: string, directionId: string, agentStore: AgentRuntimeStore) {
-    await this.projectForActor(actor, projectId, true)
+    const project = await this.projectForActor(actor, projectId)
+    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can save it as a draft')
     const direction = await this.directionForProject(actor, projectId, directionId, true)
     const run = await agentStore.runForActor(actor, direction.run_id)
     const proposal = agentFormulaProposalSchema.parse(parseJson(direction.proposal_json, {}))
@@ -356,21 +422,76 @@ export class FormulaIntelligenceStore {
     ])
   }
 
-  private async projectForActor(actor: AgentActor, projectId: string, includeTenantProjects: boolean) {
+  async assertRunStartAllowed(actor: AgentActor, projectId?: string) {
+    const activeStatuses = ['QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION']
+    const active = await this.db.prepare(
+      `SELECT
+        SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS user_count,
+        COUNT(*) AS tenant_count
+       FROM agent_runs
+       WHERE organization_id = ? AND status IN (?, ?, ?)`,
+    ).bind(actor.userId, actor.organizationId, ...activeStatuses).first<{ user_count: number | null; tenant_count: number | null }>()
+    if (Number(active?.user_count ?? 0) >= 2 || Number(active?.tenant_count ?? 0) >= 10) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_RUN_QUOTA_EXHAUSTED')
+    }
+    const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString()
+    const starts = await this.db.prepare(
+      `SELECT COUNT(*) AS count FROM formula_intelligence_runs
+       WHERE organization_id = ? AND created_by_user_id = ? AND created_at >= ?`,
+    ).bind(actor.organizationId, actor.userId, cutoff).first<{ count: number }>()
+    if (Number(starts?.count ?? 0) >= 5) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_START_RATE_LIMITED')
+    if (projectId) {
+      const projectRun = await this.db.prepare(
+        `SELECT 1 AS found FROM formula_intelligence_runs fi
+         JOIN agent_runs ar ON ar.id = fi.run_id AND ar.organization_id = fi.organization_id
+         WHERE fi.organization_id = ? AND fi.project_id = ? AND ar.status IN (?, ?, ?) LIMIT 1`,
+      ).bind(actor.organizationId, projectId, ...activeStatuses).first<{ found: number }>()
+      if (projectRun) throw new ConflictException('FORMULA_INTELLIGENCE_PROJECT_GENERATION_IN_PROGRESS')
+    }
+  }
+
+  async revalidateDraftSave(actor: AgentActor, runId: string, proposal: ReturnType<typeof agentFormulaProposalSchema.parse>, service: NorthStarService) {
+    const { config } = await this.configForRun(actor, runId)
+    const total = proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0)
+    if (Math.abs(total - 100) > 0.05) throw new UnprocessableEntityException('Formula composition must total 100% before it can be saved')
+    const preview = service.previewFormulaIntelligence(proposal).data
+    if (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
+    }
+    if (config.workflowKind === 'REFORMULATION_OPTIMIZER') {
+      assertCandidateSaveEligibility(service, proposal, config.request)
+    } else {
+      const candidateMaterialIds = new Set(proposal.ingredients.map((ingredient) => ingredient.materialId))
+      if (config.brief.lockedMaterialIds.some((materialId) => !candidateMaterialIds.has(materialId))) {
+        throw new UnprocessableEntityException('Formula draft does not preserve locked materials from the design brief')
+      }
+    }
+    return preview
+  }
+
+  private async projectForActor(actor: AgentActor, projectId: string) {
     const project = await this.db.prepare(
       `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
-       FROM formula_design_projects WHERE id = ? AND organization_id = ? ${includeTenantProjects ? '' : 'AND created_by_user_id = ?'}`,
-    ).bind(...(includeTenantProjects ? [projectId, actor.organizationId] : [projectId, actor.organizationId, actor.userId])).first<ProjectRow>()
+       FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
+    ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
+    const isCreator = project.created_by_user_id === actor.userId
+    const isProducer = await this.isProjectProducer(actor, project.id)
+    const shared = await this.db.prepare(
+      `SELECT 1 AS found FROM formula_design_direction_shares
+       WHERE organization_id = ? AND project_id = ? AND recipient_user_id = ? AND revoked_at IS NULL LIMIT 1`,
+    ).bind(actor.organizationId, project.id, actor.userId).first<{ found: number }>()
+    if (!isCreator && !isProducer && !shared) throw new NotFoundException('Design project was not found')
     return project
   }
 
   private async directionForProject(actor: AgentActor, projectId: string, directionId: string, includePrivate: boolean) {
     const direction = await this.db.prepare(
       `SELECT id, project_id, run_id, sequence, title, status, safe_summary_json, proposal_json, shared_by_user_id, shared_at, saved_formula_id, created_at, updated_at
-       FROM formula_design_directions WHERE id = ? AND project_id = ? AND organization_id = ? ${includePrivate ? '' : "AND shared_at IS NOT NULL"}`,
+       FROM formula_design_directions WHERE id = ? AND project_id = ? AND organization_id = ?`,
     ).bind(directionId, projectId, actor.organizationId).first<DirectionRow>()
     if (!direction) throw new NotFoundException('Design direction was not found')
+    if (!includePrivate && !(await this.activeShare(actor, direction.id))) throw new NotFoundException('Design direction was not found')
     return direction
   }
 
@@ -386,21 +507,70 @@ export class FormulaIntelligenceStore {
   private async pendingConfirmation(run: AgentRunRow) {
     const existing = await this.db.prepare(
       `SELECT id, summary FROM agent_confirmations
-       WHERE run_id = ? AND organization_id = ? AND status = 'PENDING'
+       WHERE run_id = ? AND organization_id = ? AND status = 'PENDING' AND expires_at > ?
        ORDER BY created_at DESC LIMIT 1`,
-    ).bind(run.id, run.organization_id).first<{ id: string; summary: string }>()
+    ).bind(run.id, run.organization_id, now()).first<{ id: string; summary: string }>()
     return existing ? { confirmationId: existing.id, summary: existing.summary } : undefined
   }
 
-  private async projectPayload(project: ProjectRow, actor: AgentActor, includePrivate: boolean) {
+  private async projectPayload(project: ProjectRow, actor: AgentActor, canViewPrivate: boolean) {
     const directionRows = await this.db.prepare(
-      `SELECT id, project_id, run_id, sequence, title, status, safe_summary_json, proposal_json, shared_by_user_id, shared_at, saved_formula_id, created_at, updated_at
-       FROM formula_design_directions WHERE project_id = ? AND organization_id = ? ${includePrivate ? '' : 'AND shared_at IS NOT NULL'} ORDER BY sequence ASC`,
+      `SELECT d.id, d.project_id, d.run_id, d.sequence, d.title, d.status, d.safe_summary_json, d.proposal_json,
+        d.shared_by_user_id, d.shared_at, d.saved_formula_id, d.created_at, d.updated_at
+       FROM formula_design_directions d
+       WHERE d.project_id = ? AND d.organization_id = ?
+       ORDER BY d.sequence ASC`,
     ).bind(project.id, actor.organizationId).all<DirectionRow>()
     const feedback = await this.db.prepare(
       `SELECT id, direction_id, user_id, rating, comment, selected, created_at, updated_at
-       FROM formula_design_feedback WHERE project_id = ? AND organization_id = ? ORDER BY created_at ASC`,
-    ).bind(project.id, actor.organizationId).all<{ id: string; direction_id: string; user_id: string; rating: number | null; comment: string; selected: number; created_at: string; updated_at: string }>()
+       FROM formula_design_feedback WHERE project_id = ? AND organization_id = ? ${canViewPrivate ? '' : 'AND user_id = ?'} ORDER BY created_at ASC`,
+    ).bind(...(canViewPrivate ? [project.id, actor.organizationId] : [project.id, actor.organizationId, actor.userId])).all<{ id: string; direction_id: string; user_id: string; rating: number | null; comment: string; selected: number; created_at: string; updated_at: string }>()
+    const directions = await Promise.all((directionRows.results ?? []).map(async (direction) => {
+      const privateDirection = canViewPrivate && await this.isDirectionProducer(actor, direction)
+      const share = privateDirection ? undefined : await this.activeShare(actor, direction.id)
+      if (!privateDirection && !share) return undefined
+      const stored = parseJson(direction.safe_summary_json, {} as ReturnType<typeof safeDirection>)
+      const proposal = agentFormulaProposalSchema.parse(parseJson(direction.proposal_json, {}))
+      const safeSource: DesignDirectionArtifact = {
+        directionId: direction.id,
+        title: direction.title,
+        narrative: typeof (stored as { narrative?: unknown }).narrative === 'string' ? (stored as { narrative: string }).narrative : '',
+        pyramidSummary: typeof (stored as { pyramidSummary?: unknown }).pyramidSummary === 'string' ? (stored as { pyramidSummary: string }).pyramidSummary : '',
+        availability: (stored as { availability?: DesignDirectionArtifact['availability'] }).availability ?? 'UNKNOWN',
+        complianceStatus: (stored as { complianceStatus?: DesignDirectionArtifact['complianceStatus'] }).complianceStatus ?? 'INSUFFICIENT_DATA',
+        warnings: Array.isArray((stored as { warnings?: unknown }).warnings) ? (stored as { warnings: string[] }).warnings : [],
+        proposal,
+      }
+      const visible = privateDirection
+        ? {
+            ...safeDirection(safeSource),
+            narrative: (stored as { narrative?: string }).narrative ?? 'Private perfumer direction.',
+            pyramidSummary: (stored as { pyramidSummary?: string }).pyramidSummary ?? '',
+            warnings: (stored as { warnings?: string[] }).warnings ?? [],
+            runId: direction.run_id,
+            proposal,
+          }
+        : {
+            ...safeDirection(safeSource),
+            ...(share?.allow_material_names ? {
+              narrative: (stored as { narrative?: string }).narrative ?? 'Creative direction shared for review.',
+              pyramidSummary: (stored as { pyramidSummary?: string }).pyramidSummary ?? 'Material names are unavailable.',
+            } : {}),
+          }
+      const shares = privateDirection
+        ? await this.db.prepare(
+          `SELECT recipient_user_id, allow_material_names, shared_at FROM formula_design_direction_shares
+           WHERE organization_id = ? AND direction_id = ? AND revoked_at IS NULL ORDER BY shared_at ASC`,
+        ).bind(actor.organizationId, direction.id).all<DirectionShareRow>()
+        : undefined
+      return {
+        ...visible,
+        status: direction.status,
+        sharedAt: share?.shared_at ?? direction.shared_at,
+        savedFormulaId: privateDirection ? direction.saved_formula_id : undefined,
+        ...(shares ? { shares: (shares.results ?? []).map((item) => ({ recipientUserId: item.recipient_user_id, allowMaterialNames: Boolean(item.allow_material_names), sharedAt: item.shared_at })) } : {}),
+      }
+    }))
     return {
       id: project.id,
       name: project.name,
@@ -410,15 +580,48 @@ export class FormulaIntelligenceStore {
       brief: formulaDesignBriefSchema.parse(parseJson(project.brief_json, {})),
       createdAt: project.created_at,
       updatedAt: project.updated_at,
-      directions: (directionRows.results ?? []).map((direction) => ({
-        ...safeDirection({ ...parseJson(direction.safe_summary_json, {}) as Omit<DesignDirectionArtifact, 'proposal'>, directionId: direction.id, proposal: agentFormulaProposalSchema.parse(parseJson(direction.proposal_json, {})) }),
-        status: direction.status,
-        sharedAt: direction.shared_at,
-        savedFormulaId: direction.saved_formula_id,
-        ...(includePrivate ? { runId: direction.run_id, proposal: agentFormulaProposalSchema.parse(parseJson(direction.proposal_json, {})) } : {}),
-      })),
+      directions: directions.filter((direction): direction is NonNullable<typeof direction> => Boolean(direction)),
       feedback: (feedback.results ?? []).map((item) => ({ id: item.id, directionId: item.direction_id, userId: item.user_id, rating: item.rating, comment: item.comment, selected: Boolean(item.selected), createdAt: item.created_at })),
     }
+  }
+
+  private async activeShare(actor: AgentActor, directionId: string) {
+    return this.db.prepare(
+      `SELECT id, recipient_user_id, allow_material_names, shared_at, revoked_at
+       FROM formula_design_direction_shares
+       WHERE organization_id = ? AND direction_id = ? AND recipient_user_id = ? AND revoked_at IS NULL`,
+    ).bind(actor.organizationId, directionId, actor.userId).first<DirectionShareRow>()
+  }
+
+  private async isProjectProducer(actor: AgentActor, projectId: string) {
+    const run = await this.db.prepare(
+      `SELECT 1 AS found FROM formula_intelligence_runs
+       WHERE organization_id = ? AND project_id = ? AND created_by_user_id = ? LIMIT 1`,
+    ).bind(actor.organizationId, projectId, actor.userId).first<{ found: number }>()
+    return Boolean(run)
+  }
+
+  private async isDirectionProducer(actor: AgentActor, direction: DirectionRow) {
+    const run = await this.db.prepare(
+      `SELECT 1 AS found FROM agent_runs WHERE id = ? AND organization_id = ? AND user_id = ? LIMIT 1`,
+    ).bind(direction.run_id, actor.organizationId, actor.userId).first<{ found: number }>()
+    return Boolean(run)
+  }
+
+  private async activeRecipients(actor: AgentActor, project: ProjectRow, recipientIds: string[]) {
+    const unique = [...new Set(recipientIds)]
+    if (unique.length !== recipientIds.length) throw new UnprocessableEntityException('A direction recipient can appear only once')
+    const placeholders = unique.map(() => '?').join(', ')
+    const rows = await this.db.prepare(
+      `SELECT user_id, brand_ids_json FROM tenant_memberships
+       WHERE organization_id = ? AND status = 'ACTIVE' AND user_id IN (${placeholders})`,
+    ).bind(actor.organizationId, ...unique).all<{ user_id: string; brand_ids_json: string }>()
+    return (rows.results ?? [])
+      .filter((row) => {
+        const brands = parseJson<string[]>(row.brand_ids_json, [])
+        return !project.brand_id || brands.includes(project.brand_id)
+      })
+      .map((row) => row.user_id)
   }
 }
 
@@ -440,6 +643,7 @@ function assertCandidateSaveEligibility(service: NorthStarService, proposal: Ret
 }
 
 async function recordTool(store: AgentRuntimeStore, run: AgentRunRow, nodeId: string, name: string, input: Record<string, unknown>, output: Record<string, unknown>) {
+  await store.assertExecutionLease(run.id, run.organization_id)
   const id = uuid()
   const timestamp = now()
   await store.database.batch([
@@ -456,6 +660,7 @@ async function beginRun(store: AgentRuntimeStore, actor: AgentActor, runId: stri
   if (!job) return undefined
   const run = await store.runForActor(actor, runId)
   if (run.status === 'CANCELLED' || run.status === 'WAITING_FOR_CONFIRMATION') return undefined
+  await store.assertExecutionLease(run.id, run.organization_id)
   const timestamp = now()
   await store.database.prepare(`UPDATE agent_runs SET status = 'RUNNING', started_at = COALESCE(started_at, ?), updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
     .bind(timestamp, timestamp, run.id, run.organization_id).run()
@@ -464,6 +669,7 @@ async function beginRun(store: AgentRuntimeStore, actor: AgentActor, runId: stri
 }
 
 async function completeRun(store: AgentRuntimeStore, run: AgentRunRow) {
+  await store.assertExecutionLease(run.id, run.organization_id)
   const timestamp = now()
   await store.database.prepare(`UPDATE agent_runs SET status = 'COMPLETED', progress = 100, completed_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
     .bind(timestamp, timestamp, run.id, run.organization_id).run()
@@ -472,8 +678,9 @@ async function completeRun(store: AgentRuntimeStore, run: AgentRunRow) {
 }
 
 async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknown) {
-  const message = error instanceof Error ? error.message.slice(0, 500) : 'Formula Intelligence execution failed'
+  const message = error instanceof ForbiddenException ? 'Formula Intelligence authorization changed during execution' : 'Formula Intelligence execution failed'
   const timestamp = now()
+  await store.assertExecutionLease(run.id, run.organization_id)
   await store.database.batch([
     store.database.prepare(`UPDATE agent_runs SET status = 'FAILED', error_summary = ?, completed_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
       .bind(message, timestamp, timestamp, run.id, run.organization_id),
@@ -542,6 +749,7 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   const resultId = await store.createNode(run, 'prepare_result', { projectId: config.projectId })
   await store.startNode(run, resultId, 'prepare_result')
   await store.createArtifact(run, { type: 'design_directions', version: 1, data: { projectId: config.projectId, directions } })
+  await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistDesignDirections(actor, config.projectId, run.id, directions)
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 1, directionCount: directions.length }, 94)
   await store.createAssistantMessage(run, 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
@@ -596,10 +804,13 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
     const baselineCost = baselinePreview.cost?.totalCost
     const costDelta = preview.cost && baselineCost !== undefined ? Number((preview.cost.totalCost - baselineCost).toFixed(4)) : undefined
     const change = compositionChangePercent(baselineProposal, candidate.proposal)
-    const hardPass = status === 'PASS'
-    const inventoryScore = availability === 'AVAILABLE' ? 20 : availability === 'MIXED' ? 5 : 10
-    const costScore = costDelta === undefined ? 0 : costDelta <= 0 ? 15 : Math.max(0, 15 - costDelta * 10)
-    const score = Number(Math.max(0, Math.min(100, (hardPass ? 60 : status === 'REVIEW_REQUIRED' ? 30 : 0) + inventoryScore + costScore + Math.max(0, 5 - change / 20))).toFixed(2))
+    // UI score is secondary. The final sort below is a strict lexical rank.
+    const score = Number(Math.max(0, Math.min(100,
+      (status === 'PASS' ? 60 : status === 'REVIEW_REQUIRED' ? 30 : 0)
+      + (hasInventoryAccess(service) && availability === 'AVAILABLE' ? 20 : hasInventoryAccess(service) && availability === 'MIXED' ? 5 : 0)
+      + (costDelta === undefined ? 0 : costDelta <= 0 ? 15 : Math.max(0, 15 - costDelta * 10))
+      + Math.max(0, 5 - change / 20),
+    )).toFixed(2))
     return {
       candidateId: uuid(), title: candidate.title, proposal: candidate.proposal, complianceStatus: status, availability,
       costDelta, compositionChangePercent: change, score,
@@ -610,10 +821,14 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
         `Composition change: ${change.toFixed(2)}%.`,
       ],
     }
-  }).sort((left, right) => right.score - left.score || left.compositionChangePercent - right.compositionChangePercent)
+  }).sort((left, right) => compareOptimizerCandidates(
+    { ...left, inventoryEvaluated: hasInventoryAccess(service) },
+    { ...right, inventoryEvaluated: hasInventoryAccess(service) },
+  ))
   const resultId = await store.createNode(run, 'prepare_result', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, resultId, 'prepare_result')
   await store.createArtifact(run, { type: 'optimizer_candidates', version: 1, data: { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion, intent: request.intent, candidates } })
+  await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistOptimizerCandidates(actor, run.id, request, candidates)
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 1, candidateCount: candidates.length }, 94)
   await store.createAssistantMessage(run, 'I ranked deterministic reformulation candidates by compliance feasibility, eligible inventory, cost evidence when permitted, and minimum composition change. Select a candidate before saving a normal editable draft.')
@@ -646,10 +861,12 @@ export async function createDesignProjectRun(
 ) {
   requirePermission(service, 'formulas.edit')
   const intelligence = new FormulaIntelligenceStore(db)
-  const project = await intelligence.designProject(actor, projectId, true)
+  await intelligence.assertRunStartAllowed(actor, projectId)
+  const project = await intelligence.designProjectForGeneration(actor, projectId)
   const store = new AgentRuntimeStore(db)
-  const result = await store.create(actor, { brief: project.brief.creativeBrief }, { provider: 'mock', model: 'deterministic-v1' })
-  const config = formulaIntelligenceRunConfigSchema.parse({ workflowKind: 'DESIGN_STUDIO', projectId, brief: project.brief })
+  const brief = formulaDesignBriefSchema.parse(parseJson(project.brief_json, {}))
+  const result = await store.create(actor, { brief: brief.creativeBrief }, { provider: 'mock', model: 'deterministic-v1' })
+  const config = formulaIntelligenceRunConfigSchema.parse({ workflowKind: 'DESIGN_STUDIO', projectId, brief })
   await intelligence.createRunConfig(actor, result.data.run.id, config, idempotencyKey)
   await db.prepare(`UPDATE formula_design_projects SET status = 'IN_PROGRESS', updated_at = ? WHERE id = ? AND organization_id = ?`).bind(now(), projectId, actor.organizationId).run()
   await auditFormulaIntelligence(db, actor, 'formula-intelligence.design.run.create', projectId)
@@ -670,8 +887,9 @@ export async function createOptimizerRun(
     throw new UnprocessableEntityException('Select an existing immutable formula version before optimizing')
   }
   const store = new AgentRuntimeStore(db)
-  const result = await store.create(actor, { brief: `Optimize ${versions.formula.name} ${request.baselineVersion}` }, { provider: 'mock', model: 'deterministic-v1' })
   const intelligence = new FormulaIntelligenceStore(db)
+  await intelligence.assertRunStartAllowed(actor)
+  const result = await store.create(actor, { brief: `Optimize ${versions.formula.name} ${request.baselineVersion}` }, { provider: 'mock', model: 'deterministic-v1' })
   const config = formulaIntelligenceRunConfigSchema.parse({ workflowKind: 'REFORMULATION_OPTIMIZER', request })
   await intelligence.createRunConfig(actor, result.data.run.id, config, idempotencyKey)
   await auditFormulaIntelligence(db, actor, 'formula-intelligence.reformulation.run.create', `${request.baselineFormulaId}:${request.baselineVersion}`)

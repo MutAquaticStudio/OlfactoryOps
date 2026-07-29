@@ -15,7 +15,7 @@ import {
   type AgentRunStatus,
 } from '../src/data/agentRuntime.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
-import { ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
+import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 
 export type AgentActor = {
   organizationId: string
@@ -188,6 +188,8 @@ export function configuredAgentProvider(_env: { AGENT_PROVIDER?: string; OPENAI_
 }
 
 export class AgentRuntimeStore {
+  private readonly executionLeases = new Map<string, string>()
+
   constructor(private readonly db: D1Database) {}
 
   get database() {
@@ -308,6 +310,7 @@ export class AgentRuntimeStore {
   }
 
   async append(runId: string, organizationId: string, type: AgentRuntimeEvent['type'], payload: Record<string, unknown>) {
+    await this.assertExecutionLease(runId, organizationId)
     const current = await this.db.prepare(
       `SELECT last_event_sequence FROM agent_runs WHERE id = ? AND organization_id = ?`,
     ).bind(runId, organizationId).first<{ last_event_sequence: number }>()
@@ -364,7 +367,7 @@ export class AgentRuntimeStore {
       `SELECT id, node_type, attempt FROM agent_nodes WHERE id = ? AND run_id = ? AND organization_id = ?`,
     ).bind(nodeId, runId, actor.organizationId).first<{ id: string; node_type: AgentNodeType; attempt: number }>()
     if (!node) throw new NotFoundException('Agent workflow node was not found')
-    if (node.attempt >= 2) throw new UnprocessableEntityException('This node has reached its retry limit')
+    if (node.attempt >= 3) throw new UnprocessableEntityException('This node has reached its retry limit')
     const timestamp = now()
     await this.db.batch([
       this.db.prepare(`UPDATE agent_nodes SET status = 'RETRYING', attempt = attempt + 1, validation_error = NULL, updated_at = ? WHERE id = ? AND organization_id = ?`)
@@ -402,6 +405,86 @@ export class AgentRuntimeStore {
     await this.append(runId, actor.organizationId, 'confirmation.accepted', { confirmationId, summary: confirmation.summary })
     await this.append(runId, actor.organizationId, 'run.completed', { status: 'COMPLETED', progress: 100 })
     return { proposal, alreadyAccepted: false, summary: confirmation.summary }
+  }
+
+  async claimFormulaDraftSave(actor: AgentActor, runId: string, confirmationId: string) {
+    await this.runForActor(actor, runId)
+    const timestamp = now()
+    await this.db.prepare(
+      `UPDATE agent_confirmations SET status = 'EXPIRED'
+       WHERE id = ? AND run_id = ? AND organization_id = ? AND status = 'PENDING' AND expires_at <= ?`,
+    ).bind(confirmationId, runId, actor.organizationId, timestamp).run()
+    const confirmation = await this.db.prepare(
+      `SELECT id, status, payload_json, summary, expires_at
+       FROM agent_confirmations WHERE id = ? AND run_id = ? AND organization_id = ?`,
+    ).bind(confirmationId, runId, actor.organizationId).first<{ id: string; status: string; payload_json: string; summary: string; expires_at: string }>()
+    if (!confirmation) throw new NotFoundException('Agent confirmation was not found')
+    if (confirmation.status === 'EXPIRED' || confirmation.expires_at <= timestamp) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
+    if (confirmation.status === 'REJECTED') throw new UnprocessableEntityException('This confirmation is no longer actionable')
+    const proposal = agentFormulaProposalSchema.parse(JSON.parse(confirmation.payload_json))
+    const existing = await this.db.prepare(
+      `SELECT formula_id, status, lease_expires_at FROM agent_formula_draft_saves
+       WHERE confirmation_id = ? AND organization_id = ?`,
+    ).bind(confirmationId, actor.organizationId).first<{ formula_id: string; status: string; lease_expires_at: string | null }>()
+    if (existing?.status === 'COMPLETED') return { proposal, summary: confirmation.summary, formulaId: existing.formula_id, completed: true, leaseToken: undefined }
+    if (existing?.status === 'CREATING' && existing.lease_expires_at && existing.lease_expires_at > timestamp) {
+      throw new ConflictException('FORMULA_INTELLIGENCE_DRAFT_SAVE_IN_PROGRESS')
+    }
+    const leaseToken = uuid()
+    const leaseExpiresAt = new Date(Date.now() + jobLeaseSeconds * 1000).toISOString()
+    const formulaId = existing?.formula_id ?? `agent-draft-${confirmationId}`
+    if (!existing) {
+      const created = await this.db.prepare(
+        `INSERT OR IGNORE INTO agent_formula_draft_saves (
+          confirmation_id, organization_id, run_id, requested_by_user_id, formula_id, status,
+          lease_token, lease_expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'CREATING', ?, ?, ?, ?)`,
+      ).bind(confirmationId, actor.organizationId, runId, actor.userId, formulaId, leaseToken, leaseExpiresAt, timestamp, timestamp).run()
+      if (!created.meta.changes) throw new ConflictException('FORMULA_INTELLIGENCE_DRAFT_SAVE_IN_PROGRESS')
+    } else {
+      const claimed = await this.db.prepare(
+        `UPDATE agent_formula_draft_saves SET status = 'CREATING', lease_token = ?, lease_expires_at = ?, error_code = NULL, updated_at = ?
+         WHERE confirmation_id = ? AND organization_id = ? AND (
+           status IN ('PENDING', 'FAILED', 'EXPIRED') OR (status = 'CREATING' AND lease_expires_at <= ?)
+         )`,
+      ).bind(leaseToken, leaseExpiresAt, timestamp, confirmationId, actor.organizationId, timestamp).run()
+      if (!claimed.meta.changes) throw new ConflictException('FORMULA_INTELLIGENCE_DRAFT_SAVE_IN_PROGRESS')
+    }
+    await this.db.prepare(
+      `UPDATE agent_confirmations SET response_idempotency_key = ?, responded_by_user_id = ?, responded_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'PENDING'`,
+    ).bind(confirmationId, actor.userId, timestamp, confirmationId, actor.organizationId).run()
+    return { proposal, summary: confirmation.summary, formulaId, completed: false, leaseToken }
+  }
+
+  async completeFormulaDraftSave(actor: AgentActor, runId: string, confirmationId: string, formulaId: string, leaseToken: string) {
+    const timestamp = now()
+    const claimed = await this.db.prepare(
+      `UPDATE agent_formula_draft_saves
+       SET status = 'COMPLETED', lease_token = NULL, lease_expires_at = NULL, completed_at = ?, updated_at = ?
+       WHERE confirmation_id = ? AND organization_id = ? AND run_id = ? AND formula_id = ? AND status = 'CREATING' AND lease_token = ?`,
+    ).bind(timestamp, timestamp, confirmationId, actor.organizationId, runId, formulaId, leaseToken).run()
+    if (!claimed.meta.changes) throw new ConflictException('FORMULA_INTELLIGENCE_DRAFT_SAVE_IN_PROGRESS')
+    await this.db.batch([
+      this.db.prepare(`UPDATE agent_confirmations SET status = 'ACCEPTED', responded_by_user_id = ?, responded_at = ? WHERE id = ? AND run_id = ? AND organization_id = ?`)
+        .bind(actor.userId, timestamp, confirmationId, runId, actor.organizationId),
+      this.db.prepare(`UPDATE agent_nodes SET status = 'COMPLETED', completed_at = ?, updated_at = ? WHERE run_id = ? AND organization_id = ? AND node_type = 'save_formula_draft'`)
+        .bind(timestamp, timestamp, runId, actor.organizationId),
+      this.db.prepare(`UPDATE agent_runs SET status = 'COMPLETED', progress = 100, completed_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
+        .bind(timestamp, timestamp, runId, actor.organizationId),
+      this.db.prepare(`UPDATE agent_jobs SET status = 'COMPLETED', lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE run_id = ? AND organization_id = ?`)
+        .bind(timestamp, runId, actor.organizationId),
+    ])
+    await this.attachSavedFormula(actor, runId, confirmationId, formulaId)
+    await this.append(runId, actor.organizationId, 'confirmation.accepted', { confirmationId, summary: 'Formula draft saved once' })
+    await this.append(runId, actor.organizationId, 'run.completed', { status: 'COMPLETED', progress: 100 })
+  }
+
+  async failFormulaDraftSave(actor: AgentActor, runId: string, confirmationId: string, leaseToken: string, code: string) {
+    await this.db.prepare(
+      `UPDATE agent_formula_draft_saves SET status = 'FAILED', lease_token = NULL, lease_expires_at = NULL, error_code = ?, updated_at = ?
+       WHERE confirmation_id = ? AND organization_id = ? AND run_id = ? AND status = 'CREATING' AND lease_token = ?`,
+    ).bind(code.slice(0, 80), now(), confirmationId, actor.organizationId, runId, leaseToken).run()
   }
 
   async rejectConfirmation(actor: AgentActor, runId: string, confirmationId: string) {
@@ -447,20 +530,35 @@ export class AgentRuntimeStore {
       `UPDATE agent_jobs SET status = 'RUNNING', attempts = attempts + 1, lease_token = ?, lease_expires_at = ?, updated_at = ?
        WHERE id = ? AND status = 'QUEUED'`,
     ).bind(leaseToken, leaseExpiresAt, timestamp, job.id).run()
-    return updated.meta.changes ? { ...job, leaseToken } : undefined
+    if (!updated.meta.changes) return undefined
+    this.executionLeases.set(`${job.organization_id}:${job.run_id}`, leaseToken)
+    return { ...job, leaseToken }
   }
 
   async completeJob(runId: string, organizationId: string, status: 'WAITING' | 'COMPLETED' | 'FAILED' | 'CANCELLED') {
-    await this.db.prepare(
+    const leaseToken = this.executionLeases.get(`${organizationId}:${runId}`)
+    const result = await this.db.prepare(
       `UPDATE agent_jobs SET status = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ?
-       WHERE run_id = ? AND organization_id = ?`,
-    ).bind(status, now(), runId, organizationId).run()
+       WHERE run_id = ? AND organization_id = ? ${leaseToken ? 'AND lease_token = ?' : ''}`,
+    ).bind(...(leaseToken ? [status, now(), runId, organizationId, leaseToken] : [status, now(), runId, organizationId])).run()
+    if (leaseToken && !result.meta.changes) throw new ConflictException('Agent job lease was lost')
+    this.executionLeases.delete(`${organizationId}:${runId}`)
   }
 
   async recoverExpiredJobs() {
     const timestamp = now()
+    await this.db.batch([
+      this.db.prepare(
+        `UPDATE agent_jobs SET status = 'FAILED', last_error = 'retry-limit', lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+         WHERE status = 'RUNNING' AND lease_expires_at < ? AND attempts >= 3`,
+      ).bind(timestamp, timestamp),
+      this.db.prepare(
+        `UPDATE agent_runs SET status = 'FAILED', error_summary = 'Formula Intelligence retry limit reached', completed_at = ?, updated_at = ?, version = version + 1
+         WHERE status = 'RUNNING' AND id IN (SELECT run_id FROM agent_jobs WHERE status = 'FAILED' AND last_error = 'retry-limit')`,
+      ).bind(timestamp, timestamp),
+    ])
     const expired = await this.db.prepare(
-      `SELECT run_id, organization_id FROM agent_jobs WHERE status = 'RUNNING' AND lease_expires_at < ? LIMIT 25`,
+      `SELECT run_id, organization_id FROM agent_jobs WHERE status = 'RUNNING' AND lease_expires_at < ? AND attempts < 3 LIMIT 25`,
     ).bind(timestamp).all<{ run_id: string; organization_id: string }>()
     for (const job of expired.results ?? []) {
       await this.db.batch([
@@ -472,6 +570,31 @@ export class AgentRuntimeStore {
       await this.append(job.run_id, job.organization_id, 'run.queued', { status: 'QUEUED', progress: 0, reason: 'lease-reclaimed' })
     }
     return expired.results ?? []
+  }
+
+  async cancelUnauthorizedRun(runId: string, organizationId: string) {
+    const timestamp = now()
+    await this.db.batch([
+      this.db.prepare(
+        `UPDATE agent_runs SET status = 'CANCELLED', cancel_requested_at = ?, completed_at = ?, error_summary = 'Session authorization changed', updated_at = ?, version = version + 1
+         WHERE id = ? AND organization_id = ? AND status IN ('QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION')`,
+      ).bind(timestamp, timestamp, timestamp, runId, organizationId),
+      this.db.prepare(
+        `UPDATE agent_jobs SET status = 'CANCELLED', lease_token = NULL, lease_expires_at = NULL, last_error = 'session-authorization-changed', updated_at = ?
+         WHERE run_id = ? AND organization_id = ?`,
+      ).bind(timestamp, runId, organizationId),
+    ])
+    await this.append(runId, organizationId, 'run.cancelled', { status: 'CANCELLED', progress: 0, reason: 'session-authorization-changed' })
+  }
+
+  async assertExecutionLease(runId: string, organizationId: string) {
+    const leaseToken = this.executionLeases.get(`${organizationId}:${runId}`)
+    if (!leaseToken) return
+    const row = await this.db.prepare(
+      `SELECT 1 AS found FROM agent_jobs
+       WHERE run_id = ? AND organization_id = ? AND status = 'RUNNING' AND lease_token = ? AND lease_expires_at > ?`,
+    ).bind(runId, organizationId, leaseToken, now()).first<{ found: number }>()
+    if (!row) throw new ConflictException('Agent job lease was lost')
   }
 
   async stream(actor: AgentActor, runId: string, afterSequence: number) {
@@ -513,6 +636,7 @@ export class AgentRuntimeStore {
   }
 
   async createNode(run: AgentRunRow, nodeType: AgentNodeType, input: Record<string, unknown>) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const definition = agentNodeDefinitions.find((item) => item.type === nodeType)
     if (!definition) throw new UnprocessableEntityException(`Unsupported agent node ${nodeType}`)
     definition.inputSchema.parse(input)
@@ -532,6 +656,7 @@ export class AgentRuntimeStore {
   }
 
   async startNode(run: AgentRunRow, nodeId: string, nodeType: AgentNodeType) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const timestamp = now()
     await this.db.prepare(
       `UPDATE agent_nodes SET status = 'RUNNING', started_at = COALESCE(started_at, ?), updated_at = ?
@@ -541,6 +666,7 @@ export class AgentRuntimeStore {
   }
 
   async completeNode(run: AgentRunRow, nodeId: string, nodeType: AgentNodeType, output: Record<string, unknown>, progress: number) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const timestamp = now()
     await this.db.batch([
       this.db.prepare(`UPDATE agent_nodes SET status = 'COMPLETED', attempt = attempt + 1, output_json = ?, started_at = COALESCE(started_at, ?), completed_at = ?, updated_at = ? WHERE id = ? AND organization_id = ?`)
@@ -552,6 +678,7 @@ export class AgentRuntimeStore {
   }
 
   async createArtifact(run: AgentRunRow, artifact: AgentArtifact) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const parsed = agentArtifactSchema.parse(artifact)
     const id = uuid()
     const timestamp = now()
@@ -564,6 +691,7 @@ export class AgentRuntimeStore {
   }
 
   async createConfirmation(run: AgentRunRow, nodeId: string, proposal: AgentFormulaProposal) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const id = uuid()
     const timestamp = now()
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
@@ -583,6 +711,7 @@ export class AgentRuntimeStore {
   }
 
   async createAssistantMessage(run: AgentRunRow, content: string) {
+    await this.assertExecutionLease(run.id, run.organization_id)
     const text = safeText(content, 1_500)
     if (!text) return
     const id = uuid()

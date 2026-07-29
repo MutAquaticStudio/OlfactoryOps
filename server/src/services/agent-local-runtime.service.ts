@@ -7,6 +7,8 @@ import {
   agentFormulaProposalSchema,
   agentNodeDefinitions,
   formulaDesignBriefSchema,
+  formulaDirectionFeedbackSchema,
+  formulaDirectionShareSchema,
   formulaOptimizerRequestSchema,
   type AgentArtifact,
   type AgentFormulaProposal,
@@ -32,11 +34,11 @@ type LocalRun = {
   id: string; organization_id: string; user_id: string; session_id: string; status: AgentRunStatus
   input_brief: string; progress: number; provider: string; model_name: string; created_at: string; updated_at: string
   last_event_sequence: number; nodes: LocalNode[]; messages: LocalMessage[]; artifacts: Array<{ id: string; type: string; version: number; data: AgentArtifact; status: string }>
-  events: AgentRuntimeEvent[]; confirmation?: { id: string; status: 'PENDING' | 'ACCEPTED' | 'REJECTED'; summary: string; proposal: AgentFormulaProposal; savedFormulaId?: string }
+  events: AgentRuntimeEvent[]; confirmation?: { id: string; status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED'; summary: string; proposal: AgentFormulaProposal; expiresAt: string; savedFormulaId?: string }
   intelligence?: { workflowKind: 'DESIGN_STUDIO' | 'REFORMULATION_OPTIMIZER'; projectId?: string; request?: FormulaOptimizerRequest }
   pendingSave?: { kind: 'design' | 'optimizer'; projectId?: string; directionId?: string; candidateId?: string }
 }
-type LocalDesignDirection = DesignDirectionArtifact & { runId: string; status: 'DRAFT' | 'SHARED' | 'SELECTED' | 'SAVED'; sharedAt?: string; savedFormulaId?: string }
+type LocalDesignDirection = DesignDirectionArtifact & { runId: string; status: 'DRAFT' | 'SHARED' | 'SELECTED' | 'SAVED'; sharedAt?: string; savedFormulaId?: string; shares?: Array<{ recipientUserId: string; allowMaterialNames: boolean; sharedAt: string; revokedAt?: string }> }
 type LocalDesignFeedback = { id: string; directionId: string; userId: string; rating?: number; comment: string; selected: boolean; createdAt: string }
 type LocalDesignProject = { id: string; organizationId: string; brandId: string; createdByUserId: string; name: string; brief: FormulaDesignBrief; status: 'BRIEFED' | 'IN_PROGRESS' | 'IN_REVIEW' | 'SELECTED'; selectedDirectionId?: string; directions: LocalDesignDirection[]; feedback: LocalDesignFeedback[]; createdAt: string; updatedAt: string }
 type LocalOptimizerCandidate = OptimizerCandidateArtifact & { status: 'READY' | 'PENDING_SAVE' | 'SAVED'; savedFormulaId?: string }
@@ -77,15 +79,19 @@ export class AgentLocalRuntimeService {
     return this.detail(session, run.id)
   }
 
-  async listDesignProjects(service: NorthStarService, session: AuthSession, includeTenantProjects: boolean) {
+  async listDesignProjects(service: NorthStarService, session: AuthSession, canViewPrivate: boolean) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
     const current = actor(session)
     return {
       data: this.state.projects
-        .filter((project) => project.organizationId === current.organizationId && (includeTenantProjects || project.createdByUserId === current.userId))
+        .filter((project) => project.organizationId === current.organizationId && (
+          project.createdByUserId === current.userId ||
+          this.isProjectProducer(current.userId, project.id) ||
+          project.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt))
+        ))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .map((project) => this.exposeProject(project, includeTenantProjects)),
+        .map((project) => this.exposeProject(project, session, canViewPrivate)),
     }
   }
 
@@ -102,14 +108,21 @@ export class AgentLocalRuntimeService {
     this.state.projects.unshift(project)
     service.recordIntegrationAudit('formula-intelligence.design.project.create', project.id)
     await this.persist()
-    return { data: { project: this.exposeProject(project, false) } }
+    return { data: { project: this.exposeProject(project, session, false) } }
   }
 
-  async designProject(service: NorthStarService, session: AuthSession, projectId: string, includeTenantProjects: boolean) {
+  async designProject(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
-    const project = this.projectFor(session, projectId, includeTenantProjects)
-    return { data: { project: this.exposeProject(project, includeTenantProjects) } }
+    const project = this.projectFor(session, projectId, false)
+    return { data: { project: this.exposeProject(project, session, canViewPrivate) } }
+  }
+
+  async designRecipients(service: NorthStarService, session: AuthSession, projectId: string) {
+    await this.ready()
+    this.requireFormulaPermission(service, 'formulas.edit')
+    const project = this.projectFor(session, projectId, true)
+    return { data: service.formulaDesignRecipients(project.brandId).data }
   }
 
   async generateDesignDirections(service: NorthStarService, session: AuthSession, projectId: string) {
@@ -122,16 +135,25 @@ export class AgentLocalRuntimeService {
     project.status = 'IN_PROGRESS'; project.updatedAt = now()
     await this.executeIntelligence(service, run)
     service.recordIntegrationAudit('formula-intelligence.design.run.create', project.id)
-    return { data: { run: this.runSummary(run), project: this.exposeProject(project, true) } }
+    return { data: { run: this.runSummary(run), project: this.exposeProject(project, session, true) } }
   }
 
-  async shareDesignDirection(service: NorthStarService, session: AuthSession, projectId: string, directionId: string) {
+  async shareDesignDirection(service: NorthStarService, session: AuthSession, projectId: string, directionId: string, body: unknown) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.edit')
     const project = this.projectFor(session, projectId, true)
     const direction = project.directions.find((item) => item.directionId === directionId)
     if (!direction) throw new NotFoundException('Design direction was not found')
-    direction.status = 'SHARED'; direction.sharedAt = now(); project.updatedAt = now()
+    if (!this.state.runs.some((run) => run.id === direction.runId && run.user_id === session.userId)) throw new ForbiddenException('Only the generating perfumer can share a direction')
+    const input = formulaDirectionShareSchema.parse(body)
+    const timestamp = now()
+    const shares = direction.shares ?? []
+    for (const recipientUserId of input.recipientUserIds) {
+      const existing = shares.find((share) => share.recipientUserId === recipientUserId)
+      if (existing) { existing.allowMaterialNames = input.allowMaterialNames; existing.sharedAt = timestamp; delete existing.revokedAt }
+      else shares.push({ recipientUserId, allowMaterialNames: input.allowMaterialNames, sharedAt: timestamp })
+    }
+    direction.shares = shares; direction.status = 'SHARED'; direction.sharedAt = timestamp; project.updatedAt = timestamp
     service.recordIntegrationAudit('formula-intelligence.design.direction.share', directionId)
     await this.persist()
     return { data: { shared: true } }
@@ -141,18 +163,18 @@ export class AgentLocalRuntimeService {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
     const project = this.projectFor(session, projectId, false)
-    const direction = project.directions.find((item) => item.directionId === directionId && item.sharedAt)
+    const current = actor(session)
+    const direction = project.directions.find((item) => item.directionId === directionId && item.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt))
     if (!direction) throw new NotFoundException('Shared design direction was not found')
-    const rating = body.rating === undefined ? undefined : Math.max(1, Math.min(5, Math.round(Number(body.rating))))
-    const comment = typeof body.comment === 'string' ? body.comment.trim().slice(0, 1200) : ''
-    const selected = body.selected === true
-    if (!comment && rating === undefined && !selected) throw new UnprocessableEntityException('Add a rating, comment, or direction selection')
+    const input = formulaDirectionFeedbackSchema.parse(body)
+    const rating = input.rating
+    const comment = input.comment ?? ''
+    const selected = input.selected
     if (selected) {
       project.directions = project.directions.map((item) => item.directionId === directionId ? { ...item, status: 'SELECTED' } : item)
       project.feedback = project.feedback.map((item) => ({ ...item, selected: false }))
       project.selectedDirectionId = directionId; project.status = 'SELECTED'
     }
-    const current = actor(session)
     const existing = project.feedback.find((item) => item.directionId === directionId && item.userId === current.userId)
     const entry: LocalDesignFeedback = { id: existing?.id ?? crypto.randomUUID(), directionId, userId: current.userId, rating, comment, selected, createdAt: existing?.createdAt ?? now() }
     project.feedback = [...project.feedback.filter((item) => item !== existing), entry]
@@ -161,12 +183,28 @@ export class AgentLocalRuntimeService {
     return { data: { accepted: true } }
   }
 
+  async revokeDesignDirectionShare(service: NorthStarService, session: AuthSession, projectId: string, directionId: string, recipientUserId: string) {
+    await this.ready()
+    this.requireFormulaPermission(service, 'formulas.edit')
+    const project = this.projectFor(session, projectId, true)
+    const direction = project.directions.find((item) => item.directionId === directionId)
+    if (!direction) throw new NotFoundException('Design direction was not found')
+    if (!this.state.runs.some((run) => run.id === direction.runId && run.user_id === session.userId)) throw new ForbiddenException('Only the generating perfumer can revoke a share')
+    const share = direction.shares?.find((item) => item.recipientUserId === recipientUserId && !item.revokedAt)
+    if (!share) throw new NotFoundException('Active direction share was not found')
+    share.revokedAt = now(); project.updatedAt = now()
+    service.recordIntegrationAudit('formula-intelligence.design.direction.revoke', directionId)
+    await this.persist()
+    return { data: { revoked: true } }
+  }
+
   async requestDesignDraftSave(service: NorthStarService, session: AuthSession, projectId: string, directionId: string) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.edit')
     const project = this.projectFor(session, projectId, true)
     const direction = project.directions.find((item) => item.directionId === directionId)
     if (!direction) throw new NotFoundException('Design direction was not found')
+    if (!this.state.runs.some((run) => run.id === direction.runId && run.user_id === session.userId)) throw new ForbiddenException('Only the generating perfumer can save a direction')
     const run = this.runFor(session, direction.runId)
     return this.requestLocalConfirmation(run, direction.proposal, { kind: 'design', projectId, directionId }, service, `formula-intelligence.design.direction.save.requested:${directionId}`)
   }
@@ -279,13 +317,21 @@ export class AgentLocalRuntimeService {
     const run = this.runFor(session, runId)
     const confirmation = run.confirmation
     if (!confirmation || confirmation.id !== confirmationId) throw new NotFoundException('Agent confirmation was not found')
+    if (confirmation.status === 'PENDING' && confirmation.expiresAt <= now()) {
+      confirmation.status = 'EXPIRED'; await this.persist(); throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
+    }
     if (confirmation.status !== 'PENDING') return { data: { duplicate: true, formulaId: confirmation.savedFormulaId } }
     if (decision === 'reject') {
       confirmation.status = 'REJECTED'; run.status = 'COMPLETED'; run.progress = 100
       this.event(run, 'confirmation.rejected', { confirmationId, summary: 'Formula draft was not saved' })
       this.event(run, 'run.completed', { status: 'COMPLETED', progress: 100 }); await this.persist(); return { data: { rejected: true } }
     }
-    const created = service.createFormulaDraft({
+    const preview = service.previewFormulaIntelligence(confirmation.proposal).data
+    const total = confirmation.proposal.ingredients.reduce((sum, item) => sum + item.percentage, 0)
+    if (Math.abs(total - 100) > 0.05 || preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
+    }
+    const created = service.createAgentFormulaDraft(confirmationId, {
       name: confirmation.proposal.name, formulaType: confirmation.proposal.formulaType, targetGrams: confirmation.proposal.targetGrams,
       concentrationType: confirmation.proposal.concentrationType, finalProductConcentrationPercent: confirmation.proposal.finalProductConcentrationPercent,
       ifraCategory: confirmation.proposal.ifraCategory, brief: confirmation.proposal.brief,
@@ -329,22 +375,45 @@ export class AgentLocalRuntimeService {
 
   private projectFor(session: AuthSession, projectId: string, includeTenantProjects: boolean) {
     const current = actor(session)
-    const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === current.organizationId && (includeTenantProjects || candidate.createdByUserId === current.userId))
+    const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === current.organizationId && (
+      includeTenantProjects ||
+      candidate.createdByUserId === current.userId ||
+      this.isProjectProducer(current.userId, candidate.id) ||
+      candidate.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt))
+    ))
     if (!project) throw new NotFoundException('Design project was not found')
     return project
   }
 
-  private exposeProject(project: LocalDesignProject, includePrivate: boolean) {
+  private isProjectProducer(userId: string, projectId: string) {
+    return this.state.runs.some((run) => run.user_id === userId && run.intelligence?.workflowKind === 'DESIGN_STUDIO' && run.intelligence.projectId === projectId)
+  }
+
+  private exposeProject(project: LocalDesignProject, session: AuthSession, canViewPrivate: boolean) {
+    const current = actor(session)
     return {
       id: project.id, name: project.name, status: project.status, createdByUserId: project.createdByUserId,
       selectedDirectionId: project.selectedDirectionId, brief: project.brief, createdAt: project.createdAt, updatedAt: project.updatedAt,
-      directions: project.directions.filter((direction) => includePrivate || direction.sharedAt).map((direction) => ({
-        directionId: direction.directionId, title: direction.title, narrative: direction.narrative, pyramidSummary: direction.pyramidSummary,
-        availability: direction.availability, complianceStatus: direction.complianceStatus, warnings: direction.warnings,
-        status: direction.status, sharedAt: direction.sharedAt, savedFormulaId: direction.savedFormulaId,
-        ...(includePrivate ? { runId: direction.runId, proposal: direction.proposal } : {}),
-      })),
-      feedback: project.feedback,
+      directions: project.directions.flatMap((direction) => {
+        const privateDirection = canViewPrivate && this.state.runs.some((run) => run.id === direction.runId && run.user_id === current.userId)
+        const share = direction.shares?.find((item) => item.recipientUserId === current.userId && !item.revokedAt)
+        if (!privateDirection && !share) return []
+        const exposeNames = privateDirection || Boolean(share?.allowMaterialNames)
+        return [{
+          directionId: direction.directionId,
+          title: direction.title,
+          narrative: exposeNames ? direction.narrative : 'A perfumer prepared this creative direction for review.',
+          pyramidSummary: exposeNames ? direction.pyramidSummary : 'Creative pyramid available to the assigned reviewer.',
+          availability: direction.availability,
+          complianceStatus: direction.complianceStatus,
+          warnings: privateDirection ? direction.warnings : [],
+          status: direction.status,
+          sharedAt: share?.sharedAt ?? direction.sharedAt,
+          savedFormulaId: privateDirection ? direction.savedFormulaId : undefined,
+          ...(privateDirection ? { runId: direction.runId, proposal: direction.proposal, shares: direction.shares?.filter((item) => !item.revokedAt) } : {}),
+        }]
+      }),
+      feedback: canViewPrivate ? project.feedback : project.feedback.filter((item) => item.userId === current.userId),
     }
   }
 
@@ -362,7 +431,7 @@ export class AgentLocalRuntimeService {
     if (run.confirmation?.status === 'PENDING') throw new UnprocessableEntityException('A draft confirmation is already pending for this run')
     const saveNode: LocalNode = { id: crypto.randomUUID(), node_type: 'save_formula_draft', status: 'WAITING_FOR_CONFIRMATION', attempt: 1 }
     run.nodes.push(saveNode)
-    run.confirmation = { id: crypto.randomUUID(), status: 'PENDING', summary: `Save ${proposal.name} as a non-consuming formula draft`, proposal }
+    run.confirmation = { id: crypto.randomUUID(), status: 'PENDING', summary: `Save ${proposal.name} as a non-consuming formula draft`, proposal, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
     run.pendingSave = pendingSave; run.status = 'WAITING_FOR_CONFIRMATION'; run.progress = 95; run.updated_at = now()
     this.event(run, 'node.progress', { nodeId: saveNode.id, nodeType: saveNode.node_type, status: saveNode.status, progress: 95 })
     this.event(run, 'confirmation.requested', { confirmationId: run.confirmation.id, summary: run.confirmation.summary, nodeId: saveNode.id, nodeType: saveNode.node_type, status: run.status, progress: 95 })
@@ -496,7 +565,7 @@ export class AgentLocalRuntimeService {
       this.persistArtifact(run, { type: 'assumptions', version: 1, data: { assumptions: ['Local deterministic mock uses real workspace tools and does not send data to a model provider.'], warnings: preview.availability.filter((item) => item.status !== 'AVAILABLE').map((item) => `${item.materialName}: ${item.status}`) } })
       const saveNode = run.nodes.at(-1)!
       this.assistantMessage(run, 'I prepared a deterministic formula proposal from your workspace data. Review the structured evidence and explicitly confirm before a draft is created.')
-      run.confirmation = { id: crypto.randomUUID(), status: 'PENDING', summary: `Save ${proposal.name} as a non-consuming formula draft`, proposal }
+      run.confirmation = { id: crypto.randomUUID(), status: 'PENDING', summary: `Save ${proposal.name} as a non-consuming formula draft`, proposal, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() }
       run.status = 'WAITING_FOR_CONFIRMATION'; run.progress = 95; run.updated_at = now()
       this.event(run, 'confirmation.requested', { confirmationId: run.confirmation.id, summary: run.confirmation.summary, nodeId: saveNode.id, nodeType: 'save_formula_draft', status: 'WAITING_FOR_CONFIRMATION', progress: 95 })
     } catch (error) {

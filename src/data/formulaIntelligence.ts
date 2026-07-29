@@ -164,3 +164,27 @@ export function compositionChangePercent(baseline: AgentFormulaProposal, candida
   const ids = new Set([...baselineById.keys(), ...candidateById.keys()])
   return Number((Array.from(ids).reduce((sum, id) => sum + Math.abs((baselineById.get(id) ?? 0) - (candidateById.get(id) ?? 0)), 0) / 2).toFixed(4))
 }
+
+type OptimizerRankInput = {
+  complianceStatus: 'PASS' | 'REVIEW_REQUIRED' | 'BLOCKED' | 'INSUFFICIENT_DATA'
+  availability: 'AVAILABLE' | 'MIXED' | 'UNKNOWN'
+  costDelta?: number
+  compositionChangePercent: number
+  inventoryEvaluated: boolean
+}
+
+// The score is presentation-only. Ordering must remain deterministic and
+// lexical so an unknown commercial signal can never improve a candidate.
+export function compareOptimizerCandidates(left: OptimizerRankInput, right: OptimizerRankInput) {
+  const complianceRank = (value: OptimizerRankInput['complianceStatus']) => value === 'PASS' ? 3 : value === 'REVIEW_REQUIRED' ? 2 : 1
+  const inventoryRank = (value: OptimizerRankInput) => !value.inventoryEvaluated ? 0 : value.availability === 'AVAILABLE' ? 3 : value.availability === 'MIXED' ? 2 : 1
+  const visibleCostRank = (value: OptimizerRankInput) => value.costDelta === undefined ? 0 : 1
+  const comparisons = [
+    complianceRank(right.complianceStatus) - complianceRank(left.complianceStatus),
+    inventoryRank(right) - inventoryRank(left),
+    visibleCostRank(right) - visibleCostRank(left),
+    (left.costDelta ?? Number.POSITIVE_INFINITY) - (right.costDelta ?? Number.POSITIVE_INFINITY),
+    left.compositionChangePercent - right.compositionChangePercent,
+  ]
+  return comparisons.find((value) => value !== 0) ?? 0
+}

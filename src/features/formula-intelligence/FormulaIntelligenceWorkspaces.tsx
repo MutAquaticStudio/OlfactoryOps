@@ -25,7 +25,10 @@ type Direction = {
   savedFormulaId?: string | null
   runId?: string
   proposal?: AgentFormulaProposal
+  shares?: Array<{ recipientUserId: string; allowMaterialNames: boolean; sharedAt: string }>
 }
+
+type ShareRecipient = { userId: string; name: string; email: string }
 
 type Feedback = { id: string; directionId: string; userId: string; rating?: number | null; comment: string; selected: boolean; createdAt: string }
 type DesignProject = {
@@ -141,6 +144,10 @@ export function FormulaDesignStudioWorkspace({
   const [notice, setNotice] = useState<string>()
   const [pending, setPending] = useState<PendingConfirmation>()
   const [feedbackDrafts, setFeedbackDrafts] = useState<Record<string, { comment: string; rating: number }>>({})
+  const [shareTarget, setShareTarget] = useState<{ projectId: string; directionId: string }>()
+  const [shareRecipients, setShareRecipients] = useState<ShareRecipient[]>([])
+  const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>([])
+  const [allowMaterialNames, setAllowMaterialNames] = useState(false)
   const materialNames = useMemo(() => new Map(materialRecords.map((material) => [material.id, material.name])), [materialRecords])
 
   const refresh = useCallback(async () => {
@@ -175,10 +182,25 @@ export function FormulaDesignStudioWorkspace({
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to generate directions') } finally { setBusy(false) }
   }
 
-  async function share(projectId: string, directionId: string) {
+  async function openShare(projectId: string, directionId: string) {
     setBusy(true); setNotice(undefined)
     try {
-      await requestApi(`/formula-intelligence/design-projects/${encodeURIComponent(projectId)}/directions/${encodeURIComponent(directionId)}/share`, { method: 'POST', headers: mutationHeaders(), body: '{}' })
+      const recipients = await requestApi<ShareRecipient[]>(`/formula-intelligence/design-projects/${encodeURIComponent(projectId)}/recipients`)
+      setShareRecipients(recipients)
+      setSelectedRecipientIds(recipients[0] ? [recipients[0].userId] : [])
+      setAllowMaterialNames(false)
+      setShareTarget({ projectId, directionId })
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to load eligible recipients') } finally { setBusy(false) }
+  }
+
+  async function share() {
+    if (!shareTarget || selectedRecipientIds.length === 0) return
+    setBusy(true); setNotice(undefined)
+    try {
+      await requestApi(`/formula-intelligence/design-projects/${encodeURIComponent(shareTarget.projectId)}/directions/${encodeURIComponent(shareTarget.directionId)}/share`, {
+        method: 'POST', headers: mutationHeaders(), body: JSON.stringify({ recipientUserIds: selectedRecipientIds, allowMaterialNames }),
+      })
+      setShareTarget(undefined)
       await refresh()
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to share direction') } finally { setBusy(false) }
   }
@@ -237,6 +259,7 @@ export function FormulaDesignStudioWorkspace({
           <label className="checkbox-row"><input type="checkbox" checked={availabilityFirst} onChange={(event) => setAvailabilityFirst(event.target.checked)} /> Prefer eligible available materials</label>
           <button className="primary-button" type="button" disabled={busy || name.trim().length < 2 || creativeBrief.trim().length < 8} onClick={() => void createProject()}><Play size={16} /> {canEditFormula ? 'Create and generate' : 'Create brief'}</button>
           {notice ? <div className="agent-notice"><AlertCircle size={15} /> {notice}</div> : null}
+          {shareTarget ? <div className="formula-intelligence-confirm"><strong>Share direction with named brand members</strong><label>Recipients<select multiple value={selectedRecipientIds} onChange={(event) => setSelectedRecipientIds(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{shareRecipients.map((recipient) => <option value={recipient.userId} key={recipient.userId}>{recipient.name} / {recipient.email}</option>)}</select></label><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Share</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></div> : null}
           {pending ? <div className="formula-intelligence-confirm"><strong>Ready to save: {pending.label}</strong><span>Creates one normal editable draft. No lot is reserved or consumed.</span><button className="primary-button small" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={15} /> Confirm draft</button></div> : null}
         </section>
         <section className="formula-intelligence-projects">
@@ -256,7 +279,7 @@ export function FormulaDesignStudioWorkspace({
                     <div className="formula-intelligence-project-meta"><span>Availability: {direction.availability}</span><span>Status: {direction.status}</span></div>
                     {direction.warnings.length ? <ul>{direction.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
                     {canEditFormula && direction.proposal ? <ProposalLines proposal={direction.proposal} materialNames={materialNames} /> : null}
-                    {canEditFormula ? <div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy || Boolean(direction.sharedAt)} onClick={() => void share(project.id, direction.directionId)}><Share2 size={14} /> {direction.sharedAt ? 'Shared' : 'Share'}</button><button className="primary-button small" type="button" disabled={busy || Boolean(direction.savedFormulaId) || !direction.proposal} onClick={() => void requestSave(project.id, direction)}><Save size={14} /> {direction.savedFormulaId ? 'Draft saved' : 'Save as draft'}</button></div> : <div className="formula-intelligence-feedback"><label>Rating<select value={draft.rating} onChange={(event) => setFeedbackDrafts((current) => ({ ...current, [direction.directionId]: { ...draft, rating: Number(event.target.value) } }))}><option value="0">Optional</option>{[1, 2, 3, 4, 5].map((rating) => <option value={rating} key={rating}>{rating}</option>)}</select></label><textarea value={draft.comment} maxLength={1200} placeholder="Feedback for the perfumer" onChange={(event) => setFeedbackDrafts((current) => ({ ...current, [direction.directionId]: { ...draft, comment: event.target.value } }))} /><div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy} onClick={() => void submitFeedback(project.id, direction.directionId)}><MessageSquare size={14} /> Send feedback</button><button className="primary-button small" type="button" disabled={busy} onClick={() => void submitFeedback(project.id, direction.directionId, true)}><CheckCircle2 size={14} /> Select</button></div></div>}
+                    {canEditFormula ? <div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy} onClick={() => void openShare(project.id, direction.directionId)}><Share2 size={14} /> {direction.shares?.length ? `Shared (${direction.shares.length})` : 'Share'}</button><button className="primary-button small" type="button" disabled={busy || Boolean(direction.savedFormulaId) || !direction.proposal} onClick={() => void requestSave(project.id, direction)}><Save size={14} /> {direction.savedFormulaId ? 'Draft saved' : 'Save as draft'}</button></div> : <div className="formula-intelligence-feedback"><label>Rating<select value={draft.rating} onChange={(event) => setFeedbackDrafts((current) => ({ ...current, [direction.directionId]: { ...draft, rating: Number(event.target.value) } }))}><option value="0">Optional</option>{[1, 2, 3, 4, 5].map((rating) => <option value={rating} key={rating}>{rating}</option>)}</select></label><textarea value={draft.comment} maxLength={1200} placeholder="Feedback for the perfumer" onChange={(event) => setFeedbackDrafts((current) => ({ ...current, [direction.directionId]: { ...draft, comment: event.target.value } }))} /><div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy} onClick={() => void submitFeedback(project.id, direction.directionId)}><MessageSquare size={14} /> Send feedback</button><button className="primary-button small" type="button" disabled={busy} onClick={() => void submitFeedback(project.id, direction.directionId, true)}><CheckCircle2 size={14} /> Select</button></div></div>}
                     {feedback.length ? <small>{feedback.length} feedback item{feedback.length === 1 ? '' : 's'}</small> : null}
                   </article>
                 })}
