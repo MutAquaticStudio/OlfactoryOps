@@ -1,12 +1,12 @@
 {
   "name": "OlfactoryOps",
   "short_name": "OlfactoryOps",
-  "description": "Fragrance R&D and operations workspace",
+  "description": "The operating system for fragrance teams, from brief to batch.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0d1214",
-  "theme_color": "#0d1214",
+  "background_color": "#090b09",
+  "theme_color": "#090b09",
   "icons": [
     {
       "src": "/olfactoryops-mark.svg",

@@ -159,6 +159,202 @@
   }
 }
 
+/* The Design Studio holds the brief, options, and the selected decision in distinct work zones. */
+.formula-intelligence-eyebrow {
+  color: #88b797;
+  font-size: 0.71rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.design-studio-grid {
+  grid-template-columns: minmax(280px, 0.72fr) minmax(360px, 1.25fr);
+  gap: 18px;
+}
+
+.design-studio-grid.has-selected-direction {
+  grid-template-columns: minmax(280px, 0.62fr) minmax(350px, 1fr) minmax(300px, 0.72fr);
+}
+
+.design-studio-grid .formula-intelligence-brief {
+  position: sticky;
+  top: 92px;
+  max-height: calc(100dvh - 112px);
+  overflow: auto;
+}
+
+.design-studio-projects {
+  min-width: 0;
+}
+
+.design-studio-projects .formula-intelligence-project {
+  gap: 14px;
+}
+
+.formula-intelligence-direction-choice {
+  width: 100%;
+  min-height: 154px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+}
+
+.formula-intelligence-direction-choice:hover,
+.formula-intelligence-direction-choice.is-selected {
+  border-color: #477b55;
+  background: #142016;
+}
+
+.formula-intelligence-direction-choice:focus-visible {
+  outline: 2px solid #4da66c;
+  outline-offset: 2px;
+}
+
+.formula-intelligence-direction-choice-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.formula-intelligence-direction-choice-heading > strong,
+.formula-intelligence-direction-choice > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.formula-intelligence-direction-choice > span:not(.formula-intelligence-direction-choice-heading):not(.formula-intelligence-direction-choice-meta) {
+  color: #c6d0c5;
+  line-height: 1.48;
+}
+
+.formula-intelligence-direction-choice small,
+.formula-intelligence-direction-choice-meta {
+  color: #91a192;
+  font-size: 0.76rem;
+  line-height: 1.42;
+}
+
+.formula-intelligence-detail {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  position: sticky;
+  top: 92px;
+  max-height: calc(100dvh - 112px);
+  overflow: auto;
+}
+
+.formula-intelligence-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.formula-intelligence-detail-heading h3 {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.formula-intelligence-narrative {
+  margin: 0;
+  color: #c9d2c8;
+  line-height: 1.56;
+  overflow-wrap: anywhere;
+}
+
+.formula-intelligence-decision-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 9px;
+}
+
+.formula-intelligence-decision-grid > div,
+.formula-intelligence-action-note,
+.formula-intelligence-evidence {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #2c392e;
+  border-radius: 7px;
+  background: #0d120e;
+}
+
+.formula-intelligence-decision-grid span,
+.formula-intelligence-evidence > span,
+.formula-intelligence-feedback-count,
+.formula-intelligence-selected {
+  color: #90a090;
+  font-size: 0.73rem;
+}
+
+.formula-intelligence-decision-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.formula-intelligence-action-note {
+  border-color: #605125;
+  color: #d5ccae;
+}
+
+.formula-intelligence-action-note ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 16px;
+  color: #c8c0a5;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.formula-intelligence-actions > * {
+  min-width: 0;
+}
+
+@media (max-width: 1120px) {
+  .formula-intelligence-grid,
+  .design-studio-grid,
+  .design-studio-grid.has-selected-direction {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .design-studio-grid .formula-intelligence-brief,
+  .formula-intelligence-detail {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .formula-intelligence-detail {
+    order: 3;
+  }
+}
+
+@media (max-width: 640px) {
+  .formula-intelligence-direction-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .formula-intelligence-direction-choice {
+    min-height: 0;
+  }
+
+  .formula-intelligence-detail-heading,
+  .formula-intelligence-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .formula-intelligence-actions > button {
+    width: 100%;
+  }
+}
+
 /* Details stay available alongside the material directory on wide workspaces. */
 .material-inspector-panel {
   align-self: start;

@@ -72,8 +72,11 @@ import {
   YAxis,
 } from 'recharts'
 import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
+import { PublicLanding } from './features/marketing/PublicLanding'
+import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
+import { MotionProvider } from './ui/motion/MotionProvider'
 import {
   auditEvents,
   commercialSkus,
@@ -1599,13 +1602,17 @@ function safeLandingForSession(key: DomainKey, session: AuthSession) {
 function domainKeyForPath(pathname: string): DomainKey {
   if (pathname === '/ai/formula-agent' || pathname === '/ai/formula-design-studio') return 'formulaDesignStudio'
   if (pathname === '/ai/reformulation-optimizer') return 'reformulationOptimizer'
+  if (pathname === '/workspace') return 'dashboard'
+  const workspaceKey = pathname.startsWith('/workspace/') ? pathname.slice('/workspace/'.length) : ''
+  if (domains.some((domain) => domain.key === workspaceKey)) return workspaceKey as DomainKey
   return 'dashboard'
 }
 
 function pathForDomainKey(key: DomainKey) {
   if (key === 'formulaAgent' || key === 'formulaDesignStudio') return '/ai/formula-design-studio'
   if (key === 'reformulationOptimizer') return '/ai/reformulation-optimizer'
-  return '/'
+  if (key === 'dashboard') return '/workspace'
+  return `/workspace/${key}`
 }
 
 function visibleWorkflowNodesForSession(session: AuthSession) {
@@ -1849,11 +1856,12 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
 
 function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
+  const [publicRoute, setPublicRoute] = useState<PublicRoute | null>(() => publicRouteForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
   const [authNotice, setAuthNotice] = useState<string | null>(null)
-  const [resumeKey, setResumeKey] = useState<DomainKey | null>(null)
+  const [resumePath, setResumePath] = useState<string | null>(() => safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`))
   const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
   const [workspaceBranding, setWorkspaceBranding] = useState<BrandingConfig>(() => workspaceBrandingFallback())
   const [tenantDomains, setTenantDomains] = useState<Record<string, string>>({})
@@ -2023,10 +2031,17 @@ function App() {
       setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
       const path = pathForDomainKey(key)
       if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
+      setPublicRoute(null)
       setMobileNavOpen(false)
     },
     [currentSession],
   )
+  const navigatePublic = useCallback((path: '/login' | '/signup', replace = false) => {
+    const nextRoute = publicRouteForPath(path)
+    if (replace) window.history.replaceState({}, document.title, path)
+    else if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
+    setPublicRoute(nextRoute)
+  }, [])
   const applyUserSettings = useCallback((settings: UserSettingsRecord | null) => {
     setUserSettingsRecord(settings)
     if (settings) {
@@ -2080,14 +2095,35 @@ function App() {
   }, [activeKey, currentSession])
 
   useEffect(() => {
-    const handlePopState = () => setActiveKey(domainKeyForPath(window.location.pathname))
+    const handlePopState = () => {
+      setActiveKey(domainKeyForPath(window.location.pathname))
+      setPublicRoute(publicRouteForPath(window.location.pathname))
+      setResumePath(safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`))
+    }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
   useEffect(() => {
+    if (currentSession || publicRoute !== null || !isProtectedApplicationPath(window.location.pathname)) return
+    const requestedPath = safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+    if (requestedPath) setResumePath(requestedPath)
+    window.history.replaceState({}, document.title, loginPathForProtectedPath(window.location.pathname, window.location.search, window.location.hash))
+    setPublicRoute('login')
+  }, [currentSession, publicRoute])
+
+  useEffect(() => {
+    if (!currentSession || publicRoute === null) return
+    const target = safeLandingForSession((userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding, currentSession)
+    setActiveKey(target)
+    const destination = pathForDomainKey(target)
+    if (window.location.pathname !== destination) window.history.replaceState({}, document.title, destination)
+    setPublicRoute(null)
+  }, [currentSession, publicRoute, userSettingsRecord])
+
+  useEffect(() => {
     function handleAuthExpired() {
-      setResumeKey((current) => current ?? activeKey)
+      setResumePath((current) => current ?? safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`) ?? pathForDomainKey(activeKey))
       setAuthNotice('Your session expired or was revoked. Sign in again to continue where you left off.')
       setCurrentSession(null)
       applyUserSettings(null)
@@ -2757,8 +2793,13 @@ function App() {
     const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
     const settings = await syncUserSettings(session)
     void syncTenantDomain(session.organizationId)
-    setActiveKey(safeLandingForSession(resumeKey ?? settings.preferredLanding, session))
-    setResumeKey(null)
+    const resumeTarget = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
+    const target = safeLandingForSession(resumeTarget, session)
+    const destination = resumePath ?? pathForDomainKey(target)
+    setActiveKey(target)
+    window.history.replaceState({}, document.title, destination)
+    setPublicRoute(publicRouteForPath(new URL(destination, window.location.origin).pathname))
+    setResumePath(null)
     setAuthNotice(null)
     setCurrentSession(session)
     return payload
@@ -2786,7 +2827,7 @@ function App() {
     })
     const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
     setCurrentSession(session)
-    setResumeKey(null)
+    setResumePath(null)
     setAuthNotice(null)
     rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain ?? payload.sso.domain)
     void syncUserSettings(session)
@@ -2821,24 +2862,44 @@ function App() {
       setSidebarCollapsed(false)
       setBillingOnboarding(false)
       setAuthNotice(null)
-      setResumeKey(null)
+      setResumePath(null)
       acceptCsrfToken()
       writeStoredAuthSession(null)
       setCommandOpen(false)
       setModal(null)
       setActiveKey('dashboard')
+      window.history.replaceState({}, document.title, '/')
+      setPublicRoute('landing')
     }
   }
 
   if (!currentSession) {
+    if (publicRoute === 'landing') {
+      return (
+        <MotionProvider>
+          <PublicLanding
+            locale={activeUiLocale()}
+            onNavigate={(path) => navigatePublic(path)}
+            onLocaleChange={(locale) => {
+              window.localStorage.setItem(localeStorageKey, locale)
+              document.documentElement.lang = locale
+              window.dispatchEvent(new CustomEvent<UiLocale>(localeChangeEvent, { detail: locale }))
+              setLocaleVersion((current) => current + 1)
+            }}
+          />
+        </MotionProvider>
+      )
+    }
     return (
-        <AuthGateway
-          notice={authNotice}
-          onLogin={loginToWorkspace}
-          onSignup={signupWorkspace}
-          onRequestPasswordReset={requestPasswordReset}
-          onCompletePasswordReset={completePasswordReset}
-        />
+      <AuthGateway
+        initialMode={publicRoute === 'signup' ? 'signup' : 'login'}
+        notice={authNotice}
+        onLogin={loginToWorkspace}
+        onSignup={signupWorkspace}
+        onRequestPasswordReset={requestPasswordReset}
+        onCompletePasswordReset={completePasswordReset}
+        onNavigate={navigatePublic}
+      />
     )
   }
 
@@ -2852,6 +2913,7 @@ function App() {
   }
 
   return (
+    <MotionProvider reduceMotion={activeUserSettings.reduceMotion}>
     <div className="min-h-screen bg-lab-bg text-[var(--text)]" style={shellAccentStyle}>
       <LabBackdrop />
       <div
@@ -3409,6 +3471,7 @@ function App() {
         </ul>
       </BlackPopup>
     </div>
+    </MotionProvider>
   )
 }
 
@@ -4090,12 +4153,15 @@ function PostSignupWorkspaceReady({
 }
 
 function AuthGateway({
+  initialMode,
   notice,
   onLogin,
   onSignup,
   onRequestPasswordReset,
   onCompletePasswordReset,
+  onNavigate,
 }: {
+  initialMode: 'login' | 'signup'
   notice?: string | null
   onLogin: (email: string, password?: string) => Promise<LoginResponse>
   onSignup: (input: {
@@ -4108,15 +4174,16 @@ function AuthGateway({
   }) => Promise<SignupResponse>
   onRequestPasswordReset: (email: string) => Promise<void>
   onCompletePasswordReset: (token: string, password: string) => Promise<void>
+  onNavigate: (path: '/login' | '/signup', replace?: boolean) => void
 }) {
   const resetToken = new URLSearchParams(window.location.search).get('reset')?.trim() ?? ''
   const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm'>(
-    resetToken ? 'reset-confirm' : 'login',
+    resetToken ? 'reset-confirm' : initialMode,
   )
-  const [email, setEmail] = useState('admin@labofscents.org')
-  const [name, setName] = useState('Thuan Le Minh')
-  const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
-  const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
+  const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
+  const [organizationName, setOrganizationName] = useState('')
+  const [workspaceSlug, setWorkspaceSlug] = useState('')
   const [workspaceSlugTouched, setWorkspaceSlugTouched] = useState(false)
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -4134,6 +4201,10 @@ function AuthGateway({
       signupPasswordReady &&
       password === confirmPassword,
   )
+
+  useEffect(() => {
+    setMode(resetToken ? 'reset-confirm' : initialMode)
+  }, [initialMode, resetToken])
 
   async function submitAuth() {
     setBusy(true)
@@ -4171,7 +4242,7 @@ function AuthGateway({
           return
         }
         await onCompletePasswordReset(resetToken, password)
-        window.history.replaceState({}, document.title, window.location.pathname)
+        onNavigate('/login', true)
         setPassword('')
         setConfirmPassword('')
         setMode('login')
@@ -4186,7 +4257,8 @@ function AuthGateway({
 
   function switchMode(nextMode: 'login' | 'signup') {
     setMode(nextMode)
-    setStatus(nextMode === 'login' ? 'Use admin@labofscents.org with the admin test password.' : 'Create a new lab workspace and owner account.')
+    onNavigate(nextMode === 'signup' ? '/signup' : '/login')
+    setStatus(nextMode === 'login' ? 'Sign in with your active workspace account.' : 'Create a new lab workspace and owner account.')
     setWorkspaceSlugTouched(false)
     if (nextMode === 'signup') {
       const defaultOrganizationName = 'New Fragrance Lab'
@@ -4197,10 +4269,10 @@ function AuthGateway({
       setPassword('')
       setConfirmPassword('')
     } else {
-      setEmail('admin@labofscents.org')
-      setName('Thuan Le Minh')
-      setOrganizationName('NOXELIS Lab')
-      setWorkspaceSlug('noxelis-live')
+      setEmail('')
+      setName('')
+      setOrganizationName('')
+      setWorkspaceSlug('')
       setPassword('')
       setConfirmPassword('')
     }
