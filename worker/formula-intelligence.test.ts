@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
-import { FormulaIntelligenceStore } from './formula-intelligence.js'
+import type { Material } from '../src/data/northStar.js'
+import { FormulaIntelligenceStore, formulaIntelligenceMaterialCatalog } from './formula-intelligence.js'
 
 type RecordedStatement = { sql: string; values: unknown[] }
 
@@ -82,6 +83,17 @@ function unresolvedProjectD1(hasDirections: boolean) {
 }
 
 describe('Formula Intelligence Worker persistence contract', () => {
+  it('excludes source-only catalogue rows even when a stale profile appears approved', () => {
+    const sourceOnly = { id: 'mat-lluch-2026-0104', name: 'ASTROLIDE PURE', catalogueSource: { status: 'SOURCE_ONLY' } } as unknown as Material
+    const reviewed = { id: 'mat-reviewed', name: 'Bergamot FCF' } as unknown as Material
+    const service = {
+      materials: () => ({ data: [sourceOnly, reviewed] }),
+      materialCompliance: () => ({ data: { status: 'APPROVED' } }),
+    } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
+
+    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [reviewed], reviewRequired: false })
+  })
+
   it('audits a tenant-scoped quota denial before rejecting a new run', async () => {
     const { db, statements } = quotaExceededD1()
     const store = new FormulaIntelligenceStore(db)

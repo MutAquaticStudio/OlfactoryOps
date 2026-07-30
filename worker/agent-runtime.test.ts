@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { OpenAiResponsesProvider, configuredAgentProvider } from './agent-runtime'
+import type { Material } from '../src/data/northStar.js'
+import { OpenAiResponsesProvider, configuredAgentProvider, selectedMaterials } from './agent-runtime'
 
 describe('formula agent provider boundary', () => {
   it('keeps every deployment in deterministic mock mode until the provider rollout is explicitly completed', () => {
@@ -25,5 +26,13 @@ describe('formula agent provider boundary', () => {
     const payload = JSON.parse(String(sentInit?.body))
     expect(payload).toMatchObject({ model: 'test-model', stream: true, store: false })
     expect(payload.tools[0]).toMatchObject({ type: 'function', name: 'search_materials', strict: true })
+  })
+
+  it('does not propose source-only supplier catalogue rows in the deterministic formula agent', () => {
+    const sourceOnly = { id: 'mat-lluch-2026-0104', name: 'ASTROLIDE PURE', family: 'synthetic aroma chemical', odor: [], catalogueSource: { status: 'SOURCE_ONLY' } } as unknown as Material
+    const reviewed = { id: 'mat-reviewed', name: 'Bergamot FCF', family: 'citrus', odor: ['citrus'] } as unknown as Material
+    const service = { materials: () => ({ data: [sourceOnly, reviewed] }) } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
+
+    expect(selectedMaterials(service, 'citrus fine fragrance').map((material) => material.id)).toEqual(['mat-reviewed'])
   })
 })

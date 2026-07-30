@@ -754,8 +754,10 @@ async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknow
   await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: message })
 }
 
-function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
-  const catalog = service.materials().data.map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
+export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
+  const catalog = service.materials().data
+    .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
+    .map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
   const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
   // A tenant may research its material master before a compliance profile exists.
   // Missing evidence remains REVIEW_REQUIRED and never becomes implicit approval.

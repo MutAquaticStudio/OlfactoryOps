@@ -740,13 +740,14 @@ export class AgentRuntimeStore {
   }
 }
 
-function selectedMaterials(service: NorthStarService, brief: string) {
+export function selectedMaterials(service: NorthStarService, brief: string) {
   const materialResult = service.materials().data
   const terms = brief.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 3)
   const score = (material: typeof materialResult[number]) => terms.reduce((total, term) =>
     total + (material.name.toLowerCase().includes(term) ? 5 : 0) + (material.family.toLowerCase().includes(term) ? 2 : 0) + material.odor.filter((odor) => odor.toLowerCase().includes(term)).length,
   0)
-  return [...materialResult]
+  return materialResult
+    .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
     .sort((left, right) => score(right) - score(left) || left.name.localeCompare(right.name))
     .slice(0, Math.min(4, materialResult.length))
 }
