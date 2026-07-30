@@ -61,6 +61,26 @@ function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?
   } as unknown as D1Database
 }
 
+function unresolvedProjectD1(hasDirections: boolean) {
+  const statements: RecordedStatement[] = []
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...values: unknown[]) {
+          statements.push({ sql, values })
+          return {
+            first: async () => sql.includes('FROM formula_design_directions') && hasDirections ? { id: 'direction-1' } : null,
+            all: async () => ({ results: [] }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }
+        },
+      }
+    },
+    batch: async () => [],
+  } as unknown as D1Database
+  return { db, statements }
+}
+
 describe('Formula Intelligence Worker persistence contract', () => {
   it('audits a tenant-scoped quota denial before rejecting a new run', async () => {
     const { db, statements } = quotaExceededD1()
@@ -86,5 +106,27 @@ describe('Formula Intelligence Worker persistence contract', () => {
     const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
 
     await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  it('returns an unresolved failed design brief to the retryable state', async () => {
+    const { db, statements } = unresolvedProjectD1(false)
+    const store = new FormulaIntelligenceStore(db)
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await store.returnUnresolvedProjectToBrief(actor, 'project-1')
+
+    const reset = statements.find((statement) => statement.sql.includes("SET status = 'BRIEFED'"))
+    expect(reset?.values).toContain('project-1')
+    expect(reset?.values).toContain('org-a')
+  })
+
+  it('does not reset a project once directions were persisted', async () => {
+    const { db, statements } = unresolvedProjectD1(true)
+    const store = new FormulaIntelligenceStore(db)
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await store.returnUnresolvedProjectToBrief(actor, 'project-1')
+
+    expect(statements.some((statement) => statement.sql.includes("SET status = 'BRIEFED'"))).toBe(false)
   })
 })

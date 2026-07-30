@@ -336,6 +336,19 @@ export class FormulaIntelligenceStore {
     ])
   }
 
+  async returnUnresolvedProjectToBrief(actor: AgentActor, projectId: string) {
+    const direction = await this.db.prepare(
+      `SELECT id FROM formula_design_directions
+       WHERE organization_id = ? AND project_id = ? LIMIT 1`,
+    ).bind(actor.organizationId, projectId).first<{ id: string }>()
+    if (direction) return
+    await this.db.prepare(
+      `UPDATE formula_design_projects
+       SET status = 'BRIEFED', updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'IN_PROGRESS'`,
+    ).bind(now(), projectId, actor.organizationId).run()
+  }
+
   async persistOptimizerCandidates(actor: AgentActor, runId: string, request: FormulaOptimizerRequest, candidates: OptimizerCandidateArtifact[]) {
     const timestamp = now()
     await this.db.batch(candidates.map((candidate, index) => this.db.prepare(
@@ -922,6 +935,9 @@ export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, se
     await auditFormulaIntelligence(store.database, actor, `formula-intelligence.${config.workflowKind.toLowerCase()}.complete`, run.id)
   } catch (error) {
     await failRun(store, run, error)
+    if (config.workflowKind === 'DESIGN_STUDIO') {
+      await intelligence.returnUnresolvedProjectToBrief(actor, config.projectId)
+    }
     await auditFormulaIntelligence(store.database, actor, `formula-intelligence.${config.workflowKind.toLowerCase()}.failed`, run.id, 'review')
   }
 }

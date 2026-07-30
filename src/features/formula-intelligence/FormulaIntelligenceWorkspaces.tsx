@@ -307,7 +307,10 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     if (!activeRun) return
     if (activeRun.confirmation?.status === 'PENDING') setPending({ runId: activeRun.run.id, confirmationId: activeRun.confirmation.id, label: activeRun.confirmation.summary })
     if (activeRun.run.status === 'COMPLETED') void refresh()
-    if (activeRun.run.status === 'FAILED') setNotice(activeRun.run.error_summary ?? 'Direction generation failed')
+    if (activeRun.run.status === 'FAILED') {
+      setNotice('Direction generation stopped. The brief is ready to retry.')
+      void refresh()
+    }
   }, [activeRun, refresh])
   useEffect(() => {
     if (selectedDirectionContext) return
