@@ -819,6 +819,48 @@ type MaterialMoleculesResponse = {
   invariant: string
 }
 
+type MaterialEvidenceCitation = {
+  citationId: string
+  sourceKind: 'material' | 'document'
+  materialId?: string
+  title: string
+  version: string
+  page?: number
+  section?: string
+  excerpt: string
+  score: number
+}
+
+type MaterialEvidenceResponse = {
+  state: 'READY' | 'NOT_INDEXED' | 'NOT_CONFIGURED' | 'NOT_EVALUATED'
+  citations: MaterialEvidenceCitation[]
+  indexedSourceCount: number
+}
+
+type MaterialEvidenceJobResponse = {
+  evidenceDocumentId: string
+  jobId: string
+  status: string
+  correlationId: string
+}
+
+type MaterialEvidenceSource = {
+  sourceKind: 'material' | 'document'
+  documentId?: string
+  title: string
+  version: string
+  state: 'QUEUED' | 'EXTRACTED' | 'REVIEW_REQUIRED' | 'READY' | 'NOT_INDEXED' | 'NOT_CONFIGURED' | 'FAILED' | 'INVALIDATED'
+  updatedAt: string
+}
+
+type MaterialEvidenceReviewSource = {
+  documentId: string
+  title: string
+  version: string
+  state: MaterialEvidenceSource['state']
+  extractedText: string
+}
+
 type PubChemFillResponse = MaterialMutationResponse & {
   molecules: MoleculeComponent[]
 }
@@ -2985,6 +3027,7 @@ function App() {
                     canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
+                    canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
                   }}
                   onFormulaSaved={(formula) => {
@@ -3007,6 +3050,7 @@ function App() {
                     canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
+                    canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
                   }}
                   onFormulaSaved={(formula) => {
@@ -4928,6 +4972,13 @@ function MaterialWorkspace({
   const [pubChemSaving, setPubChemSaving] = useState(false)
   const [compliance, setCompliance] = useState<MaterialComplianceProfile | null>(null)
   const [complianceSaving, setComplianceSaving] = useState(false)
+  const [materialEvidence, setMaterialEvidence] = useState<MaterialEvidenceResponse | null>(null)
+  const [materialEvidenceSources, setMaterialEvidenceSources] = useState<MaterialEvidenceSource[]>([])
+  const [evidenceQuery, setEvidenceQuery] = useState('')
+  const [evidenceBusy, setEvidenceBusy] = useState(false)
+  const [evidenceReview, setEvidenceReview] = useState<MaterialEvidenceReviewSource | null>(null)
+  const [evidenceReviewDraft, setEvidenceReviewDraft] = useState('')
+  const [evidenceReviewBusy, setEvidenceReviewBusy] = useState(false)
   const [complianceDraft, setComplianceDraft] = useState({
     status: 'REVIEW_REQUIRED' as MaterialComplianceProfile['status'],
     category: 'IFRA Category 4',
@@ -4941,6 +4992,8 @@ function MaterialWorkspace({
   const canCreateMaterials = sessionHasPermission(session, 'materials.create')
   const canUpdateMaterials = sessionHasPermission(session, 'materials.update')
   const canManageCompliance = session.role === 'Owner' || session.role === 'Admin'
+  const canViewMaterialEvidence = sessionHasPermission(session, 'materials.view') && sessionHasPermission(session, 'documents.view')
+  const canManageMaterialEvidence = sessionHasPermission(session, 'documents.manage')
   const [createName, setCreateName] = useState('Vetiveryl Acetate')
   const [createCas, setCreateCas] = useState('68917-34-0')
   const [createFamily, setCreateFamily] = useState('Woody vetiver')
@@ -5059,6 +5112,36 @@ function MaterialWorkspace({
     }
   }, [selected.id, selected.ifraLimit])
 
+  useEffect(() => {
+    let active = true
+    if (!canViewMaterialEvidence) {
+      setMaterialEvidence(null)
+      setMaterialEvidenceSources([])
+      return () => { active = false }
+    }
+    setMaterialEvidence(null)
+    setMaterialEvidenceSources([])
+    async function loadEvidence() {
+      try {
+        const [payload, sources] = await Promise.all([
+          requestApi<MaterialEvidenceResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence`),
+          requestApi<MaterialEvidenceSource[]>(`/materials/${encodeURIComponent(selected.id)}/evidence/sources`),
+        ])
+        if (active) {
+          setMaterialEvidence(payload)
+          setMaterialEvidenceSources(sources)
+        }
+      } catch {
+        if (active) {
+          setMaterialEvidence({ state: 'NOT_CONFIGURED', citations: [], indexedSourceCount: 0 })
+          setMaterialEvidenceSources([])
+        }
+      }
+    }
+    void loadEvidence()
+    return () => { active = false }
+  }, [canViewMaterialEvidence, selected.id])
+
   function upsertMaterial(nextMaterial: Material) {
     const exists = materialRecords.some((material) => material.id === nextMaterial.id)
     onMaterialsChange(
@@ -5067,6 +5150,84 @@ function MaterialWorkspace({
         : [nextMaterial, ...materialRecords],
     )
     onSelectMaterial(nextMaterial.id)
+  }
+
+  async function refreshMaterialEvidence(query?: string) {
+    if (!canViewMaterialEvidence) return
+    const suffix = query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''
+    const [payload, sources] = await Promise.all([
+      requestApi<MaterialEvidenceResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence${suffix}`),
+      requestApi<MaterialEvidenceSource[]>(`/materials/${encodeURIComponent(selected.id)}/evidence/sources`),
+    ])
+    setMaterialEvidence(payload)
+    setMaterialEvidenceSources(sources)
+  }
+
+  async function openMaterialEvidenceReview(documentId: string) {
+    if (!canManageMaterialEvidence) return
+    setEvidenceReviewBusy(true)
+    try {
+      const payload = await requestApi<MaterialEvidenceReviewSource>(`/documents/${encodeURIComponent(documentId)}/evidence/extracted`)
+      setEvidenceReview(payload)
+      setEvidenceReviewDraft(payload.extractedText)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence review is unavailable')
+    } finally {
+      setEvidenceReviewBusy(false)
+    }
+  }
+
+  async function submitMaterialEvidenceReview() {
+    if (!evidenceReview || !evidenceReviewDraft.trim()) return
+    setEvidenceReviewBusy(true)
+    try {
+      const result = await requestApi<MaterialEvidenceJobResponse>(`/documents/${encodeURIComponent(evidenceReview.documentId)}/evidence/review`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ reviewedText: evidenceReviewDraft }),
+      })
+      setMaterialStatus(`Evidence review submitted. Indexing reference ${result.correlationId.slice(0, 8)}.`)
+      setEvidenceReview(null)
+      setEvidenceReviewDraft('')
+      await refreshMaterialEvidence()
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence review could not be submitted')
+    } finally {
+      setEvidenceReviewBusy(false)
+    }
+  }
+
+  async function searchMaterialEvidence() {
+    if (!evidenceQuery.trim()) {
+      await refreshMaterialEvidence()
+      return
+    }
+    setEvidenceBusy(true)
+    try {
+      await refreshMaterialEvidence(evidenceQuery)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence search is unavailable')
+    } finally {
+      setEvidenceBusy(false)
+    }
+  }
+
+  async function indexSelectedMaterialEvidence() {
+    if (!canManageMaterialEvidence) return
+    setEvidenceBusy(true)
+    try {
+      const result = await requestApi<MaterialEvidenceJobResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence/index`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: '{}',
+      })
+      setMaterialStatus(`Evidence indexing queued for ${selected.name}. Reference ${result.correlationId.slice(0, 8)}.`)
+      await refreshMaterialEvidence()
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence indexing could not be queued')
+    } finally {
+      setEvidenceBusy(false)
+    }
   }
 
   async function checkCasDuplicate() {
@@ -5530,6 +5691,61 @@ function MaterialWorkspace({
             ))}
           </section>
         ) : null}
+        {canViewMaterialEvidence ? (
+          <section className="material-evidence" aria-label="Material evidence">
+            <div className="section-heading compact-heading">
+              <div>
+                <span className="eyebrow">Evidence</span>
+                <strong>Approved material references</strong>
+              </div>
+              <DataTag label="Indexed" value={String(materialEvidence?.indexedSourceCount ?? 0)} tone={materialEvidence?.state === 'READY' ? 'green' : 'blue'} />
+            </div>
+            <p className="muted-copy">
+              {materialEvidence?.state === 'NOT_CONFIGURED'
+                ? 'Evidence indexing is not configured for this workspace.'
+                : materialEvidence?.state === 'NOT_INDEXED'
+                  ? 'No approved material evidence has been indexed yet.'
+                  : 'Search approved material metadata and reviewed supplier documents.'}
+            </p>
+            <div className="material-evidence-actions">
+              <input aria-label="Search approved material evidence" value={evidenceQuery} onChange={(event) => setEvidenceQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchMaterialEvidence() }} placeholder="Search evidence" />
+              <button className="ghost-button small" type="button" disabled={evidenceBusy || !evidenceQuery.trim()} onClick={() => void searchMaterialEvidence()}>
+                {evidenceBusy ? 'Searching...' : 'Search'}
+              </button>
+              {canManageMaterialEvidence ? <button className="secondary-button small" type="button" disabled={evidenceBusy} onClick={() => void indexSelectedMaterialEvidence()}>{evidenceBusy ? 'Queueing...' : 'Index evidence'}</button> : null}
+            </div>
+            {materialEvidence?.citations.length ? (
+              <div className="material-evidence-list">
+                {materialEvidence.citations.map((citation) => (
+                  <article key={citation.citationId}>
+                    <div><strong>{citation.title}</strong><span>{citation.sourceKind === 'document' ? 'Reviewed document' : 'Material profile'} / {citation.version}{citation.page ? ` / p. ${citation.page}` : ''}{citation.section ? ` / ${citation.section}` : ''}</span></div>
+                    <p>{citation.excerpt}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {materialEvidenceSources.length ? (
+              <div className="material-evidence-sources" aria-label="Evidence indexing status">
+                {materialEvidenceSources.map((source) => (
+                  <div className="material-evidence-source" key={`${source.sourceKind}-${source.documentId ?? source.title}-${source.version}`}>
+                    <div>
+                      <strong>{source.title}</strong>
+                      <span>{source.sourceKind === 'document' ? 'Approved document' : 'Material profile'} / {source.version}</span>
+                    </div>
+                    <div className="material-evidence-source-actions">
+                      <DataTag label="Status" value={source.state.replace(/_/g, ' ')} tone={source.state === 'READY' ? 'green' : source.state === 'FAILED' || source.state === 'NOT_INDEXED' ? 'amber' : 'blue'} />
+                      {canManageMaterialEvidence && source.documentId && source.state === 'REVIEW_REQUIRED' ? (
+                        <button className="ghost-button tiny" type="button" disabled={evidenceReviewBusy} onClick={() => void openMaterialEvidenceReview(source.documentId!)}>
+                          Review extract
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
         <div className="material-form-grid">
           <label className="field-row">
             <span>Family</span>
@@ -5705,6 +5921,31 @@ function MaterialWorkspace({
           </div>
         </Panel>
       ) : null}
+
+      <WorkspaceDialog
+        open={Boolean(evidenceReview)}
+        title={evidenceReview ? `Review extraction: ${evidenceReview.title}` : 'Review extraction'}
+        description="Confirm the extracted text before it is indexed as searchable evidence."
+        onClose={() => {
+          if (!evidenceReviewBusy) {
+            setEvidenceReview(null)
+            setEvidenceReviewDraft('')
+          }
+        }}
+        footer={(
+          <>
+            <button className="ghost-button" type="button" onClick={() => { setEvidenceReview(null); setEvidenceReviewDraft('') }} disabled={evidenceReviewBusy}>Cancel</button>
+            <button className="primary-button" type="button" onClick={() => void submitMaterialEvidenceReview()} disabled={evidenceReviewBusy || !evidenceReviewDraft.trim()}>
+              {evidenceReviewBusy ? 'Submitting...' : 'Approve and index'}
+            </button>
+          </>
+        )}
+      >
+        <label className="field-row">
+          <span>Reviewed text</span>
+          <textarea data-autofocus rows={14} value={evidenceReviewDraft} maxLength={100000} onChange={(event) => setEvidenceReviewDraft(event.target.value)} />
+        </label>
+      </WorkspaceDialog>
 
     </div>
   )

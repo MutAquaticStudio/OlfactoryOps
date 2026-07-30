@@ -22,6 +22,7 @@ import {
   createOptimizerRun,
   executeFormulaIntelligenceRun,
 } from './formula-intelligence.js'
+import { MaterialEvidenceRag, type RagAiBinding, type RagVectorIndex } from './material-evidence-rag.js'
 import {
   ConflictException,
   PayloadTooLargeException,
@@ -123,6 +124,8 @@ type Env = {
   OPENAI_API_KEY?: string
   OPENAI_FORMULA_AGENT_MODEL?: string
   AGENT_CONTEXT_ENCRYPTION_KEY?: string
+  AI?: RagAiBinding
+  RAG_INDEX?: RagVectorIndex
 }
 
 type RouteContext = {
@@ -558,6 +561,9 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
   { method: 'POST', pattern: '/materials/catalogues/lluch-2026/enrich', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service }) => service.enrichMaterialsFromLluchCatalogue() },
+  { method: 'GET', pattern: '/materials/:id/evidence', persistState: false, handler: (context) => getMaterialEvidence(context) },
+  { method: 'GET', pattern: '/materials/:id/evidence/sources', persistState: false, handler: (context) => getMaterialEvidenceSources(context) },
+  { method: 'POST', pattern: '/materials/:id/evidence/index', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => indexMaterialEvidence(context) },
   { method: 'GET', pattern: '/materials/:id', handler: ({ service, params }) => service.material(params.id) },
   { method: 'PATCH', pattern: '/materials/:id', mutates: true, handler: ({ service, params, body }) => service.updateMaterial(params.id, body) },
   { method: 'GET', pattern: '/materials/:id/compliance', handler: ({ service, params }) => service.materialCompliance(params.id) },
@@ -698,9 +704,13 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/documents/compliance-dashboard', handler: ({ service }) => service.documentComplianceDashboard() },
   { method: 'POST', pattern: '/documents/upload', mutates: true, formData: true, limitKey: 'documents', rateLimit: sensitiveMutationRateLimit, handler: ({ service, env, formData }) => handleDocumentUpload(service, env, formData) },
   { method: 'POST', pattern: '/documents/generate', mutates: true, limitKey: 'documents', handler: ({ service, body, env }) => generateDocumentObject(service, env, body) },
-  { method: 'POST', pattern: '/documents/:id/approve', mutates: true, handler: ({ service, params, body }) => service.approveDocument(params.id, body) },
-  { method: 'POST', pattern: '/documents/:id/scan-result', mutates: true, handler: ({ service, params, body }) => service.recordDocumentScanResult(params.id, body) },
-  { method: 'POST', pattern: '/documents/:id/archive', mutates: true, handler: ({ service, params, body }) => service.archiveDocument(params.id, body) },
+  { method: 'GET', pattern: '/documents/:id/evidence/extracted', persistState: false, handler: (context) => getMaterialEvidenceReviewSource(context) },
+  { method: 'POST', pattern: '/documents/:id/evidence/extract', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => extractMaterialEvidenceDocument(context) },
+  { method: 'POST', pattern: '/documents/:id/evidence/review', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => reviewMaterialEvidenceDocument(context) },
+  { method: 'POST', pattern: '/documents/:id/evidence/retry', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => retryMaterialEvidenceDocument(context) },
+  { method: 'POST', pattern: '/documents/:id/approve', mutates: true, handler: (context) => approveDocumentWithEvidence(context) },
+  { method: 'POST', pattern: '/documents/:id/scan-result', mutates: true, handler: (context) => recordDocumentScanWithEvidence(context) },
+  { method: 'POST', pattern: '/documents/:id/archive', mutates: true, handler: (context) => archiveDocumentWithEvidence(context) },
   { method: 'POST', pattern: '/documents/:id/share', mutates: true, handler: ({ service, params, body, env, request }) => shareDocumentObject(service, env, request, params.id, body) },
   { method: 'GET', pattern: '/documents/download-audit', handler: ({ service }) => service.documentDownloadAudit() },
   { method: 'POST', pattern: '/documents/:id/signed-url', mutates: true, handler: ({ service, params, env, request }) => signDocumentDownload(service, env, request, params.id) },
@@ -819,12 +829,98 @@ function readAgentStreamSequence(request: Request, query: URLSearchParams) {
   return readAgentSequence(header ?? query.get('afterSequence'))
 }
 
+function materialEvidenceActor(service: NorthStarService) {
+  const agent = ensureAgentReadAccess(service)
+  return { organizationId: agent.organizationId, userId: agent.userId, permissions: service.me().data.permissions }
+}
+
+function materialEvidenceIdempotencyKey(context: RouteContext) {
+  return formulaIntelligenceIdempotencyKey(context.request)
+}
+
+async function getMaterialEvidence(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const result = await new MaterialEvidenceRag(context.env).materialEvidence(actor, context.params.id, context.query.get('q'))
+  return { data: result }
+}
+
+async function getMaterialEvidenceSources(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const result = await new MaterialEvidenceRag(context.env).materialSources(actor, context.params.id)
+  return { data: result }
+}
+
+async function indexMaterialEvidence(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const rag = new MaterialEvidenceRag(context.env)
+  const result = await rag.queueMaterial(actor, context.params.id, materialEvidenceIdempotencyKey(context))
+  context.ctx.waitUntil(rag.processJob(result.jobId))
+  return { data: result }
+}
+
+async function extractMaterialEvidenceDocument(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const rag = new MaterialEvidenceRag(context.env)
+  const result = await rag.queueDocumentExtraction(actor, context.params.id, materialEvidenceIdempotencyKey(context))
+  context.ctx.waitUntil(rag.processJob(result.jobId))
+  return { data: result }
+}
+
+async function getMaterialEvidenceReviewSource(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const result = await new MaterialEvidenceRag(context.env).reviewSource(actor, context.params.id)
+  return { data: result }
+}
+
+async function reviewMaterialEvidenceDocument(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const rag = new MaterialEvidenceRag(context.env)
+  const result = await rag.reviewDocument(actor, context.params.id, {
+    reviewedText: context.body.reviewedText,
+    idempotencyKey: materialEvidenceIdempotencyKey(context),
+  })
+  context.ctx.waitUntil(rag.processJob(result.jobId))
+  return { data: result }
+}
+
+async function retryMaterialEvidenceDocument(context: RouteContext) {
+  const actor = materialEvidenceActor(context.service)
+  const rag = new MaterialEvidenceRag(context.env)
+  const result = await rag.retryDocument(actor, context.params.id, materialEvidenceIdempotencyKey(context))
+  context.ctx.waitUntil(rag.processJob(result.jobId))
+  return { data: result }
+}
+
+async function approveDocumentWithEvidence(context: RouteContext) {
+  // Approval remains the document workflow source of truth. Indexing is an
+  // explicit reviewed action so the just-approved state has been persisted to D1.
+  return context.service.approveDocument(context.params.id, context.body)
+}
+
+async function recordDocumentScanWithEvidence(context: RouteContext) {
+  const result = context.service.recordDocumentScanResult(context.params.id, context.body)
+  if (context.body.status === 'INFECTED' || context.body.status === 'ERROR') {
+    const rag = new MaterialEvidenceRag(context.env)
+    const jobs = await rag.invalidateDocument(materialEvidenceActor(context.service), context.params.id, `scan-invalidation:${context.params.id}:${crypto.randomUUID()}`)
+    jobs.forEach((job) => context.ctx.waitUntil(rag.processJob(job.jobId)))
+  }
+  return result
+}
+
+async function archiveDocumentWithEvidence(context: RouteContext) {
+  const result = context.service.archiveDocument(context.params.id, context.body)
+  const rag = new MaterialEvidenceRag(context.env)
+  const jobs = await rag.invalidateDocument(materialEvidenceActor(context.service), context.params.id, `archive-invalidation:${context.params.id}:${crypto.randomUUID()}`)
+  jobs.forEach((job) => context.ctx.waitUntil(rag.processJob(job.jobId)))
+  return result
+}
+
 async function createAgentRun(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.create(actor, context.body, configuredAgentProvider(context.env))
   const runId = result.data.run.id
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, runId))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, runId, context.env))
   return result
 }
 
@@ -832,7 +928,7 @@ async function resumeAgentRun(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.resume(actor, context.params.id)
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id, context.env))
   return result
 }
 
@@ -840,7 +936,7 @@ async function retryAgentNode(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   const store = new AgentRuntimeStore(context.env.DB)
   const result = await store.retryNode(actor, context.params.id, context.params.nodeId)
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id))
+  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id, context.env))
   return result
 }
 
@@ -857,16 +953,17 @@ async function restartAgentRun(context: RouteContext) {
     const priorConfig = await intelligence.configForRun(actor, context.params.id)
     await intelligence.createRunConfig(actor, result.data.run.id, priorConfig.config, formulaIntelligenceIdempotencyKey(context.request))
   }
-  context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id))
+  context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id, context.env))
   return { data: { previousRunId: context.params.id, run: result.data.run } }
 }
 
-async function executeAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string) {
+async function executeAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string, env: Env) {
   const mapped = await store.database.prepare(
     `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
   ).bind(runId, actor.organizationId, actor.userId).first()
-  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId)
-  return executeDeterministicAgentRun(store, service, actor, runId)
+  const materialEvidence = new MaterialEvidenceRag(env)
+  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId, materialEvidence)
+  return executeDeterministicAgentRun(store, service, actor, runId, materialEvidence)
 }
 
 async function resolveAgentConfirmation(context: RouteContext) {
@@ -961,6 +1058,7 @@ function formulaIntelligenceCapabilities(service: NorthStarService) {
       canViewSensitiveComposition,
       canViewCostEvidence: granted.has('costing.view'),
       canViewInventoryEvidence: granted.has('inventory.view'),
+      canViewMaterialEvidence: granted.has('documents.view') && granted.has('materials.view'),
       canSaveDraft: granted.has('formulas.edit') && canViewSensitiveComposition,
     },
   }
@@ -1026,7 +1124,7 @@ async function generateFormulaDesignDirections(context: RouteContext) {
     ensureFormulaIntelligencePermission(context.service, 'edit')
     ensureFormulaIntelligenceExecutionAccess(context.service)
     const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request))
-    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, new MaterialEvidenceRag(context.env)))
     return { data: result }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
@@ -1093,7 +1191,7 @@ async function startFormulaOptimizer(context: RouteContext) {
   try {
     ensureFormulaIntelligenceExecutionAccess(context.service)
     const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request))
-    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id))
+    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, new MaterialEvidenceRag(context.env)))
     return { data: result }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, 'optimizer', error)
@@ -1309,6 +1407,7 @@ export default {
     ctx.waitUntil(Promise.all([
       runScheduledAnalytics(controller, env),
       runScheduledAgentRecovery(env),
+      runScheduledMaterialEvidence(env),
       pruneFormulaIntelligenceRetention(env.DB),
     ]))
   },
@@ -1337,12 +1436,16 @@ async function runScheduledAgentRecovery(env: Env) {
       await hydrateSnapshots(env.DB, service, env)
       service.authenticateSession(run.session_id)
       const actor = actorFromService(service)
-      await executeAgentRun(store, service, actor, job.run_id)
+      await executeAgentRun(store, service, actor, job.run_id, env)
     } catch {
       await store.cancelUnauthorizedRun(job.run_id, job.organization_id).catch(() => undefined)
       console.error('Scheduled agent resume cancelled after authorization check')
     }
   }
+}
+
+async function runScheduledMaterialEvidence(env: Env) {
+  await new MaterialEvidenceRag(env).processDueJobs()
 }
 
 function applyScheduledMaterialCatalogueBackfill(service: NorthStarService) {

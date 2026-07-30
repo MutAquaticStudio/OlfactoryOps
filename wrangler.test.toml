@@ -19,6 +19,13 @@ database_name = "olfactoryops-test"
 database_id = "a5144134-3f58-4f6b-b516-05789ef05fbc"
 migrations_dir = "migrations"
 
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "RAG_INDEX"
+index_name = "olfactoryops-material-evidence-test"
+
 [[kv_namespaces]]
 binding = "DOCUMENTS"
 id = "38a6be8a60e04985a27fa27c96c855ba"

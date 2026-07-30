@@ -92,6 +92,12 @@ function FormulaArtifact({ artifact }: { artifact: AgentArtifact }) {
   if (artifact.type === 'optimizer_candidates') {
     return <div className="agent-artifact-list">{artifact.data.candidates.map((candidate) => <div key={candidate.candidateId}><strong>{candidate.title}</strong><span>Score {candidate.score.toFixed(1)} / {candidate.complianceStatus} / {candidate.availability}</span></div>)}</div>
   }
+  if (artifact.type === 'evidence_citations') {
+    if (artifact.data.state !== 'READY' || artifact.data.citations.length === 0) {
+      return <div className="agent-artifact-list"><p>{artifact.data.state === 'NOT_CONFIGURED' ? 'Evidence retrieval is not configured.' : artifact.data.state === 'NOT_EVALUATED' ? 'Evidence is not available to this role.' : 'No approved evidence matched this research.'}</p></div>
+    }
+    return <div className="agent-artifact-list">{artifact.data.citations.map((citation) => <div key={citation.citationId}><strong>{citation.title}</strong><span>{citation.sourceKind === 'document' ? 'Reviewed document' : 'Material profile'} / {citation.version}{citation.page ? ` / p. ${citation.page}` : ''}{citation.section ? ` / ${citation.section}` : ''}</span><small>{citation.excerpt}</small></div>)}</div>
+  }
   return <div className="agent-artifact-list">{artifact.data.assumptions.map((line) => <p key={line}>{line}</p>)}{artifact.data.warnings.map((line) => <small key={line}>{line}</small>)}</div>
 }
 

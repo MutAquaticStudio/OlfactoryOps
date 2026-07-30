@@ -16,6 +16,7 @@ import {
 } from '../src/data/agentRuntime.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
+import type { MaterialEvidenceRag } from './material-evidence-rag.js'
 
 export type AgentActor = {
   organizationId: string
@@ -149,6 +150,7 @@ export const agentFunctionTools: AgentModelRequest['tools'] = [
   { name: 'validate_formula_math', description: 'Validate proposal material percentages total 100 percent.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
   { name: 'validate_compliance', description: 'Validate IFRA and workspace compliance evidence.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
   { name: 'find_material_substitutions', description: 'Suggest workspace-scoped alternatives only.', parameters: { type: 'object', properties: { materialId: { type: 'string', maxLength: 160 } }, required: ['materialId'], additionalProperties: false } },
+  { name: 'retrieve_material_evidence', description: 'Retrieve bounded citations from approved workspace material evidence.', parameters: { type: 'object', properties: { query: { type: 'string', maxLength: 320 }, materialIds: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 160 } } }, required: ['query'], additionalProperties: false } },
   { name: 'save_formula_draft', description: 'Request confirmation before creating a non-consuming draft.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
 ]
 
@@ -791,7 +793,7 @@ async function logTool(store: AgentRuntimeStore, run: AgentRunRow, nodeId: strin
   await store.append(run.id, run.organization_id, 'tool.completed', { toolId, nodeId, toolName: name, status: 'COMPLETED' })
 }
 
-export async function executeDeterministicAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string) {
+export async function executeDeterministicAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string, materialEvidence?: MaterialEvidenceRag) {
   const job = await store.claimJob(runId)
   if (!job) return
   const run = await store.runForActor(actor, runId)
@@ -809,7 +811,14 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
     await store.startNode(run, searchId, 'search_materials')
     const candidates = selectedMaterials(service, run.input_brief)
     await logTool(store, run, searchId, 'search_materials', { query: run.input_brief }, { count: candidates.length, materialIds: candidates.map((item) => item.id) })
-    await store.completeNode(run, searchId, 'search_materials', { materialIds: candidates.map((item) => item.id) }, 25)
+    const granted = new Set(service.me().data.permissions)
+    const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
+      ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: run.input_brief, materialIds: candidates.map((item) => item.id), topK: 6 })
+      : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
+    if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
+      await logTool(store, run, searchId, 'retrieve_material_evidence', { query: run.input_brief, materialIds: candidates.map((item) => item.id) }, { state: evidence.state, citationCount: evidence.citations.length })
+    }
+    await store.completeNode(run, searchId, 'search_materials', { materialIds: candidates.map((item) => item.id), evidenceState: evidence.state }, 25)
     const proposal = buildProposal(run, service)
     const inventoryId = await store.createNode(run, 'check_inventory', { proposal })
     await store.startNode(run, inventoryId, 'check_inventory')
@@ -864,7 +873,8 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
       assumptions: ['Deterministic mock mode selected workspace materials and calculated evidence through the domain services.', 'Inventory availability is advisory until a separate lab or production operation consumes lots.'],
       warnings: preview.availability.filter((item) => item.status !== 'AVAILABLE').map((item) => `${item.materialName}: ${item.status.toLowerCase()}`),
     } })
-    await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 5 }, 90)
+    await store.createArtifact(run, { type: 'evidence_citations', version: 1, data: { state: evidence.state, citations: evidence.citations } })
+    await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 6 }, 90)
     const saveId = await store.createNode(run, 'save_formula_draft', { proposal })
     await store.startNode(run, saveId, 'save_formula_draft')
     await store.createAssistantMessage(run, 'I prepared a tenant-scoped formula proposal with deterministic inventory, cost, and compliance evidence. Review the artifacts, then explicitly confirm to create one editable draft.')

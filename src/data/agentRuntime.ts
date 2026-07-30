@@ -289,6 +289,25 @@ export const optimizerCandidatesArtifactSchema = z.object({
   }),
 })
 
+export const evidenceCitationsArtifactSchema = z.object({
+  type: z.literal('evidence_citations'),
+  version: z.literal(1),
+  data: z.object({
+    state: z.enum(['READY', 'NOT_INDEXED', 'NOT_CONFIGURED', 'NOT_EVALUATED']),
+    citations: z.array(z.object({
+      citationId: z.string().min(1).max(160),
+      sourceKind: z.enum(['material', 'document']),
+      materialId: z.string().min(1).max(160).optional(),
+      title: z.string().min(1).max(240),
+      version: z.string().min(1).max(80),
+      page: z.number().int().positive().optional(),
+      section: z.string().min(1).max(160).optional(),
+      excerpt: z.string().min(1).max(700),
+      score: z.number().finite().min(0).max(1),
+    })).max(8),
+  }),
+})
+
 export const agentArtifactSchema = z.discriminatedUnion('type', [
   formulaTableArtifactSchema,
   inventoryReportArtifactSchema,
@@ -299,6 +318,7 @@ export const agentArtifactSchema = z.discriminatedUnion('type', [
   formulaRevisionComparisonArtifactSchema,
   designDirectionsArtifactSchema,
   optimizerCandidatesArtifactSchema,
+  evidenceCitationsArtifactSchema,
 ])
 export type AgentArtifact = z.infer<typeof agentArtifactSchema>
 
@@ -323,6 +343,7 @@ export const agentToolNameSchema = z.enum([
   'validate_formula_math',
   'validate_compliance',
   'find_material_substitutions',
+  'retrieve_material_evidence',
   'save_formula_draft',
 ])
 export type AgentToolName = z.infer<typeof agentToolNameSchema>

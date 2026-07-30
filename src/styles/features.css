@@ -93,6 +93,32 @@
   font-family: var(--mono-font);
 }
 
+.formula-intelligence-citations {
+  display: grid;
+  gap: 8px;
+}
+
+.formula-intelligence-citations article {
+  display: grid;
+  gap: 3px;
+  padding: 9px 0;
+  border-top: 1px solid #273027;
+}
+
+.formula-intelligence-citations article strong,
+.formula-intelligence-citations article small,
+.formula-intelligence-citations article p {
+  overflow-wrap: anywhere;
+}
+
+.formula-intelligence-citations article small,
+.formula-intelligence-citations article p {
+  margin: 0;
+  color: #98a397;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
 .formula-intelligence-score {
   padding: 4px 7px;
   border-color: #315c40;

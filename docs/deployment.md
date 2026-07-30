@@ -90,7 +90,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, `migrations/0026_finished_goods_operational_trace.sql`, `migrations/0027_operational_p1_enterprise.sql`, and `migrations/0028_auth_session_credentials.sql`, before enabling billing webhooks, transactional email, or finished-good commerce. For the test Worker:
+Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, `migrations/0026_finished_goods_operational_trace.sql`, `migrations/0027_operational_p1_enterprise.sql`, `migrations/0028_auth_session_credentials.sql`, and `migrations/0033_material_evidence_rag.sql` before enabling the corresponding Worker capabilities. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml

@@ -21,3 +21,10 @@ binding = "DB"
 database_name = "olfactoryops-production"
 database_id = "d70bc633-a4d8-4898-8149-d795032cf497"
 migrations_dir = "migrations"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "RAG_INDEX"
+index_name = "olfactoryops-material-evidence"

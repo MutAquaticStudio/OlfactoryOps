@@ -21,6 +21,7 @@ import type { Material } from '../src/data/northStar.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { AgentRuntimeStore, type AgentActor, type AgentRunRow } from './agent-runtime.js'
+import type { MaterialEvidenceRag } from './material-evidence-rag.js'
 
 type ProjectRow = {
   id: string
@@ -717,7 +718,7 @@ function availabilityRankedMaterials(service: NorthStarService, materials: Mater
     .sort((left, right) => right.availabilityRank - left.availabilityRank || left.name.localeCompare(right.name))
 }
 
-async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>) {
+async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>, materialEvidence?: MaterialEvidenceRag) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const analyzeId = await store.createNode(run, 'analyze_brief', { brief: config.brief.creativeBrief })
   await store.startNode(run, analyzeId, 'analyze_brief')
@@ -727,7 +728,14 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   const materials = availabilityRankedMaterials(service, approvedMaterials(service))
   if (!materials.length) throw new UnprocessableEntityException('No compliance-approved workspace materials are available for this design brief')
   await recordTool(store, run, searchId, 'search_materials', { query: config.brief.creativeBrief }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
-  await store.completeNode(run, searchId, 'search_materials', { materialCount: materials.length }, 28)
+  const granted = new Set(service.me().data.permissions)
+  const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
+    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id), topK: 6 })
+    : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
+  if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
+    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id) }, { state: evidence.state, citationCount: evidence.citations.length })
+  }
+  await store.completeNode(run, searchId, 'search_materials', { materialCount: materials.length, evidenceState: evidence.state }, 28)
   const proposals = buildDesignDirectionProposals(config.brief, materials)
   const inventoryId = await store.createNode(run, 'check_inventory', { projectId: config.projectId })
   await store.startNode(run, inventoryId, 'check_inventory')
@@ -756,13 +764,14 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   const resultId = await store.createNode(run, 'prepare_result', { projectId: config.projectId })
   await store.startNode(run, resultId, 'prepare_result')
   await store.createArtifact(run, { type: 'design_directions', version: 1, data: { projectId: config.projectId, directions } })
+  await store.createArtifact(run, { type: 'evidence_citations', version: 1, data: { state: evidence.state, citations: evidence.citations } })
   await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistDesignDirections(actor, config.projectId, run.id, directions)
-  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 1, directionCount: directions.length }, 94)
+  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 2, directionCount: directions.length }, 94)
   await store.createAssistantMessage(run, 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
 }
 
-async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>) {
+async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>, materialEvidence?: MaterialEvidenceRag) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const { request } = config
   const versions = service.formulaVersions(request.baselineFormulaId).data
@@ -781,7 +790,15 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   await store.startNode(run, searchId, 'search_materials')
   const materials = availabilityRankedMaterials(service, approvedMaterials(service))
   await recordTool(store, run, searchId, 'search_materials', { baselineMaterialIds: [...materialIdSet] }, { candidateMaterialIds: materials.slice(0, 24).map((material) => material.id) })
-  await store.completeNode(run, searchId, 'search_materials', { candidateMaterialCount: materials.length }, 28)
+  const granted = new Set(service.me().data.permissions)
+  const evidenceMaterialIds = [...new Set([...materialIdSet, ...materials.slice(0, 12).map((material) => material.id)])].slice(0, 12)
+  const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
+    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: `Optimize ${request.intent} for ${versions.formula.name}`, materialIds: evidenceMaterialIds, topK: 6 })
+    : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
+  if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
+    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: `Optimize ${request.intent}`, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
+  }
+  await store.completeNode(run, searchId, 'search_materials', { candidateMaterialCount: materials.length, evidenceState: evidence.state }, 28)
   const availableMaterialIds = new Set<string>()
   if (hasInventoryAccess(service)) {
     const lots = service.lotsList().data
@@ -835,13 +852,14 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   const resultId = await store.createNode(run, 'prepare_result', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, resultId, 'prepare_result')
   await store.createArtifact(run, { type: 'optimizer_candidates', version: 1, data: { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion, intent: request.intent, candidates } })
+  await store.createArtifact(run, { type: 'evidence_citations', version: 1, data: { state: evidence.state, citations: evidence.citations } })
   await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistOptimizerCandidates(actor, run.id, request, candidates)
-  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 1, candidateCount: candidates.length }, 94)
+  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 2, candidateCount: candidates.length }, 94)
   await store.createAssistantMessage(run, 'I ranked deterministic reformulation candidates by compliance feasibility, eligible inventory, cost evidence when permitted, and minimum composition change. Select a candidate before saving a normal editable draft.')
 }
 
-export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string) {
+export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string, materialEvidence?: MaterialEvidenceRag) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const { config } = await intelligence.configForRun(actor, runId)
   const run = await beginRun(store, actor, runId)
@@ -849,8 +867,8 @@ export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, se
   try {
     requirePermission(service, 'formulas.viewSensitive')
     requirePermission(service, 'materials.view')
-    if (config.workflowKind === 'DESIGN_STUDIO') await runDesignStudio(store, service, actor, run, config)
-    else await runOptimizer(store, service, actor, run, config)
+    if (config.workflowKind === 'DESIGN_STUDIO') await runDesignStudio(store, service, actor, run, config, materialEvidence)
+    else await runOptimizer(store, service, actor, run, config, materialEvidence)
     await completeRun(store, run)
     await auditFormulaIntelligence(store.database, actor, `formula-intelligence.${config.workflowKind.toLowerCase()}.complete`, run.id)
   } catch (error) {
