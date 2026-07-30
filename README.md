@@ -9,6 +9,127 @@ OlfactoryOps is a multi-tenant operating system for fragrance R&D and commercial
 - Cloudflare Workers API + D1 persistence for hosted environments
 - Vitest for domain tests and Playwright-based functional harnesses
 
+## System Architecture
+
+OlfactoryOps uses a browser-first React application with two API targets. The local NestJS/Fastify API supports development and deterministic local testing. The hosted Cloudflare Worker is the production and beta API boundary; it owns authentication, authorization, tenant isolation, persistence, audit, and external platform bindings.
+
+```mermaid
+flowchart LR
+  Browser["Browser\nReact 19 + Vite"]
+  Pages["Cloudflare Pages\npublic site, login, workspace SPA"]
+  LocalApi["Local API\nNestJS + Fastify\ndevelopment only"]
+  Worker["Cloudflare Worker\n/api/v1\nauth, policy, domain services"]
+  D1[("Cloudflare D1\ntenant-scoped operational data\naudit, ledger, jobs")]
+  KV[("Private Workers KV\nSDS/CoA document payloads")]
+  AI["Workers AI\nembeddings and text extraction"]
+  Vectorize[("Vectorize\nmaterial evidence vectors")]
+  Providers["Optional providers\nResend, Stripe, Cloudflare for SaaS"]
+
+  Browser --> Pages
+  Browser -->|"local: /api/v1"| LocalApi
+  Browser -->|"beta/prod: /api/v1"| Worker
+  Worker --> D1
+  Worker --> KV
+  Worker --> AI
+  Worker --> Vectorize
+  Worker --> Providers
+```
+
+### Frontend
+
+- `src/` is the React 19 + TypeScript application built by Vite. It contains the public product site, authentication views, role-aware workspace navigation, Materials, Formulas, Inventory, Production, Commerce, Analytics, and Formula Intelligence workspaces.
+- The frontend uses one API client in `src/App.tsx`. It sends browser requests with credentials, adds the CSRF token to mutations, and treats the API as the source of truth for operational records.
+- `VITE_API_BASE_URL` selects the API target. It is safe only for public API URLs; any value prefixed with `VITE_` is included in the client bundle and must never contain a secret.
+- The frontend is intentionally not trusted to enforce permissions, calculate final compliance, mutate inventory, or persist audit evidence. It presents capability-gated UI, while the server repeats every security decision.
+
+### Backend
+
+- `server/` contains the NestJS/Fastify API used for local development and test workflows. It binds to `127.0.0.1` and rejects a production/non-loopback configuration.
+- `worker/index.ts` is the hosted Cloudflare API. It exposes `/api/v1`, applies request-size limits, CORS, rate limits, opaque-session authentication, CSRF validation, permission checks, tenant scoping, idempotency controls, and audit persistence before or around domain mutations.
+- `server/src/services/northstar.service.ts` holds the deterministic domain rules shared by the API targets: formula resolution, IFRA checks, inventory movement, FEFO allocation, production release, costing, approvals, and role permissions.
+- Durable background work is implemented in D1 and resumed by the Worker cron. This includes Formula Agent jobs, notification/outbox retries, and Material Evidence indexing jobs. A lease token and bounded retry policy prevent duplicate processing after an interruption.
+
+### Database And Storage
+
+- Cloudflare D1 is the hosted system of record. Every operational record is scoped by `organization_id`; migrations in `migrations/` are applied before the Worker that uses them is deployed.
+- D1 stores users, sessions, tenant settings, materials, formulas, formula versions, inventory lots, immutable movement ledger entries, production/receipt/QC records, commercial records, approvals, audit-chain evidence, notifications, idempotency records, agent state, and RAG indexing metadata.
+- Private SDS/CoA payloads use the `DOCUMENTS` Workers KV binding during beta. D1 stores document metadata, scan/review status, ownership, versioning, and access evidence. Signed download URLs are not used as a RAG source.
+- Material Evidence RAG stores only vector references, bounded excerpts, content hashes, review state, and jobs in D1. Workers AI generates embeddings and Vectorize stores tenant-namespaced vectors. D1 rechecks tenant scope, approval, version, checksum, and permissions after each Vectorize result.
+
+### Authentication And Authorization
+
+1. A user signs up or signs in through `/api/v1/auth/*`.
+2. The Worker creates an opaque, one-way-hashed session credential and sends it in a secure HTTP-only cookie. Browser JavaScript never receives the session secret.
+3. `/api/v1/me` restores the authenticated session, workspace context, effective role permissions, and a CSRF token.
+4. Cookie-authenticated mutations require `X-CSRF-Token`; sensitive routes have separate rate limits. Non-browser tooling can use an opaque bearer credential where explicitly supported.
+5. Each request is authenticated, scoped to its active organization, authorized against the permission matrix, and recorded in audit evidence when it changes controlled state.
+
+Authentication does not grant cross-tenant access. Owner/Admin visibility is still permission-limited: audit evidence is available where appropriate, but private agent payloads, documents, costs, lots, and formula composition remain separately gated.
+
+### Deployment Topology
+
+- **Local development:** Vite serves the browser app at `127.0.0.1:5173`; NestJS/Fastify serves `/api/v1` at `127.0.0.1:4000`.
+- **Beta:** Cloudflare Pages serves `test.labofscents.pages.dev`; `olfactoryops-api-test` Worker uses the isolated `olfactoryops-test` D1 database, private test KV namespace, and `olfactoryops-material-evidence-test` Vectorize index.
+- **Production:** Cloudflare Pages serves the public/workspace frontend and `olfactoryops-api` Worker uses the production D1 database and production Vectorize index. Production bindings, custom domains, and provider secrets are configured in Cloudflare, never committed to Git or passed to the frontend.
+- `wrangler.test.toml` is the explicit test deployment configuration. `wrangler.toml` contains production bindings. Run migrations against the matching D1 database before deploying a Worker.
+
+### Data Flows
+
+**Operational mutation**
+
+```mermaid
+sequenceDiagram
+  participant UI as React workspace
+  participant API as Worker API
+  participant Domain as Deterministic domain service
+  participant DB as D1
+  participant Audit as Audit chain
+
+  UI->>API: Authenticated mutation + CSRF + Idempotency-Key
+  API->>API: Authenticate, tenant scope, permission, rate-limit checks
+  API->>Domain: Validate business rule
+  Domain->>DB: Atomic record, ledger, and idempotency write
+  Domain->>Audit: Append audit evidence
+  API-->>UI: Persisted response or original idempotent response
+```
+
+**Document evidence and RAG**
+
+```mermaid
+sequenceDiagram
+  participant Manager as documents.manage user
+  participant API as Worker API
+  participant KV as Private KV
+  participant DB as D1
+  participant AI as Workers AI
+  participant V as Vectorize
+
+  Manager->>API: Upload approved, clean text PDF
+  API->>KV: Store private payload
+  API->>DB: Store document metadata and review state
+  Manager->>API: Queue extraction, then review text
+  API->>AI: Extract text and create embeddings
+  API->>V: Upsert tenant-scoped vectors
+  API->>DB: Persist chunks, version/hash, status, audit
+  API-->>Manager: Bounded citation with source/version/excerpt
+```
+
+**Formula to fulfillment**
+
+```mermaid
+flowchart LR
+  Draft["Formula draft"] --> Review["Review and approve version"]
+  Review --> Batch["Production batch + QC"]
+  Batch --> FinishedLot["Released finished-good lot"]
+  FinishedLot --> SKU["SKU / catalogue"]
+  SKU --> Quote["Quote and multi-SKU order"]
+  Quote --> Reserve["FEFO reservation"]
+  Reserve --> Fulfill["Fulfillment and COGS"]
+  Fulfill --> Ledger["Immutable inventory and audit ledger"]
+```
+
+Formula design, simulation, review, and approval do not consume inventory. Inventory changes only when a committed lab usage, receipt, reservation, fulfillment, production consumption, or compensating reversal writes the ledger.
+
 ## What You Need
 
 - Node.js 22 or newer
