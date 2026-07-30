@@ -3635,7 +3635,7 @@ kbd {
   gap: 8px;
 }
 
-.supplier-catalogue-search {
+.material-directory-controls {
   display: grid;
   gap: 10px;
   margin: 14px 0;
@@ -3645,71 +3645,28 @@ kbd {
   background: var(--surface-raised);
 }
 
-.supplier-catalogue-heading,
-.supplier-catalogue-actions,
-.supplier-catalogue-row {
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
-
-.supplier-catalogue-heading {
-  align-items: center;
-  justify-content: space-between;
-}
-
-.supplier-catalogue-heading h3 {
-  margin: 2px 0 0;
-  font-size: 0.98rem;
-}
-
-.supplier-catalogue-search .muted-copy,
-.supplier-catalogue-search .helper-copy {
+.material-directory-controls .helper-copy {
   margin: 0;
 }
 
-.supplier-catalogue-actions {
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.supplier-catalogue-actions input {
-  flex: 1 1 190px;
-  min-width: 0;
-}
-
-.supplier-catalogue-results {
+.material-source-notice {
   display: grid;
-  max-height: 256px;
-  overflow: auto;
-  border-top: 1px solid var(--border);
+  gap: 8px;
+  margin: 14px 0;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface-raised));
 }
 
-.supplier-catalogue-row {
+.material-source-notice p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.material-list-more {
   width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 0;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-  background: transparent;
-  text-align: left;
-}
-
-.supplier-catalogue-row:hover {
-  color: var(--accent-text);
-}
-
-.supplier-catalogue-row > span {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.supplier-catalogue-row small {
-  overflow-wrap: anywhere;
-  color: var(--text-3);
+  margin-top: 10px;
 }
 
 .catalogue-reference {
@@ -3741,11 +3698,6 @@ kbd {
     justify-self: start;
   }
 
-  .supplier-catalogue-heading,
-  .supplier-catalogue-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }
 
 .production-timeline {

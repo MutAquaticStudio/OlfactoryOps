@@ -573,7 +573,10 @@ export class AgentLocalRuntimeService {
   }
 
   private approvedMaterials(service: NorthStarService) {
-    return service.materials().data.filter((material) => service.materialCompliance(material.id).data?.status === 'APPROVED')
+    return service.materials().data.filter((material) => (
+      material.catalogueSource?.status !== 'SOURCE_ONLY' &&
+      service.materialCompliance(material.id).data?.status === 'APPROVED'
+    ))
   }
 
   private async executeIntelligence(service: NorthStarService, run: LocalRun) {
@@ -665,7 +668,10 @@ export class AgentLocalRuntimeService {
   private async execute(service: NorthStarService, run: LocalRun) {
     run.status = 'RUNNING'; run.updated_at = now(); this.event(run, 'run.started', { status: 'RUNNING', progress: 0 })
     try {
-      const candidates = [...service.materials().data].sort((left, right) => left.name.localeCompare(right.name)).slice(0, 4)
+      const candidates = service.materials().data
+        .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, 4)
       if (!candidates.length) throw new UnprocessableEntityException('No workspace materials are available for this research run')
       const weights = candidates.length === 1 ? [100] : candidates.length === 2 ? [60, 40] : candidates.length === 3 ? [45, 30, 25] : [40, 25, 20, 15]
       const proposal = agentFormulaProposalSchema.parse({

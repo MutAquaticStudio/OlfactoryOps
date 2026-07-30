@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { materials } from './northStar'
 import {
   enrichMaterialFromLluchCatalogue,
+  isLluchCatalogueSourceMaterial,
   lluchCatalogue2026Source,
+  lluchCatalogueMaterialDirectoryForOrganization,
   searchLluchCatalogue2026,
 } from './lluch-catalogue-2026'
 
@@ -27,5 +29,18 @@ describe('Lluch catalogue 2026 import source', () => {
     expect(result.material.ifraLimit).toBe(bergamot.ifraLimit)
     expect(result.material.supplierCatalogueReferences?.some((reference) => reference.supplier === 'Lluch Essence')).toBe(true)
     expect(result.material.olfactiveProfile?.strength).toBe('Strong')
+  })
+
+  it('projects the supplier range into the tenant material directory without asserting missing technical data', () => {
+    const directory = lluchCatalogueMaterialDirectoryForOrganization('org-catalogue-test')
+    const astrolide = directory.find((material) => material.name === 'ASTROLIDE PURE')
+
+    expect(directory).toHaveLength(1986)
+    expect(astrolide?.organizationId).toBe('org-catalogue-test')
+    expect(astrolide?.cas).toBe('1222-05-5')
+    expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(astrolide?.supplierCatalogueReferences?.[0]?.sourceProductId).toBe('lluch-2026-0104')
+    expect(astrolide?.costPerGram).toBe(0)
+    expect(isLluchCatalogueSourceMaterial(astrolide!)).toBe(true)
   })
 })

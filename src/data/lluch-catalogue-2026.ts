@@ -1,4 +1,4 @@
-import type { Material, MaterialOlfactiveProfile, MaterialProvenance, MaterialSupplierCatalogueReference } from './northStar.js'
+import type { Material, MaterialCatalogueSource, MaterialOlfactiveProfile, MaterialProvenance, MaterialSupplierCatalogueReference } from './northStar.js'
 import {
   lluchCatalogue2026Products,
   lluchCatalogue2026SourceHash,
@@ -35,6 +35,91 @@ const catalogueCategory: Record<LluchCatalogueProduct['category'], MaterialSuppl
   NATURAL_AROMA_CHEMICAL: 'Natural aroma chemical',
   NATURAL_PRODUCT: 'Natural product',
   ORGANIC_PRODUCT: 'Organic product',
+}
+
+function supplierReferenceForProduct(product: LluchCatalogueProduct): MaterialSupplierCatalogueReference {
+  return {
+    sourceProductId: product.id,
+    supplier: lluchCatalogue2026Source.supplier,
+    catalogue: lluchCatalogue2026Source.catalogue,
+    catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
+    category: catalogueCategory[product.category],
+    productName: product.productName,
+    productCas: product.cas ?? 'Not listed',
+    einecs: product.einecs ?? undefined,
+    fema: product.fema ?? undefined,
+    page: product.page,
+    match: 'EXACT_PRODUCT',
+  }
+}
+
+/**
+ * Produces a directory entry from the supplier's published product identity.
+ * Missing technical, cost, and compliance values intentionally use guarded
+ * placeholders and are marked SOURCE_ONLY rather than asserted as facts.
+ */
+export function lluchCatalogueMaterialForOrganization(product: LluchCatalogueProduct, organizationId: string): Material {
+  const reference = supplierReferenceForProduct(product)
+  const catalogueSource: MaterialCatalogueSource = {
+    sourceProductId: product.id,
+    supplier: reference.supplier,
+    catalogue: reference.catalogue,
+    catalogueVersion: reference.catalogueVersion,
+    category: reference.category,
+    page: reference.page,
+    status: 'SOURCE_ONLY',
+  }
+  return {
+    id: `mat-${product.id}`,
+    organizationId,
+    name: product.productName,
+    cas: product.cas ?? 'Not listed',
+    family: reference.category,
+    // The source catalogue does not classify pyramid placement. Base is only a
+    // neutral system default; the directory labels it as not evaluated.
+    tier: 'Base',
+    vaporPressure: 0,
+    density: 0,
+    mw: 0,
+    logP: 0,
+    substantivityHours: 0,
+    // A zero placeholder prevents an unreviewed source row from passing an
+    // IFRA-based approval calculation as though it had a documented limit.
+    ifraLimit: 0,
+    costPerGram: 0,
+    odor: [],
+    supplierCatalogueReferences: [reference],
+    catalogueSource,
+    provenance: [
+      {
+        field: 'Material identity',
+        source: lluchCatalogue2026Source.title,
+        version: lluchCatalogue2026Source.catalogueVersion,
+        date: lluchCatalogue2026Source.catalogueVersion,
+      },
+    ],
+  }
+}
+
+const catalogueMaterialDirectoryCache = new Map<string, Material[]>()
+
+/**
+ * The supplier catalogue is a deterministic, tenant-scoped material directory.
+ * It remains virtual until a workspace reviews or edits a source material, so
+ * routine material mutations do not write thousands of unchanged source rows.
+ */
+export function lluchCatalogueMaterialDirectoryForOrganization(organizationId: string) {
+  const cached = catalogueMaterialDirectoryCache.get(organizationId)
+  if (cached) return cached
+  const directory = lluchCatalogue2026Products.map((product) => lluchCatalogueMaterialForOrganization(product, organizationId))
+  catalogueMaterialDirectoryCache.set(organizationId, directory)
+  return directory
+}
+
+export function isLluchCatalogueSourceMaterial(material: Material) {
+  return material.catalogueSource?.supplier === lluchCatalogue2026Source.supplier
+    && material.catalogueSource.catalogueVersion === lluchCatalogue2026Source.catalogueVersion
+    && material.catalogueSource.status === 'SOURCE_ONLY'
 }
 
 const casPattern = /\b\d{2,7}-\d{2}-\d\b/g
@@ -81,6 +166,7 @@ function catalogueReferencesForMaterial(material: Material) {
     .filter((candidate): candidate is { product: LluchCatalogueProduct; match: MaterialSupplierCatalogueReference['match'] } => candidate.match !== null)
     .sort((left, right) => rank[left.match] - rank[right.match] || left.product.page - right.product.page || left.product.productName.localeCompare(right.product.productName))
     .map(({ product, match }) => ({
+      sourceProductId: product.id,
       supplier: lluchCatalogue2026Source.supplier,
       catalogue: lluchCatalogue2026Source.catalogue,
       catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
@@ -199,7 +285,8 @@ function unique(values: string[]) {
 }
 
 function sameReference(left: MaterialSupplierCatalogueReference, right: MaterialSupplierCatalogueReference) {
-  return left.supplier === right.supplier && left.catalogueVersion === right.catalogueVersion && left.productName === right.productName
+  return left.sourceProductId === right.sourceProductId
+    || (left.supplier === right.supplier && left.catalogueVersion === right.catalogueVersion && left.productName === right.productName)
 }
 
 function appendProvenance(

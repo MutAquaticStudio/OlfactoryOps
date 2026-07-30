@@ -76,6 +76,7 @@ import { TrialsWorkspace } from './features/trials/TrialsWorkspace'
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
 import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
+import { isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
 import { MotionProvider } from './ui/motion/MotionProvider'
@@ -863,33 +864,6 @@ type MaterialEvidenceReviewSource = {
   version: string
   state: MaterialEvidenceSource['state']
   extractedText: string
-}
-
-type LluchCatalogueSource = {
-  supplier: string
-  catalogue: string
-  catalogueVersion: string
-  title: string
-  pageCount: number
-  productCount: number
-  contentHash: string
-  status: 'NOT_IMPORTED' | 'IMPORTING' | 'READY' | 'FAILED'
-  updatedAt: string | null
-}
-
-type LluchCatalogueProduct = {
-  id: string
-  productName: string
-  cas: string | null
-  einecs: string | null
-  fema: string | null
-  category: 'SYNTHETIC_AROMA_CHEMICAL' | 'NATURAL_AROMA_CHEMICAL' | 'NATURAL_PRODUCT' | 'ORGANIC_PRODUCT'
-  page: number
-}
-
-type LluchCatalogueSearchResponse = {
-  source: LluchCatalogueSource
-  products: LluchCatalogueProduct[]
 }
 
 type PubChemFillResponse = MaterialMutationResponse & {
@@ -5048,6 +5022,7 @@ function MaterialWorkspace({
   const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
+  const selectedIsSourceOnly = isLluchCatalogueSourceMaterial(selected)
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
@@ -5057,10 +5032,8 @@ function MaterialWorkspace({
   const [materialEvidenceSources, setMaterialEvidenceSources] = useState<MaterialEvidenceSource[]>([])
   const [evidenceQuery, setEvidenceQuery] = useState('')
   const [evidenceBusy, setEvidenceBusy] = useState(false)
-  const [catalogueQuery, setCatalogueQuery] = useState('')
-  const [catalogueResult, setCatalogueResult] = useState<LluchCatalogueSearchResponse | null>(null)
-  const [catalogueBusy, setCatalogueBusy] = useState(false)
-  const [catalogueStatus, setCatalogueStatus] = useState('Checking supplier catalogue availability...')
+  const [materialQuery, setMaterialQuery] = useState('')
+  const [materialListLimit, setMaterialListLimit] = useState(80)
   const [evidenceReview, setEvidenceReview] = useState<MaterialEvidenceReviewSource | null>(null)
   const [evidenceReviewDraft, setEvidenceReviewDraft] = useState('')
   const [evidenceReviewBusy, setEvidenceReviewBusy] = useState(false)
@@ -5116,6 +5089,29 @@ function MaterialWorkspace({
     [importMapping, importRows],
   )
 
+  const filteredMaterialRecords = useMemo(() => {
+    const query = materialQuery.trim().toLowerCase()
+    if (!query) return materialRecords
+    return materialRecords.filter((material) => [
+      material.name,
+      material.cas,
+      material.family,
+      material.catalogueSource?.supplier,
+      material.catalogueSource?.category,
+      ...material.supplierCatalogueReferences?.flatMap((reference) => [
+        reference.productName,
+        reference.productCas,
+        reference.einecs ?? '',
+        reference.fema ?? '',
+      ]) ?? [],
+    ].some((value) => value?.toLowerCase().includes(query)))
+  }, [materialQuery, materialRecords])
+
+  const visibleMaterialRecords = useMemo(
+    () => filteredMaterialRecords.slice(0, materialListLimit),
+    [filteredMaterialRecords, materialListLimit],
+  )
+
   useEffect(() => {
     async function loadMaterials() {
       try {
@@ -5131,33 +5127,6 @@ function MaterialWorkspace({
     }
     void loadMaterials()
   }, [onMaterialsChange, onSelectMaterial, selectedMaterialId])
-
-  const searchSupplierCatalogue = useCallback(async (query: string) => {
-    setCatalogueBusy(true)
-    try {
-      const payload = await requestApi<LluchCatalogueSearchResponse>(
-        `/materials/catalogues/lluch-2026?query=${encodeURIComponent(query.trim())}`,
-      )
-      setCatalogueResult(payload)
-      if (payload.source.status === 'NOT_IMPORTED' || payload.source.status === 'IMPORTING') {
-        setCatalogueStatus('Lluch catalogue is syncing for this workspace. Refresh shortly.')
-      } else if (payload.source.status === 'FAILED') {
-        setCatalogueStatus('Lluch catalogue sync needs an administrator review.')
-      } else if (!query.trim()) {
-        setCatalogueStatus(`${payload.source.productCount.toLocaleString()} supplier products are available. Search by product name or CAS.`)
-      } else {
-        setCatalogueStatus(`${payload.products.length} supplier product${payload.products.length === 1 ? '' : 's'} found.`)
-      }
-    } catch {
-      setCatalogueStatus('Supplier catalogue is temporarily unavailable. Try again shortly.')
-    } finally {
-      setCatalogueBusy(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void searchSupplierCatalogue('')
-  }, [searchSupplierCatalogue])
 
   useEffect(() => {
     let active = true
@@ -5263,39 +5232,6 @@ function MaterialWorkspace({
         : [nextMaterial, ...materialRecords],
     )
     onSelectMaterial(nextMaterial.id)
-  }
-
-  function selectSupplierCatalogueProduct(product: LluchCatalogueProduct) {
-    setCreateName(product.productName)
-    if (product.cas && /^\d{2,7}-\d{2}-\d$/.test(product.cas)) {
-      setCreateCas(product.cas)
-    }
-    setCreateFamily(product.category.replaceAll('_', ' ').toLowerCase())
-    setMaterialStatus(`${product.productName} was copied to the new-material draft. Confirm its specification before creating it.`)
-    requestAnimationFrame(() => {
-      createNameInputRef.current?.scrollIntoView({ block: 'nearest' })
-      createNameInputRef.current?.focus()
-    })
-  }
-
-  async function importSupplierCatalogue() {
-    if (!canUpdateMaterials) return
-    setCatalogueBusy(true)
-    try {
-      const result = await requestApi<{ materials?: Material[]; catalogue: LluchCatalogueSource }>(
-        '/materials/catalogues/lluch-2026/import',
-        { method: 'POST', headers: idempotencyHeaders() },
-      )
-      if (result.materials) {
-        onMaterialsChange(result.materials)
-      }
-      setMaterialStatus(`Lluch catalogue synced: ${result.catalogue.productCount.toLocaleString()} supplier products are available for this workspace.`)
-      await searchSupplierCatalogue(catalogueQuery)
-    } catch (error) {
-      setMaterialStatus(error instanceof Error ? error.message : 'Supplier catalogue sync failed. Try again shortly.')
-    } finally {
-      setCatalogueBusy(false)
-    }
   }
 
   async function refreshMaterialEvidence(query?: string) {
@@ -5755,55 +5691,29 @@ function MaterialWorkspace({
           ) : null}
         </section>
         <p className="muted-copy" role="status">{materialStatus}</p>
-        <section className="supplier-catalogue-search" aria-labelledby="supplier-catalogue-heading">
-          <div className="supplier-catalogue-heading">
-            <div>
-              <span className="eyebrow">Supplier catalogue</span>
-              <h3 id="supplier-catalogue-heading">Lluch Essence</h3>
-            </div>
-            <DataTag label="Products" value={(catalogueResult?.source.productCount ?? 1986).toLocaleString()} tone="blue" />
-          </div>
-          <p className="muted-copy" role="status">{catalogueStatus}</p>
-          <div className="supplier-catalogue-actions">
+        <section className="material-directory-controls" aria-label="Material directory controls">
+          <label className="field-row wide-field">
+            <span>Search materials</span>
             <input
-              aria-label="Search Lluch supplier catalogue"
-              placeholder="Search product name or CAS"
-              value={catalogueQuery}
-              onChange={(event) => setCatalogueQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void searchSupplierCatalogue(catalogueQuery)
-                }
+              aria-label="Search materials by name, CAS, EINECS, FEMA, or source"
+              placeholder="Name, CAS, EINECS, FEMA, or source"
+              value={materialQuery}
+              onChange={(event) => {
+                setMaterialQuery(event.target.value)
+                setMaterialListLimit(80)
               }}
             />
-            <button className="secondary-button small" type="button" disabled={catalogueBusy} onClick={() => void searchSupplierCatalogue(catalogueQuery)}>
-              {catalogueBusy ? 'Searching' : 'Search'}
-            </button>
-            {canUpdateMaterials ? (
-              <button className="ghost-button small" type="button" disabled={catalogueBusy} onClick={() => void importSupplierCatalogue()}>
-                Sync catalogue
-              </button>
-            ) : null}
+          </label>
+          <div className="tag-row">
+            <DataTag label="Materials" value={materialRecords.length.toLocaleString()} tone="blue" />
+            <DataTag label="Showing" value={`${visibleMaterialRecords.length} / ${filteredMaterialRecords.length.toLocaleString()}`} />
           </div>
-          {catalogueResult?.products.length ? (
-            <div className="supplier-catalogue-results" aria-live="polite">
-              {catalogueResult.products.map((product) => (
-                <button key={product.id} className="supplier-catalogue-row" type="button" onClick={() => selectSupplierCatalogueProduct(product)}>
-                  <span>
-                    <strong>{product.productName}</strong>
-                    <small>{product.category.replaceAll('_', ' ').toLowerCase()} / catalogue p. {product.page}</small>
-                  </span>
-                  <DataTag label="CAS" value={product.cas ?? 'Not listed'} />
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <p className="helper-copy">Selecting a result only prepares a material draft. Supplier approvals, specifications, compliance, lots, and stock stay unchanged.</p>
+          <p className="helper-copy">The Lluch supplier range is included in this directory. Source-only entries need technical and compliance review before they can pass formula approval or enter stock operations.</p>
         </section>
         <div className="material-list">
-          {materialRecords.map((material) => {
+          {visibleMaterialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)
+            const sourceOnly = isLluchCatalogueSourceMaterial(material)
             return (
               <button
                 key={material.id}
@@ -5813,35 +5723,53 @@ function MaterialWorkspace({
               >
                 <div>
                   <strong>{material.name}</strong>
-                  <span>{material.family}</span>
+                  <span>{sourceOnly ? `${material.catalogueSource?.supplier} / ${material.catalogueSource?.category}` : material.family}</span>
                 </div>
-                <DataTag label={material.tier} value={material.cas} tone="blue" />
+                <DataTag label={sourceOnly ? 'Review' : material.tier} value={sourceOnly ? 'Source only' : material.cas} tone={sourceOnly ? 'amber' : 'blue'} />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
             )
           })}
         </div>
+        {filteredMaterialRecords.length > visibleMaterialRecords.length ? (
+          <button className="ghost-button small material-list-more" type="button" onClick={() => setMaterialListLimit((current) => current + 80)}>
+            Show 80 more materials
+          </button>
+        ) : null}
       </Panel>
 
       <Panel className="material-inspector-panel" title="Details" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
         <div className="tag-row">
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
-          <DataTag label="Molecules" value={String(moleculeRows.length)} />
+          {selectedIsSourceOnly ? <DataTag label="Status" value="Needs review" tone="amber" /> : <DataTag label="Molecules" value={String(moleculeRows.length)} />}
         </div>
-        <div className="inspector-grid">
-          <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
-          <Metric label="Density" value={`${selected.density} g/ml`} />
-          <Metric label="MW" value={String(selected.mw)} />
-          <Metric label="LogP" value={String(selected.logP)} />
-          <Metric label="IFRA ref" value={`${selected.ifraLimit}%`} />
-          <Metric label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} />
-        </div>
-        <div className="odor-row">
-          {selected.odor.map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
+        {selectedIsSourceOnly ? (
+          <section className="material-source-notice" aria-label="Supplier source status">
+            <strong>Supplier source material</strong>
+            <p>Identity data came from the Lluch catalogue. Add approved technical, cost, IFRA, and compliance evidence before using it in an approved formula, procurement, or inventory workflow.</p>
+            <div className="tag-row">
+              <DataTag label="Category" value={selected.catalogueSource?.category ?? selected.family} tone="blue" />
+              <DataTag label="Catalogue page" value={`p. ${selected.catalogueSource?.page ?? 'n/a'}`} />
+            </div>
+          </section>
+        ) : (
+          <>
+            <div className="inspector-grid">
+              <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
+              <Metric label="Density" value={`${selected.density} g/ml`} />
+              <Metric label="MW" value={String(selected.mw)} />
+              <Metric label="LogP" value={String(selected.logP)} />
+              <Metric label="IFRA ref" value={`${selected.ifraLimit}%`} />
+              <Metric label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} />
+            </div>
+            <div className="odor-row">
+              {selected.odor.map((tag) => (
+                <span key={tag}>{tag}</span>
+              ))}
+            </div>
+          </>
+        )}
         {selected.olfactiveProfile ? (
           <section className="olfactive-profile" aria-label="Olfactive profile">
             <div className="section-heading compact-heading">

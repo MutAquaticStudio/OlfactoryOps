@@ -77,6 +77,11 @@ export interface Material {
   olfactiveProfile?: MaterialOlfactiveProfile
   /** Supplier catalogue references are traceable sourcing metadata, not an approved supplier designation. */
   supplierCatalogueReferences?: MaterialSupplierCatalogueReference[]
+  /**
+   * A source-only material is discoverable in the material directory, but its
+   * technical and commercial fields still require a controlled review.
+   */
+  catalogueSource?: MaterialCatalogueSource
   provenance: MaterialProvenance[]
 }
 
@@ -97,6 +102,7 @@ export interface MaterialOlfactiveProfile {
 }
 
 export interface MaterialSupplierCatalogueReference {
+  sourceProductId?: string
   supplier: string
   catalogue: string
   catalogueVersion: string
@@ -108,6 +114,16 @@ export interface MaterialSupplierCatalogueReference {
   page: number
   match: 'EXACT_PRODUCT' | 'CAS_EQUIVALENT' | 'RELATED_VARIANT'
   note?: string
+}
+
+export interface MaterialCatalogueSource {
+  sourceProductId: string
+  supplier: string
+  catalogue: string
+  catalogueVersion: string
+  category: MaterialSupplierCatalogueReference['category']
+  page: number
+  status: 'SOURCE_ONLY' | 'REVIEW_REQUIRED'
 }
 
 export interface MaterialProvenance {
@@ -4422,7 +4438,9 @@ export function evaluateFormulaIfra(
       const usageOfLimit = limitPercent > 0 ? (finalProductPercent / limitPercent) * 100 : 0
       const marginPercent = limitPercent - finalProductPercent
       const status: FormulaIfraRow['status'] =
-        limitPercent <= 0
+        material.catalogueSource?.status === 'SOURCE_ONLY'
+          ? 'BLOCKER'
+          : limitPercent <= 0
           ? 'NO_LIMIT'
           : marginPercent < -0.0001
             ? 'BLOCKER'
@@ -5152,7 +5170,9 @@ export function isLotEligibleForInventory(lot: InventoryLot, asOfDate = inventor
 }
 
 export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
-  return materialCatalog.map((material) => {
+  return materialCatalog
+    .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY' || lots.some((lot) => lot.materialId === material.id))
+    .map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)
     const reserved = materialLots.reduce((sum, lot) => sum + lot.reservedGrams, 0)
@@ -5160,7 +5180,7 @@ export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] =
       .filter((lot) => isLotEligibleForInventory(lot))
       .reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
     return { material, current, reserved, available }
-  })
+    })
 }
 
 export function planLabUsage(leaves: ResolvedLeaf[], lots: InventoryLot[], batchGrams: number, formulaTargetGrams: number): LabUsagePlan {

@@ -7,7 +7,12 @@ import {
 } from '../shared/http-error.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { internalPhases } from '../data/internal-phases.js'
-import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source, searchLluchCatalogue2026 } from '../../../src/data/lluch-catalogue-2026.js'
+import {
+  enrichMaterialFromLluchCatalogue,
+  lluchCatalogue2026Source,
+  lluchCatalogueMaterialDirectoryForOrganization,
+  searchLluchCatalogue2026,
+} from '../../../src/data/lluch-catalogue-2026.js'
 import {
   auditEvents,
   auditExportJobs,
@@ -1602,7 +1607,10 @@ export class NorthStarService {
     this.requirePermission(session.role, 'materials.update')
     const material = this.materialForSession(id, session)
     const updated = this.mergeMaterial(material, body, body.source?.trim() || 'Manual material update', body.version?.trim() || 'v1')
-    this.materialRecords = this.materialRecords.map((item) => (item.id === id ? updated : item))
+    const exists = this.materialRecords.some((item) => item.id === id)
+    this.materialRecords = exists
+      ? this.materialRecords.map((item) => (item.id === id ? updated : item))
+      : [updated, ...this.materialRecords]
     const audit = this.recordAudit('material.update', id, session.userId, 'allowed')
     return { data: { material: updated, audit, invariant: 'material edits preserve field provenance' } }
   }
@@ -11687,6 +11695,9 @@ export class NorthStarService {
       .map((field) => ({ field: String(field), source, version, date }))
     return {
       ...next,
+      catalogueSource: material.catalogueSource?.status === 'SOURCE_ONLY'
+        ? { ...material.catalogueSource, status: 'REVIEW_REQUIRED' }
+        : material.catalogueSource,
       provenance: [...provenance, ...material.provenance],
     }
   }
@@ -12036,7 +12047,13 @@ export class NorthStarService {
   }
 
   private materialCatalogForSession(session: AuthSession) {
-    return this.materialRecords.filter((material) => !material.organizationId || material.organizationId === session.organizationId)
+    const workspaceMaterials = this.materialRecords.filter(
+      (material) => !material.organizationId || material.organizationId === session.organizationId,
+    )
+    const persistedIds = new Set(workspaceMaterials.map((material) => material.id))
+    const catalogueDirectory = lluchCatalogueMaterialDirectoryForOrganization(session.organizationId)
+      .filter((material) => !persistedIds.has(material.id))
+    return [...workspaceMaterials, ...catalogueDirectory]
   }
 
   private materialForSession(id: string, session: AuthSession) {

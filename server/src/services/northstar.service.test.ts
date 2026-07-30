@@ -2,7 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
-import type { Material } from '../../../src/data/northStar'
+import { materials, type Material } from '../../../src/data/northStar'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
 const adminEmail = 'admin@labofscents.org'
@@ -1382,8 +1382,8 @@ describe('NorthStarService', () => {
     const service = createAuthenticatedService()
     const beforeStockRows = service.inventorySummary().data.length
     const result = service.createMaterial({
-      name: 'Vetiveryl Acetate',
-      cas: '68917-34-0',
+      name: 'Test-only Vetiver Material',
+      cas: '9999999-99-9',
       family: 'Woody vetiver',
       tier: 'Base',
       density: 0.99,
@@ -1392,14 +1392,14 @@ describe('NorthStarService', () => {
       logP: 4.8,
       source: 'Manual supplier onboarding',
     }).data
-    const dedupe = service.materialDedupe('68917-34-0').data
+    const dedupe = service.materialDedupe('9999999-99-9').data
 
-    expect(result.material.id).toBe('mat-vetiveryl-acetate')
+    expect(result.material.id).toBe('mat-test-only-vetiver-material')
     expect(result.audit.action).toBe('material.create')
     expect(result.invariant).toContain('does not create stock')
     expect(dedupe.duplicate).toBe(true)
     expect(service.inventorySummary().data.length).toBe(beforeStockRows + 1)
-    expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '68917-34-0' })).toThrow(
+    expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '9999999-99-9' })).toThrow(
       UnprocessableEntityException,
     )
   })
@@ -1449,6 +1449,33 @@ describe('NorthStarService', () => {
     expect(result.source.status).toBe('READY')
     expect(result.source.productCount).toBe(1986)
     expect(result.products.some((product) => product.productName.includes('BERGAMOT'))).toBe(true)
+  })
+
+  it('includes Lluch products in the material directory while keeping unreviewed source rows out of inventory', () => {
+    const service = createAuthenticatedService()
+    const directory = service.materials().data
+    const astrolide = directory.find((material) => material.name === 'ASTROLIDE PURE')
+    const inventory = service.inventorySummary().data
+
+    expect(directory).toHaveLength(1986 + materials.length)
+    expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(astrolide?.supplierCatalogueReferences?.[0]?.supplier).toBe('Lluch Essence')
+    expect(inventory.some((summary) => summary.material.id === astrolide?.id)).toBe(false)
+  })
+
+  it('persists a reviewed workspace edit for a Lluch source material without creating stock', () => {
+    const service = createAuthenticatedService()
+    const beforeInventoryRows = service.inventorySummary().data.length
+    const updated = service.updateMaterial('mat-lluch-2026-0104', {
+      family: 'Musk',
+      odor: ['musk', 'clean'],
+      source: 'Material technical review',
+      version: 'review-1',
+    }).data.material
+
+    expect(updated.catalogueSource?.status).toBe('REVIEW_REQUIRED')
+    expect(service.material('mat-lluch-2026-0104').data.family).toBe('Musk')
+    expect(service.inventorySummary().data.length).toBe(beforeInventoryRows + 1)
   })
 
   it('allows Manager role to update material metadata', () => {

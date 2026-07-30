@@ -65,9 +65,9 @@ flowchart LR
 ### Nhập supplier catalogue
 
 - Lluch Essence Product List 2026 đã được nhập gồm 1.986 supplier product thuộc bốn nhóm: synthetic aroma chemical, natural aroma chemical, natural product và organic product. PDF nguồn có version <code>2026-07-16</code>, SHA-256 <code>ff6642fcec15f3505470710eca8452fd70d296f9a94a68f074dfe6f9201014a4</code>.
-- Migration <code>0035_lluch_supplier_catalogue.sql</code> lưu import status và product row theo tenant trong D1. Worker scheduler nhập idempotent cho từng workspace; người có quyền Materials có thể chọn **Sync catalogue** trong Materials để đồng bộ ngay.
-- Catalogue nằm ngay trong Material drawer, không tạo module riêng. Có thể tìm theo product name hoặc CAS; chọn một kết quả chỉ prefill new-material draft, không tự tạo material.
-- Catalogue là supplier sourcing evidence, không phải specification hoặc regulatory source. Nó không tự cung cấp odor strength, diffusion, tenacity, volatility, IFRA, cost hoặc compliance decision. Olfactive profile curated vẫn có version và provenance riêng trong Material.
+- Migration <code>0035_lluch_supplier_catalogue.sql</code> lưu import status và product row theo tenant trong D1. Worker scheduler nhập idempotent cho từng workspace để phục vụ evidence, truy xuất và traceability.
+- Toàn bộ 1.986 sản phẩm Lluch hiện xuất hiện trực tiếp trong **Materials**, không có catalogue workspace riêng. Có thể tìm bằng product name, CAS, EINECS, FEMA hoặc supplier; hàng catalogue có nhãn **Needs review** và liên kết về supplier/category/page.
+- Hàng Lluch source-only có thể được khám phá và chọn để bổ sung dữ liệu, nhưng không xuất hiện trong Inventory khi chưa có lot. Các trường thiếu từ PDF như odor profile, strength, diffusion, tenacity, volatility, IFRA, cost và compliance được hiển thị là cần review; chúng không được ngầm coi là dữ liệu kỹ thuật, compliance hay thương mại đã xác thực.
 
 ### Authentication và authorization
 

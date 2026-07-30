@@ -40,6 +40,8 @@ describe('AgentLocalRuntimeService', () => {
     const created = await runtime.create(service, session, { brief: 'Marine woody fine fragrance with citrus and amber.' })
     expect(created.data.run.status).toBe('WAITING_FOR_CONFIRMATION')
     expect(created.data.artifacts.map((artifact) => artifact.type)).toContain('formula_table')
+    const proposal = created.data.confirmation?.proposal
+    expect(proposal?.ingredients.some((ingredient) => ingredient.materialId.startsWith('mat-lluch-2026-'))).toBe(false)
     const confirmation = created.data.confirmation
     expect(confirmation?.status).toBe('PENDING')
     const confirmed = await runtime.resolveConfirmation(service, session, created.data.run.id, confirmation!.id, 'accept')
