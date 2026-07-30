@@ -62,6 +62,13 @@ flowchart LR
 - Private SDS/CoA payloads use the `DOCUMENTS` Workers KV binding during beta. D1 stores document metadata, scan/review status, ownership, versioning, and access evidence. Signed download URLs are not used as a RAG source.
 - Material Evidence RAG stores only vector references, bounded excerpts, content hashes, review state, and jobs in D1. Workers AI generates embeddings and Vectorize stores tenant-namespaced vectors. D1 rechecks tenant scope, approval, version, checksum, and permissions after each Vectorize result.
 
+### Supplier Catalogue Import
+
+- The checked-in Lluch Essence Product List 2026 source contains 1,986 supplier product records across synthetic, natural aroma chemical, natural product, and organic product categories. Its source PDF is versioned as `2026-07-16` with SHA-256 `ff6642fcec15f3505470710eca8452fd70d296f9a94a68f074dfe6f9201014a4`.
+- Migration `0035_lluch_supplier_catalogue.sql` stores a tenant-scoped import status and product rows in D1. The Worker scheduler imports each active workspace idempotently; an authorized Materials user can also select **Sync catalogue** in Materials to import their workspace immediately.
+- The Materials drawer keeps the catalogue in context rather than creating another module. Search by product name or CAS, then select a result to prefill a new-material draft. It never creates a material, supplier approval, lot, purchase offer, or compliance conclusion automatically.
+- The catalogue is supplier sourcing evidence, not a specification or regulatory source. It does not supply odor strength, diffusion, tenacity, volatility, IFRA, cost, or compliance decisions. Curated olfactive profiles remain separately versioned and traced in Material provenance.
+
 ### Authentication And Authorization
 
 1. A user signs up or signs in through `/api/v1/auth/*`.
@@ -255,6 +262,7 @@ The full production checklist, security requirements, custom domain guidance, an
 - `0027_operational_p1_enterprise.sql` adds tenant-scoped material compliance, approved supplier offers, quarantined receipt/inspection/RMA records, immutable landed-cost allocations, structured QC specifications/results, yield reconciliation, and operation idempotency records. Apply it before a Worker that exposes the Operational P1 routes.
 - `0028_auth_session_credentials.sql` replaces legacy session-ID credentials with opaque, one-way-hashed Worker credentials and revokes pre-migration sessions. Users must sign in again after it is applied.
 - `0033_material_evidence_rag.sql` adds tenant-scoped reviewed evidence sources, bounded citation chunks, and lease-fenced indexing jobs. Before deploying it, create separate 768-dimension cosine Vectorize indexes for test and production, add the `AI` and `RAG_INDEX` bindings from the matching Wrangler configuration, and create metadata indexes for `organizationId`, `status`, `materialId`, `documentId`, `sourceKind`, and `indexVersion`.
+- `0035_lluch_supplier_catalogue.sql` imports the 1,986-row Lluch Essence Product List into tenant-scoped D1 supplier-catalogue tables. Apply it before deploying the Worker; the first scheduled run or an authorized **Sync catalogue** request performs the idempotent per-workspace import.
 - A production batch can create a finished-good lot only after approved formula input, raw-material consumption, QC pass, and release. Formula SKUs reserve released finished-good lots using FEFO and write COGS only when fulfilled.
 - `GET /api/v1/audit/chain/verify` and `GET /api/v1/audit/chain/evidence` are Owner/Admin-only evidence endpoints. They never return provider secrets.
 - Beta integrations are honest by default: integration readiness returns `Not configured` until its Worker secret and any DNS/HTTPS dependency are active. `managed_beta` continues to reject all Stripe customer-payment mutations server-side.

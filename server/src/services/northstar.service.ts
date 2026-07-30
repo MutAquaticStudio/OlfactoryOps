@@ -7,7 +7,7 @@ import {
 } from '../shared/http-error.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
 import { internalPhases } from '../data/internal-phases.js'
-import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source } from '../../../src/data/lluch-catalogue-2026.js'
+import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source, searchLluchCatalogue2026 } from '../../../src/data/lluch-catalogue-2026.js'
 import {
   auditEvents,
   auditExportJobs,
@@ -1632,6 +1632,17 @@ export class NorthStarService {
         source: lluchCatalogue2026Source,
         audit,
         invariant: 'Catalogue enrichment is tenant-scoped, idempotent, and does not alter CAS, cost, IFRA, compliance, lots, or inventory movements',
+      },
+    }
+  }
+
+  lluchCatalogue(query: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    return {
+      data: {
+        source: { ...lluchCatalogue2026Source, status: 'READY', updatedAt: null },
+        products: searchLluchCatalogue2026(query),
       },
     }
   }

@@ -865,6 +865,33 @@ type MaterialEvidenceReviewSource = {
   extractedText: string
 }
 
+type LluchCatalogueSource = {
+  supplier: string
+  catalogue: string
+  catalogueVersion: string
+  title: string
+  pageCount: number
+  productCount: number
+  contentHash: string
+  status: 'NOT_IMPORTED' | 'IMPORTING' | 'READY' | 'FAILED'
+  updatedAt: string | null
+}
+
+type LluchCatalogueProduct = {
+  id: string
+  productName: string
+  cas: string | null
+  einecs: string | null
+  fema: string | null
+  category: 'SYNTHETIC_AROMA_CHEMICAL' | 'NATURAL_AROMA_CHEMICAL' | 'NATURAL_PRODUCT' | 'ORGANIC_PRODUCT'
+  page: number
+}
+
+type LluchCatalogueSearchResponse = {
+  source: LluchCatalogueSource
+  products: LluchCatalogueProduct[]
+}
+
 type PubChemFillResponse = MaterialMutationResponse & {
   molecules: MoleculeComponent[]
 }
@@ -5030,6 +5057,10 @@ function MaterialWorkspace({
   const [materialEvidenceSources, setMaterialEvidenceSources] = useState<MaterialEvidenceSource[]>([])
   const [evidenceQuery, setEvidenceQuery] = useState('')
   const [evidenceBusy, setEvidenceBusy] = useState(false)
+  const [catalogueQuery, setCatalogueQuery] = useState('')
+  const [catalogueResult, setCatalogueResult] = useState<LluchCatalogueSearchResponse | null>(null)
+  const [catalogueBusy, setCatalogueBusy] = useState(false)
+  const [catalogueStatus, setCatalogueStatus] = useState('Checking supplier catalogue availability...')
   const [evidenceReview, setEvidenceReview] = useState<MaterialEvidenceReviewSource | null>(null)
   const [evidenceReviewDraft, setEvidenceReviewDraft] = useState('')
   const [evidenceReviewBusy, setEvidenceReviewBusy] = useState(false)
@@ -5099,6 +5130,33 @@ function MaterialWorkspace({
     }
     void loadMaterials()
   }, [onMaterialsChange, onSelectMaterial, selectedMaterialId])
+
+  const searchSupplierCatalogue = useCallback(async (query: string) => {
+    setCatalogueBusy(true)
+    try {
+      const payload = await requestApi<LluchCatalogueSearchResponse>(
+        `/materials/catalogues/lluch-2026?query=${encodeURIComponent(query.trim())}`,
+      )
+      setCatalogueResult(payload)
+      if (payload.source.status === 'NOT_IMPORTED' || payload.source.status === 'IMPORTING') {
+        setCatalogueStatus('Lluch catalogue is syncing for this workspace. Refresh shortly.')
+      } else if (payload.source.status === 'FAILED') {
+        setCatalogueStatus('Lluch catalogue sync needs an administrator review.')
+      } else if (!query.trim()) {
+        setCatalogueStatus(`${payload.source.productCount.toLocaleString()} supplier products are available. Search by product name or CAS.`)
+      } else {
+        setCatalogueStatus(`${payload.products.length} supplier product${payload.products.length === 1 ? '' : 's'} found.`)
+      }
+    } catch {
+      setCatalogueStatus('Supplier catalogue is temporarily unavailable. Try again shortly.')
+    } finally {
+      setCatalogueBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void searchSupplierCatalogue('')
+  }, [searchSupplierCatalogue])
 
   useEffect(() => {
     let active = true
@@ -5204,6 +5262,35 @@ function MaterialWorkspace({
         : [nextMaterial, ...materialRecords],
     )
     onSelectMaterial(nextMaterial.id)
+  }
+
+  function selectSupplierCatalogueProduct(product: LluchCatalogueProduct) {
+    setCreateName(product.productName)
+    if (product.cas && /^\d{2,7}-\d{2}-\d$/.test(product.cas)) {
+      setCreateCas(product.cas)
+    }
+    setCreateFamily(product.category.replaceAll('_', ' ').toLowerCase())
+    setMaterialStatus(`${product.productName} was copied to the new-material draft. Confirm its specification before creating it.`)
+  }
+
+  async function importSupplierCatalogue() {
+    if (!canUpdateMaterials) return
+    setCatalogueBusy(true)
+    try {
+      const result = await requestApi<{ materials?: Material[]; catalogue: LluchCatalogueSource }>(
+        '/materials/catalogues/lluch-2026/import',
+        { method: 'POST', headers: idempotencyHeaders() },
+      )
+      if (result.materials) {
+        onMaterialsChange(result.materials)
+      }
+      setMaterialStatus(`Lluch catalogue synced: ${result.catalogue.productCount.toLocaleString()} supplier products are available for this workspace.`)
+      await searchSupplierCatalogue(catalogueQuery)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Supplier catalogue sync failed. Try again shortly.')
+    } finally {
+      setCatalogueBusy(false)
+    }
   }
 
   async function refreshMaterialEvidence(query?: string) {
@@ -5663,6 +5750,52 @@ function MaterialWorkspace({
           ) : null}
         </section>
         <p className="muted-copy" role="status">{materialStatus}</p>
+        <section className="supplier-catalogue-search" aria-labelledby="supplier-catalogue-heading">
+          <div className="supplier-catalogue-heading">
+            <div>
+              <span className="eyebrow">Supplier catalogue</span>
+              <h3 id="supplier-catalogue-heading">Lluch Essence</h3>
+            </div>
+            <DataTag label="Products" value={(catalogueResult?.source.productCount ?? 1986).toLocaleString()} tone="blue" />
+          </div>
+          <p className="muted-copy" role="status">{catalogueStatus}</p>
+          <div className="supplier-catalogue-actions">
+            <input
+              aria-label="Search Lluch supplier catalogue"
+              placeholder="Search product name or CAS"
+              value={catalogueQuery}
+              onChange={(event) => setCatalogueQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void searchSupplierCatalogue(catalogueQuery)
+                }
+              }}
+            />
+            <button className="secondary-button small" type="button" disabled={catalogueBusy} onClick={() => void searchSupplierCatalogue(catalogueQuery)}>
+              {catalogueBusy ? 'Searching' : 'Search'}
+            </button>
+            {canUpdateMaterials ? (
+              <button className="ghost-button small" type="button" disabled={catalogueBusy} onClick={() => void importSupplierCatalogue()}>
+                Sync catalogue
+              </button>
+            ) : null}
+          </div>
+          {catalogueResult?.products.length ? (
+            <div className="supplier-catalogue-results" aria-live="polite">
+              {catalogueResult.products.map((product) => (
+                <button key={product.id} className="supplier-catalogue-row" type="button" onClick={() => selectSupplierCatalogueProduct(product)}>
+                  <span>
+                    <strong>{product.productName}</strong>
+                    <small>{product.category.replaceAll('_', ' ').toLowerCase()} / catalogue p. {product.page}</small>
+                  </span>
+                  <DataTag label="CAS" value={product.cas ?? 'Not listed'} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <p className="helper-copy">Selecting a result only prepares a material draft. Supplier approvals, specifications, compliance, lots, and stock stay unchanged.</p>
+        </section>
         <div className="material-list">
           {materialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)

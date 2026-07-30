@@ -24,6 +24,12 @@ import {
 } from './formula-intelligence.js'
 import { MaterialEvidenceRag, type RagAiBinding, type RagVectorIndex } from './material-evidence-rag.js'
 import {
+  importLluchCatalogueForAllOrganizations,
+  importLluchCatalogueForOrganization,
+  organizationsMissingLluchCatalogueImportAudit,
+  searchLluchCatalogue,
+} from './lluch-catalogue-store.js'
+import {
   ConflictException,
   PayloadTooLargeException,
   ForbiddenException,
@@ -586,7 +592,9 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
-  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/enrich', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service }) => service.enrichMaterialsFromLluchCatalogue() },
+  { method: 'GET', pattern: '/materials/catalogues/lluch-2026', persistState: false, handler: (context) => listLluchCatalogue(context) },
+  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/import', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: (context) => importLluchCatalogue(context) },
+  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/enrich', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: (context) => importLluchCatalogue(context) },
   { method: 'GET', pattern: '/materials/:id/evidence', persistState: false, handler: (context) => getMaterialEvidence(context) },
   { method: 'GET', pattern: '/materials/:id/evidence/sources', persistState: false, handler: (context) => getMaterialEvidenceSources(context) },
   { method: 'POST', pattern: '/materials/:id/evidence/index', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => indexMaterialEvidence(context) },
@@ -1512,6 +1520,36 @@ function applyScheduledMaterialCatalogueBackfill(service: NorthStarService) {
   return true
 }
 
+function catalogueActor(service: NorthStarService, requiredPermission: 'materials.view' | 'materials.update') {
+  const me = service.me().data
+  if (!me.permissions.includes(requiredPermission)) {
+    throw new ForbiddenException(`Lluch catalogue requires ${requiredPermission}`)
+  }
+  return actorFromService(service)
+}
+
+async function listLluchCatalogue(context: RouteContext) {
+  const actor = catalogueActor(context.service, 'materials.view')
+  const result = await searchLluchCatalogue(context.env.DB, actor.organizationId, context.query.get('query'))
+  return { data: result }
+}
+
+async function importLluchCatalogue(context: RouteContext) {
+  const actor = catalogueActor(context.service, 'materials.update')
+  const catalogue = await importLluchCatalogueForOrganization(context.env.DB, actor.organizationId)
+  if (catalogue.imported) {
+    appendSystemCatalogueImportAudit(context.service as unknown as ServiceState, [actor.organizationId])
+  }
+  const enrichment = context.service.enrichMaterialsFromLluchCatalogue().data
+  return {
+    data: {
+      ...enrichment,
+      catalogue,
+      invariant: 'Catalogue import stores tenant-scoped supplier source data and only enriches matching material references; it never creates materials, inventory, procurement approvals, or compliance decisions.',
+    },
+  }
+}
+
 function appendSystemCatalogueBackfillAudit(serviceState: ServiceState, organizationIds: string[]) {
   const at = new Date().toISOString()
   const events: AuditEvent[] = organizationIds.sort().map((organizationId) => {
@@ -1542,11 +1580,21 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
       billingMode: billingModeFromEnv(env),
     })
     await hydrateSnapshots(env.DB, service, env)
+    const catalogueImports = await importLluchCatalogueForAllOrganizations(env.DB, async (catalogueImport) => {
+      const events = appendSystemCatalogueImportAudit(service as unknown as ServiceState, [catalogueImport.organizationId])
+      await persistAuditEvents(env.DB, events, new Date().toISOString(), service as unknown as ServiceState)
+    })
+    const importedOrganizations = catalogueImports.filter((result) => result.imported).map((result) => result.organizationId)
+    const missingImportAuditOrganizations = await organizationsMissingLluchCatalogueImportAudit(env.DB)
+    if (missingImportAuditOrganizations.length > 0) {
+      const events = appendSystemCatalogueImportAudit(service as unknown as ServiceState, missingImportAuditOrganizations)
+      await persistAuditEvents(env.DB, events, new Date().toISOString(), service as unknown as ServiceState)
+    }
     const materialCatalogueChanged = applyScheduledMaterialCatalogueBackfill(service)
     const scheduledAt = new Date(controller.scheduledTime).toISOString()
     const result = service.runDueAnalyticsReports(scheduledAt)
     const emailDelivery = await deliverNotificationOutbox(service, env)
-    if (materialCatalogueChanged || result.data.reports.length > 0 || emailDelivery.changed) {
+    if (importedOrganizations.length > 0 || materialCatalogueChanged || result.data.reports.length > 0 || emailDelivery.changed) {
       await persistSnapshots(env.DB, service)
       refreshCachedSnapshotState(service)
     }
@@ -1565,6 +1613,27 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
     ])
     throw error
   }
+}
+
+function appendSystemCatalogueImportAudit(serviceState: ServiceState, organizationIds: string[]) {
+  const at = new Date().toISOString()
+  const events: AuditEvent[] = organizationIds.sort().map((organizationId) => {
+    const counter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
+    serviceState.auditCounter = counter
+    return {
+      id: `AUD-CAT-${counter}`,
+      at,
+      actor: 'system:catalogue-import',
+      action: 'material.catalogue.import',
+      entity: `lluch:${lluchCatalogue2026Source.catalogueVersion}`,
+      requestId: `system_lluch_import_${organizationId}_${lluchCatalogue2026Source.catalogueVersion}`,
+      outcome: 'allowed',
+      organizationId,
+      scope: 'tenant',
+    }
+  })
+  serviceState.auditEvents = [...events, ...serviceState.auditEvents]
+  return events
 }
 
 function billingModeFromEnv(env: Env) {

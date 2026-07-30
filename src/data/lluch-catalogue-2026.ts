@@ -1,4 +1,9 @@
 import type { Material, MaterialOlfactiveProfile, MaterialProvenance, MaterialSupplierCatalogueReference } from './northStar.js'
+import {
+  lluchCatalogue2026Products,
+  lluchCatalogue2026SourceHash,
+  type LluchCatalogueProductSeed,
+} from './lluch-catalogue-2026-products.js'
 
 export const lluchCatalogue2026Source = {
   supplier: 'Lluch Essence',
@@ -6,78 +11,89 @@ export const lluchCatalogue2026Source = {
   catalogueVersion: '2026-07-16',
   title: 'Lluch Essence Product List 2026',
   pageCount: 55,
+  productCount: lluchCatalogue2026Products.length,
+  contentHash: lluchCatalogue2026SourceHash,
 } as const
 
-type CatalogueDefinition = {
-  matches: (material: Material) => boolean
-  references: MaterialSupplierCatalogueReference[]
+export type LluchCatalogueProduct = LluchCatalogueProductSeed
+
+export function searchLluchCatalogue2026(query: string, limit = 24) {
+  const normalizedQuery = normalizeName(query)
+  if (normalizedQuery.length < 2) return [] as LluchCatalogueProduct[]
+  return lluchCatalogue2026Products
+    .filter((product) => normalizeName(product.productName).includes(normalizedQuery) || product.cas?.includes(query.trim()))
+    .sort((left, right) => {
+      const leftExact = normalizeName(left.productName) === normalizedQuery ? 0 : 1
+      const rightExact = normalizeName(right.productName) === normalizedQuery ? 0 : 1
+      return leftExact - rightExact || left.productName.localeCompare(right.productName)
+    })
+    .slice(0, Math.max(1, Math.min(limit, 48)))
 }
 
-const catalogueDefinitions: CatalogueDefinition[] = [
-  {
-    matches: (material) => material.cas === '24851-98-7',
-    references: [{
+const catalogueCategory: Record<LluchCatalogueProduct['category'], MaterialSupplierCatalogueReference['category']> = {
+  SYNTHETIC_AROMA_CHEMICAL: 'Synthetic aroma chemical',
+  NATURAL_AROMA_CHEMICAL: 'Natural aroma chemical',
+  NATURAL_PRODUCT: 'Natural product',
+  ORGANIC_PRODUCT: 'Organic product',
+}
+
+const casPattern = /\b\d{2,7}-\d{2}-\d\b/g
+
+function normalizeName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function casTokens(value: string | null | undefined) {
+  return new Set((value?.match(casPattern) ?? []).map((candidate) => candidate.trim()))
+}
+
+function relatedSupplierGrade(material: Material, product: LluchCatalogueProduct) {
+  const materialName = normalizeName(material.name)
+  const productName = normalizeName(product.productName)
+  if (materialName === 'bergamot fcf') return productName.includes('bergamot furoc free')
+  return productName.includes(materialName) || materialName.includes(productName)
+}
+
+function referenceMatch(material: Material, product: LluchCatalogueProduct): MaterialSupplierCatalogueReference['match'] | null {
+  const materialName = normalizeName(material.name)
+  const productName = normalizeName(product.productName)
+  if (materialName === productName) return 'EXACT_PRODUCT'
+  if (relatedSupplierGrade(material, product)) return 'RELATED_VARIANT'
+  const materialCas = casTokens(material.cas)
+  if ([...casTokens(product.cas)].some((candidate) => materialCas.has(candidate))) return 'CAS_EQUIVALENT'
+  return null
+}
+
+function referenceNote(match: MaterialSupplierCatalogueReference['match']) {
+  if (match === 'EXACT_PRODUCT') return undefined
+  if (match === 'RELATED_VARIANT') return 'Supplier catalogue product is a related grade; confirm the specification before procurement.'
+  return 'Supplier catalogue lists a matching CAS; confirm the selected grade before procurement.'
+}
+
+function catalogueReferencesForMaterial(material: Material) {
+  const rank: Record<MaterialSupplierCatalogueReference['match'], number> = {
+    EXACT_PRODUCT: 0,
+    RELATED_VARIANT: 1,
+    CAS_EQUIVALENT: 2,
+  }
+  return lluchCatalogue2026Products
+    .map((product) => ({ product, match: referenceMatch(material, product) }))
+    .filter((candidate): candidate is { product: LluchCatalogueProduct; match: MaterialSupplierCatalogueReference['match'] } => candidate.match !== null)
+    .sort((left, right) => rank[left.match] - rank[right.match] || left.product.page - right.product.page || left.product.productName.localeCompare(right.product.productName))
+    .map(({ product, match }) => ({
       supplier: lluchCatalogue2026Source.supplier,
       catalogue: lluchCatalogue2026Source.catalogue,
       catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
-      category: 'Synthetic aroma chemical',
-      productName: 'METHYL DIHYDROJASMONATE (10/90, 30/70, 60/40, 70/30, 80/20 grades)',
-      productCas: '24851-98-7',
-      einecs: '246-495-9',
-      fema: '3408',
-      page: 21,
-      match: 'CAS_EQUIVALENT',
-      note: 'Catalogue identifies the chemical family; confirm the selected supplier grade before procurement.',
-    }],
-  },
-  {
-    matches: (material) => material.name.trim().toLowerCase() === 'bergamot fcf',
-    references: [{
-      supplier: lluchCatalogue2026Source.supplier,
-      catalogue: lluchCatalogue2026Source.catalogue,
-      catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
-      category: 'Natural product',
-      productName: 'BERGAMOT FUROC./FREE ITALY ESS. OIL',
-      productCas: '68648-33-9',
-      einecs: '289-612-9',
-      fema: '2153',
-      page: 40,
-      match: 'RELATED_VARIANT',
-      note: 'The supplier FCF catalogue CAS differs from the current material master. Keep the existing CAS until the supplier specification is reviewed.',
-    }],
-  },
-  {
-    matches: (material) => material.cas === '16409-43-1',
-    references: [{
-      supplier: lluchCatalogue2026Source.supplier,
-      catalogue: lluchCatalogue2026Source.catalogue,
-      catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
-      category: 'Synthetic aroma chemical',
-      productName: 'ROSE OXIDE (70/30 or 90/10 grade)',
-      productCas: '16409-43-1',
-      einecs: '939-429-1 (240-457-5)',
-      fema: '3236',
-      page: 26,
-      match: 'CAS_EQUIVALENT',
-      note: 'Catalogue lists multiple isomer grades; confirm the required grade before procurement.',
-    }],
-  },
-  {
-    matches: (material) => material.cas === '121-33-5',
-    references: [{
-      supplier: lluchCatalogue2026Source.supplier,
-      catalogue: lluchCatalogue2026Source.catalogue,
-      catalogueVersion: lluchCatalogue2026Source.catalogueVersion,
-      category: 'Synthetic aroma chemical',
-      productName: 'VANILLIN',
-      productCas: '121-33-5',
-      einecs: '204-465-2',
-      fema: '3107',
-      page: 29,
-      match: 'EXACT_PRODUCT',
-    }],
-  },
-]
+      category: catalogueCategory[product.category],
+      productName: product.productName,
+      productCas: product.cas ?? 'Not listed',
+      einecs: product.einecs ?? undefined,
+      fema: product.fema ?? undefined,
+      page: product.page,
+      match,
+      note: referenceNote(match),
+    }))
+}
 
 const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'source' | 'version' | 'reviewedAt'>> = {
   '54464-57-2': {
@@ -209,7 +225,7 @@ export type LluchCatalogueEnrichment = {
  */
 export function enrichMaterialFromLluchCatalogue(material: Material): LluchCatalogueEnrichment {
   const changedFields: LluchCatalogueEnrichment['changedFields'] = []
-  const matchingReferences = catalogueDefinitions.flatMap((definition) => definition.matches(material) ? definition.references : [])
+  const matchingReferences = catalogueReferencesForMaterial(material)
   const supplierCatalogueReferences = [...(material.supplierCatalogueReferences ?? [])]
   for (const reference of matchingReferences) {
     if (!supplierCatalogueReferences.some((candidate) => sameReference(candidate, reference))) {

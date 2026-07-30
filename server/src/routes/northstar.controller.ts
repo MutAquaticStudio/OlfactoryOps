@@ -180,6 +180,11 @@ export class NorthStarController {
     return this.northStar.materialDedupe(cas)
   }
 
+  @Get('materials/catalogues/lluch-2026')
+  lluchCatalogue(@Query('query') query = '') {
+    return this.northStar.lluchCatalogue(query)
+  }
+
   @Post('materials')
   createMaterial(
     @Body()
@@ -233,6 +238,11 @@ export class NorthStarController {
 
   @Post('materials/catalogues/lluch-2026/enrich')
   enrichMaterialsFromLluchCatalogue() {
+    return this.northStar.enrichMaterialsFromLluchCatalogue()
+  }
+
+  @Post('materials/catalogues/lluch-2026/import')
+  importLluchCatalogue() {
     return this.northStar.enrichMaterialsFromLluchCatalogue()
   }
 

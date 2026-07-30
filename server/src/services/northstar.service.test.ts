@@ -1414,6 +1414,7 @@ describe('NorthStarService', () => {
 
     expect(result.updated).toBeGreaterThan(0)
     expect(result.source.catalogueVersion).toBe('2026-07-16')
+    expect(result.source.productCount).toBe(1986)
     expect(bergamot.cas).toBe(before.cas)
     expect(bergamot.ifraLimit).toBe(before.ifraLimit)
     expect(bergamot.costPerGram).toBe(before.costPerGram)
@@ -1439,6 +1440,15 @@ describe('NorthStarService', () => {
     expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(1)
     expect(service.material('mat-bergamot').data.olfactiveProfile?.tenacity).toBe('Short')
     expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(0)
+  })
+
+  it('returns the full Lluch catalogue through the tenant-scoped local development API projection', () => {
+    const service = createAuthenticatedService()
+    const result = service.lluchCatalogue('bergamot').data
+
+    expect(result.source.status).toBe('READY')
+    expect(result.source.productCount).toBe(1986)
+    expect(result.products.some((product) => product.productName.includes('BERGAMOT'))).toBe(true)
   })
 
   it('allows Manager role to update material metadata', () => {
