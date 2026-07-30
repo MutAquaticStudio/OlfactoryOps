@@ -5502,6 +5502,13 @@ function MaterialWorkspace({
               />
             </div>
             <p>{selected.olfactiveProfile.description}</p>
+            <dl className="olfactive-profile-signals" aria-label="Olfactive performance profile">
+              <div><dt>Strength</dt><dd>{selected.olfactiveProfile.strength ?? 'Not evaluated'}</dd></div>
+              <div><dt>Diffusion</dt><dd>{selected.olfactiveProfile.diffusion ?? 'Not evaluated'}</dd></div>
+              <div><dt>Tenacity</dt><dd>{selected.olfactiveProfile.tenacity ?? 'Not evaluated'}</dd></div>
+              <div><dt>Volatility</dt><dd>{selected.olfactiveProfile.volatility ?? 'Not evaluated'}</dd></div>
+              <div className="olfactive-profile-role"><dt>Formula role</dt><dd>{selected.olfactiveProfile.formulaRole ?? 'Not evaluated'}</dd></div>
+            </dl>
             <div className="tag-row">
               {selected.olfactiveProfile.facets.map((facet) => <DataTag key={facet} label="Facet" value={facet} />)}
             </div>

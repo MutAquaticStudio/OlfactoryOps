@@ -96,6 +96,7 @@ import {
   type LegalAcceptanceRecord,
   type PrivacyRequestRecord,
 } from '../src/data/northStar.js'
+import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source } from '../src/data/lluch-catalogue-2026.js'
 
 type Env = {
   DB: D1Database
@@ -1305,7 +1306,11 @@ export default {
     }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(Promise.all([runScheduledAnalytics(controller, env), runScheduledAgentRecovery(env), pruneFormulaIntelligenceRetention(env.DB)]))
+    ctx.waitUntil(Promise.all([
+      runScheduledAnalytics(controller, env),
+      runScheduledAgentRecovery(env),
+      pruneFormulaIntelligenceRetention(env.DB),
+    ]))
   },
 }
 
@@ -1340,6 +1345,45 @@ async function runScheduledAgentRecovery(env: Env) {
   }
 }
 
+function applyScheduledMaterialCatalogueBackfill(service: NorthStarService) {
+  const serviceState = service as unknown as ServiceState
+  const changedOrganizations = new Set<string>()
+  const enrichedMaterials = serviceState.materialRecords.map((material) => {
+    const enrichment = enrichMaterialFromLluchCatalogue(material)
+    if (enrichment.changed) {
+      changedOrganizations.add(material.organizationId || SEEDED_ADMIN_ORGANIZATION_ID)
+    }
+    return enrichment.material
+  })
+  if (changedOrganizations.size === 0) {
+    return false
+  }
+
+  serviceState.materialRecords = enrichedMaterials
+  appendSystemCatalogueBackfillAudit(serviceState, [...changedOrganizations])
+  return true
+}
+
+function appendSystemCatalogueBackfillAudit(serviceState: ServiceState, organizationIds: string[]) {
+  const at = new Date().toISOString()
+  const events: AuditEvent[] = organizationIds.sort().map((organizationId) => {
+    const counter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
+    serviceState.auditCounter = counter
+    return {
+      id: `AUD-TEN-${counter}`,
+      at,
+      actor: 'system:catalogue-backfill',
+      action: 'material.catalogue.backfill',
+      entity: `lluch:${lluchCatalogue2026Source.catalogueVersion}`,
+      requestId: `system_lluch_backfill_${organizationId}_${lluchCatalogue2026Source.catalogueVersion}`,
+      outcome: 'allowed' as const,
+      organizationId,
+      scope: 'tenant' as const,
+    }
+  })
+  serviceState.auditEvents = [...events, ...serviceState.auditEvents]
+}
+
 async function runScheduledAnalytics(controller: ScheduledController, env: Env) {
   const startedAt = Date.now()
   try {
@@ -1350,10 +1394,11 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
       billingMode: billingModeFromEnv(env),
     })
     await hydrateSnapshots(env.DB, service, env)
+    const materialCatalogueChanged = applyScheduledMaterialCatalogueBackfill(service)
     const scheduledAt = new Date(controller.scheduledTime).toISOString()
     const result = service.runDueAnalyticsReports(scheduledAt)
     const emailDelivery = await deliverNotificationOutbox(service, env)
-    if (result.data.reports.length > 0 || emailDelivery.changed) {
+    if (materialCatalogueChanged || result.data.reports.length > 0 || emailDelivery.changed) {
       await persistSnapshots(env.DB, service)
       refreshCachedSnapshotState(service)
     }

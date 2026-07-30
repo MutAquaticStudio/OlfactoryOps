@@ -84,6 +84,11 @@ export interface MaterialOlfactiveProfile {
   descriptors: string[]
   facets: string[]
   description: string
+  strength: 'Soft' | 'Moderate' | 'Strong' | 'Very strong'
+  diffusion: 'Low' | 'Moderate' | 'High' | 'Expansive'
+  tenacity: 'Short' | 'Medium' | 'Long' | 'Very long'
+  volatility: 'Low' | 'Medium' | 'High'
+  formulaRole: string
   status: 'CURATED' | 'REVIEW_REQUIRED'
   source: string
   version: string

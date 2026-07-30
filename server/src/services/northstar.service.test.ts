@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
+import type { Material } from '../../../src/data/northStar'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
 const adminEmail = 'admin@labofscents.org'
@@ -1400,7 +1401,25 @@ describe('NorthStarService', () => {
     expect(bergamot.costPerGram).toBe(before.costPerGram)
     expect(bergamot.supplierCatalogueReferences?.[0]?.productName).toContain('BERGAMOT FUROC./FREE')
     expect(bergamot.olfactiveProfile?.status).toBe('REVIEW_REQUIRED')
+    expect(bergamot.olfactiveProfile?.strength).toBe('Strong')
+    expect(bergamot.olfactiveProfile?.diffusion).toBe('High')
+    expect(bergamot.olfactiveProfile?.formulaRole).toBe('Citrus opening and lift')
     expect(vanillin.supplierCatalogueReferences?.[0]?.match).toBe('EXACT_PRODUCT')
+
+    const internals = service as unknown as { materialRecords: Material[] }
+    const legacyProfile = { ...bergamot.olfactiveProfile! } as Partial<NonNullable<Material['olfactiveProfile']>>
+    delete legacyProfile.strength
+    delete legacyProfile.diffusion
+    delete legacyProfile.tenacity
+    delete legacyProfile.volatility
+    delete legacyProfile.formulaRole
+    internals.materialRecords = internals.materialRecords.map((material) =>
+      material.id === bergamot.id
+        ? { ...material, olfactiveProfile: legacyProfile as Material['olfactiveProfile'] }
+        : material,
+    )
+    expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(1)
+    expect(service.material('mat-bergamot').data.olfactiveProfile?.tenacity).toBe('Short')
     expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(0)
   })
 

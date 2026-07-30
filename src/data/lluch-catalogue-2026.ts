@@ -85,6 +85,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['woody', 'cedar', 'amber', 'velvet'],
     facets: ['diffusive', 'dry', 'transparent'],
     description: 'A transparent woody-amber body with a soft cedar and velvety drydown.',
+    strength: 'Moderate',
+    diffusion: 'High',
+    tenacity: 'Long',
+    volatility: 'Low',
+    formulaRole: 'Woody body and diffusion',
     status: 'CURATED',
   },
   '24851-98-7': {
@@ -92,6 +97,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['jasmine', 'radiant', 'tea', 'airy'],
     facets: ['diffusive', 'fresh', 'petal-like'],
     description: 'An expansive jasmine floralizer with a luminous, airy petal effect.',
+    strength: 'Moderate',
+    diffusion: 'Expansive',
+    tenacity: 'Medium',
+    volatility: 'Medium',
+    formulaRole: 'Floral volume and radiance',
     status: 'CURATED',
   },
   '8007-75-8': {
@@ -99,6 +109,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['bergamot', 'sparkling', 'peel', 'green', 'bitter'],
     facets: ['fresh', 'lively', 'natural'],
     description: 'A bright citrus peel profile with a lively green and gently bitter lift.',
+    strength: 'Strong',
+    diffusion: 'High',
+    tenacity: 'Short',
+    volatility: 'High',
+    formulaRole: 'Citrus opening and lift',
     status: 'REVIEW_REQUIRED',
   },
   '6790-58-5': {
@@ -106,6 +121,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['ambergris', 'mineral', 'warm', 'woody'],
     facets: ['dry', 'long-lasting', 'radiant'],
     description: 'A warm ambergris effect with mineral depth and a persistent woody trail.',
+    strength: 'Strong',
+    diffusion: 'High',
+    tenacity: 'Very long',
+    volatility: 'Low',
+    formulaRole: 'Ambergris diffusion and fixation',
     status: 'CURATED',
   },
   '82356-51-2': {
@@ -113,6 +133,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['musk', 'skin', 'powder', 'soft'],
     facets: ['clean', 'warm', 'long-lasting'],
     description: 'A soft macrocyclic musk with a clean skin-like and powdery finish.',
+    strength: 'Soft',
+    diffusion: 'Moderate',
+    tenacity: 'Very long',
+    volatility: 'Low',
+    formulaRole: 'Musk body and fixation',
     status: 'CURATED',
   },
   '16409-43-1': {
@@ -120,6 +145,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['rose', 'metallic', 'green', 'geranium'],
     facets: ['fresh', 'bright', 'diffusive'],
     description: 'A vivid rosy-green accent with a metallic, geranium-like lift.',
+    strength: 'Strong',
+    diffusion: 'High',
+    tenacity: 'Medium',
+    volatility: 'High',
+    formulaRole: 'Rosy-green accent',
     status: 'REVIEW_REQUIRED',
   },
   '121-33-5': {
@@ -127,6 +157,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['vanilla', 'creamy', 'sweet', 'balsamic'],
     facets: ['warm', 'powdery', 'long-lasting'],
     description: 'A warm vanillic sweetener with creamy, balsamic depth.',
+    strength: 'Strong',
+    diffusion: 'Moderate',
+    tenacity: 'Long',
+    volatility: 'Low',
+    formulaRole: 'Gourmand sweetness and drydown',
     status: 'CURATED',
   },
   '64-17-5': {
@@ -134,6 +169,11 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
     descriptors: ['neutral', 'volatile', 'clean'],
     facets: ['solvent', 'lifting', 'evaporative'],
     description: 'A neutral volatile carrier that lifts the opening without adding a fragrance character.',
+    strength: 'Soft',
+    diffusion: 'High',
+    tenacity: 'Short',
+    volatility: 'High',
+    formulaRole: 'Carrier and opening lift',
     status: 'CURATED',
   },
 }
@@ -183,15 +223,17 @@ export function enrichMaterialFromLluchCatalogue(material: Material): LluchCatal
     ? {
         ...profileDefinition,
         source: 'OlfactoryOps olfactive taxonomy',
-        version: '2026-07',
-        reviewedAt: '2026-07-16',
+        version: '2026-07.1',
+        reviewedAt: '2026-07-30',
       }
     : undefined
-  const olfactiveProfile = material.olfactiveProfile ?? catalogueOlfactiveProfile
-  const profileWasAdded = Boolean(catalogueOlfactiveProfile && !material.olfactiveProfile)
-  if (profileWasAdded) changedFields.push('olfactiveProfile')
+  const olfactiveProfile = catalogueOlfactiveProfile
+    ? mergeCatalogueOlfactiveProfile(material.olfactiveProfile, catalogueOlfactiveProfile)
+    : material.olfactiveProfile
+  const profileChanged = JSON.stringify(olfactiveProfile) !== JSON.stringify(material.olfactiveProfile)
+  if (profileChanged) changedFields.push('olfactiveProfile')
 
-  const odor = profileWasAdded && olfactiveProfile
+  const odor = profileChanged && olfactiveProfile
     ? unique([...material.odor, ...olfactiveProfile.descriptors])
     : material.odor
   if (JSON.stringify(odor) !== JSON.stringify(material.odor)) changedFields.push('odor')
@@ -205,12 +247,12 @@ export function enrichMaterialFromLluchCatalogue(material: Material): LluchCatal
       date: lluchCatalogue2026Source.catalogueVersion,
     })
   }
-  if (profileWasAdded) {
+  if (profileChanged) {
     provenance = appendProvenance(provenance, {
       field: 'olfactiveProfile',
       source: 'OlfactoryOps olfactive taxonomy',
-      version: '2026-07',
-      date: '2026-07-16',
+      version: '2026-07.1',
+      date: '2026-07-30',
     })
   }
 
@@ -224,5 +266,22 @@ export function enrichMaterialFromLluchCatalogue(material: Material): LluchCatal
     },
     changed: changedFields.length > 0,
     changedFields: unique(changedFields) as LluchCatalogueEnrichment['changedFields'],
+  }
+}
+
+function mergeCatalogueOlfactiveProfile(
+  existing: MaterialOlfactiveProfile | undefined,
+  catalogue: MaterialOlfactiveProfile,
+) {
+  if (!existing) return catalogue
+  if (existing.source === catalogue.source) return catalogue
+  return {
+    ...catalogue,
+    ...existing,
+    strength: existing.strength ?? catalogue.strength,
+    diffusion: existing.diffusion ?? catalogue.diffusion,
+    tenacity: existing.tenacity ?? catalogue.tenacity,
+    volatility: existing.volatility ?? catalogue.volatility,
+    formulaRole: existing.formulaRole ?? catalogue.formulaRole,
   }
 }
