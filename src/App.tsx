@@ -72,6 +72,8 @@ import {
   YAxis,
 } from 'recharts'
 import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
+import { TrialsWorkspace } from './features/trials/TrialsWorkspace'
+import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
 import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
@@ -145,6 +147,7 @@ import {
   type FormulaPyramidNote,
   type FormulaType,
   type FormulaVersionRecord,
+  type FragranceTrialRecord,
   type FormulaWorkspacePreferences,
   type GlobalSearchResult,
   type InventoryAgingRecord,
@@ -1120,6 +1123,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   formulaAgent: Sparkles,
   formulaDesignStudio: Sparkles,
   reformulationOptimizer: SlidersHorizontal,
+  trials: ClipboardCheck,
   inventory: Boxes,
   labUsage: Beaker,
   documents: FileLock2,
@@ -1135,7 +1139,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
 const navGroups: { title: string; keys: DomainKey[]; internalOnly?: boolean }[] = [
   {
     title: 'Workbench',
-    keys: ['dashboard', 'materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'inventory', 'labUsage'],
+    keys: ['dashboard', 'materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'trials', 'inventory', 'labUsage'],
   },
   { title: 'Operations', keys: ['production', 'procurement', 'orders'] },
   { title: 'Commercial', keys: ['commerce', 'costing'] },
@@ -1644,6 +1648,7 @@ function safeLandingForSession(key: DomainKey, session: AuthSession) {
 function domainKeyForPath(pathname: string): DomainKey {
   if (pathname === '/ai/formula-agent' || pathname === '/ai/formula-design-studio') return 'formulaDesignStudio'
   if (pathname === '/ai/reformulation-optimizer') return 'reformulationOptimizer'
+  if (pathname === '/trials') return 'trials'
   if (pathname === '/workspace') return 'dashboard'
   const workspaceKey = pathname.startsWith('/workspace/') ? pathname.slice('/workspace/'.length) : ''
   if (domains.some((domain) => domain.key === workspaceKey)) return workspaceKey as DomainKey
@@ -1653,6 +1658,7 @@ function domainKeyForPath(pathname: string): DomainKey {
 function pathForDomainKey(key: DomainKey) {
   if (key === 'formulaAgent' || key === 'formulaDesignStudio') return '/ai/formula-design-studio'
   if (key === 'reformulationOptimizer') return '/ai/reformulation-optimizer'
+  if (key === 'trials') return '/trials'
   if (key === 'dashboard') return '/workspace'
   return `/workspace/${key}`
 }
@@ -1921,6 +1927,8 @@ function App() {
   const [formulaRecords, setFormulaRecords] = useState<Formula[]>([])
   const [activeFormulaId, setActiveFormulaId] = useState('')
   const [labUsageFormulaId, setLabUsageFormulaId] = useState('')
+  const [labUsageTrialId, setLabUsageTrialId] = useState<string | null>(null)
+  const [trialFormulaPrefillId, setTrialFormulaPrefillId] = useState('')
   const [lots, setLots] = useState<InventoryLot[]>([])
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [storageLocationRecords, setStorageLocationRecords] = useState<StorageLocation[]>(storageLocations)
@@ -2155,7 +2163,7 @@ function App() {
   }, [currentSession, publicRoute])
 
   useEffect(() => {
-    if (!currentSession || publicRoute === null) return
+    if (!currentSession || publicRoute === null || publicRoute === 'trialFeedback') return
     const target = safeLandingForSession((userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding, currentSession)
     setActiveKey(target)
     const destination = pathForDomainKey(target)
@@ -2355,7 +2363,7 @@ function App() {
       )
       const payload = await requestApi<LabUsageCommitResponse>('/lab-usage/commit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           formulaId: selectedLabUsageFormula.id,
           grams: batchGrams,
@@ -2373,13 +2381,15 @@ function App() {
           purpose: labUsagePurpose,
           projectCode: labUsageProjectCode,
           sampleCode: labUsageSampleCode,
+          ...(labUsageTrialId ? { trialId: labUsageTrialId } : {}),
         }),
       })
 
       setLots(payload.lots)
       setMovements((current) => mergeMovements(payload.movements, current))
       setUsageHistory(payload.usageHistory)
-      setLabUsageStatusMessage(payload.message)
+      setLabUsageStatusMessage(labUsageTrialId ? `${payload.message} Linked to trial ${labUsageTrialId}.` : payload.message)
+      setLabUsageTrialId(null)
       setActiveKey('labUsage')
       setModal(null)
     } catch (error) {
@@ -2392,6 +2402,7 @@ function App() {
     labUsageProjectCode,
     labUsagePurpose,
     labUsageSampleCode,
+    labUsageTrialId,
     hasPublishedLabUsageFormula,
     labUsageResolvedLeaves.length,
     selectedLabUsageFormula.id,
@@ -2915,6 +2926,11 @@ function App() {
     }
   }
 
+  if (publicRoute === 'trialFeedback') {
+    const token = window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''
+    return <PublicTrialFeedback token={token} requestApi={requestApi} />
+  }
+
   if (!currentSession) {
     if (publicRoute === 'landing') {
       return (
@@ -3059,6 +3075,28 @@ function App() {
                   }}
                 />
               </motion.div>
+            ) : activeKey === 'trials' ? (
+              <motion.div key="trials" {...shellMotionPreset}>
+                <div className="domain-page">
+                  <TrialsWorkspace
+                    requestApi={requestApi}
+                    formulaRecords={scopedFormulaRecords}
+                    initialFormulaId={trialFormulaPrefillId}
+                    canCreate={sessionHasPermission(currentSession, 'trials.create')}
+                    canRelease={sessionHasPermission(currentSession, 'trials.release') && sessionHasPermission(currentSession, 'formulas.approve')}
+                    canEvaluate={currentSession.role === 'SENSORY_PANELIST' && sessionHasPermission(currentSession, 'trials.evaluate')}
+                    canManagePublic={sessionHasPermission(currentSession, 'trials.managePublic')}
+                    onStartWeighing={(trial: FragranceTrialRecord) => {
+                      setLabUsageFormulaId(trial.formulaSnapshot.formulaId)
+                      setLabUsageTrialId(trial.id)
+                      setLabUsagePurpose('trial')
+                      setLabUsageSampleCode(trial.sampleCode)
+                      setLabUsageStatusMessage(`Trial ${trial.sampleCode} is ready for actual weighing.`)
+                      navigateToDomain('labUsage')
+                    }}
+                  />
+                </div>
+              </motion.div>
             ) : selectedDomain ? (
               <motion.div key={activeKey} {...shellMotionPreset}>
         <DomainWorkspace
@@ -3105,6 +3143,7 @@ function App() {
                   setWeighingOperator={setWeighingOperator}
                   labUsagePurpose={labUsagePurpose}
                   setLabUsagePurpose={setLabUsagePurpose}
+                  labUsageTrialId={labUsageTrialId}
                   labUsageProjectCode={labUsageProjectCode}
                   setLabUsageProjectCode={setLabUsageProjectCode}
                   labUsageSampleCode={labUsageSampleCode}
@@ -3116,6 +3155,10 @@ function App() {
                   onCommit={() => setModal('commit')}
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
+                  onOpenTrials={(formula) => {
+                    setTrialFormulaPrefillId(formula.id)
+                    navigateToDomain('trials')
+                  }}
                   onNewFormula={(type = 'ACCORD') => {
                     selectNewFormulaType(type)
                     setModal('newFormula')
@@ -4727,6 +4770,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setWeighingOperator,
   labUsagePurpose,
   setLabUsagePurpose,
+  labUsageTrialId,
   labUsageProjectCode,
   setLabUsageProjectCode,
   labUsageSampleCode,
@@ -4738,6 +4782,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onCommit,
   onReverse,
   onOpenModal,
+  onOpenTrials,
   onNewFormula,
   onAddFormulaLine,
   onReceiveStock,
@@ -4786,6 +4831,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setWeighingOperator: (value: string) => void
   labUsagePurpose: LabUsagePurpose
   setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageTrialId: string | null
   labUsageProjectCode: string
   setLabUsageProjectCode: (value: string) => void
   labUsageSampleCode: string
@@ -4797,6 +4843,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onCommit: () => void
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
+  onOpenTrials: (formula: Formula) => void
   onNewFormula: (type?: FormulaType) => void
   onAddFormulaLine: () => void
   onReceiveStock: () => void
@@ -4843,6 +4890,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
           onSelectMaterial={setSelectedMaterialId}
           onNewFormula={onNewFormula}
           onAddLine={onAddFormulaLine}
+          onCreateTrial={onOpenTrials}
           userSettings={userSettings}
           onUserSettingsChange={onUserSettingsChange}
         />
@@ -4884,6 +4932,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
           setWeighingOperator={setWeighingOperator}
           labUsagePurpose={labUsagePurpose}
           setLabUsagePurpose={setLabUsagePurpose}
+          labUsageTrialId={labUsageTrialId}
           labUsageProjectCode={labUsageProjectCode}
           setLabUsageProjectCode={setLabUsageProjectCode}
           labUsageSampleCode={labUsageSampleCode}
@@ -5966,6 +6015,7 @@ type FormulaWorkspaceProps = {
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  onCreateTrial: (formula: Formula) => void
   userSettings: UserSettingsRecord
   onUserSettingsChange: (settings: UserSettingsRecord) => void
 }
@@ -6238,6 +6288,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  onCreateTrial,
   userSettings,
   onUserSettingsChange,
 }: FormulaWorkspaceProps) {
@@ -6246,6 +6297,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   const canApproveFormula =
     isFormulaApproverRole(session.role) && sessionHasPermission(session, 'formulas.approve')
   const canExportFormula = sessionHasPermission(session, 'formulas.export')
+  const canCreateTrial = sessionHasPermission(session, 'trials.create')
   const formulaEditable = formula.workflowStatus === 'DRAFT' || formula.workflowStatus === 'CHANGES_REQUESTED'
   const activeFormulaType = formulaTypeForFormula(formula)
   const activeFormulaTypeMeta = formulaTypeMeta[activeFormulaType]
@@ -7232,6 +7284,12 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
               <button className="primary-button small" type="button" onClick={() => void forkWorkingCopy()}>
                 <RotateCcw size={14} />
                 Fork working copy
+              </button>
+            )}
+            {formula.workflowStatus === 'APPROVED' && canCreateTrial && (
+              <button className="ghost-button small" type="button" onClick={() => onCreateTrial(formula)}>
+                <FlaskConical size={14} />
+                Create trial
               </button>
             )}
           </div>
@@ -8290,6 +8348,7 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  onCreateTrial,
   userSettings,
   onUserSettingsChange,
 }: {
@@ -8307,6 +8366,7 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  onCreateTrial: (formula: Formula) => void
   userSettings: UserSettingsRecord
   onUserSettingsChange: (settings: UserSettingsRecord) => void
 }) {
@@ -8347,6 +8407,7 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
       onSelectMaterial={onSelectMaterial}
       onNewFormula={onNewFormula}
       onAddLine={onAddLine}
+      onCreateTrial={onCreateTrial}
       userSettings={userSettings}
       onUserSettingsChange={onUserSettingsChange}
     />
@@ -9773,6 +9834,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   setWeighingOperator,
   labUsagePurpose,
   setLabUsagePurpose,
+  labUsageTrialId,
   labUsageProjectCode,
   setLabUsageProjectCode,
   labUsageSampleCode,
@@ -9802,6 +9864,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   setWeighingOperator: (value: string) => void
   labUsagePurpose: LabUsagePurpose
   setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageTrialId: string | null
   labUsageProjectCode: string
   setLabUsageProjectCode: (value: string) => void
   labUsageSampleCode: string
@@ -9876,6 +9939,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
         right={<DataTag label="Formula" value={weighingSession.formulaCode} />}
       >
         <div className="lab-usage-formula-picker">
+          {labUsageTrialId ? <div className="agent-notice" role="status">Linked trial {labUsageTrialId}. This commit will append actual lots, weights, movements, and cost evidence to its timeline.</div> : null}
           <label className="field-row">
             <span>Published formula</span>
             <select

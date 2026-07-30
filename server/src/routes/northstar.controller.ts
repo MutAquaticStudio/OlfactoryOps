@@ -16,6 +16,7 @@ type LabUsageBody = {
   projectCode?: string
   sampleCode?: string
   qcLink?: string
+  trialId?: string
   reason?: string
   actor?: string
 }
@@ -987,6 +988,7 @@ export class NorthStarController {
       actuals: body.actuals,
       tolerancePercent: body.tolerancePercent,
       operator: body.operator,
+      trialId: body.trialId,
     })
   }
 
@@ -1000,6 +1002,7 @@ export class NorthStarController {
       projectCode: body.projectCode,
       sampleCode: body.sampleCode,
       qcLink: body.qcLink,
+      trialId: body.trialId,
     })
   }
 
@@ -1037,6 +1040,75 @@ export class NorthStarController {
   @Post('production/batches/:id/qc')
   qcProductionBatch(@Param('id') id: string, @Body() body: { result?: 'PASSED' | 'FAILED' }) {
     return this.northStar.qcProductionBatch(id, body.result)
+  }
+
+  @Get('trials')
+  trials() {
+    return this.northStar.trials()
+  }
+
+  @Get('trials/public/:token')
+  publicTrialPresentation(@Param('token') token: string) {
+    return this.northStar.publicTrialPresentation(token)
+  }
+
+  @Post('trials/public/:token/observations')
+  submitPublicTrialObservation(@Param('token') token: string, @Body() body: Record<string, unknown> = {}) {
+    return this.northStar.submitPublicTrialObservation(token, body)
+  }
+
+  @Get('trials/:id')
+  trialDetail(@Param('id') id: string) {
+    return this.northStar.trialDetail(id)
+  }
+
+  @Post('trials')
+  createTrial(@Body() body: { formulaId?: string; formulaVersion?: string; title?: string; sampleCode?: string } = {}) {
+    return this.northStar.createTrial(body)
+  }
+
+  @Post('trials/:id/release')
+  releaseTrial(@Param('id') id: string, @Body() body: { note?: string } = {}) {
+    return this.northStar.releaseTrial(id, body)
+  }
+
+  @Post('trials/:id/stage')
+  updateTrialStage(@Param('id') id: string, @Body() body: { lifecycle?: 'CONDITIONING' | 'EVALUATING' } = {}) {
+    return this.northStar.updateTrialStage(id, body.lifecycle ?? 'CONDITIONING')
+  }
+
+  @Post('trials/:id/cancel')
+  cancelTrial(@Param('id') id: string) {
+    return this.northStar.cancelTrial(id)
+  }
+
+  @Post('trials/:id/sensory-sessions')
+  createTrialSensorySession(@Param('id') id: string, @Body() body: { presentationMode?: 'BLIND' | 'BRAND_REVIEW'; closesAt?: string } = {}) {
+    return this.northStar.createTrialSensorySession(id, body)
+  }
+
+  @Post('trials/:id/sensory-sessions/:sessionId/observations')
+  submitInternalTrialObservation(
+    @Param('id') id: string,
+    @Param('sessionId') sessionId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    return this.northStar.submitInternalTrialObservation(id, sessionId, body)
+  }
+
+  @Post('trials/:id/public-links')
+  createTrialPublicLink(@Param('id') id: string, @Body() body: { sessionId?: string; presentationMode?: 'BLIND' | 'BRAND_REVIEW'; expiresAt?: string } = {}) {
+    return this.northStar.createTrialPublicLink(id, body)
+  }
+
+  @Post('trials/public-links/:id/revoke')
+  revokeTrialPublicLink(@Param('id') id: string) {
+    return this.northStar.revokeTrialPublicLink(id)
+  }
+
+  @Post('trials/:id/decision')
+  closeTrial(@Param('id') id: string, @Body() body: { outcome?: 'ACCEPT' | 'REVISE' | 'REJECT'; rationale?: string } = {}) {
+    return this.northStar.closeTrial(id, body)
   }
 
   @Get('production/schedule')

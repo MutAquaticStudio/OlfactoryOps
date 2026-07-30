@@ -381,6 +381,375 @@
   }
 }
 
+.trials-workspace {
+  display: grid;
+  gap: 18px;
+}
+
+.trials-hero,
+.trial-detail-heading,
+.trial-actions,
+.section-heading,
+.trial-row,
+.trial-evidence-grid article {
+  display: flex;
+  align-items: center;
+}
+
+.trials-hero,
+.trial-detail-heading {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.trials-hero h2,
+.trial-detail-heading h3 {
+  margin-top: 5px;
+}
+
+.trials-hero p,
+.trial-detail-heading p,
+.field-hint {
+  color: var(--text-2);
+  margin-top: 7px;
+  max-width: 68ch;
+}
+
+.trials-layout {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.72fr) minmax(320px, 1.28fr);
+  gap: 18px;
+}
+
+.trials-create-panel,
+.trials-list-panel,
+.trial-detail-panel {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.trials-create-panel label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 0.82rem;
+}
+
+.trials-create-panel input,
+.trials-create-panel select {
+  width: 100%;
+}
+
+.section-heading {
+  gap: 9px;
+  min-width: 0;
+}
+
+.section-heading h3 {
+  font-size: 1rem;
+}
+
+.trials-list {
+  display: grid;
+  gap: 7px;
+  max-height: 290px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.trial-row {
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  padding: 12px;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.trial-row:hover,
+.trial-row.is-selected {
+  border-color: rgb(var(--accent-rgb) / 0.72);
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.trial-row-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.trial-row-copy span {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trial-timeline {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(100px, 1fr));
+  gap: 6px;
+  list-style: none;
+  margin: 2px 0;
+  padding: 0;
+  overflow-x: auto;
+}
+
+.trial-timeline li {
+  min-width: 100px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.trial-timeline li.is-complete {
+  color: var(--text);
+  border-color: rgb(var(--accent-rgb) / 0.65);
+  background: rgb(var(--accent-rgb) / 0.1);
+}
+
+.trial-actions {
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.trial-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.trial-evidence-grid article {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.trial-evidence-grid span {
+  color: var(--text-3);
+  font-size: 0.75rem;
+}
+
+.trial-evidence-grid strong {
+  line-height: 1.35;
+}
+
+.trial-scorecard,
+.trial-public-links,
+.trial-decision {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.trial-score-grid,
+.trial-scorecard-fields,
+.trial-decision-fields {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.trial-score-grid label,
+.trial-scorecard-fields label,
+.trial-decision-fields label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.trial-score-grid label {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  text-transform: capitalize;
+}
+
+.trial-score-grid label.is-active {
+  border-color: rgb(var(--accent-rgb) / 0.68);
+}
+
+.trial-score-grid input,
+.trial-scorecard-fields input,
+.trial-scorecard-fields select,
+.trial-scorecard-fields textarea,
+.trial-decision-fields select,
+.trial-decision-fields textarea {
+  min-width: 0;
+  width: 100%;
+}
+
+.trial-scorecard-fields,
+.trial-decision-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trial-public-link {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 0.84rem;
+}
+
+.trial-public-link:last-child {
+  border-bottom: 0;
+}
+
+.trial-public-mode {
+  display: grid;
+  min-width: 150px;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 0.72rem;
+}
+
+.trial-public-mode select {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .trials-layout,
+  .trial-evidence-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .trials-hero,
+  .trial-detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .trials-hero .ghost-button,
+  .trial-actions > button,
+  .trials-create-panel .primary-button {
+    width: 100%;
+  }
+
+  .trial-score-grid,
+  .trial-scorecard-fields,
+  .trial-decision-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .trial-public-link {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.public-trial-feedback {
+  display: grid;
+  min-height: 100svh;
+  place-items: center;
+  padding: 24px;
+}
+
+.public-trial-card {
+  display: grid;
+  width: min(100%, 620px);
+  gap: 15px;
+  padding: clamp(20px, 4vw, 34px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-solid);
+}
+
+.public-trial-code {
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.public-trial-narrative {
+  display: grid;
+  gap: 8px;
+  padding: 13px;
+  border-left: 2px solid rgb(var(--accent-rgb) / 0.7);
+  background: rgb(var(--accent-rgb) / 0.06);
+  color: var(--text-2);
+}
+
+.public-timepoints,
+.public-score-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.public-timepoints {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.public-timepoints button {
+  min-width: 0;
+  padding: 9px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.public-timepoints button.is-active {
+  border-color: rgb(var(--accent-rgb) / 0.75);
+  background: rgb(var(--accent-rgb) / 0.12);
+  color: var(--text);
+}
+
+.public-score {
+  display: grid;
+  gap: 8px;
+}
+
+.public-score output {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.public-score-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.public-trial-card label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-2);
+  font-size: 0.82rem;
+}
+
+.public-trial-card input,
+.public-trial-card select,
+.public-trial-card textarea {
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .public-trial-feedback { padding: 12px; }
+  .public-timepoints { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Details stay available alongside the material directory on wide workspaces. */
 .material-inspector-panel {
   align-self: start;

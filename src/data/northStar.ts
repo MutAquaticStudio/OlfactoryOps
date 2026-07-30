@@ -12,6 +12,7 @@ export type DomainKey =
   | 'reformulationOptimizer'
   | 'inventory'
   | 'labUsage'
+  | 'trials'
   | 'documents'
   | 'production'
   | 'procurement'
@@ -1794,11 +1795,151 @@ export interface LabUsageRecord {
   projectCode?: string
   sampleCode?: string
   qcLink?: string
+  trialId?: string
   allocations: Allocation[]
   weighingSession?: LabWeighingSession
   createdAt: string
   reversedAt?: string
   reversalMovements?: InventoryMovement[]
+}
+
+export type TrialLifecycle =
+  | 'PLANNED'
+  | 'RELEASED_FOR_TRIAL'
+  | 'MIXED'
+  | 'CONDITIONING'
+  | 'EVALUATING'
+  | 'DECIDED'
+  | 'CANCELLED'
+
+export type SensoryTimepoint = 'OPENING' | 'HEART' | 'DRYDOWN' | 'LONGEVITY' | 'OVERALL'
+
+export type SensoryStabilityStatus = 'STABLE' | 'WATCH' | 'UNSTABLE'
+
+export type TrialDecisionOutcome = 'ACCEPT' | 'REVISE' | 'REJECT'
+
+export interface TrialFormulaSnapshot {
+  formulaId: string
+  formulaCode: string
+  formulaName: string
+  formulaVersion: string
+  checksum: string
+  formulaType: FormulaType
+  concentrationType: FormulaConcentrationType
+  finalProductConcentrationPercent: number
+  ifraCategory: string
+  brief: string
+  pyramidSummary: string
+  targetGrams: number
+  totalCost: number
+  lineCount: number
+  /** Private composition-family signal used only for deterministic trial comparison. */
+  materialFamilies: string[]
+}
+
+export interface TrialReleaseRecord {
+  id: string
+  releasedAt: string
+  releasedBy: string
+  complianceStatus: 'PASS' | 'REVIEW_REQUIRED'
+  ifraBlockerCount: number
+  formulaChecksum: string
+  note?: string
+}
+
+export interface TrialUsageLinkRecord {
+  id: string
+  trialId: string
+  usageId: string
+  formulaChecksum: string
+  movementIds: string[]
+  allocations: Allocation[]
+  actualWeights: LabWeighingSession['lines']
+  costSnapshot: number
+  linkedAt: string
+  reversedAt?: string
+}
+
+export interface SensorySessionRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  status: 'OPEN' | 'CLOSED'
+  evaluatorMode: 'INTERNAL' | 'PUBLIC'
+  presentationMode: 'BLIND' | 'BRAND_REVIEW'
+  opensAt: string
+  closesAt?: string
+  createdBy: string
+  createdAt: string
+}
+
+export interface SensoryObservationRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  sessionId: string
+  evaluatorRef: string
+  timepoint: SensoryTimepoint
+  scores: Record<SensoryTimepoint, number>
+  descriptors: string[]
+  observation: string
+  stability: SensoryStabilityStatus
+  submittedAt: string
+  updatedAt: string
+  source: 'INTERNAL' | 'PUBLIC'
+  /** Stores the public feedback request key so repeated submissions remain idempotent. */
+  idempotencyKey?: string
+}
+
+export interface TrialPublicLinkRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  sessionId: string
+  tokenHash: string
+  presentationMode: 'BLIND' | 'BRAND_REVIEW'
+  expiresAt: string
+  revokedAt?: string
+  createdBy: string
+  createdAt: string
+  lastSubmittedAt?: string
+}
+
+export interface TrialDecisionRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  outcome: TrialDecisionOutcome
+  rationale: string
+  decidedBy: string
+  decidedAt: string
+}
+
+export interface FragranceTrialRecord {
+  id: string
+  organizationId: string
+  sampleCode: string
+  title: string
+  lifecycle: TrialLifecycle
+  formulaSnapshot: TrialFormulaSnapshot
+  release?: TrialReleaseRecord
+  usageLink?: TrialUsageLinkRecord
+  decision?: TrialDecisionRecord
+  conditioningNote?: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  cancelledAt?: string
+  cancelledBy?: string
+}
+
+export interface TrialComparableEvidence {
+  status: 'READY' | 'NOT_ENOUGH_EVIDENCE'
+  sampleCount: number
+  confidence: 'LOW' | 'MODERATE' | 'HIGH' | 'NOT_EVALUATED'
+  averages: Partial<Record<SensoryTimepoint, number>>
+  trialIds: string[]
+  summary: string
 }
 
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
@@ -1990,6 +2131,24 @@ export const domains: DomainModule[] = [
     permissions: ['inventory.commitLabUsage', 'inventory.reverseLabUsage'],
     screens: ['Commit flow', 'Actual weighing session', 'Reverse popup', 'History'],
     activity: 'FRM-0421 can commit actual weighed usage via API and reverse the committed record by compensation',
+  },
+  {
+    key: 'trials',
+    phase: '7.5',
+    name: 'Trials & Sensory',
+    shortName: 'Trials',
+    responsibility: 'Immutable formula releases, actual weighing links, sensory scorecards, and evidence-based trial decisions',
+    status: 'active',
+    health: 86,
+    risk: 'Trial release is separate from formula approval; stock moves only through linked Lab Usage commits',
+    owner: 'Perfumer Team',
+    entities: ['Trial', 'TrialRelease', 'LabUsageLink', 'SensorySession', 'SensoryObservation', 'TrialDecision'],
+    features: ['Immutable version snapshot', 'Trial release gate', 'Blind panel scorecards', 'Public feedback link', 'Decision timeline', 'Comparable evidence'],
+    invariants: ['No trial creates stock movement', 'Public feedback is token-scoped and redacted', 'Comparable evidence remains tenant-private'],
+    apis: ['/api/v1/trials', '/api/v1/trials/:id/release', '/api/v1/trials/:id/sensory-sessions', '/api/v1/trials/public/:token'],
+    permissions: ['trials.view', 'trials.create', 'trials.evaluate'],
+    screens: ['Trial workbench', 'Release gate', 'Sensory scorecard', 'Decision timeline'],
+    activity: 'A released trial links actual Lab Usage and retains structured sensory evidence without altering formula approval.',
   },
   {
     key: 'documents',
@@ -2846,6 +3005,11 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'formulas.edit', label: 'Edit formula drafts', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Create, edit, fork, and submit formula drafts without consuming stock.' },
   { key: 'formulas.approve', label: 'Approve formulas', category: 'Formulas', scope: 'organization', risk: 'critical', description: 'Approve immutable formula versions after compliance review.' },
   { key: 'formulas.export', label: 'Export formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Export formula data outside the application.' },
+  { key: 'trials.view', label: 'View trials', category: 'Trials', scope: 'organization', risk: 'medium', description: 'Read tenant-private trial timelines and comparable sensory evidence.' },
+  { key: 'trials.create', label: 'Create trials', category: 'Trials', scope: 'organization', risk: 'medium', description: 'Create planned trials from immutable formula snapshots.' },
+  { key: 'trials.release', label: 'Release trials', category: 'Trials', scope: 'organization', risk: 'high', description: 'Release trial snapshots after deterministic formula and compliance review.' },
+  { key: 'trials.evaluate', label: 'Submit sensory observations', category: 'Trials', scope: 'organization', risk: 'low', description: 'Submit blinded sensory scorecards without formula composition access.' },
+  { key: 'trials.managePublic', label: 'Manage public panel links', category: 'Trials', scope: 'organization', risk: 'high', description: 'Issue and revoke time-limited public sensory links.' },
   { key: 'inventory.view', label: 'View inventory', category: 'Inventory', scope: 'organization', risk: 'low', description: 'Read stock summaries, lots, and movements.' },
   { key: 'inventory.receive', label: 'Receive inventory', category: 'Inventory', scope: 'organization', risk: 'medium', description: 'Create receipt movements and approved lots.' },
   { key: 'inventory.adjust', label: 'Adjust inventory', category: 'Inventory', scope: 'organization', risk: 'high', description: 'Create manual stock adjustments.' },
@@ -2922,6 +3086,11 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.approve',
+      'trials.view',
+      'trials.create',
+      'trials.release',
+      'trials.evaluate',
+      'trials.managePublic',
       'inventory.view',
       'inventory.adjust',
       'inventory.commitLabUsage',
@@ -2947,6 +3116,11 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.approve',
+      'trials.view',
+      'trials.create',
+      'trials.release',
+      'trials.evaluate',
+      'trials.managePublic',
       'inventory.view',
       'inventory.adjust',
       'inventory.commitLabUsage',
@@ -2968,6 +3142,8 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.export',
+      'trials.view',
+      'trials.create',
       'documents.view',
       'documents.download',
       'costing.view',
@@ -3052,6 +3228,12 @@ export const rolePolicies: RolePolicy[] = [
       'orders.view',
       'analytics.view',
     ],
+  },
+  {
+    role: 'SENSORY_PANELIST',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: ['trials.view', 'trials.evaluate'],
   },
   {
     role: 'Platform Admin',
@@ -3838,6 +4020,9 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
   labUsage: [
     { id: 'LAB-2026-088', label: 'FRM-0421 trial usage', status: 'stable', amount: '1.5g OUT', owner: 'Perfumer' },
     { id: 'LAB-PLAN', label: '12.5g usage preview', status: 'testing', amount: 'FEFO', owner: 'Lab Ops' },
+  ],
+  trials: [
+    { id: 'TRL-0001', label: 'Released fragrance trial', status: 'active', amount: 'Sensory pending', owner: 'Lab Ops' },
   ],
   documents: [
     { id: 'DOC-121', label: 'FRM-0421 export', status: 'review', amount: 'Highly Confidential', owner: 'Compliance' },

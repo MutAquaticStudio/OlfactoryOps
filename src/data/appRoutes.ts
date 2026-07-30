@@ -1,15 +1,17 @@
-export type PublicRoute = 'landing' | 'login' | 'signup'
+export type PublicRoute = 'landing' | 'login' | 'signup' | 'trialFeedback'
 
 const protectedPaths = new Set([
   '/ai/formula-agent',
   '/ai/formula-design-studio',
   '/ai/reformulation-optimizer',
+  '/trials',
 ])
 
 export function publicRouteForPath(pathname: string): PublicRoute | null {
   if (pathname === '/') return 'landing'
   if (pathname === '/login') return 'login'
   if (pathname === '/signup') return 'signup'
+  if (/^\/trial-feedback\/[^/]+$/.test(pathname)) return 'trialFeedback'
   return null
 }
 

@@ -130,6 +130,22 @@ flowchart LR
 
 Formula design, simulation, review, and approval do not consume inventory. Inventory changes only when a committed lab usage, receipt, reservation, fulfillment, production consumption, or compensating reversal writes the ledger.
 
+**Trials and sensory memory**
+
+```mermaid
+flowchart LR
+  Version["Approved immutable formula version"] --> Trial["Planned trial"]
+  Trial --> Release["Trial release gate"]
+  Release --> Weigh["Committed Lab Usage"]
+  Weigh --> Ledger["FEFO lots and immutable OUT movements"]
+  Weigh --> Session["Blind or brand-review sensory session"]
+  Session --> Scores["Structured opening to overall scorecards"]
+  Scores --> Decision["Accept, revise, or reject with rationale"]
+  Decision --> Evidence["Tenant-private comparable evidence"]
+```
+
+`/trials` is a Workbench workflow for controlled fragrance learning. A trial stores the approved formula-version checksum and release evidence, but it never moves material by itself. Only the existing Lab Usage commit can link actual weights, FEFO allocations, movement IDs, and the lot-cost snapshot to a released trial. Internal `SENSORY_PANELIST` users receive a blinded scorecard. Public links are opaque, hashed, rate-limited, revocable, and disclose either a sample code only or an explicitly approved brand narrative and pyramid. Comparable evidence stays inside its originating tenant and reports `Not enough evidence` until at least three completed scorecards are available.
+
 ## What You Need
 
 - Node.js 22 or newer

@@ -56,9 +56,13 @@ import {
   type FinishedGoodMovementRecord,
   type Formula,
   type FormulaVersionRecord,
+  type FragranceTrialRecord,
   type InventoryLot,
   type InventoryMovement,
   type LabUsageRecord,
+  type SensoryObservationRecord,
+  type SensorySessionRecord,
+  type TrialPublicLinkRecord,
   type MembershipRecord,
   type Material,
   type MaterialComplianceProfile,
@@ -165,7 +169,7 @@ export type AuthCredential = {
 }
 
 type RateLimitPolicy = {
-  key: 'auth-login' | 'auth-signup' | 'auth-reset' | 'authenticated-mutation' | 'sensitive-mutation'
+  key: 'auth-login' | 'auth-signup' | 'auth-reset' | 'authenticated-mutation' | 'sensitive-mutation' | 'public-trial-feedback'
   scope: 'client-email' | 'client' | 'session'
   limit: number
   windowSeconds: number
@@ -197,6 +201,10 @@ type SnapshotKey =
   | 'formulaRecords'
   | 'formulaVersionRecords'
   | 'usageHistory'
+  | 'fragranceTrialRecords'
+  | 'fragranceSensorySessionRecords'
+  | 'fragranceSensoryObservationRecords'
+  | 'fragranceTrialPublicLinkRecords'
   | 'documentRecords'
   | 'auditEvents'
   | 'organizationRecords'
@@ -268,6 +276,10 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   stockTakeRecords: StockTakeRecord[]
   formulaRecords: Formula[]
   formulaVersionRecords: FormulaVersionRecord[]
+  fragranceTrialRecords: FragranceTrialRecord[]
+  fragranceSensorySessionRecords: SensorySessionRecord[]
+  fragranceSensoryObservationRecords: SensoryObservationRecord[]
+  fragranceTrialPublicLinkRecords: TrialPublicLinkRecord[]
   tenantSettingsRecords: TenantSettingsRecord[]
   flagRecords: FeatureFlagRecord[]
   sequences: NumberingSequenceRecord[]
@@ -408,6 +420,10 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'lots',
   'movements',
   'usageHistory',
+  'fragranceTrialRecords',
+  'fragranceSensorySessionRecords',
+  'fragranceSensoryObservationRecords',
+  'fragranceTrialPublicLinkRecords',
 ])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
@@ -421,6 +437,10 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'formulaRecords',
   'formulaVersionRecords',
   'usageHistory',
+  'fragranceTrialRecords',
+  'fragranceSensorySessionRecords',
+  'fragranceSensoryObservationRecords',
+  'fragranceTrialPublicLinkRecords',
   'documentRecords',
   'auditEvents',
   'organizationRecords',
@@ -548,6 +568,12 @@ const NORMALIZED_TABLES = [
   'inventory_lots',
   'inventory_movements',
   'lab_usage_records',
+  'fragrance_trials',
+  'fragrance_trial_usage_links',
+  'fragrance_sensory_sessions',
+  'fragrance_sensory_observations',
+  'fragrance_trial_public_links',
+  'fragrance_trial_decisions',
 ]
 
 const routes: Route[] = [
@@ -718,9 +744,22 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/lab-usage/plan', handler: ({ service, query }) => service.labUsagePlan(query.get('formulaId') ?? '', Number(query.get('grams') ?? '12.5')) },
   { method: 'GET', pattern: '/lab-usage/:id', handler: ({ service, params }) => service.labUsageDetail(params.id) },
   { method: 'POST', pattern: '/lab-usage/weighing-session', mutates: true, handler: ({ service, body }) => service.recordLabWeighingSession(readString(body.formulaId, ''), readNumber(body.grams, 12.5), body) },
-  { method: 'POST', pattern: '/lab-usage/commit', mutates: true, handler: ({ service, body }) => service.commitLabUsage(readString(body.formulaId, ''), readNumber(body.grams, 12.5), body) },
+  { method: 'POST', pattern: '/lab-usage/commit', mutates: true, idempotent: true, handler: ({ service, body }) => service.commitLabUsage(readString(body.formulaId, ''), readNumber(body.grams, 12.5), body) },
   { method: 'POST', pattern: '/lab-usage/reverse-latest', mutates: true, handler: ({ service, body }) => service.reverseLatestLabUsage(body) },
   { method: 'POST', pattern: '/lab-usage/:id/reverse', mutates: true, handler: ({ service, params, body }) => service.reverseLabUsage(params.id, body) },
+  { method: 'GET', pattern: '/trials/public/:token', public: true, writeGate: false, handler: ({ service, params }) => service.publicTrialPresentation(params.token) },
+  { method: 'POST', pattern: '/trials/public/:token/observations', public: true, mutates: true, writeGate: false, rateLimit: { key: 'public-trial-feedback', scope: 'client', limit: 12, windowSeconds: 600, message: 'Too many feedback submissions. Please wait before trying again.' }, handler: ({ service, params, body }) => service.submitPublicTrialObservation(params.token, body) },
+  { method: 'GET', pattern: '/trials', handler: ({ service }) => service.trials() },
+  { method: 'POST', pattern: '/trials', mutates: true, idempotent: true, handler: ({ service, body }) => service.createTrial(body) },
+  { method: 'GET', pattern: '/trials/:id', handler: ({ service, params }) => service.trialDetail(params.id) },
+  { method: 'POST', pattern: '/trials/:id/release', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.releaseTrial(params.id, body) },
+  { method: 'POST', pattern: '/trials/:id/stage', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.updateTrialStage(params.id, readTrialStage(body.lifecycle)) },
+  { method: 'POST', pattern: '/trials/:id/cancel', mutates: true, idempotent: true, handler: ({ service, params }) => service.cancelTrial(params.id) },
+  { method: 'POST', pattern: '/trials/:id/sensory-sessions', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.createTrialSensorySession(params.id, body) },
+  { method: 'POST', pattern: '/trials/:id/sensory-sessions/:sessionId/observations', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.submitInternalTrialObservation(params.id, params.sessionId, body) },
+  { method: 'POST', pattern: '/trials/:id/public-links', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.createTrialPublicLink(params.id, body) },
+  { method: 'POST', pattern: '/trials/public-links/:id/revoke', mutates: true, idempotent: true, handler: ({ service, params }) => service.revokeTrialPublicLink(params.id) },
+  { method: 'POST', pattern: '/trials/:id/decision', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.closeTrial(params.id, body) },
   { method: 'GET', pattern: '/production/batches', handler: ({ service }) => service.productionBatches() },
   { method: 'POST', pattern: '/production/batches', mutates: true, handler: ({ service, body }) => service.createProductionBatch(typeof body.formulaId === 'string' ? body.formulaId : undefined, typeof body.targetGrams === 'number' ? body.targetGrams : undefined) },
   { method: 'POST', pattern: '/production/batches/:id/consume', mutates: true, handler: ({ service, params }) => service.consumeProductionBatch(params.id) },
@@ -1268,6 +1307,12 @@ export default {
       })
       if (match.route.hydrateState !== false) {
         await hydrateSnapshots(env.DB, service, env)
+        // Trial transitions may be followed immediately by a request served
+        // from another isolate. Read this narrow durable state directly so a
+        // trial can never disappear during create -> release -> lab usage.
+        if (requiresFreshTrialMemory(path, Boolean(match.route.mutates))) {
+          await hydrateFragranceOperatingMemoryState(env.DB, service as unknown as ServiceState)
+        }
       }
       if (!match.route.public) {
         if (!credential.sessionId) {
@@ -2499,6 +2544,11 @@ function readSessionCredential(headers: Headers): AuthCredential {
   return { source: 'none' }
 }
 
+function readTrialStage(value: unknown): 'CONDITIONING' | 'EVALUATING' {
+  if (value === 'EVALUATING') return 'EVALUATING'
+  return 'CONDITIONING'
+}
+
 export function createSessionCredential() {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
   return `oo_s1_${base64Url(bytes)}`
@@ -2590,6 +2640,7 @@ async function assertPersistenceReady(db: D1Database) {
       db.prepare('SELECT session_id FROM auth_session_credentials LIMIT 1').first(),
       db.prepare('SELECT organization_id FROM tenant_role_policies LIMIT 1').first(),
       db.prepare('SELECT organization_id FROM tenant_audit_events LIMIT 1').first(),
+      db.prepare('SELECT organization_id FROM fragrance_trials LIMIT 1').first(),
     ]).then(() => undefined)
   }
   try {
@@ -2613,6 +2664,10 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: 
     ;(serviceState as Record<SnapshotKey, ServiceState[SnapshotKey]>)[key] = structuredClone(cachedValue)
   }
   return
+}
+
+function requiresFreshTrialMemory(path: string, mutates: boolean) {
+  return path === '/trials' || path.startsWith('/trials/') || (mutates && path.startsWith('/lab-usage'))
 }
 
 async function hydrateWorkspaceBranding(db: D1Database, service: NorthStarService, sessionId: string) {
@@ -3505,6 +3560,7 @@ type LabUsageRecordRow = {
   project_code: string | null
   sample_code: string | null
   qc_link: string | null
+  trial_id: string | null
   allocations_json: string
   weighing_session_json: string | null
   created_at: string
@@ -3621,15 +3677,20 @@ async function hydrateNormalizedState(
   await hydrateNotificationState(db, serviceState)
   await hydrateInventoryState(db, serviceState)
   await hydrateLabUsageState(db, serviceState)
+  await hydrateFragranceOperatingMemoryState(db, serviceState)
 }
 
 async function persistNormalizedState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  // A new signup creates an organization, brand, membership, and role policies
+  // in the same mutation. Persist that tenant boundary first so dependent
+  // settings, sessions, audit evidence, and domain rows cannot reference an
+  // organization that D1 has not accepted yet.
+  await persistTenantCoreState(db, serviceState, updatedAt)
   await persistAuthSessions(db, serviceState.sessions, updatedAt)
   await persistMfaEnrollments(db, serviceState.mfaEnrollmentRecords, updatedAt)
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
   await persistEnterpriseGovernanceState(db, serviceState, updatedAt)
-  await persistTenantCoreState(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
   await persistOperationalP1State(db, serviceState, updatedAt)
   await persistFormulaState(db, serviceState, updatedAt)
@@ -3646,6 +3707,7 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistInventoryLots(db, serviceState.lots, updatedAt)
   await persistInventoryMovements(db, serviceState.movements, updatedAt)
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
+  await persistFragranceOperatingMemoryState(db, serviceState, updatedAt)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
@@ -6806,7 +6868,7 @@ async function hydrateLabUsageState(db: D1Database, serviceState: ServiceState) 
   const rows = await db
     .prepare(
       `SELECT id, formula_id, formula_code, grams, batch_grams, status, purpose, project_code,
-        sample_code, qc_link, allocations_json, weighing_session_json, created_at, reversed_at,
+        sample_code, qc_link, trial_id, allocations_json, weighing_session_json, created_at, reversed_at,
         reversal_movements_json
        FROM lab_usage_records
        ORDER BY created_at DESC, id DESC`,
@@ -6944,10 +7006,10 @@ async function persistLabUsageRecords(db: D1Database, usages: LabUsageRecord[], 
         .prepare(
           `INSERT INTO lab_usage_records (
             id, formula_id, formula_code, grams, batch_grams, status, purpose, project_code,
-            sample_code, qc_link, allocations_json, weighing_session_json, created_at, reversed_at,
+            sample_code, qc_link, trial_id, allocations_json, weighing_session_json, created_at, reversed_at,
             reversal_movements_json, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
           ON CONFLICT(id) DO UPDATE SET
             formula_id = excluded.formula_id,
             formula_code = excluded.formula_code,
@@ -6958,6 +7020,7 @@ async function persistLabUsageRecords(db: D1Database, usages: LabUsageRecord[], 
             project_code = excluded.project_code,
             sample_code = excluded.sample_code,
             qc_link = excluded.qc_link,
+            trial_id = excluded.trial_id,
             allocations_json = excluded.allocations_json,
             weighing_session_json = excluded.weighing_session_json,
             created_at = excluded.created_at,
@@ -6976,6 +7039,7 @@ async function persistLabUsageRecords(db: D1Database, usages: LabUsageRecord[], 
           usage.projectCode ?? null,
           usage.sampleCode ?? null,
           usage.qcLink ?? null,
+          usage.trialId ?? null,
           JSON.stringify(usage.allocations),
           usage.weighingSession ? JSON.stringify(usage.weighingSession) : null,
           usage.createdAt,
@@ -7161,6 +7225,97 @@ function brandingFromRow(row: BrandingRow): BrandingConfig {
     labelTemplate: row.label_template,
     logoMode: row.logo_mode === 'monogram' || row.logo_mode === 'image' ? row.logo_mode : 'wordmark',
     logoImageUrl: row.logo_image_url?.trim() || undefined,
+  }
+}
+
+async function hydrateFragranceOperatingMemoryState(db: D1Database, serviceState: ServiceState) {
+  const [trialRows, sensorySessionRows, observationRows, publicLinkRows] = await Promise.all([
+    db.prepare('SELECT id, organization_id, record_json FROM fragrance_trials ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM fragrance_sensory_sessions ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM fragrance_sensory_observations ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM fragrance_trial_public_links ORDER BY updated_at DESC').all<JsonStateRow>(),
+  ])
+  serviceState.fragranceTrialRecords = scopedJsonRecords(trialRows.results ?? []) as FragranceTrialRecord[]
+  serviceState.fragranceSensorySessionRecords = scopedJsonRecords(sensorySessionRows.results ?? []) as SensorySessionRecord[]
+  serviceState.fragranceSensoryObservationRecords = scopedJsonRecords(observationRows.results ?? []) as SensoryObservationRecord[]
+  serviceState.fragranceTrialPublicLinkRecords = scopedJsonRecords(publicLinkRows.results ?? []) as TrialPublicLinkRecord[]
+}
+
+async function persistFragranceOperatingMemoryState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  const trials = serviceState.fragranceTrialRecords
+  if (trials.length > 0) {
+    await runStatementBatches(
+      db,
+      trials.map((trial) =>
+        db.prepare(
+          `INSERT INTO fragrance_trials (id, organization_id, formula_id, formula_version, lifecycle, sample_code, record_json, created_by_user_id, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+           ON CONFLICT(id) DO UPDATE SET lifecycle = excluded.lifecycle, sample_code = excluded.sample_code, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(trial.id, trial.organizationId, trial.formulaSnapshot.formulaId, trial.formulaSnapshot.formulaVersion, trial.lifecycle, trial.sampleCode, JSON.stringify(trial), trial.createdBy, trial.createdAt, updatedAt),
+      ),
+    )
+    const usageLinks = trials.flatMap((trial) => trial.usageLink ? [{ trial, link: trial.usageLink }] : [])
+    if (usageLinks.length > 0) {
+      await runStatementBatches(
+        db,
+        usageLinks.map(({ trial, link }) =>
+          db.prepare(
+            `INSERT INTO fragrance_trial_usage_links (id, organization_id, trial_id, usage_id, record_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at`,
+          ).bind(link.id, trial.organizationId, trial.id, link.usageId, JSON.stringify(link), link.linkedAt, updatedAt),
+        ),
+      )
+    }
+    const decisions = trials.flatMap((trial) => trial.decision ? [{ trial, decision: trial.decision }] : [])
+    if (decisions.length > 0) {
+      await runStatementBatches(
+        db,
+        decisions.map(({ trial, decision }) =>
+          db.prepare(
+            `INSERT INTO fragrance_trial_decisions (id, organization_id, trial_id, outcome, record_json, decided_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
+             ON CONFLICT(organization_id, trial_id) DO UPDATE SET outcome = excluded.outcome, record_json = excluded.record_json, decided_at = excluded.decided_at, updated_at = excluded.updated_at`,
+          ).bind(decision.id, trial.organizationId, trial.id, decision.outcome, JSON.stringify(decision), decision.decidedAt, updatedAt),
+        ),
+      )
+    }
+  }
+  if (serviceState.fragranceSensorySessionRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.fragranceSensorySessionRecords.map((session) =>
+        db.prepare(
+          `INSERT INTO fragrance_sensory_sessions (id, organization_id, trial_id, status, record_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(session.id, session.organizationId, session.trialId, session.status, JSON.stringify(session), session.createdAt, updatedAt),
+      ),
+    )
+  }
+  if (serviceState.fragranceSensoryObservationRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.fragranceSensoryObservationRecords.map((observation) =>
+        db.prepare(
+          `INSERT INTO fragrance_sensory_observations (id, organization_id, trial_id, session_id, evaluator_ref, timepoint, record_json, submitted_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(organization_id, session_id, evaluator_ref, timepoint) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(observation.id, observation.organizationId, observation.trialId, observation.sessionId, observation.evaluatorRef, observation.timepoint, JSON.stringify(observation), observation.submittedAt, updatedAt),
+      ),
+    )
+  }
+  if (serviceState.fragranceTrialPublicLinkRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.fragranceTrialPublicLinkRecords.map((link) =>
+        db.prepare(
+          `INSERT INTO fragrance_trial_public_links (id, organization_id, trial_id, session_id, token_hash, expires_at, revoked_at, record_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+           ON CONFLICT(id) DO UPDATE SET expires_at = excluded.expires_at, revoked_at = excluded.revoked_at, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(link.id, link.organizationId, link.trialId, link.sessionId, link.tokenHash, link.expiresAt, link.revokedAt ?? null, JSON.stringify(link), link.createdAt, updatedAt),
+      ),
+    )
   }
 }
 
@@ -7752,6 +7907,7 @@ function labUsageFromRow(row: LabUsageRecordRow): LabUsageRecord {
     projectCode: row.project_code ?? undefined,
     sampleCode: row.sample_code ?? undefined,
     qcLink: row.qc_link ?? undefined,
+    trialId: row.trial_id ?? undefined,
     allocations: parseJson<LabUsageRecord['allocations']>(row.allocations_json, []),
     weighingSession: row.weighing_session_json ? parseJson<LabUsageRecord['weighingSession']>(row.weighing_session_json, undefined) : undefined,
     createdAt: row.created_at,

@@ -1733,6 +1733,42 @@ describe('NorthStarService', () => {
     )
   })
 
+  it('keeps trial release non-consuming and links actual lab usage, sensory evidence, and reversal history', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const draft = service.createFormulaDraft({ name: 'Sensory Trial Accord', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Ready for trial release' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved for controlled trial' }).data
+
+    const planned = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version, sampleCode: 'TRL-SENSORY-001' }).data.trial
+    const released = service.releaseTrial(planned.id).data.trial
+    expect(released.lifecycle).toBe('RELEASED_FOR_TRIAL')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+
+    const usage = service.commitLabUsage(draft.id, 10, { trialId: planned.id, purpose: 'trial', sampleCode: planned.sampleCode }).data.usage
+    const afterCommit = service.trialDetail(planned.id).data.trial
+    expect(usage.trialId).toBe(planned.id)
+    expect(afterCommit.lifecycle).toBe('MIXED')
+    expect(service.inventoryMovements().data.slice(0, 2).every((movement) => movement.type === 'LAB_CONSUMPTION')).toBe(true)
+
+    const sensory = service.createTrialSensorySession(planned.id, { presentationMode: 'BLIND' }).data.session
+    const link = service.createTrialPublicLink(planned.id, { sessionId: sensory.id, presentationMode: 'BLIND' }).data.link
+    const blind = service.publicTrialPresentation(link.token).data
+    expect(blind.title).toBe('Blind fragrance trial')
+    expect(blind).not.toHaveProperty('formulaId')
+    const scores = { OPENING: 8, HEART: 7, DRYDOWN: 8, LONGEVITY: 7, OVERALL: 8 }
+    const publicObservation = service.submitPublicTrialObservation(link.token, { timepoint: 'OVERALL', scores, descriptors: ['bright', 'woody'], observation: 'Balanced drydown.', idempotencyKey: 'public-observation-001' }).data
+    expect(publicObservation.duplicate).toBeUndefined()
+    expect(service.submitPublicTrialObservation(link.token, { timepoint: 'OVERALL', scores, idempotencyKey: 'public-observation-001' }).data.duplicate).toBe(true)
+
+    const decided = service.closeTrial(planned.id, { outcome: 'ACCEPT', rationale: 'Panel accepted the controlled trial.' }).data.trial
+    expect(decided.lifecycle).toBe('DECIDED')
+    service.reverseLabUsage(usage.id)
+    expect(service.trialDetail(planned.id).data.trial.usageLink?.reversedAt).toBeTruthy()
+  })
+
   it('keeps Formula records isolated between workspaces', () => {
     const service = createAuthenticatedService()
     const signup = service.signup({

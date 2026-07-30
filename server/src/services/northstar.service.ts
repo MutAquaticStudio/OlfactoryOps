@@ -133,6 +133,18 @@ import {
   type LabUsagePurpose,
   type LabUsageRecord,
   type LabWeighingSession,
+  type FragranceTrialRecord,
+  type TrialComparableEvidence,
+  type TrialDecisionOutcome,
+  type TrialDecisionRecord,
+  type TrialLifecycle,
+  type TrialPublicLinkRecord,
+  type TrialReleaseRecord,
+  type TrialUsageLinkRecord,
+  type SensoryObservationRecord,
+  type SensorySessionRecord,
+  type SensoryStabilityStatus,
+  type SensoryTimepoint,
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
@@ -222,6 +234,43 @@ type LabWeighingOptions = {
   projectCode?: string
   sampleCode?: string
   qcLink?: string
+  trialId?: string
+}
+
+type TrialCreateBody = {
+  formulaId?: string
+  formulaVersion?: string
+  title?: string
+  sampleCode?: string
+}
+
+type TrialReleaseBody = {
+  note?: string
+}
+
+type TrialSensorySessionBody = {
+  presentationMode?: 'BLIND' | 'BRAND_REVIEW'
+  closesAt?: string
+}
+
+type TrialObservationBody = {
+  timepoint?: SensoryTimepoint
+  scores?: Partial<Record<SensoryTimepoint, number>>
+  descriptors?: string[]
+  observation?: string
+  stability?: SensoryStabilityStatus
+  idempotencyKey?: string
+}
+
+type TrialPublicLinkBody = {
+  sessionId?: string
+  presentationMode?: 'BLIND' | 'BRAND_REVIEW'
+  expiresAt?: string
+}
+
+type TrialDecisionBody = {
+  outcome?: TrialDecisionOutcome
+  rationale?: string
 }
 
 type LabUsageReverseOptions = {
@@ -809,6 +858,10 @@ export class NorthStarService {
   private formulaRecords: Formula[] = structuredClone(initialFormulas)
   private formulaVersionRecords: FormulaVersionRecord[] = structuredClone(formulaVersions)
   private usageHistory: LabUsageRecord[] = []
+  private fragranceTrialRecords: FragranceTrialRecord[] = []
+  private fragranceSensorySessionRecords: SensorySessionRecord[] = []
+  private fragranceSensoryObservationRecords: SensoryObservationRecord[] = []
+  private fragranceTrialPublicLinkRecords: TrialPublicLinkRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
   private organizationRecords: OrganizationRecord[] = structuredClone(organizations)
@@ -4924,6 +4977,306 @@ export class NorthStarService {
     }
   }
 
+  trials() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.view')
+    return {
+      data: {
+        trials: this.fragranceTrialRecords
+          .filter((trial) => trial.organizationId === session.organizationId)
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .map((trial) => this.projectTrialForSession(trial, session)),
+        invariant: 'trial records are workspace-private and never create inventory movements',
+      },
+    }
+  }
+
+  trialDetail(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.view')
+    const trial = this.trialForSession(id, session)
+    const sessions = this.fragranceSensorySessionRecords.filter((item) => item.organizationId === session.organizationId && item.trialId === id)
+    const observations = this.fragranceSensoryObservationRecords.filter((item) => item.organizationId === session.organizationId && item.trialId === id)
+    return {
+      data: {
+        trial: this.projectTrialForSession(trial, session),
+        sensorySessions: this.canViewTrialSensitive(session) ? sessions : sessions.map((item) => this.projectSensorySession(item)),
+        observations: this.canViewTrialSensitive(session)
+          ? observations
+          : observations.filter((item) => item.evaluatorRef === session.userId).map((item) => this.projectObservation(item)),
+        publicLinks: this.roleHasPermission(session.role, 'trials.managePublic', session.organizationId)
+          ? this.fragranceTrialPublicLinkRecords
+              .filter((item) => item.organizationId === session.organizationId && item.trialId === id)
+              .map((item) => this.projectPublicLink(item))
+          : [],
+        comparableEvidence: this.retrieveTrialMemory(trial.formulaSnapshot, session.organizationId),
+        invariant: 'sensitive formula, lot, and cost evidence remains hidden from sensory panelists',
+      },
+    }
+  }
+
+  createTrial(body: TrialCreateBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.create')
+    this.requirePermission(session.role, 'formulas.view')
+    const formulaId = body.formulaId?.trim() || ''
+    const formula = this.formulaForSession(formulaId, session)
+    const version = this.formulaVersionRecords
+      .filter((item) => item.organizationId === session.organizationId && item.formulaId === formula.id && item.status === 'APPROVED')
+      .find((item) => !body.formulaVersion || item.version === body.formulaVersion)
+    if (!version) {
+      throw new UnprocessableEntityException('Create an approved immutable formula version before planning a trial')
+    }
+    const now = new Date().toISOString()
+    const next = this.fragranceTrialRecords.filter((item) => item.organizationId === session.organizationId).length + 1
+    const nonce = randomBytes(3).toString('hex').toUpperCase()
+    const sampleCode = (body.sampleCode?.trim() || `TRL-${formula.code}-${nonce}`).slice(0, 80)
+    if (this.fragranceTrialRecords.some((item) => item.organizationId === session.organizationId && item.sampleCode.toLowerCase() === sampleCode.toLowerCase())) {
+      throw new UnprocessableEntityException(`Sample code ${sampleCode} already exists in this workspace`)
+    }
+    const trial: FragranceTrialRecord = {
+      id: `TRL-${session.organizationId.replace(/[^a-z0-9]/gi, '').slice(-6).toUpperCase()}-${String(next).padStart(4, '0')}-${nonce}`,
+      organizationId: session.organizationId,
+      sampleCode,
+      title: body.title?.trim().slice(0, 120) || `${formula.name} trial`,
+      lifecycle: 'PLANNED',
+      formulaSnapshot: this.trialFormulaSnapshot(formula, version, session),
+      createdBy: session.userId,
+      createdAt: now,
+      updatedAt: now,
+    }
+    this.fragranceTrialRecords = [trial, ...this.fragranceTrialRecords]
+    const audit = this.recordAudit('trial.create', trial.id, session.userId, 'allowed')
+    return { data: { trial: this.projectTrialForSession(trial, session), audit, invariant: 'trial planning stores an immutable formula-version reference and creates no stock movement' } }
+  }
+
+  releaseTrial(id: string, body: TrialReleaseBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.release')
+    this.requireFormulaApproverRole(session)
+    const trial = this.trialForSession(id, session)
+    if (trial.lifecycle !== 'PLANNED') {
+      throw new UnprocessableEntityException(`Trial ${trial.id} can only be released from PLANNED`)
+    }
+    const version = this.trialVersionForSession(trial, session)
+    this.validateTrialRelease(version, session)
+    const now = new Date().toISOString()
+    const release: TrialReleaseRecord = {
+      id: `TRL-REL-${trial.id}`,
+      releasedAt: now,
+      releasedBy: session.userId,
+      complianceStatus: this.trialComplianceStatus(version, session),
+      ifraBlockerCount: version.ifraEvaluation.blockerCount,
+      formulaChecksum: version.checksum,
+      note: body.note?.trim().slice(0, 500) || undefined,
+    }
+    const updated = { ...trial, lifecycle: 'RELEASED_FOR_TRIAL' as const, release, updatedAt: now }
+    this.replaceTrial(updated)
+    const audit = this.recordAudit('trial.release', id, session.userId, release.complianceStatus === 'PASS' ? 'allowed' : 'review')
+    return { data: { trial: this.projectTrialForSession(updated, session), audit, invariant: 'trial release is a separate gate and never weakens normal formula approval' } }
+  }
+
+  updateTrialStage(id: string, lifecycle: 'CONDITIONING' | 'EVALUATING') {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.view')
+    const trial = this.trialForSession(id, session)
+    const allowed: Record<string, TrialLifecycle[]> = {
+      MIXED: ['CONDITIONING', 'EVALUATING'],
+      CONDITIONING: ['EVALUATING'],
+      EVALUATING: ['CONDITIONING'],
+    }
+    if (!allowed[trial.lifecycle]?.includes(lifecycle)) {
+      throw new UnprocessableEntityException(`Trial ${trial.id} cannot transition from ${trial.lifecycle} to ${lifecycle}`)
+    }
+    const updated = { ...trial, lifecycle, updatedAt: new Date().toISOString() }
+    this.replaceTrial(updated)
+    const audit = this.recordAudit(`trial.${lifecycle.toLowerCase()}`, id, session.userId, 'allowed')
+    return { data: { trial: this.projectTrialForSession(updated, session), audit } }
+  }
+
+  cancelTrial(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.create')
+    const trial = this.trialForSession(id, session)
+    if (trial.usageLink || trial.lifecycle !== 'PLANNED') {
+      throw new UnprocessableEntityException('Only an uncommitted planned trial can be cancelled')
+    }
+    const now = new Date().toISOString()
+    const updated = { ...trial, lifecycle: 'CANCELLED' as const, cancelledAt: now, cancelledBy: session.userId, updatedAt: now }
+    this.replaceTrial(updated)
+    const audit = this.recordAudit('trial.cancel', id, session.userId, 'review')
+    return { data: { trial: this.projectTrialForSession(updated, session), audit } }
+  }
+
+  createTrialSensorySession(id: string, body: TrialSensorySessionBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.view')
+    const trial = this.trialForSession(id, session)
+    if (!['MIXED', 'CONDITIONING', 'EVALUATING'].includes(trial.lifecycle)) {
+      throw new UnprocessableEntityException('A trial must be mixed before sensory review can open')
+    }
+    const now = new Date().toISOString()
+    const sessionRecord: SensorySessionRecord = {
+      id: `SNS-${trial.id}-${randomBytes(3).toString('hex').toUpperCase()}`,
+      organizationId: session.organizationId,
+      trialId: id,
+      status: 'OPEN',
+      evaluatorMode: 'INTERNAL',
+      presentationMode: body.presentationMode === 'BRAND_REVIEW' ? 'BRAND_REVIEW' : 'BLIND',
+      opensAt: now,
+      closesAt: this.normalizeTrialExpiry(body.closesAt, 30),
+      createdBy: session.userId,
+      createdAt: now,
+    }
+    this.fragranceSensorySessionRecords = [sessionRecord, ...this.fragranceSensorySessionRecords]
+    const transitioned = trial.lifecycle === 'EVALUATING' ? trial : { ...trial, lifecycle: 'EVALUATING' as const, updatedAt: now }
+    this.replaceTrial(transitioned)
+    const audit = this.recordAudit('trial.sensory-session.create', sessionRecord.id, session.userId, 'allowed')
+    return { data: { session: this.projectSensorySession(sessionRecord), trial: this.projectTrialForSession(transitioned, session), audit } }
+  }
+
+  submitInternalTrialObservation(trialId: string, sessionId: string, body: TrialObservationBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.evaluate')
+    if (this.normalizeRoleForPermission(session.role) !== 'SENSORY_PANELIST') {
+      throw new ForbiddenException('Internal sensory scorecards require the SENSORY_PANELIST role')
+    }
+    const trial = this.trialForSession(trialId, session)
+    const sensorySession = this.sensorySessionForTrial(sessionId, trial, session.organizationId)
+    if (sensorySession.status !== 'OPEN') throw new UnprocessableEntityException('This sensory session is closed')
+    const observation = this.upsertTrialObservation(trial, sensorySession, session.userId, 'INTERNAL', body)
+    const audit = this.recordAudit('trial.observation.internal.submit', observation.id, session.userId, 'allowed')
+    return { data: { observation: this.projectObservation(observation), audit } }
+  }
+
+  createTrialPublicLink(trialId: string, body: TrialPublicLinkBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.managePublic')
+    const trial = this.trialForSession(trialId, session)
+    const sensorySession = body.sessionId
+      ? this.sensorySessionForTrial(body.sessionId, trial, session.organizationId)
+      : this.fragranceSensorySessionRecords.find((item) => item.organizationId === session.organizationId && item.trialId === trialId && item.status === 'OPEN')
+    if (!sensorySession || sensorySession.status !== 'OPEN') {
+      throw new UnprocessableEntityException('Open a sensory session before issuing a public feedback link')
+    }
+    const now = new Date().toISOString()
+    const token = `trl_${randomBytes(24).toString('base64url')}`
+    const link: TrialPublicLinkRecord = {
+      id: `TPL-${trial.id}-${randomBytes(3).toString('hex').toUpperCase()}`,
+      organizationId: session.organizationId,
+      trialId: trial.id,
+      sessionId: sensorySession.id,
+      tokenHash: this.hashSecret(token),
+      presentationMode: body.presentationMode === 'BRAND_REVIEW' ? 'BRAND_REVIEW' : 'BLIND',
+      expiresAt: this.normalizeTrialExpiry(body.expiresAt, 14),
+      createdBy: session.userId,
+      createdAt: now,
+    }
+    this.fragranceTrialPublicLinkRecords = [link, ...this.fragranceTrialPublicLinkRecords]
+    const audit = this.recordAudit('trial.public-link.create', link.id, session.userId, 'allowed')
+    return { data: { link: { ...this.projectPublicLink(link), token, url: `/trial-feedback/${token}` }, audit, invariant: 'only the one-time returned token can access the blind or approved brand presentation' } }
+  }
+
+  revokeTrialPublicLink(id: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.managePublic')
+    const link = this.fragranceTrialPublicLinkRecords.find((item) => item.id === id && item.organizationId === session.organizationId)
+    if (!link) throw new NotFoundException(`Public trial link ${id} was not found`)
+    const updated = { ...link, revokedAt: new Date().toISOString() }
+    this.fragranceTrialPublicLinkRecords = this.fragranceTrialPublicLinkRecords.map((item) => (item.id === id ? updated : item))
+    const audit = this.recordAudit('trial.public-link.revoke', id, session.userId, 'review')
+    return { data: { link: this.projectPublicLink(updated), audit } }
+  }
+
+  publicTrialPresentation(token: string) {
+    const { trial, link, session } = this.publicTrialContext(token)
+    return {
+      data: {
+        sampleCode: trial.sampleCode,
+        title: link.presentationMode === 'BRAND_REVIEW' ? trial.title : 'Blind fragrance trial',
+        presentationMode: link.presentationMode,
+        narrative: link.presentationMode === 'BRAND_REVIEW' ? trial.formulaSnapshot.brief : undefined,
+        pyramid: link.presentationMode === 'BRAND_REVIEW' ? trial.formulaSnapshot.pyramidSummary : undefined,
+        timepoints: ['OPENING', 'HEART', 'DRYDOWN', 'LONGEVITY', 'OVERALL'] as SensoryTimepoint[],
+        closesAt: session.closesAt,
+      },
+    }
+  }
+
+  submitPublicTrialObservation(token: string, body: TrialObservationBody = {}) {
+    const { trial, link, session } = this.publicTrialContext(token)
+    const idempotencyKey = body.idempotencyKey?.trim()
+    if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 160) {
+      throw new UnprocessableEntityException('Public feedback requires an idempotencyKey between 8 and 160 characters')
+    }
+    const existing = this.fragranceSensoryObservationRecords.find((item) => item.organizationId === trial.organizationId && item.evaluatorRef === `public:${link.id}` && item.idempotencyKey === idempotencyKey)
+    if (existing) return { data: { observation: this.projectObservation(existing), duplicate: true } }
+    const observation = this.upsertTrialObservation(trial, session, `public:${link.id}`, 'PUBLIC', body)
+    observation.idempotencyKey = idempotencyKey
+    this.fragranceSensoryObservationRecords = this.fragranceSensoryObservationRecords.map((item) => (item.id === observation.id ? observation : item))
+    link.lastSubmittedAt = new Date().toISOString()
+    this.fragranceTrialPublicLinkRecords = this.fragranceTrialPublicLinkRecords.map((item) => (item.id === link.id ? link : item))
+    this.recordAudit('trial.observation.public.submit', observation.id, `public:${link.id}`, 'allowed', { organizationId: trial.organizationId })
+    return { data: { observation: this.projectObservation(observation) } }
+  }
+
+  closeTrial(id: string, body: TrialDecisionBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'trials.release')
+    this.requireFormulaApproverRole(session)
+    const trial = this.trialForSession(id, session)
+    if (!trial.usageLink || !['MIXED', 'CONDITIONING', 'EVALUATING'].includes(trial.lifecycle)) {
+      throw new UnprocessableEntityException('A trial requires committed actual usage before a decision can close it')
+    }
+    const outcome = body.outcome
+    const rationale = body.rationale?.trim().slice(0, 2000)
+    if (!outcome || !['ACCEPT', 'REVISE', 'REJECT'].includes(outcome) || !rationale) {
+      throw new UnprocessableEntityException('Trial decision requires ACCEPT, REVISE, or REJECT and a rationale')
+    }
+    const hasOverall = this.fragranceSensoryObservationRecords.some((item) => item.organizationId === session.organizationId && item.trialId === id && item.timepoint === 'OVERALL')
+    if (!hasOverall) throw new UnprocessableEntityException('Submit at least one overall sensory scorecard before closing a trial')
+    const now = new Date().toISOString()
+    const decision: TrialDecisionRecord = { id: `TDEC-${id}`, organizationId: session.organizationId, trialId: id, outcome, rationale, decidedBy: session.userId, decidedAt: now }
+    const updated = { ...trial, lifecycle: 'DECIDED' as const, decision, updatedAt: now }
+    this.replaceTrial(updated)
+    this.fragranceSensorySessionRecords = this.fragranceSensorySessionRecords.map((item) => item.organizationId === session.organizationId && item.trialId === id ? { ...item, status: 'CLOSED' as const, closesAt: now } : item)
+    const audit = this.recordAudit(`trial.decision.${outcome.toLowerCase()}`, id, session.userId, outcome === 'ACCEPT' ? 'allowed' : 'review')
+    return { data: { trial: this.projectTrialForSession(updated, session), audit, invariant: 'trial evidence is retained without changing the accepted, revised, or rejected formula' } }
+  }
+
+  retrieveTrialMemory(snapshot: FragranceTrialRecord['formulaSnapshot'], organizationId: string, requestedTimepoint: SensoryTimepoint = 'OVERALL'): TrialComparableEvidence {
+    const targetTerms = new Set(`${snapshot.brief} ${snapshot.pyramidSummary}`.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 3))
+    const targetFamilies = new Set(snapshot.materialFamilies ?? [])
+    const comparableTrials = this.fragranceTrialRecords
+      .filter((trial) =>
+        trial.organizationId === organizationId &&
+        trial.lifecycle === 'DECIDED' &&
+        trial.decision &&
+        trial.formulaSnapshot.formulaType === snapshot.formulaType &&
+        Math.abs(trial.formulaSnapshot.finalProductConcentrationPercent - snapshot.finalProductConcentrationPercent) <= 5,
+      )
+      .sort((left, right) => {
+        const score = (candidate: FragranceTrialRecord) => {
+          const words = `${candidate.formulaSnapshot.brief} ${candidate.formulaSnapshot.pyramidSummary}`.toLowerCase().split(/[^a-z0-9]+/)
+          const sharedTerms = words.filter((term) => targetTerms.has(term)).length
+          const sharedFamilies = (candidate.formulaSnapshot.materialFamilies ?? []).filter((family) => targetFamilies.has(family)).length
+          return sharedTerms + sharedFamilies * 2
+        }
+        return score(right) - score(left) || right.updatedAt.localeCompare(left.updatedAt)
+      })
+    const observations = this.fragranceSensoryObservationRecords.filter((item) => item.organizationId === organizationId && comparableTrials.some((trial) => trial.id === item.trialId))
+    const scorecards = observations.filter((item) => item.timepoint === requestedTimepoint)
+    if (scorecards.length < 3) {
+      return { status: 'NOT_ENOUGH_EVIDENCE', sampleCount: scorecards.length, confidence: 'NOT_EVALUATED', averages: {}, trialIds: comparableTrials.map((item) => item.id), summary: 'Not enough evidence: at least three completed comparable overall scorecards are required.' }
+    }
+    const averages = (['OPENING', 'HEART', 'DRYDOWN', 'LONGEVITY', 'OVERALL'] as SensoryTimepoint[]).reduce<Partial<Record<SensoryTimepoint, number>>>((result, timepoint) => {
+      const values = observations.map((item) => item.scores[timepoint]).filter((value) => Number.isFinite(value))
+      if (values.length > 0) result[timepoint] = Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2))
+      return result
+    }, {})
+    return { status: 'READY', sampleCount: scorecards.length, confidence: scorecards.length >= 10 ? 'HIGH' : scorecards.length >= 5 ? 'MODERATE' : 'LOW', averages, trialIds: comparableTrials.map((item) => item.id), summary: 'Comparable evidence is descriptive tenant-private sensory history, not a predictive recommendation.' }
+  }
+
   labUsagePlan(formulaId: string, grams: number) {
     const session = this.currentSession()
     const formula = this.publishedFormulaForLabUsage(formulaId, session)
@@ -4975,6 +5328,7 @@ export class NorthStarService {
   recordLabWeighingSession(formulaId: string, grams: number, options: LabWeighingOptions = {}) {
     const session = this.currentSession()
     const formula = this.publishedFormulaForLabUsage(formulaId, session)
+    if (options.trialId) this.trialReadyForLabUsage(options.trialId, formulaId, session)
     const plan = this.labUsagePlan(formulaId, grams).data
     if (!plan.canCommit) {
       throw new UnprocessableEntityException({
@@ -5055,6 +5409,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'inventory.commitLabUsage')
     const formula = this.publishedFormulaForLabUsage(formulaId, session)
+    const trial = options.trialId ? this.trialReadyForLabUsage(options.trialId, formulaId, session) : undefined
     const plan = this.labUsagePlan(formulaId, grams).data
     const weighingSession = this.recordLabWeighingSession(formulaId, grams, options).data.weighingSession
     if (weighingSession.status !== 'READY') {
@@ -5110,11 +5465,27 @@ export class NorthStarService {
       projectCode: options.projectCode?.trim() || undefined,
       sampleCode: options.sampleCode?.trim() || undefined,
       qcLink: options.qcLink?.trim() || undefined,
+      trialId: trial?.id,
       allocations: actualAllocations,
       weighingSession: { ...weighingSession, id: `WGH-${usageId}`, createdAt: timestamp },
       createdAt: timestamp,
     }
     this.usageHistory = [usage, ...this.usageHistory]
+    if (trial) {
+      const usageLink: TrialUsageLinkRecord = {
+        id: `TUL-${trial.id}`,
+        trialId: trial.id,
+        usageId,
+        formulaChecksum: trial.formulaSnapshot.checksum,
+        movementIds: createdMovements.map((movement) => movement.id),
+        allocations: actualAllocations,
+        actualWeights: usage.weighingSession?.lines ?? [],
+        costSnapshot: Number(actualAllocations.reduce((sum, allocation) => sum + allocation.allocatedGrams * (lotMap.get(allocation.lotId)?.unitCost ?? 0), 0).toFixed(4)),
+        linkedAt: timestamp,
+      }
+      this.replaceTrial({ ...trial, lifecycle: 'MIXED', usageLink, updatedAt: timestamp })
+      this.recordAudit('trial.usage.commit', `${trial.id}:${usageId}`, session.userId, 'allowed')
+    }
 
     return {
       data: {
@@ -5224,6 +5595,13 @@ export class NorthStarService {
           })
         : item,
     )
+    if (usage.trialId) {
+      const trial = this.fragranceTrialRecords.find((item) => item.id === usage.trialId && item.organizationId === session.organizationId)
+      if (trial?.usageLink) {
+        this.replaceTrial({ ...trial, usageLink: { ...trial.usageLink, reversedAt: timestamp }, updatedAt: timestamp })
+        this.recordAudit('trial.usage.reversed', `${trial.id}:${usage.id}`, session.userId, 'review')
+      }
+    }
 
     return {
       data: {
@@ -11695,6 +12073,203 @@ export class NorthStarService {
       throw new NotFoundException(`Formula ${id} was not found`)
     }
     return formula
+  }
+
+  private trialForSession(id: string, session: AuthSession) {
+    const trial = this.fragranceTrialRecords.find((item) => item.id === id && item.organizationId === session.organizationId)
+    if (!trial) throw new NotFoundException(`Trial ${id} was not found`)
+    return trial
+  }
+
+  private replaceTrial(next: FragranceTrialRecord) {
+    this.fragranceTrialRecords = this.fragranceTrialRecords.map((item) => item.id === next.id && item.organizationId === next.organizationId ? next : item)
+  }
+
+  private trialVersionForSession(trial: FragranceTrialRecord, session: AuthSession) {
+    const version = this.formulaVersionRecords.find((item) =>
+      item.organizationId === session.organizationId &&
+      item.formulaId === trial.formulaSnapshot.formulaId &&
+      item.version === trial.formulaSnapshot.formulaVersion &&
+      item.checksum === trial.formulaSnapshot.checksum,
+    )
+    if (!version) throw new UnprocessableEntityException('The immutable formula version referenced by this trial is unavailable')
+    return version
+  }
+
+  private trialFormulaSnapshot(formula: Formula, version: FormulaVersionRecord, session: AuthSession): FragranceTrialRecord['formulaSnapshot'] {
+    return {
+      formulaId: formula.id,
+      formulaCode: formula.code,
+      formulaName: formula.name,
+      formulaVersion: version.version,
+      checksum: version.checksum,
+      formulaType: version.metadata.formulaType,
+      concentrationType: version.metadata.concentrationType,
+      finalProductConcentrationPercent: version.metadata.finalProductConcentrationPercent,
+      ifraCategory: version.metadata.ifraCategory,
+      brief: version.metadata.brief,
+      pyramidSummary: version.metadata.pyramidSummary,
+      targetGrams: version.totalGrams,
+      totalCost: version.totalCost,
+      lineCount: version.lineCount,
+      materialFamilies: Array.from(new Set(version.resolvedLeaves.map((leaf) => this.materialCatalogForSession(session).find((material) => material.id === leaf.materialId)?.family).filter((family): family is string => Boolean(family)))).sort(),
+    }
+  }
+
+  private validateTrialRelease(version: FormulaVersionRecord, session: AuthSession) {
+    if (version.status !== 'APPROVED') throw new UnprocessableEntityException('Only an approved formula version can be released for trial')
+    const percent = version.resolvedLeaves.reduce((sum, leaf) => sum + leaf.effectivePercent, 0)
+    if (Math.abs(percent - 100) > 0.01 || version.totalGrams <= 0) {
+      throw new UnprocessableEntityException('Trial release requires a valid 100% formula composition')
+    }
+    if (version.ifraEvaluation.blockerCount > 0 || !version.ifraEvaluation.compositionReady) {
+      throw new UnprocessableEntityException('Trial release requires a passing deterministic IFRA review')
+    }
+    const blockedMaterial = version.resolvedLeaves.find((leaf) =>
+      this.materialComplianceRecords.some((profile) =>
+        (profile.organizationId || 'org-nxl') === session.organizationId && profile.materialId === leaf.materialId && profile.status === 'BLOCKED',
+      ),
+    )
+    if (blockedMaterial) throw new UnprocessableEntityException(`Trial release cannot include blocked material ${blockedMaterial.materialName}`)
+  }
+
+  private trialComplianceStatus(version: FormulaVersionRecord, session: AuthSession): TrialReleaseRecord['complianceStatus'] {
+    const requiresReview = version.resolvedLeaves.some((leaf) =>
+      this.materialComplianceRecords.some((profile) =>
+        (profile.organizationId || 'org-nxl') === session.organizationId && profile.materialId === leaf.materialId && profile.status === 'REVIEW_REQUIRED',
+      ),
+    )
+    return requiresReview ? 'REVIEW_REQUIRED' : 'PASS'
+  }
+
+  private trialReadyForLabUsage(trialId: string, formulaId: string, session: AuthSession) {
+    const trial = this.trialForSession(trialId, session)
+    if (trial.lifecycle !== 'RELEASED_FOR_TRIAL' || !trial.release || trial.usageLink) {
+      throw new UnprocessableEntityException('A trial must be released and uncommitted before actual lab usage can be linked')
+    }
+    if (trial.formulaSnapshot.formulaId !== formulaId) {
+      throw new UnprocessableEntityException('The selected formula does not match the immutable trial release snapshot')
+    }
+    return trial
+  }
+
+  private sensorySessionForTrial(id: string, trial: FragranceTrialRecord, organizationId: string) {
+    const session = this.fragranceSensorySessionRecords.find((item) => item.id === id && item.organizationId === organizationId && item.trialId === trial.id)
+    if (!session) throw new NotFoundException(`Sensory session ${id} was not found`)
+    return session
+  }
+
+  private upsertTrialObservation(
+    trial: FragranceTrialRecord,
+    sensorySession: SensorySessionRecord,
+    evaluatorRef: string,
+    source: SensoryObservationRecord['source'],
+    body: TrialObservationBody,
+  ) {
+    if (sensorySession.status !== 'OPEN' || (sensorySession.closesAt && Date.parse(sensorySession.closesAt) <= Date.now())) {
+      throw new UnprocessableEntityException('This sensory session is closed')
+    }
+    const timepoint = body.timepoint
+    if (!timepoint || !['OPENING', 'HEART', 'DRYDOWN', 'LONGEVITY', 'OVERALL'].includes(timepoint)) {
+      throw new UnprocessableEntityException('A valid sensory timepoint is required')
+    }
+    const scores = (['OPENING', 'HEART', 'DRYDOWN', 'LONGEVITY', 'OVERALL'] as SensoryTimepoint[]).reduce<Record<SensoryTimepoint, number>>((result, key) => {
+      const value = Number(body.scores?.[key])
+      if (!Number.isFinite(value) || value < 1 || value > 10) throw new UnprocessableEntityException('Each sensory score must be between 1 and 10')
+      result[key] = Number(value.toFixed(1))
+      return result
+    }, {} as Record<SensoryTimepoint, number>)
+    const descriptors = Array.from(new Set((body.descriptors ?? []).map((item) => String(item).trim().toLowerCase()).filter(Boolean)))
+    if (descriptors.length > 12 || descriptors.some((item) => item.length > 36)) throw new UnprocessableEntityException('Use at most 12 sensory descriptors of 36 characters each')
+    const observation = body.observation?.trim().slice(0, 2000) || ''
+    const stability: SensoryStabilityStatus = body.stability === 'WATCH' || body.stability === 'UNSTABLE' ? body.stability : 'STABLE'
+    const now = new Date().toISOString()
+    const existing = this.fragranceSensoryObservationRecords.find((item) => item.organizationId === trial.organizationId && item.sessionId === sensorySession.id && item.evaluatorRef === evaluatorRef && item.timepoint === timepoint)
+    const next: SensoryObservationRecord = {
+      id: existing?.id ?? `SOBS-${sensorySession.id}-${String(this.fragranceSensoryObservationRecords.filter((item) => item.sessionId === sensorySession.id).length + 1).padStart(3, '0')}`,
+      organizationId: trial.organizationId,
+      trialId: trial.id,
+      sessionId: sensorySession.id,
+      evaluatorRef,
+      timepoint,
+      scores,
+      descriptors,
+      observation,
+      stability,
+      submittedAt: existing?.submittedAt ?? now,
+      updatedAt: now,
+      source,
+    }
+    this.fragranceSensoryObservationRecords = existing
+      ? this.fragranceSensoryObservationRecords.map((item) => item.id === existing.id ? next : item)
+      : [next, ...this.fragranceSensoryObservationRecords]
+    return next
+  }
+
+  private publicTrialContext(token: string) {
+    const tokenHash = this.hashSecret(token.trim())
+    const link = this.fragranceTrialPublicLinkRecords.find((item) => item.tokenHash === tokenHash)
+    if (!link || link.revokedAt || Date.parse(link.expiresAt) <= Date.now()) throw new NotFoundException('This trial feedback link is unavailable')
+    const trial = this.fragranceTrialRecords.find((item) => item.id === link.trialId && item.organizationId === link.organizationId)
+    const session = this.fragranceSensorySessionRecords.find((item) => item.id === link.sessionId && item.organizationId === link.organizationId && item.trialId === link.trialId)
+    if (!trial || !session || session.status !== 'OPEN' || (session.closesAt && Date.parse(session.closesAt) <= Date.now())) throw new NotFoundException('This trial feedback link is unavailable')
+    return { trial, link, session }
+  }
+
+  private normalizeTrialExpiry(value: string | undefined, defaultDays: number) {
+    const fallback = new Date(Date.now() + defaultDays * 24 * 60 * 60 * 1000)
+    const candidate = value ? new Date(value) : fallback
+    if (!Number.isFinite(candidate.getTime()) || candidate.getTime() <= Date.now() || candidate.getTime() > Date.now() + 90 * 24 * 60 * 60 * 1000) {
+      throw new UnprocessableEntityException('Trial expiry must be between now and 90 days from now')
+    }
+    return candidate.toISOString()
+  }
+
+  private canViewTrialSensitive(session: AuthSession) {
+    return this.roleHasPermission(session.role, 'formulas.viewSensitive', session.organizationId) && this.roleHasPermission(session.role, 'materials.view', session.organizationId)
+  }
+
+  private projectTrialForSession(trial: FragranceTrialRecord, session: AuthSession): FragranceTrialRecord {
+    if (this.canViewTrialSensitive(session)) return trial
+    return {
+      id: trial.id,
+      organizationId: trial.organizationId,
+      sampleCode: trial.sampleCode,
+      title: 'Blind fragrance trial',
+      lifecycle: trial.lifecycle,
+      formulaSnapshot: {
+        formulaId: '',
+        formulaCode: '',
+        formulaName: '',
+        formulaVersion: '',
+        checksum: '',
+        formulaType: trial.formulaSnapshot.formulaType,
+        concentrationType: trial.formulaSnapshot.concentrationType,
+        finalProductConcentrationPercent: trial.formulaSnapshot.finalProductConcentrationPercent,
+        ifraCategory: trial.formulaSnapshot.ifraCategory,
+        brief: '',
+        pyramidSummary: '',
+        targetGrams: 0,
+        totalCost: 0,
+        lineCount: 0,
+        materialFamilies: [],
+      },
+      createdBy: '',
+      createdAt: trial.createdAt,
+      updatedAt: trial.updatedAt,
+    }
+  }
+
+  private projectSensorySession(session: SensorySessionRecord) {
+    return { id: session.id, trialId: session.trialId, status: session.status, presentationMode: session.presentationMode, opensAt: session.opensAt, closesAt: session.closesAt }
+  }
+
+  private projectObservation(observation: SensoryObservationRecord) {
+    return { ...observation, evaluatorRef: observation.evaluatorRef.startsWith('public:') ? 'External evaluator' : 'Internal panelist' }
+  }
+
+  private projectPublicLink(link: TrialPublicLinkRecord) {
+    return { id: link.id, trialId: link.trialId, sessionId: link.sessionId, presentationMode: link.presentationMode, expiresAt: link.expiresAt, revokedAt: link.revokedAt, createdAt: link.createdAt, lastSubmittedAt: link.lastSubmittedAt }
   }
 
   private publishedFormulaForLabUsage(id: string, session: AuthSession) {
