@@ -247,7 +247,23 @@ export class FormulaIntelligenceStore {
        WHERE p.organization_id = ? AND (p.created_by_user_id = ? OR s.id IS NOT NULL OR r.run_id IS NOT NULL)
        ORDER BY p.updated_at DESC LIMIT 80`,
     ).bind(actor.userId, actor.userId, actor.organizationId, actor.userId).all<ProjectRow>()
-    return Promise.all((result.results ?? []).map((project) => this.projectPayload(project, actor, canViewPrivate)))
+    const visible = new Map((result.results ?? []).map((project) => [project.id, project]))
+    // A perfumer may pick up an untouched brief in their active brand, but never
+    // browse private directions that another perfumer has already generated.
+    if (canViewPrivate) {
+      const brandIds = await this.activeBrandIds(actor)
+      if (brandIds.length) {
+        const placeholders = brandIds.map(() => '?').join(', ')
+        const queued = await this.db.prepare(
+          `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+           FROM formula_design_projects
+           WHERE organization_id = ? AND status = 'BRIEFED' AND brand_id IN (${placeholders})
+           ORDER BY updated_at DESC LIMIT 80`,
+        ).bind(actor.organizationId, ...brandIds).all<ProjectRow>()
+        for (const project of queued.results ?? []) visible.set(project.id, project)
+      }
+    }
+    return Promise.all([...visible.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at)).map((project) => this.projectPayload(project, actor, canViewPrivate)))
   }
 
   async designProject(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
@@ -261,6 +277,23 @@ export class FormulaIntelligenceStore {
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
     ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
+    const brandIds = await this.activeBrandIds(actor)
+    const canStart = project.created_by_user_id === actor.userId || (
+      project.status === 'BRIEFED' && Boolean(project.brand_id) && brandIds.includes(project.brand_id!)
+    )
+    if (!canStart) throw new NotFoundException('Design project was not found')
+    const existingRun = await this.db.prepare(
+      `SELECT created_by_user_id FROM formula_intelligence_runs
+       WHERE organization_id = ? AND project_id = ?
+       ORDER BY created_at DESC LIMIT 1`,
+    ).bind(actor.organizationId, project.id).first<{ created_by_user_id: string }>()
+    if (existingRun && existingRun.created_by_user_id !== actor.userId) {
+      // Do not disclose that a different perfumer is working on a project.
+      throw new NotFoundException('Design project was not found')
+    }
+    if (existingRun || project.status !== 'BRIEFED') {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ALREADY_GENERATED')
+    }
     return project
   }
 
@@ -313,9 +346,9 @@ export class FormulaIntelligenceStore {
 
   async shareDirection(actor: AgentActor, projectId: string, directionId: string, body: unknown) {
     const project = await this.projectForActor(actor, projectId)
-    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can share it')
     const input = formulaDirectionShareSchema.parse(body)
     const direction = await this.directionForProject(actor, projectId, directionId, true)
+    if (!(await this.isDirectionProducer(actor, direction))) throw new ForbiddenException('Only the perfumer who generated a direction can share it')
     const recipients = await this.activeRecipients(actor, project, input.recipientUserIds)
     if (recipients.length !== input.recipientUserIds.length) throw new UnprocessableEntityException('Every recipient must be an active member of this project brand')
     const timestamp = now()
@@ -337,8 +370,9 @@ export class FormulaIntelligenceStore {
   }
 
   async revokeDirectionShare(actor: AgentActor, projectId: string, directionId: string, recipientUserId: string) {
-    const project = await this.projectForActor(actor, projectId)
-    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can revoke a share')
+    await this.projectForActor(actor, projectId)
+    const direction = await this.directionForProject(actor, projectId, directionId, true)
+    if (!(await this.isDirectionProducer(actor, direction))) throw new ForbiddenException('Only the perfumer who generated a direction can revoke a share')
     const result = await this.db.prepare(
       `UPDATE formula_design_direction_shares SET revoked_at = ?, revoked_by_user_id = ?, updated_at = ?
        WHERE organization_id = ? AND project_id = ? AND direction_id = ? AND recipient_user_id = ? AND revoked_at IS NULL`,
@@ -385,9 +419,9 @@ export class FormulaIntelligenceStore {
   }
 
   async requestDirectionDraftSave(actor: AgentActor, projectId: string, directionId: string, agentStore: AgentRuntimeStore) {
-    const project = await this.projectForActor(actor, projectId)
-    if (!(await this.isProjectProducer(actor, project.id))) throw new ForbiddenException('Only the perfumer who generated a direction can save it as a draft')
+    await this.projectForActor(actor, projectId)
     const direction = await this.directionForProject(actor, projectId, directionId, true)
+    if (!(await this.isDirectionProducer(actor, direction))) throw new ForbiddenException('Only the perfumer who generated a direction can save it as a draft')
     const run = await agentStore.runForActor(actor, direction.run_id)
     const proposal = agentFormulaProposalSchema.parse(parseJson(direction.proposal_json, {}))
     const pending = await this.pendingConfirmation(run)
@@ -614,6 +648,14 @@ export class FormulaIntelligenceStore {
       `SELECT 1 AS found FROM agent_runs WHERE id = ? AND organization_id = ? AND user_id = ? LIMIT 1`,
     ).bind(direction.run_id, actor.organizationId, actor.userId).first<{ found: number }>()
     return Boolean(run)
+  }
+
+  private async activeBrandIds(actor: AgentActor) {
+    const membership = await this.db.prepare(
+      `SELECT brand_ids_json FROM tenant_memberships
+       WHERE organization_id = ? AND user_id = ? AND status = 'ACTIVE' LIMIT 1`,
+    ).bind(actor.organizationId, actor.userId).first<{ brand_ids_json: string }>()
+    return membership ? parseJson<string[]>(membership.brand_ids_json, []) : []
   }
 
   private async activeRecipients(actor: AgentActor, project: ProjectRow, recipientIds: string[]) {
@@ -886,8 +928,8 @@ export async function createDesignProjectRun(
 ) {
   requirePermission(service, 'formulas.edit')
   const intelligence = new FormulaIntelligenceStore(db)
-  await intelligence.assertRunStartAllowed(actor, projectId)
   const project = await intelligence.designProjectForGeneration(actor, projectId)
+  await intelligence.assertRunStartAllowed(actor, projectId)
   const store = new AgentRuntimeStore(db)
   const brief = formulaDesignBriefSchema.parse(parseJson(project.brief_json, {}))
   const result = await store.create(actor, { brief: brief.creativeBrief }, { provider: 'mock', model: 'deterministic-v1' })

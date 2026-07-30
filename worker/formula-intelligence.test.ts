@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { UnprocessableEntityException } from '../server/src/shared/http-error.js'
+import { NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import { FormulaIntelligenceStore } from './formula-intelligence.js'
 
 type RecordedStatement = { sql: string; values: unknown[] }
@@ -34,6 +34,33 @@ function quotaExceededD1() {
   return { db, statements }
 }
 
+function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?: string }) {
+  const project = {
+    id: 'project-1', organization_id: 'org-a', brand_id: 'brand-a', created_by_user_id: 'usr-brand',
+    status: 'BRIEFED', name: 'Shared brief', brief_json: '{}', selected_direction_id: null,
+    created_at: '2026-07-29T00:00:00.000Z', updated_at: '2026-07-29T00:00:00.000Z',
+  }
+  return {
+    prepare(sql: string) {
+      return {
+        bind() {
+          return {
+            first: async () => {
+              if (sql.includes('FROM formula_design_projects')) return project
+              if (sql.includes('FROM tenant_memberships')) return { brand_ids_json: JSON.stringify(options.brandIds) }
+              if (sql.includes('FROM formula_intelligence_runs')) return options.existingRunUserId ? { created_by_user_id: options.existingRunUserId } : null
+              return null
+            },
+            all: async () => ({ results: [] }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }
+        },
+      }
+    },
+    batch: async () => [],
+  } as unknown as D1Database
+}
+
 describe('Formula Intelligence Worker persistence contract', () => {
   it('audits a tenant-scoped quota denial before rejecting a new run', async () => {
     const { db, statements } = quotaExceededD1()
@@ -45,5 +72,19 @@ describe('Formula Intelligence Worker persistence contract', () => {
     expect(auditInsert?.values).toContain('org-a')
     expect(auditInsert?.values).toContain('formula-intelligence.run.quota.denied')
     expect(auditInsert?.values).toContain('blocked')
+  })
+
+  it('does not expose a brand brief to a perfumer outside that brand', async () => {
+    const store = new FormulaIntelligenceStore(designProjectAccessD1({ brandIds: ['brand-b'] }))
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  it('prevents a second perfumer from generating over an existing direction run', async () => {
+    const store = new FormulaIntelligenceStore(designProjectAccessD1({ brandIds: ['brand-a'], existingRunUserId: 'usr-other-perfumer' }))
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toBeInstanceOf(NotFoundException)
   })
 })

@@ -122,4 +122,30 @@ describe('AgentLocalRuntimeService', () => {
       allowMaterialNames: false,
     })).rejects.toThrow('Every recipient must be an active member of this project brand')
   })
+
+  it('does not let a perfumer outside the project brand generate a brief', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    const project = await runtime.createDesignProject(service, session, {
+      name: 'Private brand brief',
+      formulaType: 'FINE_FRAGRANCE',
+      concentrationType: 'EDP',
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+      targetMarkets: ['EU'],
+      creativeBrief: 'A private creative direction owned by this brand.',
+      desiredNotes: ['citrus'],
+      avoidedNotes: [],
+      lockedMaterialIds: [],
+      availabilityFirst: true,
+      targetGrams: 100,
+    })
+    const outsideBrandSession = { ...session, userId: 'usr-other-perfumer', brandId: 'brand-other' }
+
+    await expect(runtime.generateDesignDirections(service, outsideBrandSession, project.data.project.id)).rejects.toThrow('Design project was not found')
+  })
 })

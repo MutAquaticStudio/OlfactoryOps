@@ -137,7 +137,8 @@ export class AgentLocalRuntimeService {
         .filter((project) => project.organizationId === current.organizationId && (
           project.createdByUserId === current.userId ||
           this.isProjectProducer(current.userId, project.id) ||
-          project.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt))
+          project.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt)) ||
+          (canViewPrivate && project.status === 'BRIEFED' && project.brandId === session.brandId)
         ))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .map((project) => this.exposeProject(project, session, canViewPrivate)),
@@ -171,6 +172,7 @@ export class AgentLocalRuntimeService {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.edit')
     const project = this.projectFor(session, projectId, true)
+    this.requireProjectProducer(session, project)
     return { data: service.formulaDesignRecipients(project.brandId).data }
   }
 
@@ -180,6 +182,7 @@ export class AgentLocalRuntimeService {
     this.requireFormulaPermission(service, 'formulas.viewSensitive')
     this.requireFormulaPermission(service, 'materials.view')
     const project = this.projectFor(session, projectId, true)
+    if (project.status !== 'BRIEFED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ALREADY_GENERATED')
     let run: LocalRun
     try {
       run = this.createIntelligenceRun(session, project.brief.creativeBrief, { workflowKind: 'DESIGN_STUDIO', projectId })
@@ -456,13 +459,13 @@ export class AgentLocalRuntimeService {
     }
   }
 
-  private projectFor(session: AuthSession, projectId: string, includeTenantProjects: boolean) {
+  private projectFor(session: AuthSession, projectId: string, allowBrandBrief: boolean) {
     const current = actor(session)
     const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === current.organizationId && (
-      includeTenantProjects ||
       candidate.createdByUserId === current.userId ||
       this.isProjectProducer(current.userId, candidate.id) ||
-      candidate.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt))
+      candidate.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt)) ||
+      (allowBrandBrief && candidate.status === 'BRIEFED' && candidate.brandId === session.brandId)
     ))
     if (!project) throw new NotFoundException('Design project was not found')
     return project
@@ -470,6 +473,12 @@ export class AgentLocalRuntimeService {
 
   private isProjectProducer(userId: string, projectId: string) {
     return this.state.runs.some((run) => run.user_id === userId && run.intelligence?.workflowKind === 'DESIGN_STUDIO' && run.intelligence.projectId === projectId)
+  }
+
+  private requireProjectProducer(session: AuthSession, project: LocalDesignProject) {
+    if (!this.isProjectProducer(session.userId, project.id)) {
+      throw new ForbiddenException('Only the generating perfumer can manage direction recipients')
+    }
   }
 
   private exposeProject(project: LocalDesignProject, session: AuthSession, canViewPrivate: boolean) {
