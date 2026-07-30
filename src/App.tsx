@@ -5083,6 +5083,7 @@ function MaterialWorkspace({
   const [createCas, setCreateCas] = useState('68917-34-0')
   const [createFamily, setCreateFamily] = useState('Woody vetiver')
   const [createTier, setCreateTier] = useState<Material['tier']>('Base')
+  const createNameInputRef = useRef<HTMLInputElement>(null)
   const [editDraft, setEditDraft] = useState({
     family: selected.family,
     tier: selected.tier,
@@ -5271,6 +5272,10 @@ function MaterialWorkspace({
     }
     setCreateFamily(product.category.replaceAll('_', ' ').toLowerCase())
     setMaterialStatus(`${product.productName} was copied to the new-material draft. Confirm its specification before creating it.`)
+    requestAnimationFrame(() => {
+      createNameInputRef.current?.scrollIntoView({ block: 'nearest' })
+      createNameInputRef.current?.focus()
+    })
   }
 
   async function importSupplierCatalogue() {
@@ -5648,7 +5653,7 @@ function MaterialWorkspace({
         <div className="material-form-grid">
           <label className="field-row">
             <span>Name</span>
-            <input aria-label="New material name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
+            <input ref={createNameInputRef} aria-label="New material name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
           </label>
           <label className="field-row">
             <span>CAS</span>
