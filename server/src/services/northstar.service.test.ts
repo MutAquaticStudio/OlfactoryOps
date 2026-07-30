@@ -248,6 +248,24 @@ describe('NorthStarService', () => {
     expect(reverse.invariant).toContain('reverse by compensation')
   })
 
+  it('marks a proposal with no material compliance profile as review required', () => {
+    const service = createAuthenticatedService()
+
+    const preview = service.previewFormulaIntelligence({
+      name: 'Unreviewed material preview',
+      formulaType: 'ACCORD',
+      targetGrams: 100,
+      concentrationType: 'OTHER',
+      finalProductConcentrationPercent: 100,
+      ifraCategory: '4',
+      brief: 'Verify that missing compliance evidence is never treated as approved.',
+      ingredients: [{ materialId: 'mat-ambroxan', percentage: 100, pyramidNote: 'Base' }],
+    }).data
+
+    expect(preview.compliance.status).toBe('REVIEW_REQUIRED')
+    expect(preview.compliance.reviewMaterialIds).toEqual(['mat-ambroxan'])
+  })
+
   it('partially reverses a selected lot before completing the remaining compensation', () => {
     const service = createAuthenticatedService()
     const commit = service.commitLabUsage('frm-accord-citrus', 12.5).data

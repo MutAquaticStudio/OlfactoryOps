@@ -132,11 +132,12 @@ function availabilityStatus(preview: Preview) {
 }
 
 function candidateWarnings(preview: Preview) {
+  const materialNames = new Map(preview.formula.lines.map((line) => [line.materialId, line.label]))
   return [
     ...preview.ifra.rows
       .filter((row) => row.status !== 'PASS' && row.status !== 'NO_LIMIT')
       .map((row) => `${row.materialName}: ${row.status}`),
-    ...preview.compliance.reviewMaterialIds.map((id) => `Compliance review required for ${id}`),
+    ...preview.compliance.reviewMaterialIds.map((id) => `Compliance review required for ${materialNames.get(id) ?? id}`),
     ...(preview.visibility.canViewInventory
       ? preview.availability.filter((item) => item.status !== 'AVAILABLE').map((item) => `${item.materialName}: ${item.status.toLowerCase()}`)
       : ['Inventory detail is hidden by the current role.']),
@@ -740,11 +741,14 @@ async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknow
   await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: message })
 }
 
-function approvedMaterials(service: NorthStarService) {
-  return service.materials().data.filter((material) => {
-    const profile = service.materialCompliance(material.id).data
-    return profile?.status === 'APPROVED'
-  })
+function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
+  const catalog = service.materials().data.map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
+  const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
+  // A tenant may research its material master before a compliance profile exists.
+  // Missing evidence remains REVIEW_REQUIRED and never becomes implicit approval.
+  return approved.length
+    ? { materials: approved, reviewRequired: false }
+    : { materials: catalog.filter(({ profile }) => profile?.status !== 'BLOCKED').map(({ material }) => material), reviewRequired: true }
 }
 
 function availabilityRankedMaterials(service: NorthStarService, materials: Material[]) {
@@ -767,8 +771,9 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   await store.completeNode(run, analyzeId, 'analyze_brief', { designProjectId: config.projectId, availabilityFirst: config.brief.availabilityFirst }, 12)
   const searchId = await store.createNode(run, 'search_materials', { brief: config.brief.creativeBrief })
   await store.startNode(run, searchId, 'search_materials')
-  const materials = availabilityRankedMaterials(service, approvedMaterials(service))
-  if (!materials.length) throw new UnprocessableEntityException('No compliance-approved workspace materials are available for this design brief')
+  const materialCatalog = formulaIntelligenceMaterialCatalog(service)
+  const materials = availabilityRankedMaterials(service, materialCatalog.materials)
+  if (!materials.length) throw new UnprocessableEntityException('No eligible workspace materials are available for this design brief')
   await recordTool(store, run, searchId, 'search_materials', { query: config.brief.creativeBrief }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
   const granted = new Set(service.me().data.permissions)
   const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
@@ -810,7 +815,9 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistDesignDirections(actor, config.projectId, run.id, directions)
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 2, directionCount: directions.length }, 94)
-  await store.createAssistantMessage(run, 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
+  await store.createAssistantMessage(run, materialCatalog.reviewRequired
+    ? 'I prepared three deterministic design directions from the available material master. Compliance evidence is incomplete, so each direction is marked for review before it can progress.'
+    : 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
 }
 
 async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>, materialEvidence?: MaterialEvidenceRag) {
@@ -830,7 +837,7 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   if (!baselineProposal.ingredients.length) throw new UnprocessableEntityException('Baseline version has no material composition to optimize')
   const searchId = await store.createNode(run, 'search_materials', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, searchId, 'search_materials')
-  const materials = availabilityRankedMaterials(service, approvedMaterials(service))
+  const materials = availabilityRankedMaterials(service, formulaIntelligenceMaterialCatalog(service).materials)
   await recordTool(store, run, searchId, 'search_materials', { baselineMaterialIds: [...materialIdSet] }, { candidateMaterialIds: materials.slice(0, 24).map((material) => material.id) })
   const granted = new Set(service.me().data.permissions)
   const evidenceMaterialIds = [...new Set([...materialIdSet, ...materials.slice(0, 12).map((material) => material.id)])].slice(0, 12)

@@ -2049,7 +2049,9 @@ export class NorthStarService {
       (profile) => profile.materialId === ingredient.materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
     ))
     const blockedMaterialIds = profiles.filter((profile) => profile?.status === 'BLOCKED').map((profile) => profile!.materialId)
-    const reviewMaterialIds = profiles.filter((profile) => profile?.status === 'REVIEW_REQUIRED').map((profile) => profile!.materialId)
+    const reviewMaterialIds = profiles.flatMap((profile, index) => (
+      profile?.status === 'REVIEW_REQUIRED' || !profile ? [proposal.ingredients[index]!.materialId] : []
+    ))
     return {
       data: {
         formula,

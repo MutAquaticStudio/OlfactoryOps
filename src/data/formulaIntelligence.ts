@@ -66,11 +66,11 @@ export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materia
       return availability || materialScore(right, desiredTerms, avoidedTerms) - materialScore(left, desiredTerms, avoidedTerms) || left.name.localeCompare(right.name)
     })
   const locked = brief.lockedMaterialIds.map((id) => ranked.find((material) => material.id === id))
-  if (locked.some((material) => !material)) throw new Error('A locked material is not approved or is not visible in this workspace')
+  if (locked.some((material) => !material)) throw new Error('A locked material is not eligible or is not visible in this workspace')
   const resolvedLocked = locked as MaterialSeed[]
   const paletteSize = Math.max(4, resolvedLocked.length)
   const palette = [...resolvedLocked, ...ranked.filter((material) => !resolvedLocked.some((item) => item.id === material.id))].slice(0, paletteSize)
-  if (palette.length === 0) throw new Error('No approved workspace materials match this design brief')
+  if (palette.length === 0) throw new Error('No eligible workspace materials match this design brief')
   const labels = ['Luminous opening', 'Textural heart', 'Enduring trail']
   return labels.map((label, index) => {
     const unlocked = palette.filter((material) => !resolvedLocked.some((item) => item.id === material.id))
@@ -78,7 +78,7 @@ export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materia
     const title = `${brief.name} - ${label}`
     return {
       title,
-      narrative: `${label} for ${brief.creativeBrief.slice(0, 180)}. This direction keeps approved materials availability-first and identifies any shortfall before a draft is saved.`,
+      narrative: `${label} for ${brief.creativeBrief.slice(0, 180)}. This direction prioritizes eligible materials and identifies availability or compliance review before a draft is saved.`,
       pyramidSummary: choice.map((material) => `${noteForTier(material.tier)}: ${material.name}`).join(' / '),
       proposal: proposalFromMaterials(title, brief, choice, weightSets[index]!),
     }
