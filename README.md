@@ -42,6 +42,12 @@ flowchart LR
 - `VITE_API_BASE_URL` selects the API target. It is safe only for public API URLs; any value prefixed with `VITE_` is included in the client bundle and must never contain a secret.
 - The frontend is intentionally not trusted to enforce permissions, calculate final compliance, mutate inventory, or persist audit evidence. It presents capability-gated UI, while the server repeats every security decision.
 
+### Motion And Interaction
+
+- Quiet Lab motion lives in `src/ui/motion/` as local, audited React/TypeScript source built on the existing `framer-motion` dependency. No React Bits package, Pro registry, or remote runtime is loaded.
+- `AnimatedContent`, `AnimatedList`, `MotionCardButton`, `Stepper`, and `CountUp` make loaded operational data, workflow progress, task choices, and decision cards easier to scan. They are used on the Home task surface, Formula Design Studio, Trials & Sensory, and Production lifecycle gate.
+- Motion is intentionally short (160--220 ms), never autoplayed, and never carries required information. It honors both the operating-system `prefers-reduced-motion` setting and the workspace `Reduce motion` preference, which renders the same information without animation.
+
 ### Backend
 
 - `server/` contains the NestJS/Fastify API used for local development and test workflows. It binds to `127.0.0.1` and rejects a production/non-loopback configuration.

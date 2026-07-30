@@ -79,6 +79,7 @@ import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPa
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
 import { MotionProvider } from './ui/motion/MotionProvider'
+import { AnimatedContent, AnimatedList, AnimatedListItem, CountUp, MotionCardButton, Stepper } from './ui/motion/MotionPrimitives'
 import {
   auditEvents,
   commercialSkus,
@@ -4567,49 +4568,51 @@ const Dashboard = memo(function Dashboard({
         title="Today in your workspace"
         icon={Gauge}
       >
-        <div className="hero-content">
-          <div>
-            <p className="lead">
-              {internalAdminView
-                ? 'Start with the work that needs a decision. Workspace administration stays available in the background, without taking over day-to-day lab work.'
-                : 'Pick up the next dependable step, from a formula brief through material readiness, lab use, and production.'}
-            </p>
-            <div className="hero-actions">
-              {primaryDomain ? (
-                <button
-                  className="primary-button"
-                  data-testid="home-primary-action"
-                  type="button"
-                  onClick={() => onNavigate(primaryDomain.key)}
-                >
-                  Continue in {primaryDomainDisplay?.shortName ?? primaryDomain.name}
-                  <ChevronRight size={16} />
-                </button>
-              ) : null}
-              {canExportAudit ? (
-                <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
-                  Audit export
-                </button>
-              ) : null}
+        <AnimatedContent>
+          <div className="hero-content">
+            <div>
+              <p className="lead">
+                {internalAdminView
+                  ? 'Start with the work that needs a decision. Workspace administration stays available in the background, without taking over day-to-day lab work.'
+                  : 'Pick up the next dependable step, from a formula brief through material readiness, lab use, and production.'}
+              </p>
+              <div className="hero-actions">
+                {primaryDomain ? (
+                  <button
+                    className="primary-button"
+                    data-testid="home-primary-action"
+                    type="button"
+                    onClick={() => onNavigate(primaryDomain.key)}
+                  >
+                    Continue in {primaryDomainDisplay?.shortName ?? primaryDomain.name}
+                    <ChevronRight size={16} />
+                  </button>
+                ) : null}
+                {canExportAudit ? (
+                  <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
+                    Audit export
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="hero-metrics">
+              <Metric label="Available work areas" value={String(visibleModuleCount)} countUpValue={visibleModuleCount} />
+              {stats.risks > 0 ? <Metric label="Items needing review" value={String(stats.risks)} countUpValue={stats.risks} /> : null}
             </div>
           </div>
-          <div className="hero-metrics">
-            <Metric label="Available work areas" value={String(visibleModuleCount)} />
-            {stats.risks > 0 ? <Metric label="Items needing review" value={String(stats.risks)} /> : null}
-          </div>
-        </div>
+        </AnimatedContent>
       </Panel>
 
       {canViewUserOverview ? <OwnerUserOverview session={session} onNavigate={onNavigate} /> : null}
 
       {visibleWorkflowNodes.length > 0 ? (
         <Panel className="workflow-panel" title="Next steps" icon={Activity}>
-          <TaskShortcuts nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
+          <AnimatedContent delay={0.05}><TaskShortcuts nodes={visibleWorkflowNodes} onNavigate={onNavigate} /></AnimatedContent>
         </Panel>
       ) : null}
 
       <Panel className="matrix-panel" title="Your workspace" icon={Database}>
-        <DomainMatrix session={session} onNavigate={onNavigate} />
+        <AnimatedContent delay={0.08}><DomainMatrix session={session} onNavigate={onNavigate} /></AnimatedContent>
       </Panel>
 
       {canViewEnterpriseReadiness ? <EnterpriseReadiness session={session} onOpenModal={onOpenModal} /> : null}
@@ -4637,21 +4640,23 @@ function TaskShortcuts({
   onNavigate: (key: DomainKey) => void
 }) {
   return (
-    <div className="task-shortcut-list" aria-label="Suggested work areas">
+    <AnimatedList className="task-shortcut-list" aria-label="Suggested work areas">
       {nodes.map((node) => {
         const Icon = domainIcons[node.key]
         return (
-          <button className="task-shortcut" key={node.key} type="button" onClick={() => onNavigate(node.key)}>
-            <span className="task-shortcut-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>
-            <span>
-              <strong>{node.label}</strong>
-              <small>{node.detail}</small>
-            </span>
-            <ChevronRight size={16} aria-hidden="true" />
-          </button>
+          <AnimatedListItem key={node.key}>
+            <MotionCardButton className="task-shortcut" type="button" onClick={() => onNavigate(node.key)}>
+              <span className="task-shortcut-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>
+              <span>
+                <strong>{node.label}</strong>
+                <small>{node.detail}</small>
+              </span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </MotionCardButton>
+          </AnimatedListItem>
         )
       })}
-    </div>
+    </AnimatedList>
   )
 }
 
@@ -4698,10 +4703,10 @@ function OwnerUserOverview({
     >
       <div className="owner-user-summary">
         <div className="owner-user-metrics">
-          <Metric label="Total users" value={String(memberSummary?.totalMembers ?? 0)} />
-          <Metric label="Active" value={String(memberSummary?.activeMembers ?? 0)} />
-          <Metric label="Pending invites" value={String(memberSummary?.invitedMembers ?? 0)} />
-          <Metric label="Active sessions" value={String(memberSummary?.activeSessions ?? 0)} />
+          <Metric label="Total users" value={String(memberSummary?.totalMembers ?? 0)} countUpValue={memberSummary?.totalMembers ?? 0} />
+          <Metric label="Active" value={String(memberSummary?.activeMembers ?? 0)} countUpValue={memberSummary?.activeMembers ?? 0} />
+          <Metric label="Pending invites" value={String(memberSummary?.invitedMembers ?? 0)} countUpValue={memberSummary?.invitedMembers ?? 0} />
+          <Metric label="Active sessions" value={String(memberSummary?.activeSessions ?? 0)} countUpValue={memberSummary?.activeSessions ?? 0} />
         </div>
         <div className="owner-user-roles">
           <span className="mono-small">Role distribution</span>
@@ -11268,16 +11273,23 @@ function ProductionWorkspace({
               </label>
               <StatusBadge status={productionStatusTone[activeBatch.status]} label={productionLifecycleLabels[activeBatch.status]} />
             </div>
-            <div className="production-timeline" aria-label="Production lifecycle">
-              {productionLifecycle.map((status, index) => (
-                <div
-                  className={`timeline-step ${activeBatch.status === status ? 'is-current' : ''} ${productionLifecycle.indexOf(activeBatch.status) > index ? 'is-done' : ''}`}
-                  key={status}
-                >
-                  <span className="timeline-step-index">{index + 1}</span>
-                  <span>{productionLifecycleLabels[status]}</span>
-                </div>
-              ))}
+            <div className="production-timeline">
+              <Stepper
+                label="Production lifecycle"
+                steps={productionLifecycle.map((status, index) => {
+                  const currentIndex = productionLifecycle.indexOf(activeBatch.status)
+                  const statusForStep = activeBatch.status === 'HOLD'
+                    ? (index === 0 ? 'blocked' : 'upcoming')
+                    : activeBatch.status === 'PLANNED'
+                      ? (index === 0 ? 'active' : 'upcoming')
+                      : index < currentIndex
+                        ? 'complete'
+                        : index === currentIndex
+                          ? 'active'
+                          : 'upcoming'
+                  return { id: status, label: productionLifecycleLabels[status], status: statusForStep }
+                })}
+              />
             </div>
             <div className="production-gate-action">
               <div>
@@ -17318,11 +17330,11 @@ function FormulaSheetDialog({
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, countUpValue }: { label: string; value: string; countUpValue?: number }) {
   return (
     <div className="metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{Number.isFinite(countUpValue) ? <CountUp value={countUpValue ?? 0} /> : value}</strong>
     </div>
   )
 }

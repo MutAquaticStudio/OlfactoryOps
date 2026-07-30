@@ -31,6 +31,20 @@ export function AnimatedListItem({ children, ...props }: HTMLMotionProps<'div'> 
   return <motion.div {...props} variants={disabled ? undefined : { hidden: { opacity: 0, y: 6 }, visible: { opacity: 1, y: 0, transition: { duration: 0.18, ease: [0.22, 1, 0.36, 1] } } }}>{children}</motion.div>
 }
 
+export function MotionCardButton({ children, ...props }: HTMLMotionProps<'button'> & { children: ReactNode }) {
+  const disabled = useMotionDisabled()
+  return (
+    <motion.button
+      {...props}
+      whileHover={disabled ? undefined : { y: -2 }}
+      whileTap={disabled ? undefined : { scale: 0.985 }}
+      transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {children}
+    </motion.button>
+  )
+}
+
 export type StepperStep = { id: string; label: string; status: 'complete' | 'active' | 'upcoming' | 'blocked' }
 
 export function Stepper({ steps, label = 'Workflow progress' }: { steps: StepperStep[]; label?: string }) {
@@ -39,16 +53,17 @@ export function Stepper({ steps, label = 'Workflow progress' }: { steps: Stepper
 
 export function CountUp({ value, formatter = (next: number) => String(next), duration = 200 }: { value: number; formatter?: (value: number) => string; duration?: number }) {
   const disabled = useMotionDisabled()
-  const previous = useRef(value)
-  const [display, setDisplay] = useState(value)
+  const previous = useRef<number | null>(null)
+  const [display, setDisplay] = useState(() => disabled ? value : 0)
 
   useEffect(() => {
-    if (disabled || previous.current === value) {
+    if (disabled) {
       previous.current = value
       setDisplay(value)
       return
     }
-    const from = previous.current
+    const from = previous.current ?? 0
+    if (previous.current === value) return
     const started = performance.now()
     let frame = 0
     const tick = (now: number) => {

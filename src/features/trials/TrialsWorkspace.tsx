@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, ClipboardCheck, FlaskConical, Link2, Play, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { Formula, FragranceTrialRecord, SensorySessionRecord, SensoryStabilityStatus, SensoryTimepoint, TrialComparableEvidence, TrialDecisionOutcome, TrialPublicLinkRecord } from '../../data/northStar'
+import { AnimatedContent, AnimatedList, AnimatedListItem, Stepper } from '../../ui/motion/MotionPrimitives'
 
 type TrialDetail = {
   trial: FragranceTrialRecord
@@ -179,14 +180,16 @@ export function TrialsWorkspace({
 
   return (
     <section className="trials-workspace" aria-label="Trials and sensory">
-      <header className="trials-hero">
-        <div>
-          <span className="eyebrow"><FlaskConical size={14} /> Trials and sensory</span>
-          <h2>Learn from each formula release</h2>
-          <p>Release a version, record actual weighing, gather structured sensory feedback, then decide with comparable evidence.</p>
-        </div>
-        <button className="ghost-button small" type="button" onClick={() => void load()} disabled={busy}><RefreshCw size={15} /> Refresh</button>
-      </header>
+      <AnimatedContent>
+        <header className="trials-hero">
+          <div>
+            <span className="eyebrow"><FlaskConical size={14} /> Trials and sensory</span>
+            <h2>Learn from each formula release</h2>
+            <p>Release a version, record actual weighing, gather structured sensory feedback, then decide with comparable evidence.</p>
+          </div>
+          <button className="ghost-button small" type="button" onClick={() => void load()} disabled={busy}><RefreshCw size={15} /> Refresh</button>
+        </header>
+      </AnimatedContent>
 
       {notice ? <div className="agent-notice" role="status">{notice}</div> : null}
 
@@ -212,27 +215,35 @@ export function TrialsWorkspace({
         <section className="panel trials-list-panel">
           <div className="section-heading"><span className="section-icon"><ClipboardCheck size={17} /></span><h3>Trial workbench</h3></div>
           {trials.length === 0 ? <div className="empty-state">No trials yet. Start with an approved formula version.</div> : (
-            <div className="trials-list" role="list">
+            <AnimatedList className="trials-list" role="list">
               {trials.map((trial) => (
-                <button key={trial.id} type="button" className={`trial-row ${trial.id === selectedTrial?.id ? 'is-selected' : ''}`} onClick={() => setSelectedId(trial.id)}>
-                  <span className="trial-row-copy"><strong>{trial.sampleCode}</strong><span>{trial.title}</span></span>
-                  <span className="status-chip">{trial.lifecycle.replaceAll('_', ' ')}</span>
-                </button>
+                <AnimatedListItem key={trial.id}>
+                  <button type="button" className={`trial-row ${trial.id === selectedTrial?.id ? 'is-selected' : ''}`} onClick={() => setSelectedId(trial.id)}>
+                    <span className="trial-row-copy"><strong>{trial.sampleCode}</strong><span>{trial.title}</span></span>
+                    <span className="status-chip">{trial.lifecycle.replaceAll('_', ' ')}</span>
+                  </button>
+                </AnimatedListItem>
               ))}
-            </div>
+            </AnimatedList>
           )}
         </section>
       </div>
 
       {selectedTrial ? (
+        <AnimatedContent key={selectedTrial.id}>
         <section className="panel trial-detail-panel">
           <div className="trial-detail-heading">
             <div><span className="eyebrow">{selectedTrial.sampleCode}</span><h3>{selectedTrial.title}</h3><p>{selectedTrial.formulaSnapshot?.formulaName ?? 'Blind formula presentation'} {selectedTrial.formulaSnapshot?.formulaVersion ? `/${selectedTrial.formulaSnapshot.formulaVersion}` : ''}</p></div>
             <span className="status-chip">{selectedTrial.lifecycle.replaceAll('_', ' ')}</span>
           </div>
-          <ol className="trial-timeline" aria-label="Trial lifecycle">
-            {stages.map((stage, index) => <li key={stage} className={index <= currentStage ? 'is-complete' : ''}>{stage.replaceAll('_', ' ')}</li>)}
-          </ol>
+          <Stepper
+            label="Trial lifecycle"
+            steps={stages.map((stage, index) => ({
+              id: stage,
+              label: stage.replaceAll('_', ' '),
+              status: selectedTrial.lifecycle === 'CANCELLED' ? (index === 0 ? 'blocked' : 'upcoming') : index < currentStage ? 'complete' : index === currentStage ? 'active' : 'upcoming',
+            }))}
+          />
           <div className="trial-actions">
             {selectedTrial.lifecycle === 'PLANNED' ? <button className="primary-button" type="button" disabled={!canRelease || busy} onClick={() => void mutate(() => requestApi<MutationResponse>(`/trials/${encodeURIComponent(selectedTrial.id)}/release`, mutationInit()))}><ShieldCheck size={16} /> Release for trial</button> : null}
             {selectedTrial.lifecycle === 'PLANNED' && canCreate ? <button className="ghost-button small" type="button" disabled={busy} onClick={() => void mutate(() => requestApi<MutationResponse>(`/trials/${encodeURIComponent(selectedTrial.id)}/cancel`, mutationInit()))}>Cancel trial</button> : null}
@@ -242,11 +253,11 @@ export function TrialsWorkspace({
             {canManagePublic && detail?.sensorySessions.some((item) => item.status === 'OPEN') ? <label className="trial-public-mode">Public view<select value={publicPresentationMode} onChange={(event) => setPublicPresentationMode(event.target.value as 'BLIND' | 'BRAND_REVIEW')} disabled={busy}><option value="BLIND">Blind sample</option><option value="BRAND_REVIEW">Brand review</option></select></label> : null}
             {canManagePublic && detail?.sensorySessions.some((item) => item.status === 'OPEN') ? <button className="secondary-button" type="button" disabled={busy} onClick={() => void issuePublicLink()}><Link2 size={16} /> Copy feedback link</button> : null}
           </div>
-          <div className="trial-evidence-grid">
-            <article><span>Formula release</span><strong>{selectedTrial.release ? `Released ${new Date(selectedTrial.release.releasedAt).toLocaleDateString()}` : 'Awaiting release gate'}</strong></article>
-            <article><span>Actual lab usage</span><strong>{selectedTrial.usageLink ? `${selectedTrial.usageLink.actualWeights.length} weighed lines linked` : 'No inventory movement'}</strong></article>
-            <article><span>Comparable evidence</span><strong>{detail?.comparableEvidence.status === 'READY' ? `${detail.comparableEvidence.sampleCount} scorecards / ${detail.comparableEvidence.confidence.toLowerCase()} confidence` : 'Not enough evidence'}</strong></article>
-          </div>
+          <AnimatedList className="trial-evidence-grid">
+            <AnimatedListItem><article><span>Formula release</span><strong>{selectedTrial.release ? `Released ${new Date(selectedTrial.release.releasedAt).toLocaleDateString()}` : 'Awaiting release gate'}</strong></article></AnimatedListItem>
+            <AnimatedListItem><article><span>Actual lab usage</span><strong>{selectedTrial.usageLink ? `${selectedTrial.usageLink.actualWeights.length} weighed lines linked` : 'No inventory movement'}</strong></article></AnimatedListItem>
+            <AnimatedListItem><article><span>Comparable evidence</span><strong>{detail?.comparableEvidence.status === 'READY' ? `${detail.comparableEvidence.sampleCount} scorecards / ${detail.comparableEvidence.confidence.toLowerCase()} confidence` : 'Not enough evidence'}</strong></article></AnimatedListItem>
+          </AnimatedList>
           {canEvaluate && detail?.sensorySessions.some((item) => item.status === 'OPEN') ? (
             <section className="trial-scorecard" aria-label="Internal sensory scorecard">
               <div className="section-heading"><span className="section-icon"><ClipboardCheck size={17} /></span><h4>Internal sensory scorecard</h4></div>
@@ -278,6 +289,7 @@ export function TrialsWorkspace({
             </section>
           ) : null}
         </section>
+        </AnimatedContent>
       ) : null}
     </section>
   )
