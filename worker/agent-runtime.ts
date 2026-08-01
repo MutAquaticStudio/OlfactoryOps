@@ -8,6 +8,7 @@ import {
   agentNodeDefinitions,
   agentRuntimeEventSchema,
   agentToolNameSchema,
+  toSafeAgentRuntimeError,
   type AgentArtifact,
   type AgentFormulaProposal,
   type AgentNodeType,
@@ -882,14 +883,14 @@ export async function executeDeterministicAgentRun(store: AgentRuntimeStore, ser
     await store.createConfirmation(run, saveId, proposal)
     await store.completeJob(run.id, run.organization_id, 'WAITING')
   } catch (error) {
-    const message = error instanceof Error ? error.message.slice(0, 500) : 'Formula research failed'
+    const failure = toSafeAgentRuntimeError(error, 'Formula research failed')
     await store.database.batch([
       store.database.prepare(`UPDATE agent_runs SET status = 'FAILED', error_summary = ?, completed_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
-        .bind(message, now(), now(), run.id, run.organization_id),
+        .bind(failure.message, now(), now(), run.id, run.organization_id),
       store.database.prepare(`UPDATE agent_jobs SET status = 'FAILED', last_error = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE run_id = ? AND organization_id = ?`)
-        .bind(message, now(), run.id, run.organization_id),
+        .bind(failure.code, now(), run.id, run.organization_id),
     ])
-    await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: message })
+    await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: failure.message, errorInfo: failure })
   }
 }
 

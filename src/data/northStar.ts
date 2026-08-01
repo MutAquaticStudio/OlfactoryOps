@@ -1853,6 +1853,23 @@ export interface TrialFormulaSnapshot {
   materialFamilies: string[]
 }
 
+/**
+ * Immutable provenance for a trial planned from a reviewed Formula Intelligence
+ * direction. It intentionally references only durable identifiers and hashes;
+ * no prompt, provider output, cost, lot, or raw compliance payload is copied
+ * into the operating-memory record.
+ */
+export interface FormulaIntelligenceTrialSource {
+  kind: 'DESIGN_DIRECTION'
+  projectId: string
+  directionId: string
+  runId: string
+  briefVersionId: string
+  constraintSnapshotId: string
+  materialUniverseHash: string
+  evaluationHash: string
+}
+
 export interface TrialReleaseRecord {
   id: string
   releasedAt: string
@@ -1938,6 +1955,7 @@ export interface FragranceTrialRecord {
   title: string
   lifecycle: TrialLifecycle
   formulaSnapshot: TrialFormulaSnapshot
+  formulaIntelligenceSource?: FormulaIntelligenceTrialSource
   release?: TrialReleaseRecord
   usageLink?: TrialUsageLinkRecord
   decision?: TrialDecisionRecord
@@ -1950,12 +1968,95 @@ export interface FragranceTrialRecord {
 }
 
 export interface TrialComparableEvidence {
-  status: 'READY' | 'NOT_ENOUGH_EVIDENCE'
+  status: 'READY' | 'NOT_ENOUGH_EVIDENCE' | 'NOT_AVAILABLE'
   sampleCount: number
   confidence: 'LOW' | 'MODERATE' | 'HIGH' | 'NOT_EVALUATED'
   averages: Partial<Record<SensoryTimepoint, number>>
   trialIds: string[]
   summary: string
+}
+
+/**
+ * A tenant-private, derived projection of a decided trial. It is evidence for
+ * future human decisions, not a model-training record and never crosses the
+ * organization boundary.
+ */
+export interface SensoryMemoryRecord {
+  id: string
+  organizationId: string
+  formulaId: string
+  formulaVersion: string
+  trialId: string
+  briefVersionId?: string
+  candidateId?: string
+  descriptors: string[]
+  timepointScores: Partial<Record<SensoryTimepoint, number>>
+  decision: TrialDecisionOutcome
+  reasonCodes: string[]
+  costSnapshot?: number
+  inventoryReadinessPercent?: number
+  createdAt: string
+}
+
+export interface WorkspacePreferenceProfile {
+  id: string
+  organizationId: string
+  version: number
+  evidenceCount: number
+  confidence: 'INSUFFICIENT' | 'LOW' | 'MEDIUM' | 'HIGH'
+  preferredDescriptors: string[]
+  avoidedDescriptors: string[]
+  recurrentDecisionReasons: string[]
+  derivedFromStart?: string
+  derivedFromEnd?: string
+  createdAt: string
+}
+
+/** Human-reviewed substitution evidence. Formula Intelligence may only use an
+ * APPROVED record; material similarity alone is never enough. */
+export interface ApprovedMaterialSubstitutionRecord {
+  id: string
+  organizationId: string
+  sourceMaterialId: string
+  replacementMaterialId: string
+  status: 'APPROVED' | 'ARCHIVED'
+  reviewer: string
+  evidenceReference: string
+  roleSimilarity: 'LOW' | 'MEDIUM' | 'HIGH'
+  strengthFactor: number
+  complianceCaveat?: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type OperationalLineageNodeType = 'FORMULA' | 'FORMULA_VERSION' | 'MATERIAL' | 'LOT' | 'TRIAL' | 'BATCH' | 'FINISHED_GOOD_LOT' | 'ORDER' | 'DOCUMENT' | 'DESIGN_DIRECTION'
+
+export interface OperationalLineageEdge {
+  id: string
+  organizationId: string
+  fromType: OperationalLineageNodeType
+  fromId: string
+  edgeType: 'CONTAINS_MATERIAL' | 'TRIAL_OF' | 'CONSUMED_LOT' | 'PRODUCED_LOT' | 'FULFILLED_BY' | 'SUPPORTED_BY_EVIDENCE' | 'GENERATED_FROM' | 'REVISED_FROM'
+  toType: OperationalLineageNodeType
+  toId: string
+  sourceVersion?: string
+  createdAt: string
+}
+
+export interface OperationalLineageProjection {
+  subject: { type: OperationalLineageNodeType; id: string }
+  edges: OperationalLineageEdge[]
+  impact: {
+    formulas: number
+    trials: number
+    lots: number
+    batches: number
+    finishedGoodLots: number
+    orders: number
+    documents: number
+  }
+  invariant: string
 }
 
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
@@ -3391,6 +3492,11 @@ export const featureFlags: FeatureFlagRecord[] = [
   { organizationId: 'org-nxl', key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
   { organizationId: 'org-nxl', key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
   { organizationId: 'org-nxl', key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
+  { organizationId: 'org-nxl', key: 'designStudioBriefCompiler', label: 'Formula Intelligence brief compiler', enabled: true, phase: 6 },
+  { organizationId: 'org-nxl', key: 'designStudioCandidateGeneration', label: 'Formula Intelligence candidate generation', enabled: true, phase: 6 },
+  { organizationId: 'org-nxl', key: 'designStudioSensoryMemory', label: 'Private sensory learning', enabled: true, phase: 6 },
+  { organizationId: 'org-nxl', key: 'designStudioOptimizer', label: 'Formula Intelligence optimizer', enabled: true, phase: 8 },
+  { organizationId: 'org-nxl', key: 'formulaIntelligenceRag', label: 'Formula Intelligence evidence retrieval', enabled: true, phase: 9 },
 ]
 
 export const numberingSequences: NumberingSequenceRecord[] = [

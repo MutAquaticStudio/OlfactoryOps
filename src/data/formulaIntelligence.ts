@@ -1,5 +1,5 @@
-import type { AgentFormulaProposal, FormulaDesignBrief, FormulaOptimizerIntent } from './agentRuntime.js'
-import type { Formula, FormulaPyramidNote, Material } from './northStar.js'
+import type { AgentFormulaProposal, FormulaDesignBrief, FormulaOptimizationObjectives, FormulaOptimizerIntent } from './agentRuntime.js'
+import type { ApprovedMaterialSubstitutionRecord, Formula, FormulaPyramidNote, Material, WorkspacePreferenceProfile } from './northStar.js'
 
 type MaterialSeed = Pick<Material, 'id' | 'name' | 'family' | 'odor' | 'tier' | 'costPerGram' | 'ifraLimit'> & { availabilityRank?: number }
 
@@ -85,6 +85,47 @@ export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materia
   })
 }
 
+export type SensoryMemoryDirectionEvidence = {
+  state: 'READY' | 'NOT_ENOUGH_EVIDENCE' | 'DISABLED' | 'NOT_EVALUATED'
+  profileVersion?: number
+  evidenceCount: number
+  adjustment: number
+  explanation: string
+}
+
+/**
+ * Applies a small deterministic presentation/ranking adjustment from a
+ * workspace's reviewed trial outcomes. It deliberately does not claim odor
+ * prediction and does not mutate a proposed formula.
+ */
+export function sensoryMemoryEvidenceForDirection(
+  direction: Pick<{ title: string; narrative: string; pyramidSummary: string }, 'title' | 'narrative' | 'pyramidSummary'>,
+  profile: WorkspacePreferenceProfile | undefined,
+  enabled: boolean,
+): SensoryMemoryDirectionEvidence {
+  if (!enabled) {
+    return { state: 'DISABLED', evidenceCount: 0, adjustment: 0, explanation: 'Private sensory learning is disabled for this workspace.' }
+  }
+  if (!profile || profile.confidence === 'INSUFFICIENT') {
+    return { state: 'NOT_ENOUGH_EVIDENCE', evidenceCount: profile?.evidenceCount ?? 0, adjustment: 0, explanation: 'Not enough completed sensory evidence to adjust this direction.' }
+  }
+  const text = `${direction.title} ${direction.narrative} ${direction.pyramidSummary}`.toLowerCase()
+  const preferredHits = profile.preferredDescriptors.filter((term) => text.includes(term.toLowerCase())).length
+  const avoidedHits = profile.avoidedDescriptors.filter((term) => text.includes(term.toLowerCase())).length
+  const adjustment = Math.max(-12, Math.min(12, preferredHits * 3 - avoidedHits * 4))
+  return {
+    state: 'READY',
+    profileVersion: profile.version,
+    evidenceCount: profile.evidenceCount,
+    adjustment,
+    explanation: adjustment > 0
+      ? 'Private completed-trial evidence modestly favors descriptors seen in accepted workspace outcomes.'
+      : adjustment < 0
+        ? 'Private completed-trial evidence flags descriptors that recur in revised or rejected workspace outcomes.'
+        : 'Private completed-trial evidence is relevant but does not distinguish this direction.',
+  }
+}
+
 export function proposalFromFormulaVersion(formula: Formula, versionLines: Formula['lines']): AgentFormulaProposal {
   const total = versionLines.reduce((sum, line) => sum + line.grams, 0)
   return {
@@ -120,40 +161,64 @@ export function buildOptimizerProposals(
   intent: FormulaOptimizerIntent,
   lockedMaterialIds: string[],
   availableMaterialIds: Set<string>,
+  objectives: FormulaOptimizationObjectives | undefined = undefined,
+  approvedSubstitutions: ApprovedMaterialSubstitutionRecord[] = [],
 ) {
   const current = new Map(materials.map((material) => [material.id, material]))
-  const unlocked = baseline.ingredients.filter((ingredient) => !lockedMaterialIds.includes(ingredient.materialId))
-  const variants: Array<{ title: string; proposal: AgentFormulaProposal }> = [{ title: `${baseline.name} - Baseline`, proposal: baseline }]
+  const locked = new Set([...lockedMaterialIds, ...(objectives?.preserveMaterialIds ?? [])])
+  const prohibited = new Set(objectives?.prohibitedMaterialIds ?? [])
+  const unlocked = baseline.ingredients.filter((ingredient) => !locked.has(ingredient.materialId))
+  const variants: Array<{ title: string; proposal: AgentFormulaProposal }> = prohibited.size === 0 ? [{ title: `${baseline.name} - Baseline`, proposal: baseline }] : []
+  const replacementFor = (sourceId: string, predicate: (material: MaterialSeed) => boolean) => {
+    const approvedIds = new Set(approvedSubstitutions
+      .filter((substitution) => substitution.status === 'APPROVED' && substitution.sourceMaterialId === sourceId && Math.abs(substitution.strengthFactor - 1) < 0.0001)
+      .map((substitution) => substitution.replacementMaterialId))
+    return materials
+      .filter((material) => approvedIds.has(material.id) && !prohibited.has(material.id) && !baseline.ingredients.some((line) => line.materialId === material.id) && predicate(material))
+      .sort((left, right) => left.costPerGram - right.costPerGram || left.name.localeCompare(right.name))[0]
+  }
+  const allowAnySubstitution = objectives?.requireApprovedSubstitutions !== false
+  const substitution = (sourceId: string, predicate: (material: MaterialSeed) => boolean) => {
+    if (!allowAnySubstitution) {
+      return materials
+        .filter((material) => !prohibited.has(material.id) && !baseline.ingredients.some((line) => line.materialId === material.id) && predicate(material))
+        .sort((left, right) => left.costPerGram - right.costPerGram || left.name.localeCompare(right.name))[0]
+    }
+    return replacementFor(sourceId, predicate)
+  }
   const costSource = [...unlocked]
     .sort((left, right) => (current.get(right.materialId)?.costPerGram ?? 0) - (current.get(left.materialId)?.costPerGram ?? 0))[0]
-  if (costSource && (intent === 'COST' || intent === 'COMBINED')) {
+  if (costSource && (intent === 'COST' || intent === 'COMBINED' || objectives?.targetCostReductionPercent !== undefined || objectives?.maxTotalCost !== undefined)) {
     const source = current.get(costSource.materialId)
-    const replacement = materials
-      .filter((material) => material.id !== source?.id && material.tier === source?.tier && !baseline.ingredients.some((line) => line.materialId === material.id))
-      .sort((left, right) => left.costPerGram - right.costPerGram || left.name.localeCompare(right.name))[0]
+    const replacement = substitution(costSource.materialId, (material) => material.id !== source?.id && material.tier === source?.tier)
     if (replacement) variants.push({ title: `${baseline.name} - Cost recovery`, proposal: replaceIngredient(baseline, costSource.materialId, replacement) })
   }
   const inventorySource = [...unlocked].find((ingredient) => !availableMaterialIds.has(ingredient.materialId))
-  if (inventorySource && (intent === 'INVENTORY' || intent === 'COMBINED')) {
+  if (inventorySource && (intent === 'INVENTORY' || intent === 'COMBINED' || objectives?.maximizeInventoryCoverage || objectives?.minimizeNewPurchases)) {
     const source = current.get(inventorySource.materialId)
-    const replacement = materials
-      .filter((material) => availableMaterialIds.has(material.id) && material.tier === source?.tier && !baseline.ingredients.some((line) => line.materialId === material.id))
-      .sort((left, right) => left.costPerGram - right.costPerGram || left.name.localeCompare(right.name))[0]
+    const replacement = substitution(inventorySource.materialId, (material) => availableMaterialIds.has(material.id) && material.tier === source?.tier)
     if (replacement) variants.push({ title: `${baseline.name} - Stock recovery`, proposal: replaceIngredient(baseline, inventorySource.materialId, replacement) })
   }
   const complianceSource = [...unlocked]
     .sort((left, right) => (current.get(left.materialId)?.ifraLimit ?? 100) - (current.get(right.materialId)?.ifraLimit ?? 100))[0]
-  if (complianceSource && (intent === 'COMPLIANCE' || intent === 'COMBINED')) {
+  if (complianceSource && (intent === 'COMPLIANCE' || intent === 'COMBINED' || objectives?.complianceRequired)) {
     const source = current.get(complianceSource.materialId)
-    const replacement = materials
-      .filter((material) => material.id !== source?.id && material.tier === source?.tier && material.ifraLimit > (source?.ifraLimit ?? 0) && !baseline.ingredients.some((line) => line.materialId === material.id))
-      .sort((left, right) => right.ifraLimit - left.ifraLimit || left.costPerGram - right.costPerGram || left.name.localeCompare(right.name))[0]
+    const replacement = substitution(complianceSource.materialId, (material) => material.id !== source?.id && material.tier === source?.tier && material.ifraLimit > (source?.ifraLimit ?? 0))
     if (replacement) variants.push({ title: `${baseline.name} - Compliance recovery`, proposal: replaceIngredient(baseline, complianceSource.materialId, replacement) })
+  }
+  for (const prohibitedId of prohibited) {
+    const source = current.get(prohibitedId)
+    if (!source || locked.has(prohibitedId)) continue
+    const replacement = substitution(prohibitedId, (material) => material.tier === source.tier)
+    if (replacement) variants.push({ title: `${baseline.name} - Restricted material recovery`, proposal: replaceIngredient(baseline, prohibitedId, replacement) })
   }
   const distinct = new Map<string, { title: string; proposal: AgentFormulaProposal }>()
   for (const variant of variants) {
     const signature = variant.proposal.ingredients.map((ingredient) => ingredient.materialId).join('|')
-    if (!distinct.has(signature)) distinct.set(signature, variant)
+    const materialIds = new Set(variant.proposal.ingredients.map((ingredient) => ingredient.materialId))
+    if (!distinct.has(signature) && [...locked].every((materialId) => materialIds.has(materialId)) && [...prohibited].every((materialId) => !materialIds.has(materialId))) {
+      distinct.set(signature, variant)
+    }
   }
   return Array.from(distinct.values()).slice(0, 3)
 }
@@ -187,4 +252,24 @@ export function compareOptimizerCandidates(left: OptimizerRankInput, right: Opti
     left.compositionChangePercent - right.compositionChangePercent,
   ]
   return comparisons.find((value) => value !== 0) ?? 0
+}
+
+export function optimizerParetoState(candidate: OptimizerRankInput, candidates: OptimizerRankInput[]) {
+  if (!candidate.inventoryEvaluated || candidate.costDelta === undefined) return 'NOT_EVALUATED' as const
+  const candidateCostDelta = candidate.costDelta
+  const complianceRank = (value: OptimizerRankInput['complianceStatus']) => value === 'PASS' ? 3 : value === 'REVIEW_REQUIRED' ? 2 : 1
+  const inventoryRank = (value: OptimizerRankInput) => value.availability === 'AVAILABLE' ? 3 : value.availability === 'MIXED' ? 2 : 1
+  const dominated = candidates.some((other) => {
+    if (other === candidate || !other.inventoryEvaluated || other.costDelta === undefined) return false
+    const noWorse = complianceRank(other.complianceStatus) >= complianceRank(candidate.complianceStatus)
+      && inventoryRank(other) >= inventoryRank(candidate)
+      && other.costDelta <= candidateCostDelta
+      && other.compositionChangePercent <= candidate.compositionChangePercent
+    const strictlyBetter = complianceRank(other.complianceStatus) > complianceRank(candidate.complianceStatus)
+      || inventoryRank(other) > inventoryRank(candidate)
+      || other.costDelta < candidateCostDelta
+      || other.compositionChangePercent < candidate.compositionChangePercent
+    return noWorse && strictlyBetter
+  })
+  return dominated ? 'DOMINATED' as const : 'PARETO' as const
 }

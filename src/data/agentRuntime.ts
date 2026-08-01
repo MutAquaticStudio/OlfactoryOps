@@ -56,11 +56,37 @@ export const agentEventTypeSchema = z.enum([
   'confirmation.rejected',
   'artifact.created',
   'artifact.updated',
+  'job.queued',
+  'job.leased',
+  'job.retrying',
+  'job.completed',
+  'job.cancelled',
+  'connection.snapshot',
+  'connection.resync_required',
   'heartbeat',
 ])
 export type AgentEventType = z.infer<typeof agentEventTypeSchema>
 
 const opaqueRecordSchema = z.record(z.string(), z.unknown())
+
+export const agentRuntimeErrorSchema = z.object({
+  code: z.string().min(1).max(96),
+  message: z.string().min(1).max(500),
+  retryable: z.boolean().default(false),
+  correlationId: z.string().min(1).max(160).optional(),
+}).strict()
+export type AgentRuntimeError = z.infer<typeof agentRuntimeErrorSchema>
+
+export function toSafeAgentRuntimeError(error: unknown, fallback = 'Formula Intelligence execution failed'): AgentRuntimeError {
+  const raw = error instanceof Error ? error.message : ''
+  if (raw.includes('FORMULA_INTELLIGENCE_RUN_QUOTA_EXHAUSTED')) {
+    return { code: 'FORMULA_INTELLIGENCE_RUN_QUOTA_EXHAUSTED', message: 'Formula Intelligence run quota has been reached.', retryable: false }
+  }
+  if (raw.includes('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')) {
+    return { code: 'FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED', message: 'This formula draft confirmation has expired.', retryable: false }
+  }
+  return { code: 'FORMULA_INTELLIGENCE_EXECUTION_FAILED', message: fallback, retryable: false }
+}
 
 export const formulaIntelligenceWorkflowKindSchema = z.enum([
   'RESEARCH',
@@ -102,8 +128,213 @@ export const formulaDesignBriefSchema = z.object({
 }).strict()
 export type FormulaDesignBrief = z.infer<typeof formulaDesignBriefSchema>
 
+const compactTextSchema = z.string().trim().min(1).max(160)
+const optionalCompactTextSchema = compactTextSchema.optional()
+const optionalShortListSchema = z.array(compactTextSchema).max(24).default([])
+
+export const formulaDesignProjectCreateSchema = z.object({
+  name: z.string().trim().min(2).max(240),
+  rawBrief: z.string().trim().min(8).max(6000).optional(),
+  // creativeBrief is accepted during the migration window for the previous
+  // client contract. It is preserved as raw text, never treated as reviewed
+  // structure.
+  creativeBrief: z.string().trim().min(8).max(6000).optional(),
+  formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).optional(),
+  concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).optional(),
+  finalProductConcentrationPercent: z.number().finite().min(0.01).max(100).optional(),
+  ifraCategory: z.string().trim().min(1).max(32).optional(),
+  targetMarkets: z.array(compactTextSchema).max(12).optional(),
+  desiredNotes: optionalShortListSchema,
+  avoidedNotes: optionalShortListSchema,
+  lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
+  availabilityFirst: z.boolean().optional(),
+  targetGrams: z.number().finite().positive().max(100_000).optional(),
+}).strict().superRefine((value, context) => {
+  if (!value.rawBrief && !value.creativeBrief) {
+    context.addIssue({ code: 'custom', message: 'Provide a raw fragrance brief' })
+  }
+})
+export type FormulaDesignProjectCreate = z.infer<typeof formulaDesignProjectCreateSchema>
+
+export const formulaDesignBriefVersionStateSchema = z.enum([
+  'RAW',
+  'REVIEW_REQUIRED',
+  'REVIEWED',
+  'LEGACY_UNSTRUCTURED',
+])
+export type FormulaDesignBriefVersionState = z.infer<typeof formulaDesignBriefVersionStateSchema>
+
+export const formulaDesignBriefProductTypeSchema = z.enum([
+  'FINE_FRAGRANCE',
+  'HOME_FRAGRANCE',
+  'PERSONAL_CARE',
+  'FUNCTIONAL',
+  'OTHER',
+])
+export const formulaDesignInventoryPreferenceSchema = z.enum([
+  'IGNORE',
+  'PREFER_AVAILABLE',
+  'AVAILABLE_ONLY',
+])
+export const formulaDesignQuestionImportanceSchema = z.enum(['LOW', 'MEDIUM', 'HIGH'])
+export const formulaDesignUnresolvedQuestionSchema = z.object({
+  field: z.string().min(1).max(160),
+  reason: z.string().min(1).max(320),
+  importance: formulaDesignQuestionImportanceSchema,
+}).strict()
+export type FormulaDesignUnresolvedQuestion = z.infer<typeof formulaDesignUnresolvedQuestionSchema>
+
+export const structuredFormulaDesignBriefSchema = z.object({
+  schemaVersion: z.literal(1),
+  product: z.object({
+    productType: formulaDesignBriefProductTypeSchema.optional(),
+    formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).optional(),
+    format: optionalCompactTextSchema,
+    concentrationLabel: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).optional(),
+    targetConcentrationPercent: z.number().finite().min(0.01).max(100).optional(),
+    targetGrams: z.number().finite().positive().max(100_000).optional(),
+  }).strict(),
+  creative: z.object({
+    families: optionalShortListSchema,
+    descriptors: optionalShortListSchema,
+    emotionalIntent: z.string().trim().max(600).optional(),
+    references: optionalShortListSchema,
+    desiredNotes: optionalShortListSchema,
+    avoidedNotes: optionalShortListSchema,
+    specialEffects: optionalShortListSchema,
+  }).strict(),
+  performance: z.object({
+    diffusion: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
+    targetLongevityHours: z.number().finite().min(0).max(240).optional(),
+    opening: z.string().trim().max(320).optional(),
+    drydown: z.string().trim().max(320).optional(),
+  }).strict(),
+  audience: z.object({
+    target: z.string().trim().max(320).optional(),
+    positioning: z.string().trim().max(320).optional(),
+    occasion: z.string().trim().max(320).optional(),
+    markets: z.array(compactTextSchema).max(12).default([]),
+  }).strict(),
+  constraints: z.object({
+    workspaceMaterialsOnly: z.boolean(),
+    reviewedMaterialsOnly: z.boolean(),
+    ifraCategory: z.string().trim().min(1).max(32).optional(),
+    targetMarkets: z.array(compactTextSchema).max(12).default([]),
+    maxCost: z.object({
+      amount: z.number().finite().positive().max(1_000_000),
+      currency: z.string().trim().min(3).max(12),
+    }).strict().optional(),
+    inventoryPreference: formulaDesignInventoryPreferenceSchema,
+    prohibitedMaterialIds: z.array(z.string().min(1).max(160)).max(80).default([]),
+    requiredMaterialIds: z.array(z.string().min(1).max(160)).max(80).default([]),
+    prohibitedDescriptors: optionalShortListSchema,
+  }).strict(),
+  unresolvedQuestions: z.array(formulaDesignUnresolvedQuestionSchema).max(32).default([]),
+}).strict()
+export type StructuredFormulaDesignBrief = z.infer<typeof structuredFormulaDesignBriefSchema>
+
+export type FormulaDesignStructuredBriefValidation = {
+  brief: StructuredFormulaDesignBrief
+  unresolvedQuestions: FormulaDesignUnresolvedQuestion[]
+  state: Extract<FormulaDesignBriefVersionState, 'REVIEW_REQUIRED' | 'REVIEWED'>
+}
+
+const marketAliases: Record<string, string> = {
+  EU: 'EU', EUROPE: 'EU', EUROPEAN_UNION: 'EU',
+  UK: 'UK', UNITED_KINGDOM: 'UK',
+  US: 'US', USA: 'US', UNITED_STATES: 'US',
+  GCC: 'GCC', JP: 'JP', JAPAN: 'JP', CN: 'CN', CHINA: 'CN', ASEAN: 'ASEAN',
+}
+const supportedIfraCategories = new Set(['1', '2', '3', '4', '5A', '5B', '6', '7A', '7B', '8', '9', '10A', '10B', '11A', '11B', '12'])
+
+function normalizeVocabulary(value: string) {
+  return value.trim().replaceAll(/[^a-zA-Z0-9]+/g, '_').replaceAll(/^_+|_+$/g, '').toUpperCase()
+}
+
+function unresolved(field: string, reason: string, importance: FormulaDesignUnresolvedQuestion['importance']): FormulaDesignUnresolvedQuestion {
+  return { field, reason, importance }
+}
+
+export function validateStructuredFormulaDesignBrief(input: unknown): FormulaDesignStructuredBriefValidation {
+  const parsed = structuredFormulaDesignBriefSchema.parse(input)
+  const questions = [...parsed.unresolvedQuestions]
+  const normalizeMarkets = (values: string[], field: string) => values.flatMap((value) => {
+    const normalized = marketAliases[normalizeVocabulary(value)]
+    if (normalized) return [normalized]
+    questions.push(unresolved(field, `Unsupported market code: ${value.trim()}`, 'HIGH'))
+    return []
+  })
+  const targetMarkets = [...new Set(normalizeMarkets(parsed.constraints.targetMarkets, 'constraints.targetMarkets'))]
+  const audienceMarkets = [...new Set(normalizeMarkets(parsed.audience.markets, 'audience.markets'))]
+  const ifraCategory = parsed.constraints.ifraCategory?.trim().replace(/^category\s+/i, '').toUpperCase()
+  if (!parsed.product.productType) questions.push(unresolved('product.productType', 'Select the product type.', 'HIGH'))
+  if (!parsed.product.formulaType) questions.push(unresolved('product.formulaType', 'Select Accord or Fine fragrance.', 'HIGH'))
+  if (!parsed.product.concentrationLabel) questions.push(unresolved('product.concentrationLabel', 'Select the concentration label.', 'HIGH'))
+  if (parsed.product.targetConcentrationPercent === undefined) questions.push(unresolved('product.targetConcentrationPercent', 'Set the final-product concentration.', 'HIGH'))
+  if (parsed.product.targetGrams === undefined) questions.push(unresolved('product.targetGrams', 'Set the target trial quantity.', 'MEDIUM'))
+  if (!ifraCategory || !supportedIfraCategories.has(ifraCategory)) questions.push(unresolved('constraints.ifraCategory', 'Select a supported IFRA category.', 'HIGH'))
+  if (targetMarkets.length === 0) questions.push(unresolved('constraints.targetMarkets', 'Select at least one target market.', 'HIGH'))
+  if (!parsed.creative.descriptors.length && !parsed.creative.desiredNotes.length) {
+    questions.push(unresolved('creative', 'Describe at least one desired note or creative descriptor.', 'HIGH'))
+  }
+  const deduplicated = [...new Map(questions.map((question) => [`${question.field}:${question.reason}`, question])).values()]
+  const brief: StructuredFormulaDesignBrief = {
+    ...parsed,
+    audience: { ...parsed.audience, markets: audienceMarkets },
+    constraints: { ...parsed.constraints, ifraCategory: ifraCategory && supportedIfraCategories.has(ifraCategory) ? ifraCategory : undefined, targetMarkets },
+    unresolvedQuestions: deduplicated,
+  }
+  return {
+    brief,
+    unresolvedQuestions: deduplicated,
+    state: deduplicated.some((question) => question.importance === 'HIGH') ? 'REVIEW_REQUIRED' : 'REVIEWED',
+  }
+}
+
+export function rawBriefFromProjectCreate(input: FormulaDesignProjectCreate) {
+  return (input.rawBrief ?? input.creativeBrief ?? '').trim()
+}
+
+export function formulaDesignBriefFromStructuredBrief(name: string, structured: StructuredFormulaDesignBrief): FormulaDesignBrief {
+  if (!structured.product.formulaType || !structured.product.concentrationLabel || structured.product.targetConcentrationPercent === undefined || structured.product.targetGrams === undefined || !structured.constraints.ifraCategory || structured.constraints.targetMarkets.length === 0) {
+    throw new Error('A reviewed structured brief is required before generation')
+  }
+  return formulaDesignBriefSchema.parse({
+    name,
+    formulaType: structured.product.formulaType,
+    concentrationType: structured.product.concentrationLabel,
+    finalProductConcentrationPercent: structured.product.targetConcentrationPercent,
+    ifraCategory: structured.constraints.ifraCategory,
+    targetMarkets: structured.constraints.targetMarkets,
+    creativeBrief: [structured.creative.emotionalIntent, ...structured.creative.descriptors, ...structured.creative.desiredNotes].filter(Boolean).join('. '),
+    desiredNotes: structured.creative.desiredNotes,
+    avoidedNotes: structured.creative.avoidedNotes,
+    lockedMaterialIds: structured.constraints.requiredMaterialIds,
+    availabilityFirst: structured.constraints.inventoryPreference !== 'IGNORE',
+    targetGrams: structured.product.targetGrams,
+  })
+}
+
 export const formulaOptimizerIntentSchema = z.enum(['COST', 'COMPLIANCE', 'INVENTORY', 'COMBINED'])
 export type FormulaOptimizerIntent = z.infer<typeof formulaOptimizerIntentSchema>
+
+export const formulaOptimizationObjectivesSchema = z.object({
+  targetCostReductionPercent: z.number().finite().min(0).max(90).optional(),
+  maxTotalCost: z.number().finite().positive().optional(),
+  maximizeInventoryCoverage: z.boolean().default(false),
+  minimizeNewPurchases: z.boolean().default(false),
+  maximizeEvidenceCoverage: z.boolean().default(false),
+  preserveMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
+  prohibitedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
+  complianceRequired: z.boolean().default(true),
+  historicalSimilarityWeight: z.number().finite().min(0).max(1).default(0),
+  requireApprovedSubstitutions: z.boolean().default(true),
+}).strict().superRefine((value, context) => {
+  const prohibited = new Set(value.prohibitedMaterialIds)
+  const conflicting = value.preserveMaterialIds.find((materialId) => prohibited.has(materialId))
+  if (conflicting) context.addIssue({ code: 'custom', path: ['prohibitedMaterialIds'], message: `Material ${conflicting} cannot be both preserved and prohibited` })
+})
+export type FormulaOptimizationObjectives = z.infer<typeof formulaOptimizationObjectivesSchema>
 
 export const formulaOptimizerRequestSchema = z.object({
   baselineFormulaId: z.string().min(1).max(160),
@@ -111,6 +342,7 @@ export const formulaOptimizerRequestSchema = z.object({
   intent: formulaOptimizerIntentSchema.default('COMBINED'),
   lockedMaterialIds: z.array(z.string().min(1).max(160)).max(24).default([]),
   requireEligibleInventory: z.boolean().default(false),
+  objectives: formulaOptimizationObjectivesSchema.optional(),
 }).strict()
 export type FormulaOptimizerRequest = z.infer<typeof formulaOptimizerRequestSchema>
 
@@ -133,6 +365,8 @@ export const formulaIntelligenceRunConfigSchema = z.discriminatedUnion('workflow
   z.object({
     workflowKind: z.literal('DESIGN_STUDIO'),
     projectId: z.string().min(1).max(160),
+    briefVersionId: z.string().min(1).max(160).optional(),
+    constraintSnapshotId: z.string().min(1).max(160).optional(),
     brief: formulaDesignBriefSchema,
   }),
   z.object({
@@ -253,8 +487,41 @@ export const designDirectionArtifactSchema = z.object({
   complianceStatus: z.enum(['PASS', 'REVIEW_REQUIRED', 'BLOCKED', 'INSUFFICIENT_DATA']),
   proposal: agentFormulaProposalSchema,
   warnings: z.array(z.string().max(500)).max(40),
+  historicalEvidence: z.object({
+    state: z.enum(['READY', 'NOT_ENOUGH_EVIDENCE', 'DISABLED', 'NOT_EVALUATED']),
+    profileVersion: z.number().int().positive().optional(),
+    evidenceCount: z.number().int().min(0),
+    adjustment: z.number().finite().min(-12).max(12),
+    explanation: z.string().min(1).max(500),
+  }).optional(),
 })
 export type DesignDirectionArtifact = z.infer<typeof designDirectionArtifactSchema>
+
+export const designCandidateEvaluationSchema = z.object({
+  directionId: z.string().min(1).max(160),
+  rank: z.number().int().min(1).max(3),
+  proposalChecksum: z.string().regex(/^[a-f0-9]{64}$/),
+  composition: z.object({
+    state: z.literal('VALID'),
+    totalPercentage: z.number().finite().min(99.95).max(100.05),
+  }).strict(),
+  constraints: z.object({
+    state: z.enum(['PASS', 'REVIEW_REQUIRED', 'BLOCKED']),
+    requiredMaterialsSatisfied: z.boolean(),
+  }).strict(),
+  complianceStatus: z.enum(['PASS', 'REVIEW_REQUIRED', 'BLOCKED', 'INSUFFICIENT_DATA']),
+  availability: z.enum(['AVAILABLE', 'MIXED', 'UNKNOWN']),
+  cost: z.object({
+    state: z.enum(['EVALUATED', 'NOT_EVALUATED']),
+    totalCost: z.number().finite().nonnegative().optional(),
+  }).strict(),
+  materialUniverse: z.object({
+    hash: z.string().regex(/^[a-f0-9]{64}$/),
+    materialCount: z.number().int().min(1).max(10_000),
+  }).strict(),
+  warnings: z.array(z.string().min(1).max(500)).max(40),
+}).strict()
+export type DesignCandidateEvaluation = z.infer<typeof designCandidateEvaluationSchema>
 
 export const designDirectionsArtifactSchema = z.object({
   type: z.literal('design_directions'),
@@ -263,6 +530,18 @@ export const designDirectionsArtifactSchema = z.object({
     projectId: z.string().min(1).max(160),
     directions: z.array(designDirectionArtifactSchema).min(1).max(3),
   }),
+})
+
+export const designCandidateComparisonArtifactSchema = z.object({
+  type: z.literal('design_candidate_comparison'),
+  version: z.literal(1),
+  data: z.object({
+    projectId: z.string().min(1).max(160),
+    briefVersionId: z.string().min(1).max(160),
+    constraintSnapshotId: z.string().min(1).max(160),
+    materialUniverseHash: z.string().regex(/^[a-f0-9]{64}$/),
+    candidates: z.array(designCandidateEvaluationSchema).min(1).max(3),
+  }).strict(),
 })
 
 export const optimizerCandidateArtifactSchema = z.object({
@@ -274,6 +553,10 @@ export const optimizerCandidateArtifactSchema = z.object({
   costDelta: z.number().finite().optional(),
   compositionChangePercent: z.number().finite().min(0).max(100),
   score: z.number().finite().min(0).max(100),
+  pareto: z.object({
+    state: z.enum(['PARETO', 'DOMINATED', 'NOT_EVALUATED']),
+    tradeoff: z.string().min(1).max(500),
+  }).optional(),
   summary: z.array(z.string().min(1).max(500)).max(12),
 })
 export type OptimizerCandidateArtifact = z.infer<typeof optimizerCandidateArtifactSchema>
@@ -317,20 +600,26 @@ export const agentArtifactSchema = z.discriminatedUnion('type', [
   assumptionsArtifactSchema,
   formulaRevisionComparisonArtifactSchema,
   designDirectionsArtifactSchema,
+  designCandidateComparisonArtifactSchema,
   optimizerCandidatesArtifactSchema,
   evidenceCitationsArtifactSchema,
 ])
 export type AgentArtifact = z.infer<typeof agentArtifactSchema>
 
-export const agentRuntimeEventSchema = z.object({
+export const agentRuntimeEventEnvelopeSchema = z.object({
   protocolVersion: z.literal(AGENT_PROTOCOL_VERSION),
   eventId: z.string().uuid(),
   tenantId: z.string().min(1).max(160),
   runId: z.string().min(1).max(160),
   sequence: z.number().int().nonnegative(),
-  type: agentEventTypeSchema,
+  type: z.string().min(1).max(96),
   timestamp: z.string().datetime(),
   payload: opaqueRecordSchema,
+})
+export type AgentRuntimeEventEnvelope = z.infer<typeof agentRuntimeEventEnvelopeSchema>
+
+export const agentRuntimeEventSchema = agentRuntimeEventEnvelopeSchema.extend({
+  type: agentEventTypeSchema,
 })
 export type AgentRuntimeEvent = z.infer<typeof agentRuntimeEventSchema>
 
@@ -390,6 +679,7 @@ export type AgentRunSnapshot = {
   runId: string
   status: AgentRunStatus
   lastSequence: number
+  lastEventId?: string
   messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; createdAt: string; complete: boolean }>
   nodes: Record<string, { id: string; type: AgentNodeType; status: AgentNodeStatus; progress: number; error?: string }>
   artifacts: AgentArtifact[]
@@ -408,6 +698,7 @@ export function reduceAgentRuntimeEvent(state: AgentRunSnapshot, candidate: Agen
   const next: AgentRunSnapshot = {
     ...state,
     lastSequence: event.sequence,
+    lastEventId: event.eventId,
     messages: [...state.messages],
     nodes: { ...state.nodes },
     artifacts: [...state.artifacts],
@@ -459,4 +750,72 @@ export function reduceAgentRuntimeEvent(state: AgentRunSnapshot, candidate: Agen
     }
   }
   return next
+}
+
+export type AgentEventReconciliation = {
+  snapshot: AgentRunSnapshot
+  buffered: AgentRuntimeEvent[]
+  seenEventIds: string[]
+}
+
+export type AgentEventReconciliationResult = {
+  state: AgentEventReconciliation
+  disposition: 'applied' | 'buffered' | 'duplicate' | 'ignored' | 'resync_required'
+}
+
+const maxBufferedAgentEvents = 128
+const maxSeenAgentEventIds = 512
+
+export function createAgentEventReconciliation(runId: string): AgentEventReconciliation {
+  return { snapshot: createAgentRunSnapshot(runId), buffered: [], seenEventIds: [] }
+}
+
+/**
+ * The server remains authoritative. This reducer only reconciles persisted SSE
+ * events until a contiguous sequence can be applied or a fresh replay is needed.
+ */
+export function reconcileAgentRuntimeEvent(
+  current: AgentEventReconciliation,
+  candidate: unknown,
+): AgentEventReconciliationResult {
+  const envelope = agentRuntimeEventEnvelopeSchema.safeParse(candidate)
+  if (!envelope.success || envelope.data.runId !== current.snapshot.runId) {
+    return { state: current, disposition: 'ignored' }
+  }
+  const parsed = agentRuntimeEventSchema.safeParse(envelope.data)
+  if (!parsed.success) return { state: current, disposition: 'ignored' }
+  const event = parsed.data
+  if (current.seenEventIds.includes(event.eventId) || event.sequence <= current.snapshot.lastSequence) {
+    return { state: current, disposition: 'duplicate' }
+  }
+  const bufferedBySequence = new Map(current.buffered.map((item) => [item.sequence, item]))
+  const conflicting = bufferedBySequence.get(event.sequence)
+  if (conflicting && conflicting.eventId !== event.eventId) {
+    return { state: current, disposition: 'resync_required' }
+  }
+  if (event.sequence > current.snapshot.lastSequence + 1) {
+    bufferedBySequence.set(event.sequence, event)
+    const buffered = [...bufferedBySequence.values()].sort((left, right) => left.sequence - right.sequence)
+    if (buffered.length > maxBufferedAgentEvents) return { state: current, disposition: 'resync_required' }
+    return {
+      state: { ...current, buffered, seenEventIds: rememberAgentEventId(current.seenEventIds, event.eventId) },
+      disposition: 'buffered',
+    }
+  }
+  let snapshot = reduceAgentRuntimeEvent(current.snapshot, event)
+  const seenEventIds = rememberAgentEventId(current.seenEventIds, event.eventId)
+  bufferedBySequence.delete(event.sequence)
+  while (bufferedBySequence.has(snapshot.lastSequence + 1)) {
+    const next = bufferedBySequence.get(snapshot.lastSequence + 1)!
+    bufferedBySequence.delete(next.sequence)
+    snapshot = reduceAgentRuntimeEvent(snapshot, next)
+  }
+  return {
+    state: { snapshot, buffered: [...bufferedBySequence.values()].sort((left, right) => left.sequence - right.sequence), seenEventIds },
+    disposition: 'applied',
+  }
+}
+
+function rememberAgentEventId(ids: string[], eventId: string) {
+  return [...ids.filter((id) => id !== eventId), eventId].slice(-maxSeenAgentEventIds)
 }

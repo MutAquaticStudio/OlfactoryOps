@@ -1806,6 +1806,129 @@ describe('NorthStarService', () => {
     expect(service.trialDetail(planned.id).data.trial.usageLink?.reversedAt).toBeTruthy()
   })
 
+  it('preserves immutable Formula Intelligence lineage when an approved direction enters trial planning', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const draft = service.createFormulaDraft({ name: 'Direction-to-trial accord', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Direction passed normal review.' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved immutable version for trial planning.' }).data
+
+    const planned = service.createTrialFromFormulaIntelligenceCandidate({
+      formulaId: draft.id,
+      formulaVersion: approval.version.version,
+      sampleCode: 'TRL-DIRECTION-001',
+    }, {
+      kind: 'DESIGN_DIRECTION',
+      projectId: 'project-direction-001',
+      directionId: 'direction-001',
+      runId: 'run-direction-001',
+      briefVersionId: 'brief-001',
+      constraintSnapshotId: 'constraint-001',
+      materialUniverseHash: 'universe-hash-001',
+      evaluationHash: 'evaluation-hash-001',
+    }).data.trial
+
+    expect(planned.formulaIntelligenceSource).toMatchObject({ directionId: 'direction-001', evaluationHash: 'evaluation-hash-001' })
+    expect(planned.formulaSnapshot.formulaVersion).toBe(approval.version.version)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('returns only completed tenant-scoped sensory history for an immutable formula version', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({ name: 'Comparable sensory baseline', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Comparable history baseline.' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved formula version.' }).data
+
+    for (let index = 1; index <= 3; index += 1) {
+      const trial = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version, sampleCode: `TRL-MEMORY-${index}` }).data.trial
+      service.releaseTrial(trial.id)
+      service.commitLabUsage(draft.id, 10, { trialId: trial.id, purpose: 'trial', sampleCode: trial.sampleCode })
+      const sensory = service.createTrialSensorySession(trial.id, { presentationMode: 'BLIND' }).data.session
+      const link = service.createTrialPublicLink(trial.id, { sessionId: sensory.id, presentationMode: 'BLIND' }).data.link
+      service.submitPublicTrialObservation(link.token, {
+        timepoint: 'OVERALL',
+        scores: { OPENING: 7 + index / 10, HEART: 7, DRYDOWN: 8, LONGEVITY: 7, OVERALL: 8 },
+        descriptors: ['bright', 'amber'],
+        observation: 'Controlled comparable observation.',
+        idempotencyKey: `memory-observation-${index}`,
+      })
+      service.closeTrial(trial.id, { outcome: 'ACCEPT', rationale: 'Completed comparable evidence.' })
+    }
+
+    const evidence = service.formulaTrialEvidence(draft.id, approval.version.version).data
+    expect(evidence.evidence.status).toBe('READY')
+    expect(evidence.evidence.sampleCount).toBe(3)
+    expect(evidence.evidence.averages.OVERALL).toBe(8)
+    expect(evidence.evidence.trialIds).toHaveLength(3)
+    const memory = service.workspaceSensoryMemory().data
+    expect(memory.status).toBe('READY')
+    expect(memory.profile?.evidenceCount).toBe(3)
+    expect(memory.profile?.preferredDescriptors).toContain('bright')
+    expect(service.formulaIntelligenceOperationalMetrics().data).toMatchObject({
+      decidedTrials: 3,
+      decisionCounts: { ACCEPT: 3, REVISE: 0, REJECT: 0 },
+      privateMemory: { evidenceCount: 3 },
+      executionTelemetry: { status: 'NOT_EVALUATED' },
+    })
+    const lineage = service.operationalLineage('FORMULA', draft.id).data
+    expect(lineage.impact.trials).toBe(3)
+    expect(lineage.impact.lots).toBeGreaterThan(0)
+
+    service.signup({
+      organizationName: 'Evidence Isolation Lab', workspaceSlug: 'evidence-isolation', email: 'owner@evidence-isolation.test', name: 'Evidence Owner', password: 'EvidenceIsolation2026!',
+    })
+    expect(() => service.formulaTrialEvidence(draft.id, approval.version.version)).toThrow('was not found')
+  })
+
+  it('uses tenant-scoped approved substitutions as an explicit optimizer control', () => {
+    const service = createAuthenticatedService()
+    const created = service.upsertApprovedMaterialSubstitution({
+      sourceMaterialId: 'mat-hedione', replacementMaterialId: 'mat-iso', evidenceReference: 'Internal comparative evaluation 2026-08', roleSimilarity: 'MEDIUM', strengthFactor: 1,
+    }).data.substitution
+    expect(created.status).toBe('APPROVED')
+    expect(service.approvedMaterialSubstitutions().data).toContainEqual(expect.objectContaining({ id: created.id, sourceMaterialId: 'mat-hedione' }))
+    service.signup({
+      organizationName: 'Substitution Isolation Lab', workspaceSlug: 'substitution-isolation', email: 'owner@substitution-isolation.test', name: 'Substitution Owner', password: 'SubstitutionIsolation2026!',
+    })
+    expect(service.approvedMaterialSubstitutions().data).toHaveLength(0)
+  })
+
+  it('keeps comparable evidence and formula metadata unavailable to sensory panelists', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({ name: 'Panelist redaction baseline', targetGrams: 100 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Prepare a blind panelist trial.' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved for blind panel.' }).data
+    const trial = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version }).data.trial
+
+    const invited = service.inviteMember({
+      email: 'panelist.evidence@example.test',
+      name: 'Evidence Panelist',
+      role: 'SENSORY_PANELIST',
+      brandIds: ['brand-nxl'],
+    }).data
+    service.setMembershipStatus(invited.membership.id, 'ACTIVE')
+    provisionTestCredential(service, 'panelist.evidence@example.test', 'PanelistEvidence2026!')
+    const login = service.login('panelist.evidence@example.test', 'PanelistEvidence2026!').data
+    service.authenticateSession(login.session.id)
+
+    const detail = service.trialDetail(trial.id).data
+    expect(detail.comparableEvidence).toMatchObject({
+      status: 'NOT_AVAILABLE',
+      sampleCount: 0,
+      confidence: 'NOT_EVALUATED',
+      averages: {},
+      trialIds: [],
+    })
+    expect(detail.trial.formulaSnapshot.formulaId).toBe('')
+    expect(detail.trial.formulaSnapshot.formulaName).toBe('')
+  })
+
   it('keeps Formula records isolated between workspaces', () => {
     const service = createAuthenticatedService()
     const signup = service.signup({

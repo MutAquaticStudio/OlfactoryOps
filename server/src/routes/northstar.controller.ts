@@ -180,6 +180,28 @@ export class NorthStarController {
     return this.northStar.materialDedupe(cas)
   }
 
+  @Get('materials/substitutions')
+  approvedMaterialSubstitutions() {
+    return this.northStar.approvedMaterialSubstitutions()
+  }
+
+  @Post('materials/substitutions')
+  upsertApprovedMaterialSubstitution(
+    @Body()
+    body: {
+      sourceMaterialId?: string
+      replacementMaterialId?: string
+      evidenceReference?: string
+      roleSimilarity?: 'LOW' | 'MEDIUM' | 'HIGH'
+      strengthFactor?: number
+      complianceCaveat?: string
+      status?: 'APPROVED' | 'ARCHIVED'
+    },
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.formulaIntelligenceMutation('POST:/materials/substitutions', idempotencyKey, body, async () => this.northStar.upsertApprovedMaterialSubstitution(body))
+  }
+
   @Get('materials/catalogues/lluch-2026')
   lluchCatalogue(@Query('query') query = '') {
     return this.northStar.lluchCatalogue(query)
@@ -309,15 +331,29 @@ export class NorthStarController {
   formulaIntelligenceCapabilities() {
     const permissions = new Set(this.northStar.me().data.permissions)
     const canViewSensitiveComposition = permissions.has('formulas.viewSensitive') && permissions.has('materials.view')
+    const candidateGenerationEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')
+    const optimizerEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioOptimizer')
+    const sensoryMemoryEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
+    const evidenceRetrievalEnabled = this.northStar.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
     return {
       data: {
         canCreateBrief: permissions.has('formulas.view'),
-        canGenerateDirections: permissions.has('formulas.edit') && canViewSensitiveComposition,
-        canRunOptimizer: canViewSensitiveComposition,
+        canReviewBrief: permissions.has('formulas.edit'),
+        canGenerateDirections: candidateGenerationEnabled && permissions.has('formulas.edit') && canViewSensitiveComposition,
+        canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
         canViewSensitiveComposition,
         canViewCostEvidence: permissions.has('costing.view'),
         canViewInventoryEvidence: permissions.has('inventory.view'),
+        canViewMaterialEvidence: evidenceRetrievalEnabled && permissions.has('documents.view') && permissions.has('materials.view'),
         canSaveDraft: permissions.has('formulas.edit') && canViewSensitiveComposition,
+        canPlanTrial: permissions.has('trials.create') && permissions.has('formulas.edit') && canViewSensitiveComposition,
+        canViewTrialEvidence: sensoryMemoryEnabled && canViewSensitiveComposition && permissions.has('trials.view'),
+        formulaIntelligenceFeatures: {
+          candidateGenerationEnabled,
+          optimizerEnabled,
+          sensoryMemoryEnabled,
+          evidenceRetrievalEnabled,
+        },
       },
     }
   }
@@ -331,6 +367,26 @@ export class NorthStarController {
   formulaDesignProject(@Param('projectId') projectId: string) {
     const context = this.northStar.me().data
     return this.agentRuntime.designProject(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+  }
+
+  @Get('formula-intelligence/design-projects/:projectId/brief-versions')
+  formulaDesignBriefVersions(@Param('projectId') projectId: string) {
+    const context = this.northStar.me().data
+    return this.agentRuntime.designBriefVersions(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/brief-versions/compile')
+  formulaDesignBriefCompilerStatus(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    const context = this.northStar.me().data
+    if (!this.northStar.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
+      return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
+    }
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions/compile`, idempotencyKey, {}, () => this.agentRuntime.designBriefCompilerStatus(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view')))
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/brief-versions')
+  saveFormulaDesignBriefVersion(@Param('projectId') projectId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions`, idempotencyKey, body, () => this.agentRuntime.saveDesignBriefVersion(this.northStar, this.northStar.me().data.session, projectId, body))
   }
 
   @Get('formula-intelligence/design-projects/:projectId/recipients')
@@ -361,6 +417,11 @@ export class NorthStarController {
   @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/save')
   saveFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Headers('idempotency-key') idempotencyKey?: string) {
     return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/save`, idempotencyKey, {}, () => this.agentRuntime.requestDesignDraftSave(this.northStar, this.northStar.me().data.session, projectId, directionId))
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/trial')
+  createFormulaDesignDirectionTrial(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/trial`, idempotencyKey, body, () => this.agentRuntime.createTrialFromDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
   }
 
   @Post('formula-intelligence/optimizer/runs')
@@ -394,8 +455,9 @@ export class NorthStarController {
   }
 
   @Get('agent/runs/:id/stream')
-  async agentStream(@Param('id') id: string, @Query('afterSequence') afterSequence: string | undefined, @Res() reply: any) {
-    const events = await this.agentRuntime.events(this.northStar.me().data.session, id, Math.max(0, Number(afterSequence ?? '0') || 0))
+  async agentStream(@Param('id') id: string, @Query('afterSequence') afterSequence: string | undefined, @Headers('last-event-id') lastEventId: string | undefined, @Res() reply: any) {
+    const replaySequence = Math.max(0, Number(lastEventId ?? afterSequence ?? '0') || 0)
+    const events = await this.agentRuntime.events(this.northStar.me().data.session, id, replaySequence)
     reply.header('Cache-Control', 'no-cache, no-transform')
     reply.header('Connection', 'keep-alive')
     reply.header('Content-Type', 'text/event-stream; charset=utf-8')
@@ -539,6 +601,26 @@ export class NorthStarController {
   @Get('formulas/:id/versions')
   formulaVersions(@Param('id') id: string) {
     return this.northStar.formulaVersions(id)
+  }
+
+  @Get('formulas/:id/trial-evidence')
+  formulaTrialEvidence(@Param('id') id: string, @Query('version') version?: string) {
+    return this.northStar.formulaTrialEvidence(id, version)
+  }
+
+  @Get('formula-intelligence/sensory-memory')
+  workspaceSensoryMemory() {
+    return this.northStar.workspaceSensoryMemory()
+  }
+
+  @Get('formula-intelligence/operational-metrics')
+  formulaIntelligenceOperationalMetrics() {
+    return this.northStar.formulaIntelligenceOperationalMetrics()
+  }
+
+  @Get('lineage/:type/:id')
+  operationalLineage(@Param('type') type: string, @Param('id') id: string) {
+    return this.northStar.operationalLineage(type.toUpperCase() as Parameters<NorthStarService['operationalLineage']>[0], id)
   }
 
   @Post('formulas/:id/versions')

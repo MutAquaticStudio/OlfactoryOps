@@ -1,5 +1,102 @@
 # OlfactoryOps
 
+## Competitive Moat: Phase 0-9
+
+### Phase 4: Direction to Trial
+
+A saved Formula Design Studio direction can enter **Trials & Sensory** only
+after the existing formula review and approval workflow has produced an
+immutable approved version. The planned trial retains compact private
+provenance for the project, direction, reviewed brief, constraint snapshot,
+material-universe hash, and candidate evaluation hash.
+
+Planning a trial never reserves or consumes inventory. Existing **Lab Usage
+commit** remains the sole operation that records material movements and links
+actual weights and lots to the trial.
+
+### Phase 5: Completed Trial Evidence
+
+Formula R&D and the Reformulation Optimizer can now retrieve read-only,
+tenant-scoped aggregate sensory evidence for an immutable formula version.
+The evidence service only uses decided trials, never changes a trial, formula,
+inventory movement, or approval state, and reports `Not enough evidence` until
+three completed overall scorecards are available.
+
+The projection is capability-gated by `formulas.viewSensitive`,
+`materials.view`, and `trials.view`. It returns only aggregate scores, sample
+count, confidence, and a safe status; it excludes observations, evaluator
+identity, public-link tokens, material composition, lots, costs, and internal
+comments. Trial reviewers without sensitive formula access receive
+`Not available for this role` rather than a partially redacted result.
+
+### Phase 6-9: Private Learning, Traceability, And Controlled Optimization
+
+**Private sensory memory** derives a versioned workspace preference profile
+only from decided tenant Trials. It is descriptive evidence, never model
+training, an odor prediction, or a change to an existing formula. The profile
+needs a minimum evidence threshold and its direction-ranking adjustment is
+bounded; missing evidence remains `Not enough evidence`.
+
+**Operational lineage** is a bounded, tenant-scoped read projection over the
+existing formula version, trial, lot, batch, finished-good, order, and document
+records. It adds no second graph database and never rewrites historical
+operational records. Formula R&D shows a compact trace summary when the role
+has sensitive formula, material, and Trial access.
+
+**Reformulation Optimizer** now accepts explicit hard constraints: preserve or
+prohibit materials, required eligible inventory, cost-reduction target, cost
+ceiling, and evidence preferences. It can only use reviewer-approved material
+substitutions. Candidates are ranked lexically by compliance, evaluated
+inventory, visible cost, and minimum composition change, with a Pareto state
+that is `Not evaluated` whenever commercial evidence is unavailable.
+Cost objectives require `costing.view`; an eligible-inventory hard gate requires
+`inventory.view`, and any candidate that fails an explicit gate is not offered
+for draft confirmation.
+
+The tenant feature flags `designStudioCandidateGeneration`,
+`designStudioOptimizer`, `designStudioSensoryMemory`, and
+`formulaIntelligenceRag` are server-side kill switches. They change runtime
+behavior in both local API and Worker paths; frontend visibility is only a
+reflection of those capabilities.
+
+Migration `0037_competitive_moat_memory.sql` adds tenant-scoped durable
+records for sensory memory, immutable preference-profile history, and approved
+material substitutions. Apply it to D1 before deploying the Worker.
+The isolated local test D1 binding has applied migrations through `0037`
+successfully; the production-named local binding remains blocked earlier by
+pre-existing migration `0010` schema drift and was deliberately left unchanged.
+
+Checkpoint Competitive Moat tạo lineage riêng tư cho Design Studio theo luồng:
+**raw brief -> structured review -> immutable brief version -> direction generation**.
+`formula_design_projects` vẫn là project aggregate hiện có; migration
+`0036_competitive_moat_briefs.sql` bổ sung brief version, constraint snapshot,
+generation context và direction evaluation mà không tạo song song một AI
+architecture mới.
+
+- Project mới chỉ lưu raw brief VI/EN. User với quyền `formulas.edit` phải
+  review các ràng buộc có cấu trúc trước khi Generate.
+- Khi chưa có provider, Brief Compiler trả `Not configured`. Hệ thống không tự
+  suy diễn market, IFRA, budget, material hay compliance; thiếu trường quan
+  trọng sẽ được lưu thành `REVIEW_REQUIRED`.
+- Project cũ được backfill thành `LEGACY_UNSTRUCTURED`; brief JSON cũ vẫn hoạt
+  động để không phá vỡ generation workflow đã tồn tại.
+- Mọi mutation vẫn qua authenticated tenant context, CSRF, idempotency và audit
+  evidence. Công thức, compliance, inventory và Trial/Sensory không thay đổi
+  behavior trong checkpoint này.
+
+Tài liệu baseline, data flow, risk register, backlog và execution state nằm
+trong [docs/competitive-moat](docs/competitive-moat/).
+
+### Phase 3: Candidate lineage
+
+Mỗi lần Generate từ một structured brief đã review, hệ thống pin một material
+universe tenant-scoped (eligible material, family, tier và availability rank)
+vào constraint snapshot bằng SHA-256. Ba direction deterministic được đánh giá
+theo formula math, required-material constraint, compliance, availability và
+cost khi role được phép xem. Evaluation chỉ trả về cho perfumer tạo direction;
+brand projection vẫn không chứa material ID, ratio, cost, lot hoặc warning thô.
+Không có stock reservation, consumption hoặc provider/LLM call trong bước này.
+
 OlfactoryOps là hệ điều hành đa tenant cho nghiên cứu, phát triển và vận hành thương mại ngành hương liệu. Hệ thống kết nối Material Intelligence, công thức, tồn kho theo lot, sản xuất, mua hàng, thương mại, đơn hàng, bằng chứng tuân thủ và phân tích vận hành trong một workspace.
 
 ## Công nghệ sử dụng
@@ -328,6 +425,24 @@ npm run build
 npm run build:api
 npm run test
 npm run security:client-bundle
+~~~
+
+## Nền tảng AI/Agent
+
+Formula Intelligence vận hành theo chế độ **deterministic mock mode**: kết quả được tạo từ các công cụ đã đăng ký chạy trên dữ liệu workspace có kiểm soát, không gọi LLM bên ngoài và không tự tiêu hao tồn kho. Browser nhận tiến độ qua SSE có replay từ event đã persist; API là nguồn dữ liệu chuẩn và mọi bản nháp công thức vẫn cần xác nhận rõ ràng trước khi lưu.
+
+### Trải nghiệm Formula Design Studio
+
+Design Studio dùng bố cục quyết định theo luồng **brief → directions → draft**. Brief và hướng sáng tạo được tách rõ; mỗi direction chỉ hiển thị phần tóm tắt để so sánh, còn pyramid, bằng chứng, thành phần riêng tư, chia sẻ và lưu draft nằm trong khu vực review khi người dùng chọn direction. Tiến độ nghiên cứu dùng motion nhẹ từ các component nguồn cục bộ lấy cảm hứng từ React Bits, tôn trọng reduced-motion và không làm thay đổi workflow, quyền hay dữ liệu công thức. Ở màn hình dưới 1380px, review chuyển xuống dưới danh sách directions trước khi các cột bị ép hẹp.
+
+Tài liệu kiến trúc, protocol event, mô hình bảo mật công cụ và báo cáo checkpoint nằm tại [docs/agent-platform](docs/agent-platform/). Khi triển khai checkpoint Agent Platform, chạy tối thiểu:
+
+~~~bash
+npm run test
+npm run build
+npm run build:api
+npm run typecheck:worker
+npm run lint
 ~~~
 
 Với Cloudflare release, chạy <code>npm run deploy:check</code> sau khi D1 migration và Worker secret đã sẵn sàng.

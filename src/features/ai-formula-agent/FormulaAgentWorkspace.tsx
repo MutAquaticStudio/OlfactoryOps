@@ -89,6 +89,9 @@ function FormulaArtifact({ artifact }: { artifact: AgentArtifact }) {
   if (artifact.type === 'design_directions') {
     return <div className="agent-artifact-list">{artifact.data.directions.map((direction) => <div key={direction.directionId}><strong>{direction.title}</strong><span>{direction.pyramidSummary} / {direction.availability} / {direction.complianceStatus}</span></div>)}</div>
   }
+  if (artifact.type === 'design_candidate_comparison') {
+    return <div className="agent-artifact-list">{artifact.data.candidates.map((candidate) => <div key={candidate.directionId}><strong>Candidate #{candidate.rank}</strong><span>{candidate.complianceStatus} / {candidate.availability === 'UNKNOWN' ? 'Inventory not evaluated' : candidate.availability} / {candidate.cost.state === 'EVALUATED' ? `Cost ${candidate.cost.totalCost?.toFixed(2) ?? 'not available'}` : 'Cost not evaluated'}</span></div>)}</div>
+  }
   if (artifact.type === 'optimizer_candidates') {
     return <div className="agent-artifact-list">{artifact.data.candidates.map((candidate) => <div key={candidate.candidateId}><strong>{candidate.title}</strong><span>Score {candidate.score.toFixed(1)} / {candidate.complianceStatus} / {candidate.availability}</span></div>)}</div>
   }

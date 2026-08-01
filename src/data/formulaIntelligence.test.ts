@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formulaDesignBriefSchema, formulaDirectionFeedbackSchema, formulaDirectionShareSchema } from './agentRuntime'
-import { buildDesignDirectionProposals, buildOptimizerProposals, compareOptimizerCandidates, compositionChangePercent } from './formulaIntelligence'
+import { formulaDesignBriefSchema, formulaDirectionFeedbackSchema, formulaDirectionShareSchema, formulaOptimizationObjectivesSchema } from './agentRuntime'
+import { buildDesignDirectionProposals, buildOptimizerProposals, compareOptimizerCandidates, compositionChangePercent, optimizerParetoState, sensoryMemoryEvidenceForDirection } from './formulaIntelligence'
 import { materials } from './northStar'
 
 describe('Formula Intelligence deterministic proposals', () => {
@@ -60,5 +60,34 @@ describe('Formula Intelligence deterministic proposals', () => {
       { complianceStatus: 'PASS', availability: 'AVAILABLE', costDelta: undefined, compositionChangePercent: 1, inventoryEvaluated: true },
       { complianceStatus: 'REVIEW_REQUIRED', availability: 'AVAILABLE', costDelta: -10, compositionChangePercent: 0, inventoryEvaluated: true },
     )).toBeLessThan(0)
+  })
+
+  it('keeps private sensory learning bounded and honest about insufficient evidence', () => {
+    const direction = { title: 'Citrus trail', narrative: 'A luminous citrus opening.', pyramidSummary: 'Top: Bergamot' }
+    expect(sensoryMemoryEvidenceForDirection(direction, undefined, true)).toMatchObject({ state: 'NOT_ENOUGH_EVIDENCE', adjustment: 0 })
+    expect(sensoryMemoryEvidenceForDirection(direction, {
+      id: 'profile-1', organizationId: 'org-nxl', version: 2, evidenceCount: 5, confidence: 'MEDIUM',
+      preferredDescriptors: ['citrus', 'luminous'], avoidedDescriptors: ['powdery'], recurrentDecisionReasons: [], createdAt: '2026-08-01T00:00:00.000Z',
+    }, true)).toMatchObject({ state: 'READY', adjustment: 6 })
+    expect(sensoryMemoryEvidenceForDirection(direction, undefined, false)).toMatchObject({ state: 'DISABLED', adjustment: 0 })
+  })
+
+  it('requires reviewer-approved substitutions and exposes Pareto uncertainty', () => {
+    const source = materials.find((material) => materials.some((candidate) => candidate.id !== material.id && candidate.tier === material.tier))!
+    const replacement = materials.find((material) => material.id !== source.id && material.tier === source.tier)!
+    const baseline = {
+      name: 'Restricted baseline', formulaType: 'FINE_FRAGRANCE' as const, targetGrams: 100, concentrationType: 'EDP' as const,
+      finalProductConcentrationPercent: 20, ifraCategory: '4', brief: 'baseline',
+      ingredients: [{ materialId: source.id, percentage: 100, pyramidNote: source.tier === 'Heart' ? 'Middle' as const : source.tier }],
+    }
+    const objectives = formulaOptimizationObjectivesSchema.parse({ prohibitedMaterialIds: [source.id], requireApprovedSubstitutions: true })
+    expect(buildOptimizerProposals(baseline, materials, 'COMBINED', [], new Set(), objectives)).toHaveLength(0)
+    const approved = [{
+      id: 'sub-1', organizationId: 'org-nxl', sourceMaterialId: source.id, replacementMaterialId: replacement.id, status: 'APPROVED' as const,
+      reviewer: 'usr-admin', evidenceReference: 'panel review', roleSimilarity: 'HIGH' as const, strengthFactor: 1, version: 1, createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+    }]
+    const candidates = buildOptimizerProposals(baseline, materials, 'COMBINED', [], new Set([replacement.id]), objectives, approved)
+    expect(candidates.some((candidate) => candidate.proposal.ingredients.some((line) => line.materialId === replacement.id))).toBe(true)
+    expect(optimizerParetoState({ complianceStatus: 'PASS', availability: 'UNKNOWN', costDelta: -1, compositionChangePercent: 2, inventoryEvaluated: false }, [])).toBe('NOT_EVALUATED')
   })
 })

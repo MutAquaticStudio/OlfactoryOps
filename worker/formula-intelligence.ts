@@ -1,11 +1,19 @@
 import {
   agentFormulaProposalSchema,
+  designCandidateEvaluationSchema,
+  formulaDesignBriefFromStructuredBrief,
   formulaDesignBriefSchema,
+  formulaDesignProjectCreateSchema,
   formulaDirectionFeedbackSchema,
   formulaDirectionShareSchema,
   formulaIntelligenceRunConfigSchema,
   formulaOptimizerRequestSchema,
+  rawBriefFromProjectCreate,
+  structuredFormulaDesignBriefSchema,
+  toSafeAgentRuntimeError,
+  validateStructuredFormulaDesignBrief,
   type DesignDirectionArtifact,
+  type DesignCandidateEvaluation,
   type FormulaIntelligenceRunConfig,
   type FormulaOptimizerRequest,
   type OptimizerCandidateArtifact,
@@ -15,9 +23,11 @@ import {
   buildOptimizerProposals,
   compareOptimizerCandidates,
   compositionChangePercent,
+  optimizerParetoState,
   proposalFromFormulaVersion,
+  sensoryMemoryEvidenceForDirection,
 } from '../src/data/formulaIntelligence.js'
-import type { Material } from '../src/data/northStar.js'
+import type { FormulaIntelligenceTrialSource, Material } from '../src/data/northStar.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { AgentRuntimeStore, type AgentActor, type AgentRunRow } from './agent-runtime.js'
@@ -31,9 +41,39 @@ type ProjectRow = {
   status: string
   name: string
   brief_json: string
+  current_brief_version_id: string | null
   selected_direction_id: string | null
   created_at: string
   updated_at: string
+}
+
+type BriefVersionRow = {
+  id: string
+  organization_id: string
+  project_id: string
+  version_number: number
+  state: 'RAW' | 'REVIEW_REQUIRED' | 'REVIEWED' | 'LEGACY_UNSTRUCTURED'
+  schema_version: number
+  raw_brief: string
+  structured_brief_json: string | null
+  unresolved_questions_json: string
+  compiler_mode: 'MANUAL' | 'NOT_CONFIGURED' | 'LEGACY'
+  checksum: string
+  created_by_user_id: string
+  created_at: string
+}
+
+type ConstraintSnapshotRow = {
+  id: string
+  organization_id: string
+  project_id: string
+  brief_version_id: string
+  snapshot_json: string
+  constraints_hash: string
+  material_universe_hash: string | null
+  material_universe_state: 'NOT_EVALUATED' | 'PINNED'
+  created_by_user_id: string
+  created_at: string
 }
 
 type DirectionRow = {
@@ -50,6 +90,18 @@ type DirectionRow = {
   saved_formula_id: string | null
   created_at: string
   updated_at: string
+}
+
+type GenerationContextLinkRow = {
+  brief_version_id: string
+  constraint_snapshot_id: string
+  material_universe_hash: string
+}
+
+type DirectionEvaluationLinkRow = {
+  constraint_snapshot_id: string
+  evaluation_json: string
+  evaluation_hash: string
 }
 
 type DirectionShareRow = {
@@ -100,6 +152,21 @@ function parseJson<T>(value: string, fallback: T): T {
   }
 }
 
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, canonicalJson(nested)]))
+  }
+  return value
+}
+
+async function checksum(value: unknown) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(canonicalJson(value))))
+  return Array.from(new Uint8Array(digest), (item) => item.toString(16).padStart(2, '0')).join('')
+}
+
 function permissions(service: NorthStarService) {
   return new Set(service.me().data.permissions)
 }
@@ -107,6 +174,12 @@ function permissions(service: NorthStarService) {
 function requirePermission(service: NorthStarService, permission: string) {
   if (!permissions(service).has(permission)) {
     throw new ForbiddenException(`Formula Intelligence requires ${permission}`)
+  }
+}
+
+function requireFormulaIntelligenceFeature(service: NorthStarService, key: string) {
+  if (!service.formulaIntelligenceFeatureEnabled(key)) {
+    throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_FEATURE_DISABLED')
   }
 }
 
@@ -142,6 +215,66 @@ function candidateWarnings(preview: Preview) {
       ? preview.availability.filter((item) => item.status !== 'AVAILABLE').map((item) => `${item.materialName}: ${item.status.toLowerCase()}`)
       : ['Inventory detail is hidden by the current role.']),
   ].slice(0, 40)
+}
+
+function designCandidateConstraintState(direction: DesignDirectionArtifact, brief: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>['brief']) {
+  const proposalMaterialIds = new Set(direction.proposal.ingredients.map((ingredient) => ingredient.materialId))
+  const requiredMaterialsSatisfied = brief.lockedMaterialIds.every((materialId) => proposalMaterialIds.has(materialId))
+  const state = !requiredMaterialsSatisfied || direction.complianceStatus === 'BLOCKED'
+    ? 'BLOCKED' as const
+    : direction.complianceStatus === 'REVIEW_REQUIRED'
+      ? 'REVIEW_REQUIRED' as const
+      : 'PASS' as const
+  return { state, requiredMaterialsSatisfied }
+}
+
+function compareDesignCandidateEvaluations(left: DesignCandidateEvaluation, right: DesignCandidateEvaluation) {
+  const constraintRank = (value: DesignCandidateEvaluation['constraints']['state']) => value === 'PASS' ? 3 : value === 'REVIEW_REQUIRED' ? 2 : 1
+  const complianceRank = (value: DesignCandidateEvaluation['complianceStatus']) => value === 'PASS' ? 3 : value === 'REVIEW_REQUIRED' ? 2 : 1
+  const availabilityRank = (value: DesignCandidateEvaluation['availability']) => value === 'AVAILABLE' ? 3 : value === 'MIXED' ? 2 : 1
+  const constraint = constraintRank(right.constraints.state) - constraintRank(left.constraints.state)
+  if (constraint) return constraint
+  const compliance = complianceRank(right.complianceStatus) - complianceRank(left.complianceStatus)
+  if (compliance) return compliance
+  const availability = availabilityRank(right.availability) - availabilityRank(left.availability)
+  if (availability) return availability
+  const costEvidence = Number(right.cost.state === 'EVALUATED') - Number(left.cost.state === 'EVALUATED')
+  if (costEvidence) return costEvidence
+  if (left.cost.totalCost !== undefined && right.cost.totalCost !== undefined && left.cost.totalCost !== right.cost.totalCost) {
+    return left.cost.totalCost - right.cost.totalCost
+  }
+  return left.proposalChecksum.localeCompare(right.proposalChecksum)
+}
+
+async function evaluateDesignCandidates(
+  directions: DesignDirectionArtifact[],
+  previews: Preview[],
+  brief: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>['brief'],
+  materialUniverseHash: string,
+  materialCount: number,
+) {
+  const evaluations = await Promise.all(directions.map(async (direction, index) => {
+    const preview = previews[index]!
+    const totalPercentage = Number(direction.proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0).toFixed(4))
+    const constraints = designCandidateConstraintState(direction, brief)
+    return designCandidateEvaluationSchema.parse({
+      directionId: direction.directionId,
+      rank: 1,
+      proposalChecksum: await checksum(direction.proposal),
+      composition: { state: 'VALID', totalPercentage },
+      constraints,
+      complianceStatus: direction.complianceStatus,
+      availability: direction.availability,
+      cost: preview.cost
+        ? { state: 'EVALUATED', totalCost: Number(preview.cost.totalCost.toFixed(4)) }
+        : { state: 'NOT_EVALUATED' },
+      materialUniverse: { hash: materialUniverseHash, materialCount },
+      warnings: direction.warnings,
+    })
+  }))
+  return evaluations
+    .sort(compareDesignCandidateEvaluations)
+    .map((evaluation, index) => ({ ...evaluation, rank: index + 1 }))
 }
 
 function safeDirection(direction: DesignDirectionArtifact) {
@@ -216,30 +349,42 @@ export class FormulaIntelligenceStore {
   constructor(private readonly db: D1Database) {}
 
   async createDesignProject(actor: AgentActor, briefInput: unknown, idempotencyKey: string, brandId: string) {
-    const brief = formulaDesignBriefSchema.parse(briefInput)
+    const input = formulaDesignProjectCreateSchema.parse(briefInput)
+    const rawBrief = rawBriefFromProjectCreate(input)
     const rawKey = idempotencyKey.trim().slice(0, 160)
     const key = `design-project:${actor.userId}:${rawKey}`
     if (!rawKey) throw new UnprocessableEntityException('Idempotency-Key is required for a design brief')
     const existing = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
        FROM formula_design_projects WHERE organization_id = ? AND idempotency_key = ?`,
     ).bind(actor.organizationId, key).first<ProjectRow>()
     if (existing) return this.projectPayload(existing, actor, false)
     const timestamp = now()
+    const briefVersionId = uuid()
+    const rawChecksum = await checksum({ schemaVersion: 1, rawBrief, state: 'RAW' })
     const project: ProjectRow = {
       id: uuid(), organization_id: actor.organizationId, brand_id: brandId || null, created_by_user_id: actor.userId,
-      status: 'BRIEFED', name: brief.name, brief_json: JSON.stringify(brief), selected_direction_id: null, created_at: timestamp, updated_at: timestamp,
+      status: 'BRIEFED', name: input.name, brief_json: '{}', current_brief_version_id: briefVersionId, selected_direction_id: null, created_at: timestamp, updated_at: timestamp,
     }
-    await this.db.prepare(
-      `INSERT INTO formula_design_projects (id, organization_id, brand_id, created_by_user_id, status, name, brief_json, idempotency_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(project.id, project.organization_id, project.brand_id, project.created_by_user_id, project.status, project.name, project.brief_json, key, timestamp, timestamp).run()
+    await this.db.batch([
+      this.db.prepare(
+        `INSERT INTO formula_design_projects (id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(project.id, project.organization_id, project.brand_id, project.created_by_user_id, project.status, project.name, project.brief_json, project.current_brief_version_id, key, timestamp, timestamp),
+      this.db.prepare(
+        `INSERT INTO formula_design_brief_versions (
+          id, organization_id, project_id, version_number, state, schema_version, raw_brief,
+          structured_brief_json, unresolved_questions_json, compiler_mode, compiler_template_version,
+          checksum, idempotency_key, created_by_user_id, created_at
+        ) VALUES (?, ?, ?, 1, 'RAW', 1, ?, NULL, ?, 'MANUAL', NULL, ?, ?, ?, ?)`,
+      ).bind(briefVersionId, actor.organizationId, project.id, rawBrief, JSON.stringify([{ field: 'structuredBrief', reason: 'Complete the structured review before generation.', importance: 'HIGH' }]), rawChecksum, `brief-raw:${actor.userId}:${rawKey}`, actor.userId, timestamp),
+    ])
     return this.projectPayload(project, actor, false)
   }
 
   async listDesignProjects(actor: AgentActor, canViewPrivate: boolean) {
     const result = await this.db.prepare(
-      `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.selected_direction_id, p.created_at, p.updated_at
+      `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.current_brief_version_id, p.selected_direction_id, p.created_at, p.updated_at
        FROM formula_design_projects p
        LEFT JOIN formula_design_direction_shares s
          ON s.project_id = p.id AND s.organization_id = p.organization_id AND s.recipient_user_id = ? AND s.revoked_at IS NULL
@@ -256,7 +401,7 @@ export class FormulaIntelligenceStore {
       if (brandIds.length) {
         const placeholders = brandIds.map(() => '?').join(', ')
         const queued = await this.db.prepare(
-          `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+          `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
            FROM formula_design_projects
            WHERE organization_id = ? AND status = 'BRIEFED' AND brand_id IN (${placeholders})
            ORDER BY updated_at DESC LIMIT 80`,
@@ -274,7 +419,7 @@ export class FormulaIntelligenceStore {
 
   async designProjectForGeneration(actor: AgentActor, projectId: string) {
     const project = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
     ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
@@ -295,7 +440,84 @@ export class FormulaIntelligenceStore {
     if (existingRun || project.status !== 'BRIEFED') {
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ALREADY_GENERATED')
     }
-    return project
+    const version = await this.currentBriefVersion(project)
+    if (version?.state === 'RAW' || version?.state === 'REVIEW_REQUIRED') {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
+    }
+    if (version?.state === 'REVIEWED') {
+      const structured = structuredFormulaDesignBriefSchema.parse(parseJson(version.structured_brief_json ?? '{}', {}))
+      const snapshot = await this.ensureConstraintSnapshot(actor, project, version, structured)
+      return { project, brief: formulaDesignBriefFromStructuredBrief(project.name, structured), briefVersion: version, constraintSnapshot: snapshot }
+    }
+    return {
+      project,
+      brief: formulaDesignBriefSchema.parse(parseJson(project.brief_json, {})),
+      briefVersion: version,
+      constraintSnapshot: undefined,
+    }
+  }
+
+  async briefVersions(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
+    const project = await this.projectForActor(actor, projectId)
+    if (!canViewPrivate && project.created_by_user_id !== actor.userId) throw new NotFoundException('Design project was not found')
+    const versions = await this.db.prepare(
+      `SELECT id, organization_id, project_id, version_number, state, schema_version, raw_brief, structured_brief_json,
+        unresolved_questions_json, compiler_mode, checksum, created_by_user_id, created_at
+       FROM formula_design_brief_versions WHERE organization_id = ? AND project_id = ? ORDER BY version_number DESC`,
+    ).bind(actor.organizationId, projectId).all<BriefVersionRow>()
+    return { currentBriefVersionId: project.current_brief_version_id, versions: (versions.results ?? []).map((version) => this.briefVersionPayload(version)) }
+  }
+
+  async briefCompilerStatus(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
+    const project = await this.projectForActor(actor, projectId)
+    if (!canViewPrivate && project.created_by_user_id !== actor.userId) throw new NotFoundException('Design project was not found')
+    return {
+      mode: 'MANUAL',
+      status: 'NOT_CONFIGURED',
+      message: 'AI brief compilation is not configured. Review the structured brief manually.',
+    }
+  }
+
+  async saveBriefVersion(actor: AgentActor, projectId: string, input: unknown, idempotencyKey: string) {
+    const project = await this.projectForBriefEdit(actor, projectId)
+    const validation = validateStructuredFormulaDesignBrief(input)
+    const priorVersion = await this.currentBriefVersion(project)
+    const latest = await this.db.prepare(
+      `SELECT MAX(version_number) AS version_number FROM formula_design_brief_versions WHERE organization_id = ? AND project_id = ?`,
+    ).bind(actor.organizationId, project.id).first<{ version_number: number | null }>()
+    const timestamp = now()
+    const versionNumber = Number(latest?.version_number ?? 0) + 1
+    const versionId = uuid()
+    const scopedIdempotencyKey = `design-brief-version:${actor.userId}:${idempotencyKey.trim().slice(0, 160)}`
+    const versionChecksum = await checksum({
+      schemaVersion: validation.brief.schemaVersion,
+      rawBrief: priorVersion?.raw_brief ?? '',
+      structuredBrief: validation.brief,
+      unresolvedQuestions: validation.unresolvedQuestions,
+    })
+    const legacyProjection = validation.state === 'REVIEWED'
+      ? JSON.stringify(formulaDesignBriefFromStructuredBrief(project.name, validation.brief))
+      : project.brief_json
+    await this.db.batch([
+      this.db.prepare(
+        `INSERT INTO formula_design_brief_versions (
+          id, organization_id, project_id, version_number, state, schema_version, raw_brief,
+          structured_brief_json, unresolved_questions_json, compiler_mode, compiler_template_version,
+          checksum, idempotency_key, created_by_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 'MANUAL', 'competitive-moat.v1', ?, ?, ?, ?)`,
+      ).bind(versionId, actor.organizationId, project.id, versionNumber, validation.state, priorVersion?.raw_brief ?? '', JSON.stringify(validation.brief), JSON.stringify(validation.unresolvedQuestions), versionChecksum, scopedIdempotencyKey, actor.userId, timestamp),
+      this.db.prepare(
+        `UPDATE formula_design_projects SET current_brief_version_id = ?, brief_json = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ?`,
+      ).bind(versionId, legacyProjection, timestamp, project.id, actor.organizationId),
+    ])
+    await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.design.brief.version.create', `${project.id}:${versionId}`, validation.state === 'REVIEWED' ? 'allowed' : 'review')
+    return this.briefVersionPayload({
+      id: versionId, organization_id: actor.organizationId, project_id: project.id, version_number: versionNumber,
+      state: validation.state, schema_version: 1, raw_brief: priorVersion?.raw_brief ?? '', structured_brief_json: JSON.stringify(validation.brief),
+      unresolved_questions_json: JSON.stringify(validation.unresolvedQuestions), compiler_mode: 'MANUAL', checksum: versionChecksum,
+      created_by_user_id: actor.userId, created_at: timestamp,
+    })
   }
 
   async createRunConfig(actor: AgentActor, runId: string, config: FormulaIntelligenceRunConfig, idempotencyKey: string) {
@@ -313,6 +535,18 @@ export class FormulaIntelligenceStore {
     ).run()
   }
 
+  async createGenerationContext(actor: AgentActor, runId: string, input: { project: ProjectRow; briefVersion: BriefVersionRow; constraintSnapshot: ConstraintSnapshotRow }) {
+    await this.db.prepare(
+      `INSERT OR IGNORE INTO formula_design_generation_contexts (
+        id, organization_id, project_id, run_id, brief_version_id, constraint_snapshot_id,
+        material_universe_hash, created_by_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      uuid(), actor.organizationId, input.project.id, runId, input.briefVersion.id, input.constraintSnapshot.id,
+      input.constraintSnapshot.material_universe_hash, actor.userId, now(),
+    ).run()
+  }
+
   async configForRun(actor: AgentActor, runId: string) {
     const row = await this.db.prepare(
       `SELECT run_id, workflow_kind, config_json, project_id, baseline_formula_id, baseline_version, created_by_user_id
@@ -322,15 +556,33 @@ export class FormulaIntelligenceStore {
     return { row, config: formulaIntelligenceRunConfigSchema.parse(parseJson(row.config_json, {})) }
   }
 
-  async persistDesignDirections(actor: AgentActor, projectId: string, runId: string, directions: DesignDirectionArtifact[]) {
+  async persistDesignDirections(
+    actor: AgentActor,
+    projectId: string,
+    runId: string,
+    directions: DesignDirectionArtifact[],
+    evaluationContext?: { constraintSnapshotId: string; evaluations: DesignCandidateEvaluation[] },
+  ) {
     const timestamp = now()
     const statements = directions.map((direction, index) => this.db.prepare(
       `INSERT INTO formula_design_directions (id, organization_id, project_id, run_id, sequence, title, status, safe_summary_json, proposal_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?)
        ON CONFLICT(project_id, sequence) DO UPDATE SET run_id = excluded.run_id, title = excluded.title, status = 'DRAFT', safe_summary_json = excluded.safe_summary_json, proposal_json = excluded.proposal_json, updated_at = excluded.updated_at`,
     ).bind(direction.directionId, actor.organizationId, projectId, runId, index + 1, direction.title, JSON.stringify(safeDirection(direction)), JSON.stringify(direction.proposal), timestamp, timestamp))
+    const evaluationStatements = evaluationContext
+      ? await Promise.all(evaluationContext.evaluations.map(async (evaluation) => this.db.prepare(
+        `INSERT OR IGNORE INTO formula_design_direction_evaluations (
+          id, organization_id, project_id, run_id, direction_id, constraint_snapshot_id,
+          evaluation_version, evaluation_json, evaluation_hash, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+      ).bind(
+        uuid(), actor.organizationId, projectId, runId, evaluation.directionId, evaluationContext.constraintSnapshotId,
+        JSON.stringify(evaluation), await checksum(evaluation), timestamp,
+      )))
+      : []
     await this.db.batch([
       ...statements,
+      ...evaluationStatements,
       this.db.prepare(`UPDATE formula_design_projects SET status = 'IN_REVIEW', updated_at = ? WHERE id = ? AND organization_id = ?`)
         .bind(timestamp, projectId, actor.organizationId),
     ])
@@ -447,6 +699,70 @@ export class FormulaIntelligenceStore {
     return { confirmationId, summary: `Save ${proposal.name} as a non-consuming formula draft` }
   }
 
+  async createTrialFromDesignDirection(
+    actor: AgentActor,
+    projectId: string,
+    directionId: string,
+    body: unknown,
+    service: NorthStarService,
+  ) {
+    await this.projectForActor(actor, projectId)
+    const direction = await this.directionForProject(actor, projectId, directionId, true)
+    if (!(await this.isDirectionProducer(actor, direction))) throw new ForbiddenException('Only the perfumer who generated a direction can plan its trial')
+    if (!direction.saved_formula_id || direction.status !== 'SAVED') {
+      throw new UnprocessableEntityException('Save this direction as a formula draft before planning a trial')
+    }
+
+    const [context, evaluation] = await Promise.all([
+      this.db.prepare(
+        `SELECT brief_version_id, constraint_snapshot_id, material_universe_hash
+         FROM formula_design_generation_contexts
+         WHERE organization_id = ? AND project_id = ? AND run_id = ?
+         ORDER BY created_at DESC LIMIT 1`,
+      ).bind(actor.organizationId, projectId, direction.run_id).first<GenerationContextLinkRow>(),
+      this.db.prepare(
+        `SELECT constraint_snapshot_id, evaluation_json, evaluation_hash
+         FROM formula_design_direction_evaluations
+         WHERE organization_id = ? AND project_id = ? AND run_id = ? AND direction_id = ?
+         ORDER BY evaluation_version DESC LIMIT 1`,
+      ).bind(actor.organizationId, projectId, direction.run_id, directionId).first<DirectionEvaluationLinkRow>(),
+    ])
+    const parsedEvaluation = evaluation && designCandidateEvaluationSchema.safeParse(parseJson(evaluation.evaluation_json, {}))
+    if (!context || !evaluation || !parsedEvaluation?.success || evaluation.constraint_snapshot_id !== context.constraint_snapshot_id || parsedEvaluation.data.materialUniverse.hash !== context.material_universe_hash) {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CANDIDATE_LINEAGE_REQUIRED')
+    }
+    if (parsedEvaluation.data.constraints.state === 'BLOCKED') {
+      throw new UnprocessableEntityException('A blocked direction cannot be planned as a trial')
+    }
+
+    const existing = await this.db.prepare(
+      `SELECT id FROM fragrance_trials
+       WHERE organization_id = ? AND json_extract(record_json, '$.formulaIntelligenceSource.directionId') = ?
+       ORDER BY created_at DESC LIMIT 1`,
+    ).bind(actor.organizationId, directionId).first<{ id: string }>()
+    if (existing) {
+      return { trial: service.trialDetail(existing.id).data.trial, duplicate: true, invariant: 'a design direction maps to one planned trial and never reserves or consumes inventory' }
+    }
+
+    const input = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {}
+    const source: FormulaIntelligenceTrialSource = {
+      kind: 'DESIGN_DIRECTION',
+      projectId,
+      directionId,
+      runId: direction.run_id,
+      briefVersionId: context.brief_version_id,
+      constraintSnapshotId: context.constraint_snapshot_id,
+      materialUniverseHash: context.material_universe_hash,
+      evaluationHash: evaluation.evaluation_hash,
+    }
+    const result = service.createTrialFromFormulaIntelligenceCandidate({
+      formulaId: direction.saved_formula_id,
+      ...(typeof input.title === 'string' ? { title: input.title } : {}),
+      ...(typeof input.sampleCode === 'string' ? { sampleCode: input.sampleCode } : {}),
+    }, source)
+    return { ...result.data, duplicate: false, invariant: 'a direction trial preserves immutable candidate lineage and creates no reservation or inventory movement' }
+  }
+
   async requestCandidateDraftSave(actor: AgentActor, runId: string, candidateId: string, agentStore: AgentRuntimeStore, service: NorthStarService) {
     const candidate = await this.candidateForRun(actor, runId, candidateId)
     const run = await agentStore.runForActor(actor, runId)
@@ -525,9 +841,144 @@ export class FormulaIntelligenceStore {
     return preview
   }
 
+  private async projectForBriefEdit(actor: AgentActor, projectId: string) {
+    const project = await this.db.prepare(
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
+       FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
+    ).bind(projectId, actor.organizationId).first<ProjectRow>()
+    if (!project) throw new NotFoundException('Design project was not found')
+    const brandIds = await this.activeBrandIds(actor)
+    const canEdit = project.created_by_user_id === actor.userId || (
+      project.status === 'BRIEFED' && Boolean(project.brand_id) && brandIds.includes(project.brand_id!)
+    )
+    if (!canEdit) throw new NotFoundException('Design project was not found')
+    return project
+  }
+
+  private async currentBriefVersion(project: ProjectRow) {
+    if (!project.current_brief_version_id) return undefined
+    return this.db.prepare(
+      `SELECT id, organization_id, project_id, version_number, state, schema_version, raw_brief, structured_brief_json,
+        unresolved_questions_json, compiler_mode, checksum, created_by_user_id, created_at
+       FROM formula_design_brief_versions WHERE id = ? AND organization_id = ? AND project_id = ?`,
+    ).bind(project.current_brief_version_id, project.organization_id, project.id).first<BriefVersionRow>()
+  }
+
+  private async ensureConstraintSnapshot(
+    actor: AgentActor,
+    project: ProjectRow,
+    version: BriefVersionRow,
+    structured: ReturnType<typeof structuredFormulaDesignBriefSchema.parse>,
+  ) {
+    const existing = await this.db.prepare(
+      `SELECT id, organization_id, project_id, brief_version_id, snapshot_json, constraints_hash, material_universe_hash,
+        material_universe_state, created_by_user_id, created_at
+       FROM formula_design_constraint_snapshots WHERE organization_id = ? AND brief_version_id = ?`,
+    ).bind(actor.organizationId, version.id).first<ConstraintSnapshotRow>()
+    if (existing) return existing
+    const timestamp = now()
+    const snapshotJson = JSON.stringify({ schemaVersion: 1, product: structured.product, constraints: structured.constraints })
+    const constraintsHash = await checksum({ product: structured.product, constraints: structured.constraints })
+    const candidate: ConstraintSnapshotRow = {
+      id: uuid(), organization_id: actor.organizationId, project_id: project.id, brief_version_id: version.id,
+      snapshot_json: snapshotJson, constraints_hash: constraintsHash, material_universe_hash: null,
+      material_universe_state: 'NOT_EVALUATED', created_by_user_id: actor.userId, created_at: timestamp,
+    }
+    await this.db.prepare(
+      `INSERT OR IGNORE INTO formula_design_constraint_snapshots (
+        id, organization_id, project_id, brief_version_id, snapshot_json, constraints_hash,
+        material_universe_hash, material_universe_state, created_by_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'NOT_EVALUATED', ?, ?)`,
+    ).bind(candidate.id, candidate.organization_id, candidate.project_id, candidate.brief_version_id, candidate.snapshot_json, candidate.constraints_hash, candidate.created_by_user_id, candidate.created_at).run()
+    return (await this.db.prepare(
+      `SELECT id, organization_id, project_id, brief_version_id, snapshot_json, constraints_hash, material_universe_hash,
+        material_universe_state, created_by_user_id, created_at
+       FROM formula_design_constraint_snapshots WHERE organization_id = ? AND brief_version_id = ?`,
+    ).bind(actor.organizationId, version.id).first<ConstraintSnapshotRow>()) ?? candidate
+  }
+
+  async pinMaterialUniverse(
+    actor: AgentActor,
+    runId: string,
+    constraintSnapshotId: string,
+    materials: Array<Material & { availabilityRank?: number }>,
+  ) {
+    const snapshot = await this.db.prepare(
+      `SELECT id, organization_id, project_id, brief_version_id, snapshot_json, constraints_hash, material_universe_hash,
+        material_universe_state, created_by_user_id, created_at
+       FROM formula_design_constraint_snapshots
+       WHERE id = ? AND organization_id = ?`,
+    ).bind(constraintSnapshotId, actor.organizationId).first<ConstraintSnapshotRow>()
+    if (!snapshot) throw new NotFoundException('Design constraint snapshot was not found')
+    const universe = materials
+      .map((material) => ({
+        id: material.id,
+        family: material.family,
+        tier: material.tier,
+        availabilityRank: Number((material.availabilityRank ?? 0).toFixed(4)),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id))
+    const materialUniverseHash = await checksum(universe)
+    if (snapshot.material_universe_state === 'PINNED') {
+      if (snapshot.material_universe_hash !== materialUniverseHash) {
+        throw new ConflictException('Design material universe was already pinned for this reviewed brief')
+      }
+      await this.db.prepare(
+        `UPDATE formula_design_generation_contexts
+         SET material_universe_hash = ?
+         WHERE organization_id = ? AND run_id = ? AND constraint_snapshot_id = ?`,
+      ).bind(materialUniverseHash, actor.organizationId, runId, snapshot.id).run()
+      return snapshot
+    }
+    const existingPayload = parseJson<Record<string, unknown>>(snapshot.snapshot_json, {})
+    await this.db.prepare(
+      `UPDATE formula_design_constraint_snapshots
+       SET snapshot_json = ?, material_universe_hash = ?, material_universe_state = 'PINNED'
+       WHERE id = ? AND organization_id = ? AND material_universe_state = 'NOT_EVALUATED'`,
+    ).bind(
+      JSON.stringify({ ...existingPayload, materialUniverse: { schemaVersion: 1, materials: universe } }),
+      materialUniverseHash,
+      snapshot.id,
+      actor.organizationId,
+    ).run()
+    const pinned = await this.db.prepare(
+      `SELECT id, organization_id, project_id, brief_version_id, snapshot_json, constraints_hash, material_universe_hash,
+        material_universe_state, created_by_user_id, created_at
+       FROM formula_design_constraint_snapshots
+       WHERE id = ? AND organization_id = ?`,
+    ).bind(snapshot.id, actor.organizationId).first<ConstraintSnapshotRow>()
+    if (!pinned || pinned.material_universe_state !== 'PINNED' || pinned.material_universe_hash !== materialUniverseHash) {
+      throw new ConflictException('Design material universe could not be pinned safely')
+    }
+    await this.db.prepare(
+      `UPDATE formula_design_generation_contexts
+       SET material_universe_hash = ?
+       WHERE organization_id = ? AND run_id = ? AND constraint_snapshot_id = ?`,
+    ).bind(materialUniverseHash, actor.organizationId, runId, snapshot.id).run()
+    return pinned
+  }
+
+  private briefVersionPayload(version: BriefVersionRow) {
+    const parsed = version.structured_brief_json
+      ? structuredFormulaDesignBriefSchema.safeParse(parseJson(version.structured_brief_json, {}))
+      : undefined
+    return {
+      id: version.id,
+      versionNumber: version.version_number,
+      state: version.state,
+      schemaVersion: version.schema_version,
+      rawBrief: version.raw_brief,
+      structuredBrief: parsed?.success ? parsed.data : undefined,
+      unresolvedQuestions: parseJson(version.unresolved_questions_json, [] as Array<{ field: string; reason: string; importance: 'LOW' | 'MEDIUM' | 'HIGH' }>),
+      compilerMode: version.compiler_mode,
+      checksum: version.checksum,
+      createdAt: version.created_at,
+    }
+  }
+
   private async projectForActor(actor: AgentActor, projectId: string) {
     const project = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
     ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
@@ -570,6 +1021,9 @@ export class FormulaIntelligenceStore {
   }
 
   private async projectPayload(project: ProjectRow, actor: AgentActor, canViewPrivate: boolean) {
+    const canViewBriefDetails = canViewPrivate || project.created_by_user_id === actor.userId
+    const currentBriefVersion = canViewBriefDetails ? await this.currentBriefVersion(project) : undefined
+    const legacyBrief = formulaDesignBriefSchema.safeParse(parseJson(project.brief_json, {}))
     const directionRows = await this.db.prepare(
       `SELECT d.id, d.project_id, d.run_id, d.sequence, d.title, d.status, d.safe_summary_json, d.proposal_json,
         d.shared_by_user_id, d.shared_at, d.saved_formula_id, d.created_at, d.updated_at
@@ -619,11 +1073,30 @@ export class FormulaIntelligenceStore {
            WHERE organization_id = ? AND direction_id = ? AND revoked_at IS NULL ORDER BY shared_at ASC`,
         ).bind(actor.organizationId, direction.id).all<DirectionShareRow>()
         : undefined
+      const evaluationRow = privateDirection
+        ? await this.db.prepare(
+          `SELECT evaluation_json FROM formula_design_direction_evaluations
+           WHERE organization_id = ? AND direction_id = ?
+           ORDER BY evaluation_version DESC LIMIT 1`,
+        ).bind(actor.organizationId, direction.id).first<{ evaluation_json: string }>()
+        : undefined
+      const evaluation = evaluationRow
+        ? designCandidateEvaluationSchema.safeParse(parseJson(evaluationRow.evaluation_json, {}))
+        : undefined
+      const trial = privateDirection && direction.saved_formula_id
+        ? await this.db.prepare(
+          `SELECT id FROM fragrance_trials
+           WHERE organization_id = ? AND json_extract(record_json, '$.formulaIntelligenceSource.directionId') = ?
+           ORDER BY created_at DESC LIMIT 1`,
+        ).bind(actor.organizationId, direction.id).first<{ id: string }>()
+        : undefined
       return {
         ...visible,
         status: direction.status,
         sharedAt: share?.shared_at ?? direction.shared_at,
         savedFormulaId: privateDirection ? direction.saved_formula_id : undefined,
+        trialId: privateDirection ? trial?.id : undefined,
+        ...(evaluation?.success ? { evaluation: evaluation.data } : {}),
         ...(shares ? { shares: (shares.results ?? []).map((item) => ({ recipientUserId: item.recipient_user_id, allowMaterialNames: Boolean(item.allow_material_names), sharedAt: item.shared_at })) } : {}),
       }
     }))
@@ -633,7 +1106,10 @@ export class FormulaIntelligenceStore {
       status: project.status,
       createdByUserId: project.created_by_user_id,
       selectedDirectionId: project.selected_direction_id,
-      brief: formulaDesignBriefSchema.parse(parseJson(project.brief_json, {})),
+      ...(legacyBrief.success && canViewBriefDetails ? { brief: legacyBrief.data } : {}),
+      currentBriefVersionId: project.current_brief_version_id,
+      briefVersion: currentBriefVersion ? this.briefVersionPayload(currentBriefVersion) : undefined,
+      briefStatus: currentBriefVersion?.state ?? 'LEGACY_UNSTRUCTURED',
       createdAt: project.created_at,
       updatedAt: project.updated_at,
       directions: directions.filter((direction): direction is NonNullable<typeof direction> => Boolean(direction)),
@@ -693,12 +1169,31 @@ function assertCandidateSaveEligibility(service: NorthStarService, proposal: Ret
   const total = proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0)
   if (Math.abs(total - 100) > 0.05) throw new UnprocessableEntityException('Candidate composition must total 100% before it can be saved')
   const candidateMaterialIds = new Set(proposal.ingredients.map((ingredient) => ingredient.materialId))
-  if (request.lockedMaterialIds.some((materialId) => !candidateMaterialIds.has(materialId))) {
+  const preserved = [...new Set([...request.lockedMaterialIds, ...(request.objectives?.preserveMaterialIds ?? [])])]
+  if (preserved.some((materialId) => !candidateMaterialIds.has(materialId))) {
     throw new UnprocessableEntityException('Candidate does not preserve all locked materials')
+  }
+  if ((request.objectives?.prohibitedMaterialIds ?? []).some((materialId) => candidateMaterialIds.has(materialId))) {
+    throw new UnprocessableEntityException('Candidate contains a prohibited material')
   }
   const preview = service.previewFormulaIntelligence(proposal).data
   if (preview.compliance.status !== 'APPROVED' || preview.ifra.blockerCount > 0) {
     throw new UnprocessableEntityException('Only a compliance-passing candidate can be saved as a formula draft')
+  }
+  const baseline = service.formulaVersions(request.baselineFormulaId).data.versions.find((version) => version.version === request.baselineVersion)
+  const formula = service.formulaVersions(request.baselineFormulaId).data.formula
+  if ((request.objectives?.targetCostReductionPercent !== undefined || request.objectives?.maxTotalCost !== undefined) && (!preview.cost || !baseline)) {
+    throw new UnprocessableEntityException('Cost evidence is required before this constrained candidate can be saved')
+  }
+  if (preview.cost && baseline) {
+    const baselinePreview = service.previewFormulaIntelligence(proposalFromFormulaVersion(formula, baseline.lines)).data
+    const baselineCost = baselinePreview.cost?.totalCost
+    if ((request.objectives?.targetCostReductionPercent ?? 0) > 0 && (!baselineCost || ((baselineCost - preview.cost.totalCost) / baselineCost) * 100 + 0.0001 < request.objectives!.targetCostReductionPercent!)) {
+      throw new UnprocessableEntityException('Candidate does not meet the requested cost reduction target')
+    }
+    if (request.objectives?.maxTotalCost !== undefined && preview.cost.totalCost - request.objectives.maxTotalCost > 0.0001) {
+      throw new UnprocessableEntityException('Candidate exceeds the maximum total cost objective')
+    }
   }
   if (request.requireEligibleInventory) {
     if (!preview.visibility.canViewInventory) throw new ForbiddenException('Inventory permission is required when eligible inventory is mandatory')
@@ -742,16 +1237,18 @@ async function completeRun(store: AgentRuntimeStore, run: AgentRunRow) {
 }
 
 async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknown) {
-  const message = error instanceof ForbiddenException ? 'Formula Intelligence authorization changed during execution' : 'Formula Intelligence execution failed'
+  const failure = error instanceof ForbiddenException
+    ? { code: 'FORMULA_INTELLIGENCE_AUTHORIZATION_CHANGED', message: 'Formula Intelligence authorization changed during execution', retryable: false }
+    : toSafeAgentRuntimeError(error)
   const timestamp = now()
   await store.assertExecutionLease(run.id, run.organization_id)
   await store.database.batch([
     store.database.prepare(`UPDATE agent_runs SET status = 'FAILED', error_summary = ?, completed_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND organization_id = ?`)
-      .bind(message, timestamp, timestamp, run.id, run.organization_id),
+      .bind(failure.message, timestamp, timestamp, run.id, run.organization_id),
     store.database.prepare(`UPDATE agent_jobs SET status = 'FAILED', last_error = ?, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE run_id = ? AND organization_id = ?`)
-      .bind(message, timestamp, run.id, run.organization_id),
+      .bind(failure.code, timestamp, run.id, run.organization_id),
   ])
-  await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: message })
+  await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: failure.message, errorInfo: failure })
 }
 
 export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
@@ -789,16 +1286,29 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   const materialCatalog = formulaIntelligenceMaterialCatalog(service)
   const materials = availabilityRankedMaterials(service, materialCatalog.materials)
   if (!materials.length) throw new UnprocessableEntityException('No eligible workspace materials are available for this design brief')
+  const constraintSnapshot = config.constraintSnapshotId && config.briefVersionId
+    ? await intelligence.pinMaterialUniverse(actor, run.id, config.constraintSnapshotId, materials)
+    : undefined
   await recordTool(store, run, searchId, 'search_materials', { query: config.brief.creativeBrief }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
   const granted = new Set(service.me().data.permissions)
-  const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
+  const evidence = materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')
     ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id), topK: 6 })
     : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
-  if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
+  if (materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')) {
     await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id) }, { state: evidence.state, citationCount: evidence.citations.length })
   }
   await store.completeNode(run, searchId, 'search_materials', { materialCount: materials.length, evidenceState: evidence.state }, 28)
+  const sensoryMemory = service.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory') && granted.has('trials.view')
+    ? service.workspaceSensoryMemory().data
+    : undefined
   const proposals = buildDesignDirectionProposals(config.brief, materials)
+    .map((proposal) => ({
+      ...proposal,
+      historicalEvidence: sensoryMemory
+        ? sensoryMemoryEvidenceForDirection(proposal, sensoryMemory.profile, sensoryMemory.enabled)
+        : { state: 'NOT_EVALUATED' as const, evidenceCount: 0, adjustment: 0, explanation: 'Private sensory evidence is not available to this role.' },
+    }))
+    .sort((left, right) => right.historicalEvidence.adjustment - left.historicalEvidence.adjustment || left.title.localeCompare(right.title))
   const inventoryId = await store.createNode(run, 'check_inventory', { projectId: config.projectId })
   await store.startNode(run, inventoryId, 'check_inventory')
   await store.completeNode(run, inventoryId, 'check_inventory', { mode: hasInventoryAccess(service) ? 'availability-first' : 'redacted' }, 42)
@@ -822,14 +1332,37 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
     complianceStatus: complianceStatus(previews[index]!),
     proposal: direction.proposal,
     warnings: candidateWarnings(previews[index]!),
+    historicalEvidence: direction.historicalEvidence,
   }))
+  const evaluations = constraintSnapshot?.material_universe_hash
+    ? await evaluateDesignCandidates(directions, previews, config.brief, constraintSnapshot.material_universe_hash, materials.length)
+    : []
   const resultId = await store.createNode(run, 'prepare_result', { projectId: config.projectId })
   await store.startNode(run, resultId, 'prepare_result')
   await store.createArtifact(run, { type: 'design_directions', version: 1, data: { projectId: config.projectId, directions } })
+  if (constraintSnapshot?.material_universe_hash && config.briefVersionId) {
+    await store.createArtifact(run, {
+      type: 'design_candidate_comparison',
+      version: 1,
+      data: {
+        projectId: config.projectId,
+        briefVersionId: config.briefVersionId,
+        constraintSnapshotId: constraintSnapshot.id,
+        materialUniverseHash: constraintSnapshot.material_universe_hash,
+        candidates: evaluations,
+      },
+    })
+  }
   await store.createArtifact(run, { type: 'evidence_citations', version: 1, data: { state: evidence.state, citations: evidence.citations } })
   await store.assertExecutionLease(run.id, run.organization_id)
-  await intelligence.persistDesignDirections(actor, config.projectId, run.id, directions)
-  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 2, directionCount: directions.length }, 94)
+  await intelligence.persistDesignDirections(
+    actor,
+    config.projectId,
+    run.id,
+    directions,
+    constraintSnapshot && evaluations.length ? { constraintSnapshotId: constraintSnapshot.id, evaluations } : undefined,
+  )
+  await store.completeNode(run, resultId, 'prepare_result', { artifactCount: constraintSnapshot ? 3 : 2, directionCount: directions.length }, 94)
   await store.createAssistantMessage(run, materialCatalog.reviewRequired
     ? 'I prepared three deterministic design directions from the available material master. Compliance evidence is incomplete, so each direction is marked for review before it can progress.'
     : 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
@@ -856,10 +1389,10 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   await recordTool(store, run, searchId, 'search_materials', { baselineMaterialIds: [...materialIdSet] }, { candidateMaterialIds: materials.slice(0, 24).map((material) => material.id) })
   const granted = new Set(service.me().data.permissions)
   const evidenceMaterialIds = [...new Set([...materialIdSet, ...materials.slice(0, 12).map((material) => material.id)])].slice(0, 12)
-  const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
+  const evidence = materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')
     ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: `Optimize ${request.intent} for ${versions.formula.name}`, materialIds: evidenceMaterialIds, topK: 6 })
     : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
-  if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
+  if (materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')) {
     await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: `Optimize ${request.intent}`, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
   }
   await store.completeNode(run, searchId, 'search_materials', { candidateMaterialCount: materials.length, evidenceState: evidence.state }, 28)
@@ -871,12 +1404,27 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   const inventoryId = await store.createNode(run, 'check_inventory', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, inventoryId, 'check_inventory')
   await store.completeNode(run, inventoryId, 'check_inventory', { visibility: hasInventoryAccess(service) ? 'full' : 'redacted', availableMaterialCount: availableMaterialIds.size }, 42)
-  const proposals = buildOptimizerProposals(baselineProposal, materials, request.intent, request.lockedMaterialIds, availableMaterialIds)
+  const substitutions = service.approvedMaterialSubstitutions().data
+  const proposals = buildOptimizerProposals(baselineProposal, materials, request.intent, request.lockedMaterialIds, availableMaterialIds, request.objectives, substitutions)
+  if (proposals.length === 0) {
+    throw new UnprocessableEntityException('No optimizer candidate satisfies the locked, prohibited, and approved-substitution constraints')
+  }
   const generateId = await store.createNode(run, 'generate_formula', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, generateId, 'generate_formula')
   await store.completeNode(run, generateId, 'generate_formula', { candidateCount: proposals.length }, 58)
-  const previews = proposals.map((candidate) => service.previewFormulaIntelligence(candidate.proposal).data)
-  const baselinePreview = previews[0]!
+  const baselinePreview = service.previewFormulaIntelligence(baselineProposal).data
+  const evaluated = proposals.map((candidate) => ({ candidate, preview: service.previewFormulaIntelligence(candidate.proposal).data }))
+    .filter(({ preview }) => {
+      if (request.objectives?.complianceRequired && preview.compliance.status === 'BLOCKED') return false
+      if (request.requireEligibleInventory && preview.availability.some((item) => item.status !== 'AVAILABLE')) return false
+      const baselineCost = baselinePreview.cost?.totalCost
+      if (request.objectives?.targetCostReductionPercent !== undefined && (baselineCost === undefined || !preview.cost || ((baselineCost - preview.cost.totalCost) / baselineCost) * 100 + 0.0001 < request.objectives.targetCostReductionPercent)) return false
+      if (request.objectives?.maxTotalCost !== undefined && (!preview.cost || preview.cost.totalCost - request.objectives.maxTotalCost > 0.0001)) return false
+      return true
+    })
+  if (evaluated.length === 0) throw new UnprocessableEntityException('No optimizer candidate satisfies the requested compliance, inventory, and cost gates')
+  const qualifiedProposals = evaluated.map(({ candidate }) => candidate)
+  const previews = evaluated.map(({ preview }) => preview)
   const costId = await store.createNode(run, 'calculate_cost', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, costId, 'calculate_cost')
   await recordTool(store, run, costId, 'calculate_formula_cost', { candidateCount: proposals.length }, { visibility: hasCostAccess(service) ? 'full' : 'redacted' })
@@ -885,7 +1433,7 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   await store.startNode(run, complianceId, 'validate_compliance')
   await recordTool(store, run, complianceId, 'validate_compliance', { candidateCount: proposals.length }, { statuses: previews.map((preview) => preview.compliance.status) })
   await store.completeNode(run, complianceId, 'validate_compliance', { statuses: previews.map((preview) => preview.compliance.status) }, 80)
-  const candidates: OptimizerCandidateArtifact[] = proposals.map((candidate, index) => {
+  const baseCandidates: OptimizerCandidateArtifact[] = qualifiedProposals.map((candidate, index) => {
     const preview = previews[index]!
     const status = complianceStatus(preview)
     const availability = availabilityStatus(preview)
@@ -908,6 +1456,27 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
         costDelta === undefined ? 'Cost detail is hidden by the current role.' : `${costDelta <= 0 ? 'Estimated cost reduction' : 'Estimated cost increase'}: ${Math.abs(costDelta).toFixed(2)}.`,
         `Composition change: ${change.toFixed(2)}%.`,
       ],
+    }
+  })
+  const optimizerInputs = baseCandidates.map((candidate) => ({
+    complianceStatus: candidate.complianceStatus,
+    availability: candidate.availability,
+    costDelta: candidate.costDelta,
+    compositionChangePercent: candidate.compositionChangePercent,
+    inventoryEvaluated: hasInventoryAccess(service),
+  }))
+  const candidates = baseCandidates.map((candidate, index) => {
+    const state = optimizerParetoState(optimizerInputs[index]!, optimizerInputs)
+    return {
+      ...candidate,
+      pareto: {
+        state,
+        tradeoff: state === 'PARETO'
+          ? 'No evaluated candidate improves compliance, inventory, cost, and composition change at the same time.'
+          : state === 'DOMINATED'
+            ? 'Another evaluated candidate is no worse on every deterministic objective and better on at least one.'
+            : 'Pareto state is not evaluated because cost or inventory evidence is unavailable to this role.',
+      },
     }
   }).sort((left, right) => compareOptimizerCandidates(
     { ...left, inventoryEvaluated: hasInventoryAccess(service) },
@@ -952,17 +1521,30 @@ export async function createDesignProjectRun(
   idempotencyKey: string,
 ) {
   requirePermission(service, 'formulas.edit')
+  requireFormulaIntelligenceFeature(service, 'designStudioCandidateGeneration')
   const intelligence = new FormulaIntelligenceStore(db)
-  const project = await intelligence.designProjectForGeneration(actor, projectId)
+  const generation = await intelligence.designProjectForGeneration(actor, projectId)
   await intelligence.assertRunStartAllowed(actor, projectId)
   const store = new AgentRuntimeStore(db)
-  const brief = formulaDesignBriefSchema.parse(parseJson(project.brief_json, {}))
+  const brief = generation.brief
   const result = await store.create(actor, { brief: brief.creativeBrief }, { provider: 'mock', model: 'deterministic-v1' })
-  const config = formulaIntelligenceRunConfigSchema.parse({ workflowKind: 'DESIGN_STUDIO', projectId, brief })
+  const config = formulaIntelligenceRunConfigSchema.parse({
+    workflowKind: 'DESIGN_STUDIO',
+    projectId,
+    ...(generation.briefVersion?.state === 'REVIEWED' ? { briefVersionId: generation.briefVersion.id, constraintSnapshotId: generation.constraintSnapshot?.id } : {}),
+    brief,
+  })
   await intelligence.createRunConfig(actor, result.data.run.id, config, idempotencyKey)
+  if (generation.briefVersion?.state === 'REVIEWED' && generation.constraintSnapshot) {
+    await intelligence.createGenerationContext(actor, result.data.run.id, {
+      project: generation.project,
+      briefVersion: generation.briefVersion,
+      constraintSnapshot: generation.constraintSnapshot,
+    })
+  }
   await db.prepare(`UPDATE formula_design_projects SET status = 'IN_PROGRESS', updated_at = ? WHERE id = ? AND organization_id = ?`).bind(now(), projectId, actor.organizationId).run()
   await auditFormulaIntelligence(db, actor, 'formula-intelligence.design.run.create', projectId)
-  return { run: result.data.run, project }
+  return { run: result.data.run, project: generation.project }
 }
 
 export async function createOptimizerRun(
@@ -973,7 +1555,15 @@ export async function createOptimizerRun(
   idempotencyKey: string,
 ) {
   requirePermission(service, 'formulas.viewSensitive')
+  requirePermission(service, 'materials.view')
+  requireFormulaIntelligenceFeature(service, 'designStudioOptimizer')
   const request = formulaOptimizerRequestSchema.parse(requestInput)
+  if ((request.objectives?.targetCostReductionPercent !== undefined || request.objectives?.maxTotalCost !== undefined) && !hasCostAccess(service)) {
+    throw new ForbiddenException('Formula Intelligence cost objectives require costing.view')
+  }
+  if (request.requireEligibleInventory && !hasInventoryAccess(service)) {
+    throw new ForbiddenException('Eligible inventory gating requires inventory.view')
+  }
   const versions = service.formulaVersions(request.baselineFormulaId).data
   if (!versions.versions.some((version) => version.version === request.baselineVersion)) {
     throw new UnprocessableEntityException('Select an existing immutable formula version before optimizing')

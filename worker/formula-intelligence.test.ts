@@ -35,10 +35,10 @@ function quotaExceededD1() {
   return { db, statements }
 }
 
-function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?: string }) {
+function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?: string; briefState?: 'RAW' | 'REVIEW_REQUIRED' | 'REVIEWED' | 'LEGACY_UNSTRUCTURED' }) {
   const project = {
     id: 'project-1', organization_id: 'org-a', brand_id: 'brand-a', created_by_user_id: 'usr-brand',
-    status: 'BRIEFED', name: 'Shared brief', brief_json: '{}', selected_direction_id: null,
+    status: 'BRIEFED', name: 'Shared brief', brief_json: '{}', current_brief_version_id: options.briefState ? 'brief-1' : null, selected_direction_id: null,
     created_at: '2026-07-29T00:00:00.000Z', updated_at: '2026-07-29T00:00:00.000Z',
   }
   return {
@@ -49,6 +49,10 @@ function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?
             first: async () => {
               if (sql.includes('FROM formula_design_projects')) return project
               if (sql.includes('FROM tenant_memberships')) return { brand_ids_json: JSON.stringify(options.brandIds) }
+              if (sql.includes('FROM formula_design_brief_versions')) return options.briefState ? {
+                id: 'brief-1', organization_id: 'org-a', project_id: 'project-1', version_number: 1, state: options.briefState,
+                schema_version: 1, raw_brief: 'Marine woody', structured_brief_json: null, unresolved_questions_json: '[]', compiler_mode: 'MANUAL', checksum: 'checksum', created_by_user_id: 'usr-brand', created_at: '2026-07-29T00:00:00.000Z',
+              } : null
               if (sql.includes('FROM formula_intelligence_runs')) return options.existingRunUserId ? { created_by_user_id: options.existingRunUserId } : null
               return null
             },
@@ -80,6 +84,42 @@ function unresolvedProjectD1(hasDirections: boolean) {
     batch: async () => [],
   } as unknown as D1Database
   return { db, statements }
+}
+
+function constraintSnapshotD1() {
+  const statements: RecordedStatement[] = []
+  let snapshotReads = 0
+  let pinnedHash: string | null = null
+  const initial = {
+    id: 'snapshot-1', organization_id: 'org-a', project_id: 'project-1', brief_version_id: 'brief-1',
+    snapshot_json: JSON.stringify({ schemaVersion: 1 }), constraints_hash: 'constraints-hash', material_universe_hash: null,
+    material_universe_state: 'NOT_EVALUATED', created_by_user_id: 'usr-perfumer', created_at: '2026-08-01T00:00:00.000Z',
+  }
+  const pinned = { ...initial, material_universe_hash: 'pending', material_universe_state: 'PINNED' }
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...values: unknown[]) {
+          statements.push({ sql, values })
+          if (sql.includes("SET snapshot_json = ?, material_universe_hash = ?, material_universe_state = 'PINNED'")) {
+            pinnedHash = String(values[1])
+          }
+          return {
+            first: async () => {
+              if (!sql.includes('FROM formula_design_constraint_snapshots')) return null
+              snapshotReads += 1
+              if (snapshotReads === 1) return initial
+              return { ...pinned, material_universe_hash: pinnedHash ?? pinned.material_universe_hash }
+            },
+            all: async () => ({ results: [] }),
+            run: async () => ({ meta: { changes: 1 } }),
+          }
+        },
+      }
+    },
+    batch: async () => [],
+  } as unknown as D1Database
+  return { db, statements, pinned }
 }
 
 describe('Formula Intelligence Worker persistence contract', () => {
@@ -120,6 +160,13 @@ describe('Formula Intelligence Worker persistence contract', () => {
     await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toBeInstanceOf(NotFoundException)
   })
 
+  it('blocks Worker generation until a new brief has a reviewed version', async () => {
+    const store = new FormulaIntelligenceStore(designProjectAccessD1({ brandIds: ['brand-a'], briefState: 'RAW' }))
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toThrow('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
+  })
+
   it('returns an unresolved failed design brief to the retryable state', async () => {
     const { db, statements } = unresolvedProjectD1(false)
     const store = new FormulaIntelligenceStore(db)
@@ -140,5 +187,25 @@ describe('Formula Intelligence Worker persistence contract', () => {
     await store.returnUnresolvedProjectToBrief(actor, 'project-1')
 
     expect(statements.some((statement) => statement.sql.includes("SET status = 'BRIEFED'"))).toBe(false)
+  })
+
+  it('pins the reviewed material universe before persisting candidate evaluation context', async () => {
+    const { db, statements } = constraintSnapshotD1()
+    const store = new FormulaIntelligenceStore(db)
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+    const snapshot = await store.pinMaterialUniverse(actor, 'run-1', 'snapshot-1', [
+      { id: 'mat-b', family: 'Citrus', tier: 'Top', availabilityRank: 10 } as unknown as Material,
+      { id: 'mat-a', family: 'Woody', tier: 'Base', availabilityRank: 0 } as unknown as Material,
+    ])
+
+    expect(snapshot.material_universe_state).toBe('PINNED')
+    expect(snapshot.material_universe_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(statements.some((statement) => statement.sql.includes("material_universe_state = 'NOT_EVALUATED'"))).toBe(true)
+    expect(statements.some((statement) => statement.sql.includes('UPDATE formula_design_generation_contexts'))).toBe(true)
+    const replayed = await store.pinMaterialUniverse(actor, 'run-retry', 'snapshot-1', [
+      { id: 'mat-a', family: 'Woody', tier: 'Base', availabilityRank: 0 } as unknown as Material,
+      { id: 'mat-b', family: 'Citrus', tier: 'Top', availabilityRank: 10 } as unknown as Material,
+    ])
+    expect(replayed.material_universe_hash).toBe(snapshot.material_universe_hash)
   })
 })

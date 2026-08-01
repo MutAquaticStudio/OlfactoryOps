@@ -185,22 +185,32 @@
   }
 }
 
-/* The Design Studio holds the brief, options, and the selected decision in distinct work zones. */
+/* Formula Design Studio is a decision workspace: brief, directions, then a selected review. */
 .formula-intelligence-eyebrow {
-  color: #88b797;
-  font-size: 0.71rem;
-  font-weight: 700;
-  letter-spacing: 0.055em;
+  color: var(--accent);
+  font-size: 0.69rem;
+  font-weight: 720;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
+.formula-intelligence-hero-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: center;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .design-studio-grid {
-  grid-template-columns: minmax(280px, 0.72fr) minmax(360px, 1.25fr);
+  grid-template-columns: minmax(294px, 0.7fr) minmax(0, 1.3fr);
   gap: 18px;
 }
 
 .design-studio-grid.has-selected-direction {
-  grid-template-columns: minmax(280px, 0.62fr) minmax(350px, 1fr) minmax(300px, 0.72fr);
+  grid-template-columns: minmax(294px, 0.62fr) minmax(360px, 1fr) minmax(320px, 0.7fr);
 }
 
 .design-studio-grid .formula-intelligence-brief {
@@ -210,66 +220,198 @@
   overflow: auto;
 }
 
-.design-studio-projects {
+.design-studio-brief {
+  align-content: start;
+}
+
+.design-studio-projects,
+.design-studio-projects > div {
   min-width: 0;
 }
 
-.design-studio-projects .formula-intelligence-project {
-  gap: 14px;
+.design-project-card {
+  gap: 15px;
+  padding: 18px;
 }
 
-.formula-intelligence-direction-choice {
-  width: 100%;
-  min-height: 154px;
-  cursor: pointer;
-  text-align: left;
-  color: var(--text);
-  font: inherit;
-}
-
-.formula-intelligence-direction-choice:hover,
-.formula-intelligence-direction-choice.is-selected {
-  border-color: #477b55;
-  background: #142016;
-}
-
-.formula-intelligence-direction-choice:focus-visible {
-  outline: 2px solid #4da66c;
-  outline-offset: 2px;
-}
-
-.formula-intelligence-direction-choice-heading {
+.design-project-card-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 16px;
+  min-width: 0;
 }
 
-.formula-intelligence-direction-choice-heading > strong,
-.formula-intelligence-direction-choice > span {
+.design-project-card-heading > div {
+  min-width: 0;
+}
+
+.design-project-card-heading h3 {
+  margin: 5px 0 7px;
+  overflow-wrap: anywhere;
+}
+
+.design-project-card-heading .formula-intelligence-copy {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.formula-intelligence-project-stage,
+.formula-intelligence-decision-status {
+  flex: 0 0 auto;
+  max-width: 132px;
+  color: var(--text-2);
+  font-size: 0.76rem;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.formula-intelligence-project-stage.is-green,
+.formula-intelligence-decision-status.is-green {
+  color: #9ecfb0;
+}
+
+.formula-intelligence-project-stage.is-amber,
+.formula-intelligence-decision-status.is-amber {
+  color: #d4bd85;
+}
+
+.formula-intelligence-project-stage.is-red,
+.formula-intelligence-decision-status.is-red {
+  color: #e5aaa7;
+}
+
+.design-project-card-meta {
+  gap: 0 9px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.design-project-card-meta > span:not(.status-chip) {
+  padding: 0;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 0.76rem;
+}
+
+.design-project-card-meta > span:not(.status-chip)::after {
+  margin-left: 9px;
+  color: var(--border-strong);
+  content: "•";
+}
+
+.design-project-card-meta > span:last-child::after {
+  display: none;
+}
+
+.design-project-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.design-project-card-actions small {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.design-direction-list {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.design-direction-list .formula-intelligence-direction-choice {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 0;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 15px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  border-color: var(--border);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  font: inherit;
+}
+
+.design-direction-list .formula-intelligence-direction-choice:hover,
+.design-direction-list .formula-intelligence-direction-choice.is-selected {
+  border-color: rgb(var(--accent-rgb) / 0.76);
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+.design-direction-list .formula-intelligence-direction-choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.design-direction-card-index {
+  color: var(--text-3) !important;
+  font: 0.74rem/1 var(--mono-font);
+}
+
+.design-direction-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.design-direction-card-copy strong,
+.design-direction-card-copy small,
+.design-direction-card-copy > span {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.formula-intelligence-direction-choice > span:not(.formula-intelligence-direction-choice-heading):not(.formula-intelligence-direction-choice-meta) {
-  color: #c6d0c5;
-  line-height: 1.48;
+.design-direction-card-copy strong {
+  color: var(--text);
+  font-size: 0.93rem;
+  line-height: 1.35;
 }
 
-.formula-intelligence-direction-choice small,
-.formula-intelligence-direction-choice-meta {
-  color: #91a192;
-  font-size: 0.76rem;
+.design-direction-card-copy small {
+  color: var(--text-2);
+  font-size: 0.75rem;
+}
+
+.design-direction-card-narrative {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-2) !important;
+  font-size: 0.8rem;
   line-height: 1.42;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.design-direction-card-pyramid {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-3) !important;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+.design-direction-card-arrow {
+  color: var(--text-3);
 }
 
 .formula-intelligence-detail {
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: 15px;
   position: sticky;
   top: 92px;
   max-height: calc(100dvh - 112px);
+  padding: 18px;
   overflow: auto;
 }
 
@@ -277,54 +419,57 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
 }
 
 .formula-intelligence-detail-heading h3 {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
+  font-size: 1.08rem;
+  line-height: 1.3;
 }
 
 .formula-intelligence-narrative {
   margin: 0;
-  color: #c9d2c8;
+  color: var(--text-2);
   line-height: 1.56;
   overflow-wrap: anywhere;
 }
 
 .formula-intelligence-decision-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 9px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .formula-intelligence-decision-grid > div,
 .formula-intelligence-action-note,
 .formula-intelligence-evidence {
   display: grid;
+  min-width: 0;
   gap: 5px;
-  padding: 12px;
-  border: 1px solid #2c392e;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
   border-radius: 7px;
-  background: #0d120e;
+  background: var(--panel-solid);
 }
 
 .formula-intelligence-decision-grid span,
 .formula-intelligence-evidence > span,
 .formula-intelligence-feedback-count,
 .formula-intelligence-selected {
-  color: #90a090;
+  color: var(--text-3);
   font-size: 0.73rem;
 }
 
 .formula-intelligence-decision-grid strong {
   overflow-wrap: anywhere;
-  font-size: 0.86rem;
-  line-height: 1.4;
+  font-size: 0.84rem;
+  line-height: 1.42;
 }
 
 .formula-intelligence-action-note {
-  border-color: #605125;
+  border-color: rgb(193 157 73 / 0.46);
   color: #d5ccae;
 }
 
@@ -340,6 +485,78 @@
 
 .formula-intelligence-actions > * {
   min-width: 0;
+}
+
+.formula-intelligence-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-2);
+  background: var(--panel-solid);
+  font-size: 0.8rem;
+  line-height: 1.42;
+}
+
+.formula-intelligence-notice.is-success {
+  border-color: rgb(var(--accent-rgb) / 0.48);
+  color: #b5d7be;
+}
+
+.formula-intelligence-notice.is-error {
+  border-color: rgb(204 105 98 / 0.56);
+  color: #e7bbb7;
+}
+
+.formula-intelligence-run-status {
+  display: grid;
+  gap: 11px;
+  padding: 13px;
+  border-color: rgb(var(--accent-rgb) / 0.38);
+  background: rgb(var(--accent-rgb) / 0.06);
+}
+
+.formula-intelligence-run-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.formula-intelligence-run-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.formula-intelligence-run-heading strong {
+  color: var(--text);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.formula-intelligence-run-percent {
+  color: var(--text-2);
+  font: 0.76rem/1 var(--mono-font);
+}
+
+.formula-intelligence-run-percent.is-blocked {
+  color: var(--danger);
+}
+
+@media (max-width: 1380px) {
+  .design-studio-grid.has-selected-direction {
+    grid-template-columns: minmax(294px, 0.68fr) minmax(0, 1.32fr);
+  }
+
+  .design-studio-grid.has-selected-direction .formula-intelligence-detail {
+    grid-column: 1 / -1;
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
 }
 
 @media (max-width: 1120px) {
@@ -362,18 +579,40 @@
 }
 
 @media (max-width: 640px) {
-  .formula-intelligence-direction-grid {
-    grid-template-columns: minmax(0, 1fr);
+  .formula-intelligence-hero-note {
+    align-self: flex-start;
   }
 
-  .formula-intelligence-direction-choice {
-    min-height: 0;
+  .design-project-card,
+  .formula-intelligence-detail {
+    padding: 15px;
   }
 
+  .design-project-card-heading,
   .formula-intelligence-detail-heading,
   .formula-intelligence-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .formula-intelligence-project-stage,
+  .formula-intelligence-decision-status {
+    max-width: none;
+    text-align: left;
+  }
+
+  .formula-intelligence-decision-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .design-direction-list .formula-intelligence-direction-choice {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 9px;
+    padding: 13px;
+  }
+
+  .design-project-card-meta > span:not(.status-chip)::after {
+    display: none;
   }
 
   .formula-intelligence-actions > button {
@@ -545,6 +784,57 @@
   line-height: 1.35;
 }
 
+.trial-memory-summary {
+  display: grid;
+  gap: 0.72rem;
+  padding: 0.86rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.trial-memory-heading,
+.trial-memory-metrics,
+.trial-memory-scores {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trial-memory-heading > div,
+.trial-memory-scores > div {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.trial-memory-heading span,
+.trial-memory-scores span,
+.trial-memory-summary p,
+.trial-memory-metrics,
+.trial-memory-heading small {
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.trial-memory-heading strong,
+.trial-memory-scores strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.trial-memory-scores {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  padding-top: 0.64rem;
+  border-top: 1px solid var(--border);
+}
+
+.trial-memory-summary p {
+  margin: 0;
+  line-height: 1.45;
+}
+
 .trial-scorecard,
 .trial-public-links,
 .trial-decision {
@@ -657,6 +947,16 @@
   .trial-public-link {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .trial-memory-heading,
+  .trial-memory-metrics {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .trial-memory-scores {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

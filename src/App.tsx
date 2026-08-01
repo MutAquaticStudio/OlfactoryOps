@@ -73,6 +73,8 @@ import {
 } from 'recharts'
 import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
 import { TrialsWorkspace } from './features/trials/TrialsWorkspace'
+import { TrialEvidenceSummary } from './features/trials/TrialEvidenceSummary'
+import { OperationalLineageSummary } from './features/trials/OperationalLineageSummary'
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
 import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
@@ -150,6 +152,7 @@ import {
   type FormulaType,
   type FormulaVersionRecord,
   type FragranceTrialRecord,
+  type TrialComparableEvidence,
   type FormulaWorkspacePreferences,
   type GlobalSearchResult,
   type InventoryAgingRecord,
@@ -180,6 +183,7 @@ import {
   type ProcurementReceiptRecord,
   type LandedCostAllocationRecord,
   type OperationalAnalyticsReport,
+  type OperationalLineageProjection,
   type PurchaseOrderLineItem,
   type PurchaseOrderRecord,
   type QuoteRecord,
@@ -955,6 +959,14 @@ type InventoryTransferResponse = InventoryReceiptResponse
 type InventoryWriteOffResponse = InventoryReceiptResponse & {
   audit: AuditEvent
 }
+
+type FormulaTrialEvidenceResponse = {
+  formulaId: string
+  formulaVersion: string
+  evidence: TrialComparableEvidence
+  invariant: string
+}
+type FormulaLineageResponse = { data: OperationalLineageProjection }
 
 type InventoryAgingResponse = {
   records: InventoryAgingRecord[]
@@ -3040,6 +3052,7 @@ function App() {
                   materialRecords={materialRecords}
                   capabilities={{
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
+                    canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
                     canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
@@ -3047,11 +3060,14 @@ function App() {
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
                     canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
                   }}
                   onFormulaSaved={(formula) => {
                     setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
                     setActiveFormulaId(formula.id)
                   }}
+                  onTrialPlanned={() => navigateToDomain('trials')}
                 />
               </motion.div>
             ) : activeKey === 'reformulationOptimizer' ? (
@@ -3063,6 +3079,7 @@ function App() {
                   materialRecords={materialRecords}
                   capabilities={{
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
+                    canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
                     canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
                     canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
@@ -3070,6 +3087,8 @@ function App() {
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
                     canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
                   }}
                   onFormulaSaved={(formula) => {
                     setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
@@ -6369,6 +6388,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     isFormulaApproverRole(session.role) && sessionHasPermission(session, 'formulas.approve')
   const canExportFormula = sessionHasPermission(session, 'formulas.export')
   const canCreateTrial = sessionHasPermission(session, 'trials.create')
+  const canViewTrialEvidence = sessionHasPermission(session, 'formulas.viewSensitive') && sessionHasPermission(session, 'materials.view') && sessionHasPermission(session, 'trials.view')
   const formulaEditable = formula.workflowStatus === 'DRAFT' || formula.workflowStatus === 'CHANGES_REQUESTED'
   const activeFormulaType = formulaTypeForFormula(formula)
   const activeFormulaTypeMeta = formulaTypeMeta[activeFormulaType]
@@ -6379,6 +6399,12 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   )
   const [formulaStatus, setFormulaStatus] = useState('Formula Labspace ready')
   const [versions, setVersions] = useState<FormulaVersionRecord[]>([])
+  const [trialEvidence, setTrialEvidence] = useState<TrialComparableEvidence | null>(null)
+  const [trialEvidenceLoading, setTrialEvidenceLoading] = useState(false)
+  const [trialEvidenceUnavailable, setTrialEvidenceUnavailable] = useState<string>()
+  const [operationalLineage, setOperationalLineage] = useState<OperationalLineageProjection | null>(null)
+  const [operationalLineageLoading, setOperationalLineageLoading] = useState(false)
+  const [operationalLineageUnavailable, setOperationalLineageUnavailable] = useState<string>()
   const [versionNote, setVersionNote] = useState(`Snapshot ${formula.code} ${formula.version}`)
   const [activeLabTab, setActiveLabTab] = useState<FormulaLabTab>('details')
   const [createSheetOpen, setCreateSheetOpen] = useState(false)
@@ -6596,6 +6622,40 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     setEditDraft(null)
     setFocusedMaterialId(null)
   }, [formula.code, formula.id, formula.version])
+
+  const evidenceVersion = versions[0]?.version
+  useEffect(() => {
+    if (!canViewTrialEvidence || !evidenceVersion) {
+      setTrialEvidence(null)
+      setTrialEvidenceUnavailable(undefined)
+      setTrialEvidenceLoading(false)
+      return
+    }
+    let active = true
+    setTrialEvidenceLoading(true)
+    setTrialEvidenceUnavailable(undefined)
+    void requestApi<FormulaTrialEvidenceResponse>(`/formulas/${encodeURIComponent(formula.id)}/trial-evidence?version=${encodeURIComponent(evidenceVersion)}`)
+      .then((payload) => { if (active) setTrialEvidence(payload.evidence) })
+      .catch(() => { if (active) setTrialEvidenceUnavailable('Completed trial evidence is temporarily unavailable.') })
+      .finally(() => { if (active) setTrialEvidenceLoading(false) })
+    return () => { active = false }
+  }, [canViewTrialEvidence, evidenceVersion, formula.id])
+  useEffect(() => {
+    if (!canViewTrialEvidence) {
+      setOperationalLineage(null)
+      setOperationalLineageUnavailable(undefined)
+      setOperationalLineageLoading(false)
+      return
+    }
+    let active = true
+    setOperationalLineageLoading(true)
+    setOperationalLineageUnavailable(undefined)
+    void requestApi<FormulaLineageResponse>(`/lineage/FORMULA/${encodeURIComponent(formula.id)}`)
+      .then((payload) => { if (active) setOperationalLineage(payload.data) })
+      .catch(() => { if (active) setOperationalLineageUnavailable('Operational trace is temporarily unavailable.') })
+      .finally(() => { if (active) setOperationalLineageLoading(false) })
+    return () => { active = false }
+  }, [canViewTrialEvidence, formula.id])
 
   useEffect(() => {
     let active = true
@@ -7569,6 +7629,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 : `${Math.abs(finalPercentGap).toFixed(2)}% over target; rebalance before approval.`}
           </p>
         </section>
+        {canViewTrialEvidence ? <TrialEvidenceSummary evidence={trialEvidence} formulaVersion={evidenceVersion} loading={trialEvidenceLoading} unavailableMessage={trialEvidenceUnavailable} /> : null}
+        {canViewTrialEvidence ? <OperationalLineageSummary lineage={operationalLineage} loading={operationalLineageLoading} unavailableMessage={operationalLineageUnavailable} /> : null}
       </aside>
       ) : null}
 

@@ -256,7 +256,7 @@ export function TrialsWorkspace({
           <AnimatedList className="trial-evidence-grid">
             <AnimatedListItem><article><span>Formula release</span><strong>{selectedTrial.release ? `Released ${new Date(selectedTrial.release.releasedAt).toLocaleDateString()}` : 'Awaiting release gate'}</strong></article></AnimatedListItem>
             <AnimatedListItem><article><span>Actual lab usage</span><strong>{selectedTrial.usageLink ? `${selectedTrial.usageLink.actualWeights.length} weighed lines linked` : 'No inventory movement'}</strong></article></AnimatedListItem>
-            <AnimatedListItem><article><span>Comparable evidence</span><strong>{detail?.comparableEvidence.status === 'READY' ? `${detail.comparableEvidence.sampleCount} scorecards / ${detail.comparableEvidence.confidence.toLowerCase()} confidence` : 'Not enough evidence'}</strong></article></AnimatedListItem>
+            <AnimatedListItem><article><span>Comparable evidence</span><strong>{detail?.comparableEvidence.status === 'READY' ? `${detail.comparableEvidence.sampleCount} scorecards / ${detail.comparableEvidence.confidence.toLowerCase()} confidence` : detail?.comparableEvidence.status === 'NOT_AVAILABLE' ? 'Not available for this role' : 'Not enough evidence'}</strong></article></AnimatedListItem>
           </AnimatedList>
           {canEvaluate && detail?.sensorySessions.some((item) => item.status === 'OPEN') ? (
             <section className="trial-scorecard" aria-label="Internal sensory scorecard">

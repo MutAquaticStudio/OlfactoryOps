@@ -74,6 +74,7 @@ import {
   type MaterialComplianceProfile,
   type MoleculeComponent,
   type NumberingSequenceRecord,
+  type OperationalLineageNodeType,
   type OrderDocumentRecord,
   type OrganizationRecord,
   type PriceHistoryRecord,
@@ -91,6 +92,9 @@ import {
   type SampleRequestRecord,
   type SalesOrderRecord,
   type ScheduledReportRecord,
+  type SensoryMemoryRecord,
+  type WorkspacePreferenceProfile,
+  type ApprovedMaterialSubstitutionRecord,
   type ShipmentRecord,
   type SsoConfigRecord,
   type StockTakeRecord,
@@ -211,6 +215,9 @@ type SnapshotKey =
   | 'fragranceSensorySessionRecords'
   | 'fragranceSensoryObservationRecords'
   | 'fragranceTrialPublicLinkRecords'
+  | 'sensoryMemoryRecords'
+  | 'workspacePreferenceProfiles'
+  | 'approvedMaterialSubstitutionRecords'
   | 'documentRecords'
   | 'auditEvents'
   | 'organizationRecords'
@@ -286,6 +293,9 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   fragranceSensorySessionRecords: SensorySessionRecord[]
   fragranceSensoryObservationRecords: SensoryObservationRecord[]
   fragranceTrialPublicLinkRecords: TrialPublicLinkRecord[]
+  sensoryMemoryRecords: SensoryMemoryRecord[]
+  workspacePreferenceProfiles: WorkspacePreferenceProfile[]
+  approvedMaterialSubstitutionRecords: ApprovedMaterialSubstitutionRecord[]
   tenantSettingsRecords: TenantSettingsRecord[]
   flagRecords: FeatureFlagRecord[]
   sequences: NumberingSequenceRecord[]
@@ -430,6 +440,9 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'fragranceSensorySessionRecords',
   'fragranceSensoryObservationRecords',
   'fragranceTrialPublicLinkRecords',
+  'sensoryMemoryRecords',
+  'workspacePreferenceProfiles',
+  'approvedMaterialSubstitutionRecords',
 ])
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
@@ -447,6 +460,9 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'fragranceSensorySessionRecords',
   'fragranceSensoryObservationRecords',
   'fragranceTrialPublicLinkRecords',
+  'sensoryMemoryRecords',
+  'workspacePreferenceProfiles',
+  'approvedMaterialSubstitutionRecords',
   'documentRecords',
   'auditEvents',
   'organizationRecords',
@@ -530,6 +546,9 @@ const NORMALIZED_TABLES = [
   'tenant_numbering_sequences',
   'tenant_custom_fields',
   'tenant_branding',
+  'fragrance_sensory_memory',
+  'workspace_preference_profiles',
+  'approved_material_substitutions',
   'formula_records',
   'formula_version_records',
   'document_records',
@@ -591,6 +610,8 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
+  { method: 'GET', pattern: '/materials/substitutions', handler: ({ service }) => service.approvedMaterialSubstitutions() },
+  { method: 'POST', pattern: '/materials/substitutions', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.upsertApprovedMaterialSubstitution(body) },
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
   { method: 'GET', pattern: '/materials/catalogues/lluch-2026', persistState: false, handler: (context) => listLluchCatalogue(context) },
   { method: 'POST', pattern: '/materials/catalogues/lluch-2026/import', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: (context) => importLluchCatalogue(context) },
@@ -614,14 +635,20 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
+  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/brief-versions', persistState: false, handler: ({ service, env, params }) => listFormulaDesignBriefVersions(service, env, params.id) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/brief-versions/compile', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => formulaDesignBriefCompilerStatus(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/brief-versions', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => saveFormulaDesignBriefVersion(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/recipients', persistState: false, handler: ({ service, env, params }) => listFormulaDesignRecipients(service, env, params.id) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/generate', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => generateFormulaDesignDirections(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/share', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => shareFormulaDesignDirection(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/shares/:recipientUserId/revoke', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => revokeFormulaDesignDirectionShare(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/feedback', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => submitFormulaDesignFeedback(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestFormulaDesignDraftSave(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/trial', mutates: true, idempotent: true, writeGate: false, handler: (context) => createFormulaDesignDirectionTrial(context) },
   { method: 'POST', pattern: '/formula-intelligence/optimizer/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => startFormulaOptimizer(context) },
   { method: 'POST', pattern: '/formula-intelligence/optimizer/runs/:id/candidates/:candidateId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestOptimizerDraftSave(context) },
+  { method: 'GET', pattern: '/formula-intelligence/sensory-memory', handler: ({ service }) => service.workspaceSensoryMemory() },
+  { method: 'GET', pattern: '/formula-intelligence/operational-metrics', handler: ({ service }) => service.formulaIntelligenceOperationalMetrics() },
   { method: 'POST', pattern: '/agent/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createAgentRun(context) },
   { method: 'GET', pattern: '/agent/runs', persistState: false, handler: ({ service, env }) => new AgentRuntimeStore(env.DB).list(ensureAgentReadAccess(service)) },
   { method: 'GET', pattern: '/agent/runs/:id', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).detail(ensureAgentReadAccess(service), params.id) },
@@ -648,6 +675,8 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/formulas/:id/evaporation', handler: ({ service, params }) => service.formulaEvaporation(params.id) },
   { method: 'POST', pattern: '/formulas/:id/scale', handler: ({ service, params, body }) => service.formulaScale(params.id, body) },
   { method: 'GET', pattern: '/formulas/:id/versions', handler: ({ service, params }) => service.formulaVersions(params.id) },
+  { method: 'GET', pattern: '/formulas/:id/trial-evidence', handler: ({ service, params, query }) => service.formulaTrialEvidence(params.id, query.get('version') ?? undefined) },
+  { method: 'GET', pattern: '/lineage/:type/:id', handler: ({ service, params }) => service.operationalLineage(params.type.toUpperCase() as OperationalLineageNodeType, params.id) },
   { method: 'POST', pattern: '/formulas/:id/versions', mutates: true, handler: ({ service, params, body }) => service.createFormulaVersion(params.id, body) },
   { method: 'GET', pattern: '/formulas/:id/versions/diff', handler: ({ service, params, query }) => service.formulaVersionDiff(params.id, query.get('from') ?? undefined, query.get('to') ?? undefined) },
   { method: 'POST', pattern: '/formulas/:id/versions/:version/evaluations', mutates: true, handler: ({ service, params, body }) => service.addFormulaEvaluation(params.id, params.version, body) },
@@ -1097,16 +1126,29 @@ function formulaIntelligenceCanView(service: NorthStarService) {
 function formulaIntelligenceCapabilities(service: NorthStarService) {
   const granted = new Set(service.me().data.permissions)
   const canViewSensitiveComposition = granted.has('formulas.viewSensitive') && granted.has('materials.view')
+  const candidateGenerationEnabled = service.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')
+  const optimizerEnabled = service.formulaIntelligenceFeatureEnabled('designStudioOptimizer')
+  const sensoryMemoryEnabled = service.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
+  const evidenceRetrievalEnabled = service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
   return {
     data: {
       canCreateBrief: granted.has('formulas.view'),
-      canGenerateDirections: granted.has('formulas.edit') && canViewSensitiveComposition,
-      canRunOptimizer: canViewSensitiveComposition,
+      canReviewBrief: granted.has('formulas.edit'),
+      canGenerateDirections: candidateGenerationEnabled && granted.has('formulas.edit') && canViewSensitiveComposition,
+      canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
       canViewSensitiveComposition,
       canViewCostEvidence: granted.has('costing.view'),
       canViewInventoryEvidence: granted.has('inventory.view'),
-      canViewMaterialEvidence: granted.has('documents.view') && granted.has('materials.view'),
+      canViewMaterialEvidence: evidenceRetrievalEnabled && granted.has('documents.view') && granted.has('materials.view'),
       canSaveDraft: granted.has('formulas.edit') && canViewSensitiveComposition,
+      canPlanTrial: granted.has('trials.create') && granted.has('formulas.edit') && canViewSensitiveComposition,
+      canViewTrialEvidence: sensoryMemoryEnabled && canViewSensitiveComposition && granted.has('trials.view'),
+      formulaIntelligenceFeatures: {
+        candidateGenerationEnabled,
+        optimizerEnabled,
+        sensoryMemoryEnabled,
+        evidenceRetrievalEnabled,
+      },
     },
   }
 }
@@ -1157,6 +1199,38 @@ async function getFormulaDesignProject(service: NorthStarService, env: Env, proj
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
   return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(actor, projectId, formulaIntelligenceCanViewPrivate(service)) } }
+}
+
+async function listFormulaDesignBriefVersions(service: NorthStarService, env: Env, projectId: string) {
+  ensureFormulaIntelligencePermission(service, 'view')
+  const actor = ensureAgentReadAccess(service)
+  return { data: await new FormulaIntelligenceStore(env.DB).briefVersions(actor, projectId, formulaIntelligenceCanViewPrivate(service)) }
+}
+
+async function formulaDesignBriefCompilerStatus(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    if (!context.service.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
+      return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
+    }
+    return { data: await new FormulaIntelligenceStore(context.env.DB).briefCompilerStatus(actor, context.params.id, formulaIntelligenceCanViewPrivate(context.service)) }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
+    throw error
+  }
+}
+
+async function saveFormulaDesignBriefVersion(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    const version = await new FormulaIntelligenceStore(context.env.DB).saveBriefVersion(actor, context.params.id, context.body, formulaIntelligenceIdempotencyKey(context.request))
+    return { data: { version } }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
+    throw error
+  }
 }
 
 async function listFormulaDesignRecipients(service: NorthStarService, env: Env, projectId: string) {
@@ -1226,6 +1300,26 @@ async function requestFormulaDesignDraftSave(context: RouteContext) {
       actor, context.params.id, context.params.directionId, new AgentRuntimeStore(context.env.DB),
     )
     await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.save.requested', context.params.directionId)
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
+    throw error
+  }
+}
+
+async function createFormulaDesignDirectionTrial(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'edit')
+    ensureFormulaIntelligenceExecutionAccess(context.service)
+    const result = await new FormulaIntelligenceStore(context.env.DB).createTrialFromDesignDirection(
+      actor,
+      context.params.id,
+      context.params.directionId,
+      context.body,
+      context.service,
+    )
+    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.trial.create', context.params.directionId)
     return { data: result }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
@@ -2736,7 +2830,13 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: 
 }
 
 function requiresFreshTrialMemory(path: string, mutates: boolean) {
-  return path === '/trials' || path.startsWith('/trials/') || (mutates && path.startsWith('/lab-usage'))
+  return path === '/trials'
+    || path.startsWith('/trials/')
+    || /^\/formulas\/[^/]+\/trial-evidence$/.test(path)
+    || path === '/formula-intelligence/sensory-memory'
+    || path.startsWith('/lineage/')
+    || (mutates && path.startsWith('/lab-usage'))
+    || (mutates && /^\/formula-intelligence\/design-projects\/[^/]+\/directions\/[^/]+\/trial$/.test(path))
 }
 
 async function hydrateWorkspaceBranding(db: D1Database, service: NorthStarService, sessionId: string) {
@@ -7298,16 +7398,22 @@ function brandingFromRow(row: BrandingRow): BrandingConfig {
 }
 
 async function hydrateFragranceOperatingMemoryState(db: D1Database, serviceState: ServiceState) {
-  const [trialRows, sensorySessionRows, observationRows, publicLinkRows] = await Promise.all([
+  const [trialRows, sensorySessionRows, observationRows, publicLinkRows, memoryRows, profileRows, substitutionRows] = await Promise.all([
     db.prepare('SELECT id, organization_id, record_json FROM fragrance_trials ORDER BY updated_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM fragrance_sensory_sessions ORDER BY updated_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM fragrance_sensory_observations ORDER BY updated_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM fragrance_trial_public_links ORDER BY updated_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM fragrance_sensory_memory ORDER BY created_at DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM workspace_preference_profiles ORDER BY version DESC').all<JsonStateRow>(),
+    db.prepare('SELECT id, organization_id, record_json FROM approved_material_substitutions ORDER BY updated_at DESC').all<JsonStateRow>(),
   ])
   serviceState.fragranceTrialRecords = scopedJsonRecords(trialRows.results ?? []) as FragranceTrialRecord[]
   serviceState.fragranceSensorySessionRecords = scopedJsonRecords(sensorySessionRows.results ?? []) as SensorySessionRecord[]
   serviceState.fragranceSensoryObservationRecords = scopedJsonRecords(observationRows.results ?? []) as SensoryObservationRecord[]
   serviceState.fragranceTrialPublicLinkRecords = scopedJsonRecords(publicLinkRows.results ?? []) as TrialPublicLinkRecord[]
+  serviceState.sensoryMemoryRecords = scopedJsonRecords(memoryRows.results ?? []) as SensoryMemoryRecord[]
+  serviceState.workspacePreferenceProfiles = scopedJsonRecords(profileRows.results ?? []) as WorkspacePreferenceProfile[]
+  serviceState.approvedMaterialSubstitutionRecords = scopedJsonRecords(substitutionRows.results ?? []) as ApprovedMaterialSubstitutionRecord[]
 }
 
 async function persistFragranceOperatingMemoryState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
@@ -7383,6 +7489,42 @@ async function persistFragranceOperatingMemoryState(db: D1Database, serviceState
            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
            ON CONFLICT(id) DO UPDATE SET expires_at = excluded.expires_at, revoked_at = excluded.revoked_at, record_json = excluded.record_json, updated_at = excluded.updated_at`,
         ).bind(link.id, link.organizationId, link.trialId, link.sessionId, link.tokenHash, link.expiresAt, link.revokedAt ?? null, JSON.stringify(link), link.createdAt, updatedAt),
+      ),
+    )
+  }
+  if (serviceState.sensoryMemoryRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.sensoryMemoryRecords.map((record) =>
+        db.prepare(
+          `INSERT INTO fragrance_sensory_memory (id, organization_id, trial_id, formula_id, formula_version, decision, record_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(organization_id, trial_id) DO UPDATE SET record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(record.id, record.organizationId, record.trialId, record.formulaId, record.formulaVersion, record.decision, JSON.stringify(record), record.createdAt, updatedAt),
+      ),
+    )
+  }
+  if (serviceState.workspacePreferenceProfiles.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.workspacePreferenceProfiles.map((profile) =>
+        db.prepare(
+          `INSERT INTO workspace_preference_profiles (id, organization_id, version, evidence_count, confidence, record_json, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+           ON CONFLICT(organization_id, version) DO NOTHING`,
+        ).bind(profile.id, profile.organizationId, profile.version, profile.evidenceCount, profile.confidence, JSON.stringify(profile), profile.createdAt),
+      ),
+    )
+  }
+  if (serviceState.approvedMaterialSubstitutionRecords.length > 0) {
+    await runStatementBatches(
+      db,
+      serviceState.approvedMaterialSubstitutionRecords.map((record) =>
+        db.prepare(
+          `INSERT INTO approved_material_substitutions (id, organization_id, source_material_id, replacement_material_id, status, record_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+           ON CONFLICT(organization_id, source_material_id, replacement_material_id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
+        ).bind(record.id, record.organizationId, record.sourceMaterialId, record.replacementMaterialId, record.status, JSON.stringify(record), record.createdAt, record.updatedAt),
       ),
     )
   }

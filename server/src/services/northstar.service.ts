@@ -150,6 +150,12 @@ import {
   type SensorySessionRecord,
   type SensoryStabilityStatus,
   type SensoryTimepoint,
+  type SensoryMemoryRecord,
+  type WorkspacePreferenceProfile,
+  type ApprovedMaterialSubstitutionRecord,
+  type OperationalLineageEdge,
+  type OperationalLineageNodeType,
+  type OperationalLineageProjection,
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
@@ -867,6 +873,9 @@ export class NorthStarService {
   private fragranceSensorySessionRecords: SensorySessionRecord[] = []
   private fragranceSensoryObservationRecords: SensoryObservationRecord[] = []
   private fragranceTrialPublicLinkRecords: TrialPublicLinkRecord[] = []
+  private sensoryMemoryRecords: SensoryMemoryRecord[] = []
+  private workspacePreferenceProfiles: WorkspacePreferenceProfile[] = []
+  private approvedMaterialSubstitutionRecords: ApprovedMaterialSubstitutionRecord[] = []
   private documentRecords: DocumentRecord[] = structuredClone(documents)
   private auditEvents: AuditEvent[] = structuredClone(auditEvents)
   private organizationRecords: OrganizationRecord[] = structuredClone(organizations)
@@ -5028,13 +5037,217 @@ export class NorthStarService {
               .filter((item) => item.organizationId === session.organizationId && item.trialId === id)
               .map((item) => this.projectPublicLink(item))
           : [],
-        comparableEvidence: this.retrieveTrialMemory(trial.formulaSnapshot, session.organizationId),
+        comparableEvidence: this.projectTrialComparableEvidence(trial.formulaSnapshot, session),
         invariant: 'sensitive formula, lot, and cost evidence remains hidden from sensory panelists',
       },
     }
   }
 
   createTrial(body: TrialCreateBody = {}) {
+    return this.createTrialWithSource(body)
+  }
+
+  formulaTrialEvidence(id: string, requestedVersion?: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.viewSensitive')
+    this.requirePermission(session.role, 'materials.view')
+    this.requirePermission(session.role, 'trials.view')
+    const formula = this.formulaForSession(id, session)
+    const versions = this.formulaVersionRecords
+      .filter((item) => item.organizationId === session.organizationId && item.formulaId === formula.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    const version = requestedVersion?.trim()
+      ? versions.find((item) => item.version === requestedVersion.trim())
+      : versions[0]
+    if (!version) {
+      throw new NotFoundException('Create an immutable formula version before retrieving trial evidence')
+    }
+    return {
+      data: {
+        formulaId: formula.id,
+        formulaVersion: version.version,
+        evidence: this.retrieveTrialMemory(this.trialFormulaSnapshot(formula, version, session), session.organizationId),
+        invariant: 'completed sensory evidence is tenant-private, read-only, and never changes formula, approval, or inventory state',
+      },
+    }
+  }
+
+  formulaIntelligenceFeatureEnabled(key: string) {
+    const session = this.currentSession()
+    return this.featureFlagsForOrganization(session.organizationId).some((flag) => flag.key === key && flag.enabled)
+  }
+
+  workspaceSensoryMemory() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.viewSensitive')
+    this.requirePermission(session.role, 'materials.view')
+    this.requirePermission(session.role, 'trials.view')
+    const enabled = this.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
+    const profile = this.workspacePreferenceProfiles
+      .filter((item) => item.organizationId === session.organizationId)
+      .sort((left, right) => right.version - left.version)[0]
+    const evidenceCount = this.sensoryMemoryRecords.filter((item) => item.organizationId === session.organizationId).length
+    return {
+      data: {
+        enabled,
+        status: !enabled ? 'DISABLED' : profile?.confidence === 'INSUFFICIENT' || !profile ? 'NOT_ENOUGH_EVIDENCE' : 'READY',
+        evidenceCount,
+        profile,
+        invariant: 'private sensory memory is tenant-scoped, derived from decided trials, and never represents model training or an odor guarantee',
+      },
+    }
+  }
+
+  formulaIntelligenceOperationalMetrics() {
+    const session = this.currentSession()
+    if (session.role !== 'Owner' && session.role !== 'Admin') {
+      throw new ForbiddenException('Only workspace owners and admins can view Formula Intelligence operational metrics')
+    }
+    const trials = this.fragranceTrialRecords.filter((trial) => trial.organizationId === session.organizationId)
+    const decided = trials.filter((trial) => trial.decision)
+    const decisionCounts = decided.reduce<Record<'ACCEPT' | 'REVISE' | 'REJECT', number>>((counts, trial) => {
+      counts[trial.decision!.outcome] += 1
+      return counts
+    }, { ACCEPT: 0, REVISE: 0, REJECT: 0 })
+    const measuredCycles = decided
+      .filter((trial) => Number.isFinite(Date.parse(trial.createdAt)) && Number.isFinite(Date.parse(trial.decision!.decidedAt)))
+      .map((trial) => (Date.parse(trial.decision!.decidedAt) - Date.parse(trial.createdAt)) / 3_600_000)
+    const averageDecisionHours = measuredCycles.length
+      ? Number((measuredCycles.reduce((sum, hours) => sum + hours, 0) / measuredCycles.length).toFixed(2))
+      : undefined
+    const profile = this.workspacePreferenceProfiles
+      .filter((item) => item.organizationId === session.organizationId)
+      .sort((left, right) => right.version - left.version)[0]
+    return {
+      data: {
+        decidedTrials: decided.length,
+        decisionCounts,
+        averageDecisionHours,
+        privateMemory: {
+          evidenceCount: this.sensoryMemoryRecords.filter((item) => item.organizationId === session.organizationId).length,
+          profileVersion: profile?.version,
+          confidence: profile?.confidence ?? 'INSUFFICIENT',
+        },
+        executionTelemetry: {
+          status: 'NOT_EVALUATED',
+          reason: 'Durable Agent-run latency and failure metrics are measured from Worker D1 after the migration and hosted telemetry gate are active.',
+        },
+        invariant: 'metrics are tenant-scoped operational facts; unavailable telemetry is never replaced with a simulated success rate',
+      },
+    }
+  }
+
+  approvedMaterialSubstitutions() {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.view')
+    return {
+      data: this.approvedMaterialSubstitutionRecords
+        .filter((item) => item.organizationId === session.organizationId && item.status === 'APPROVED')
+        .sort((left, right) => left.sourceMaterialId.localeCompare(right.sourceMaterialId) || left.replacementMaterialId.localeCompare(right.replacementMaterialId)),
+    }
+  }
+
+  upsertApprovedMaterialSubstitution(body: {
+    sourceMaterialId?: string
+    replacementMaterialId?: string
+    evidenceReference?: string
+    roleSimilarity?: 'LOW' | 'MEDIUM' | 'HIGH'
+    strengthFactor?: number
+    complianceCaveat?: string
+    status?: 'APPROVED' | 'ARCHIVED'
+  }) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'materials.update')
+    const sourceMaterialId = body.sourceMaterialId?.trim()
+    const replacementMaterialId = body.replacementMaterialId?.trim()
+    const evidenceReference = body.evidenceReference?.trim().slice(0, 500)
+    const strengthFactor = Number(body.strengthFactor ?? 1)
+    if (!sourceMaterialId || !replacementMaterialId || sourceMaterialId === replacementMaterialId || !evidenceReference) {
+      throw new UnprocessableEntityException('A substitution requires distinct source and replacement materials plus an evidence reference')
+    }
+    if (!Number.isFinite(strengthFactor) || strengthFactor < 0.5 || strengthFactor > 2) {
+      throw new UnprocessableEntityException('Substitution strengthFactor must be between 0.5 and 2')
+    }
+    this.materialForSession(sourceMaterialId, session)
+    this.materialForSession(replacementMaterialId, session)
+    const existing = this.approvedMaterialSubstitutionRecords.find((item) => item.organizationId === session.organizationId && item.sourceMaterialId === sourceMaterialId && item.replacementMaterialId === replacementMaterialId)
+    const timestamp = new Date().toISOString()
+    const record: ApprovedMaterialSubstitutionRecord = {
+      id: existing?.id ?? `SUB-${randomBytes(8).toString('hex').toUpperCase()}`,
+      organizationId: session.organizationId,
+      sourceMaterialId,
+      replacementMaterialId,
+      status: body.status === 'ARCHIVED' ? 'ARCHIVED' : 'APPROVED',
+      reviewer: session.userId,
+      evidenceReference,
+      roleSimilarity: body.roleSimilarity === 'LOW' || body.roleSimilarity === 'MEDIUM' ? body.roleSimilarity : 'HIGH',
+      strengthFactor,
+      ...(body.complianceCaveat?.trim() ? { complianceCaveat: body.complianceCaveat.trim().slice(0, 500) } : {}),
+      version: (existing?.version ?? 0) + 1,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    }
+    this.approvedMaterialSubstitutionRecords = [record, ...this.approvedMaterialSubstitutionRecords.filter((item) => item.id !== record.id)]
+    const audit = this.recordAudit('material.substitution.upsert', record.id, session.userId, record.status === 'APPROVED' ? 'allowed' : 'review')
+    return { data: { substitution: record, audit, invariant: 'only a reviewer-approved substitution record can be used by the optimizer' } }
+  }
+
+  operationalLineage(subjectType: OperationalLineageNodeType, subjectId: string) {
+    const session = this.currentSession()
+    const normalizedType = subjectType.toUpperCase() as OperationalLineageNodeType
+    if (!['FORMULA', 'FORMULA_VERSION', 'MATERIAL', 'LOT', 'TRIAL', 'BATCH', 'FINISHED_GOOD_LOT', 'ORDER', 'DOCUMENT', 'DESIGN_DIRECTION'].includes(normalizedType)) {
+      throw new UnprocessableEntityException('Unsupported lineage subject type')
+    }
+    this.assertLineageSubjectAccess(normalizedType, subjectId, session)
+    const allEdges = this.operationalLineageEdges(session)
+    const nodeKey = (type: OperationalLineageNodeType, id: string) => `${type}:${id}`
+    const discovered = new Set([nodeKey(normalizedType, subjectId)])
+    const selected = new Map<string, OperationalLineageEdge>()
+    // A bounded local traversal makes the read model useful for impact review
+    // without turning the operational store into an unbounded graph query.
+    for (let hop = 0; hop < 3 && selected.size < 240; hop += 1) {
+      const matches = allEdges.filter((edge) =>
+        discovered.has(nodeKey(edge.fromType, edge.fromId)) || discovered.has(nodeKey(edge.toType, edge.toId)),
+      )
+      let expanded = false
+      for (const edge of matches) {
+        if (!selected.has(edge.id)) selected.set(edge.id, edge)
+        const before = discovered.size
+        discovered.add(nodeKey(edge.fromType, edge.fromId))
+        discovered.add(nodeKey(edge.toType, edge.toId))
+        expanded ||= discovered.size > before
+        if (selected.size >= 240) break
+      }
+      if (!expanded) break
+    }
+    const edges = [...selected.values()]
+    const uniqueByType = (type: OperationalLineageNodeType) => new Set(edges.flatMap((edge) => [
+      edge.fromType === type ? edge.fromId : undefined,
+      edge.toType === type ? edge.toId : undefined,
+    ]).filter((value): value is string => Boolean(value))).size
+    const projection: OperationalLineageProjection = {
+      subject: { type: normalizedType, id: subjectId },
+      edges,
+      impact: {
+        formulas: uniqueByType('FORMULA'),
+        trials: uniqueByType('TRIAL'),
+        lots: uniqueByType('LOT'),
+        batches: uniqueByType('BATCH'),
+        finishedGoodLots: uniqueByType('FINISHED_GOOD_LOT'),
+        orders: uniqueByType('ORDER'),
+        documents: uniqueByType('DOCUMENT'),
+      },
+      invariant: 'operational lineage is a deterministic tenant-scoped read projection; historical records are never rewritten when new evidence arrives',
+    }
+    return { data: projection }
+  }
+
+  createTrialFromFormulaIntelligenceCandidate(body: TrialCreateBody, source: FragranceTrialRecord['formulaIntelligenceSource']) {
+    if (!source) throw new UnprocessableEntityException('Formula Intelligence trial lineage is required')
+    return this.createTrialWithSource(body, source)
+  }
+
+  private createTrialWithSource(body: TrialCreateBody = {}, formulaIntelligenceSource?: FragranceTrialRecord['formulaIntelligenceSource']) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'trials.create')
     this.requirePermission(session.role, 'formulas.view')
@@ -5060,12 +5273,13 @@ export class NorthStarService {
       title: body.title?.trim().slice(0, 120) || `${formula.name} trial`,
       lifecycle: 'PLANNED',
       formulaSnapshot: this.trialFormulaSnapshot(formula, version, session),
+      ...(formulaIntelligenceSource ? { formulaIntelligenceSource } : {}),
       createdBy: session.userId,
       createdAt: now,
       updatedAt: now,
     }
     this.fragranceTrialRecords = [trial, ...this.fragranceTrialRecords]
-    const audit = this.recordAudit('trial.create', trial.id, session.userId, 'allowed')
+    const audit = this.recordAudit(formulaIntelligenceSource ? 'trial.create.formula-intelligence' : 'trial.create', trial.id, session.userId, 'allowed')
     return { data: { trial: this.projectTrialForSession(trial, session), audit, invariant: 'trial planning stores an immutable formula-version reference and creates no stock movement' } }
   }
 
@@ -5259,11 +5473,14 @@ export class NorthStarService {
     const updated = { ...trial, lifecycle: 'DECIDED' as const, decision, updatedAt: now }
     this.replaceTrial(updated)
     this.fragranceSensorySessionRecords = this.fragranceSensorySessionRecords.map((item) => item.organizationId === session.organizationId && item.trialId === id ? { ...item, status: 'CLOSED' as const, closesAt: now } : item)
+    if (this.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')) {
+      this.captureSensoryMemory(updated)
+    }
     const audit = this.recordAudit(`trial.decision.${outcome.toLowerCase()}`, id, session.userId, outcome === 'ACCEPT' ? 'allowed' : 'review')
     return { data: { trial: this.projectTrialForSession(updated, session), audit, invariant: 'trial evidence is retained without changing the accepted, revised, or rejected formula' } }
   }
 
-  retrieveTrialMemory(snapshot: FragranceTrialRecord['formulaSnapshot'], organizationId: string, requestedTimepoint: SensoryTimepoint = 'OVERALL'): TrialComparableEvidence {
+  private retrieveTrialMemory(snapshot: FragranceTrialRecord['formulaSnapshot'], organizationId: string, requestedTimepoint: SensoryTimepoint = 'OVERALL'): TrialComparableEvidence {
     const targetTerms = new Set(`${snapshot.brief} ${snapshot.pyramidSummary}`.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length >= 3))
     const targetFamilies = new Set(snapshot.materialFamilies ?? [])
     const comparableTrials = this.fragranceTrialRecords
@@ -5294,6 +5511,182 @@ export class NorthStarService {
       return result
     }, {})
     return { status: 'READY', sampleCount: scorecards.length, confidence: scorecards.length >= 10 ? 'HIGH' : scorecards.length >= 5 ? 'MODERATE' : 'LOW', averages, trialIds: comparableTrials.map((item) => item.id), summary: 'Comparable evidence is descriptive tenant-private sensory history, not a predictive recommendation.' }
+  }
+
+  private captureSensoryMemory(trial: FragranceTrialRecord) {
+    if (!trial.decision || trial.lifecycle !== 'DECIDED') return
+    if (this.sensoryMemoryRecords.some((item) => item.organizationId === trial.organizationId && item.trialId === trial.id)) return
+    const observations = this.fragranceSensoryObservationRecords.filter((item) => item.organizationId === trial.organizationId && item.trialId === trial.id)
+    const descriptors = [...new Set(observations.flatMap((item) => item.descriptors.map((descriptor) => descriptor.trim().toLowerCase())).filter((descriptor) => descriptor.length >= 2))].slice(0, 32)
+    const timepointScores = (['OPENING', 'HEART', 'DRYDOWN', 'LONGEVITY', 'OVERALL'] as SensoryTimepoint[]).reduce<Partial<Record<SensoryTimepoint, number>>>((scores, timepoint) => {
+      const values = observations
+        .filter((item) => item.timepoint === timepoint)
+        .map((item) => item.scores[timepoint])
+        .filter((value) => Number.isFinite(value))
+      if (values.length > 0) scores[timepoint] = Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2))
+      return scores
+    }, {})
+    const reasonCodes = this.preferenceTerms(trial.decision.rationale)
+    const record: SensoryMemoryRecord = {
+      id: `SMR-${randomBytes(8).toString('hex').toUpperCase()}`,
+      organizationId: trial.organizationId,
+      formulaId: trial.formulaSnapshot.formulaId,
+      formulaVersion: trial.formulaSnapshot.formulaVersion,
+      trialId: trial.id,
+      ...(trial.formulaIntelligenceSource ? {
+        briefVersionId: trial.formulaIntelligenceSource.briefVersionId,
+        candidateId: trial.formulaIntelligenceSource.directionId,
+      } : {}),
+      descriptors,
+      timepointScores,
+      decision: trial.decision.outcome,
+      reasonCodes,
+      ...(trial.usageLink ? { costSnapshot: trial.usageLink.costSnapshot, inventoryReadinessPercent: 100 } : {}),
+      createdAt: trial.decision.decidedAt,
+    }
+    this.sensoryMemoryRecords = [record, ...this.sensoryMemoryRecords]
+    this.appendWorkspacePreferenceProfile(trial.organizationId)
+  }
+
+  private appendWorkspacePreferenceProfile(organizationId: string) {
+    const records = this.sensoryMemoryRecords
+      .filter((item) => item.organizationId === organizationId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    const frequency = (values: string[]) => [...new Set(values)]
+      .map((value) => ({ value, count: values.filter((candidate) => candidate === value).length }))
+      .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value))
+      .map((item) => item.value)
+      .slice(0, 8)
+    const preferredDescriptors = frequency(records.filter((item) => item.decision === 'ACCEPT').flatMap((item) => item.descriptors))
+    const avoidedDescriptors = frequency(records.filter((item) => item.decision !== 'ACCEPT').flatMap((item) => item.descriptors))
+    const recurrentDecisionReasons = frequency(records.flatMap((item) => item.reasonCodes))
+    const evidenceCount = records.filter((item) => Number.isFinite(item.timepointScores.OVERALL)).length
+    const profile: WorkspacePreferenceProfile = {
+      id: `SPP-${randomBytes(8).toString('hex').toUpperCase()}`,
+      organizationId,
+      version: (this.workspacePreferenceProfiles.filter((item) => item.organizationId === organizationId).reduce((highest, item) => Math.max(highest, item.version), 0)) + 1,
+      evidenceCount,
+      confidence: evidenceCount < 3 ? 'INSUFFICIENT' : evidenceCount < 5 ? 'LOW' : evidenceCount < 10 ? 'MEDIUM' : 'HIGH',
+      preferredDescriptors,
+      avoidedDescriptors,
+      recurrentDecisionReasons,
+      derivedFromStart: records[0]?.createdAt,
+      derivedFromEnd: records.at(-1)?.createdAt,
+      createdAt: new Date().toISOString(),
+    }
+    this.workspacePreferenceProfiles = [profile, ...this.workspacePreferenceProfiles]
+  }
+
+  private preferenceTerms(value: string) {
+    return [...new Set(value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((term) => term.length >= 4 && term.length <= 48)
+    )].slice(0, 12)
+  }
+
+  private assertLineageSubjectAccess(type: OperationalLineageNodeType, id: string, session: AuthSession) {
+    if (type === 'FORMULA') {
+      this.requirePermission(session.role, 'formulas.viewSensitive')
+      this.formulaForSession(id, session)
+      return
+    }
+    if (type === 'FORMULA_VERSION') {
+      this.requirePermission(session.role, 'formulas.viewSensitive')
+      const [formulaId, version] = id.split('@')
+      if (!formulaId || !version || !this.formulaVersionRecords.some((item) => item.organizationId === session.organizationId && item.formulaId === formulaId && item.version === version)) {
+        throw new NotFoundException(`Formula version ${id} was not found`)
+      }
+      return
+    }
+    if (type === 'MATERIAL') {
+      this.requirePermission(session.role, 'materials.view')
+      this.materialForSession(id, session)
+      return
+    }
+    if (type === 'LOT') {
+      this.requirePermission(session.role, 'inventory.view')
+      this.lotForSession(id, session)
+      return
+    }
+    if (type === 'TRIAL') {
+      this.requirePermission(session.role, 'trials.view')
+      this.trialForSession(id, session)
+      return
+    }
+    if (type === 'BATCH') {
+      this.requirePermission(session.role, 'production.view')
+      this.productionBatchForSession(id, session)
+      return
+    }
+    if (type === 'FINISHED_GOOD_LOT') {
+      this.requirePermission(session.role, 'inventory.view')
+      if (!this.finishedGoodLotsForSession(session).some((lot) => lot.id === id)) throw new NotFoundException(`Finished good lot ${id} was not found`)
+      return
+    }
+    if (type === 'ORDER') {
+      this.requirePermission(session.role, 'orders.view')
+      if (!this.ordersForSession(session).some((order) => order.id === id)) throw new NotFoundException(`Order ${id} was not found`)
+      return
+    }
+    if (type === 'DOCUMENT') {
+      this.requirePermission(session.role, 'documents.view')
+      this.documentForSession(id, session)
+      return
+    }
+    this.requirePermission(session.role, 'formulas.viewSensitive')
+    if (!this.fragranceTrialRecords.some((trial) => trial.organizationId === session.organizationId && trial.formulaIntelligenceSource?.directionId === id)) {
+      throw new NotFoundException(`Design direction ${id} was not found`)
+    }
+  }
+
+  private operationalLineageEdges(session: AuthSession): OperationalLineageEdge[] {
+    const edges: OperationalLineageEdge[] = []
+    const add = (fromType: OperationalLineageNodeType, fromId: string, edgeType: OperationalLineageEdge['edgeType'], toType: OperationalLineageNodeType, toId: string, createdAt: string, sourceVersion?: string) => {
+      const fingerprint = `${session.organizationId}:${fromType}:${fromId}:${edgeType}:${toType}:${toId}:${sourceVersion ?? ''}`
+      edges.push({
+        id: `LIN-${createHash('sha256').update(fingerprint).digest('hex').slice(0, 20).toUpperCase()}`,
+        organizationId: session.organizationId,
+        fromType,
+        fromId,
+        edgeType,
+        toType,
+        toId,
+        ...(sourceVersion ? { sourceVersion } : {}),
+        createdAt,
+      })
+    }
+    const formulas = this.formulaCatalogForSession(session)
+    const formulaIds = new Set(formulas.map((formula) => formula.id))
+    for (const version of this.formulaVersionRecords.filter((item) => item.organizationId === session.organizationId && formulaIds.has(item.formulaId))) {
+      const versionId = `${version.formulaId}@${version.version}`
+      add('FORMULA', version.formulaId, 'REVISED_FROM', 'FORMULA_VERSION', versionId, version.createdAt, version.version)
+      for (const line of version.lines) {
+        if (line.materialId) add('FORMULA_VERSION', versionId, 'CONTAINS_MATERIAL', 'MATERIAL', line.materialId, version.createdAt, version.version)
+      }
+    }
+    for (const trial of this.fragranceTrialRecords.filter((item) => item.organizationId === session.organizationId)) {
+      const versionId = `${trial.formulaSnapshot.formulaId}@${trial.formulaSnapshot.formulaVersion}`
+      add('TRIAL', trial.id, 'TRIAL_OF', 'FORMULA_VERSION', versionId, trial.createdAt, trial.formulaSnapshot.formulaVersion)
+      if (trial.formulaIntelligenceSource) add('DESIGN_DIRECTION', trial.formulaIntelligenceSource.directionId, 'GENERATED_FROM', 'TRIAL', trial.id, trial.createdAt)
+      for (const allocation of trial.usageLink?.allocations ?? []) add('TRIAL', trial.id, 'CONSUMED_LOT', 'LOT', allocation.lotId, trial.usageLink?.linkedAt ?? trial.updatedAt)
+    }
+    for (const batch of this.productionBatchRecords.filter((item) => formulaIds.has(item.formulaId))) {
+      add('BATCH', batch.id, 'TRIAL_OF', 'FORMULA', batch.formulaId, batch.workOrder.scheduledStartAt)
+      for (const lotId of batch.genealogy.inputLotIds) add('BATCH', batch.id, 'CONSUMED_LOT', 'LOT', lotId, batch.workOrder.scheduledStartAt)
+      if (batch.genealogy.outputLotId) add('BATCH', batch.id, 'PRODUCED_LOT', 'FINISHED_GOOD_LOT', batch.genealogy.outputLotId, batch.workOrder.scheduledStartAt)
+    }
+    for (const movement of this.finishedGoodMovementRecords.filter((item) => item.organizationId === session.organizationId && item.orderId)) {
+      add('FINISHED_GOOD_LOT', movement.finishedGoodLotId, 'FULFILLED_BY', 'ORDER', movement.orderId!, movement.at)
+    }
+    for (const document of this.documentsForSession(session)) {
+      const type = formulas.some((formula) => formula.id === document.linkedTo) ? 'FORMULA'
+        : this.materialCatalogForSession(session).some((material) => material.id === document.linkedTo) ? 'MATERIAL'
+          : this.lotsForSession(session).some((lot) => lot.id === document.linkedTo) ? 'LOT'
+            : undefined
+      if (type) add('DOCUMENT', document.id, 'SUPPORTED_BY_EVIDENCE', type, document.linkedTo, document.issueDate ?? document.lastAccessed, document.version)
+    }
+    return [...new Map(edges.map((edge) => [edge.id, edge])).values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
   }
 
   labUsagePlan(formulaId: string, grams: number) {
@@ -12255,6 +12648,20 @@ export class NorthStarService {
 
   private canViewTrialSensitive(session: AuthSession) {
     return this.roleHasPermission(session.role, 'formulas.viewSensitive', session.organizationId) && this.roleHasPermission(session.role, 'materials.view', session.organizationId)
+  }
+
+  private projectTrialComparableEvidence(snapshot: FragranceTrialRecord['formulaSnapshot'], session: AuthSession): TrialComparableEvidence {
+    if (this.canViewTrialSensitive(session)) {
+      return this.retrieveTrialMemory(snapshot, session.organizationId)
+    }
+    return {
+      status: 'NOT_AVAILABLE',
+      sampleCount: 0,
+      confidence: 'NOT_EVALUATED',
+      averages: {},
+      trialIds: [],
+      summary: 'Comparable sensory evidence is not available to this role.',
+    }
   }
 
   private projectTrialForSession(trial: FragranceTrialRecord, session: AuthSession): FragranceTrialRecord {
