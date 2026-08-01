@@ -411,9 +411,9 @@ function MaterialPicker({ label, materials, selected, onChange }: { label: strin
   return <div className="formula-intelligence-picker"><label>{label}<input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search approved materials" /></label>{selectedMaterials.length ? <div className="formula-intelligence-picker-chips">{selectedMaterials.map((material) => <button type="button" key={material.id} onClick={() => toggle(material.id)}>{material.name}<X size={13} /></button>)}</div> : <small>No locked materials.</small>}<div className="formula-intelligence-picker-list">{visible.slice(0, 16).map((material) => <label key={material.id}><input type="checkbox" checked={selected.includes(material.id)} onChange={() => toggle(material.id)} /> <span>{material.name}</span></label>)}</div></div>
 }
 
-function FormulaIntelligenceDialog({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+function FormulaIntelligenceDialog({ title, description, children, footer, onClose, className = '' }: { title: string; description?: string; children: React.ReactNode; footer?: React.ReactNode; onClose: () => void; className?: string }) {
   return (
-    <AppWorkspaceDialog open title={title} onClose={onClose} className="formula-intelligence-modal">
+    <AppWorkspaceDialog open title={title} description={description} onClose={onClose} footer={footer} className={`formula-intelligence-modal ${className}`.trim()}>
       {children}
     </AppWorkspaceDialog>
   )
@@ -567,6 +567,67 @@ function DesignProjectCard({
   </section>
 }
 
+function StructuredBriefReviewDialog({
+  project,
+  draft,
+  materials,
+  busy,
+  canReview,
+  onDraftChange,
+  onSave,
+  onClose,
+}: {
+  project: DesignProject
+  draft: BriefReviewDraft
+  materials: Material[]
+  busy: boolean
+  canReview: boolean
+  onDraftChange: (next: BriefReviewDraft) => void
+  onSave: () => void
+  onClose: () => void
+}) {
+  const rawBrief = project.briefVersion?.rawBrief ?? project.brief?.creativeBrief ?? 'No raw brief was saved for this project.'
+  const footer = <div className="formula-intelligence-actions brief-review-footer-actions">
+    <button className="primary-button" type="button" disabled={busy || !canReview} onClick={onSave}><CheckCircle2 size={16} /> Save reviewed brief</button>
+    <button className="secondary-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+  </div>
+
+  return <FormulaIntelligenceDialog title="Review structured brief" description="Set the product and material boundaries that guide direction creation." onClose={onClose} footer={footer} className="brief-review-dialog">
+    <div className="structured-brief-review">
+      <section className="brief-review-original">
+        <span className="formula-intelligence-eyebrow">Original request</span>
+        <p>{rawBrief}</p>
+      </section>
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Product setup</h3><p>Define what is being made and the intended concentration.</p></div></div>
+        <div className="form-grid-two brief-review-grid">
+          <label>Product type<select data-autofocus value={draft.productType} onChange={(event) => onDraftChange({ ...draft, productType: event.target.value })}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="HOME_FRAGRANCE">Home fragrance</option><option value="PERSONAL_CARE">Personal care</option><option value="FUNCTIONAL">Functional</option><option value="OTHER">Other</option></select></label>
+          <label>Formula type<select value={draft.formulaType} onChange={(event) => onDraftChange({ ...draft, formulaType: event.target.value })}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="ACCORD">Accord</option></select></label>
+          <label>Format<input value={draft.format} maxLength={160} placeholder="Spray, candle, soap" onChange={(event) => onDraftChange({ ...draft, format: event.target.value })} /></label>
+          <label>Concentration<select value={draft.concentrationLabel} onChange={(event) => onDraftChange({ ...draft, concentrationLabel: event.target.value })}><option value="">Select</option><option value="PARFUM">Parfum</option><option value="EDP">EDP</option><option value="EDT">EDT</option><option value="EDC">EDC</option><option value="COLOGNE">Cologne</option><option value="OTHER">Other</option></select></label>
+          <label>Final concentration %<input type="number" min="0.01" max="100" value={draft.concentration} onChange={(event) => onDraftChange({ ...draft, concentration: event.target.value })} /></label>
+          <label>Target grams<input type="number" min="0.01" value={draft.targetGrams} onChange={(event) => onDraftChange({ ...draft, targetGrams: event.target.value })} /></label>
+        </div>
+      </section>
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Creative direction</h3><p>Capture the signals a perfumer should preserve or avoid.</p></div></div>
+        <div className="brief-review-fields">
+          <label>Creative descriptors<input value={draft.descriptors} placeholder="Marine, citrus, amber" onChange={(event) => onDraftChange({ ...draft, descriptors: event.target.value })} /></label>
+          <div className="form-grid-two brief-review-grid"><label>Desired notes<input value={draft.desiredNotes} placeholder="Bergamot, cedar" onChange={(event) => onDraftChange({ ...draft, desiredNotes: event.target.value })} /></label><label>Avoided notes<input value={draft.avoidedNotes} placeholder="Powdery" onChange={(event) => onDraftChange({ ...draft, avoidedNotes: event.target.value })} /></label></div>
+          <label>Creative intent<textarea value={draft.emotionalIntent} maxLength={600} placeholder="Describe the emotional effect or context for the fragrance." onChange={(event) => onDraftChange({ ...draft, emotionalIntent: event.target.value })} /></label>
+        </div>
+      </section>
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Market and material boundaries</h3><p>These constraints are checked before a direction can move forward.</p></div></div>
+        <div className="form-grid-two brief-review-grid"><label>IFRA category<input value={draft.ifraCategory} maxLength={32} placeholder="4" onChange={(event) => onDraftChange({ ...draft, ifraCategory: event.target.value })} /></label><label>Markets<input value={draft.markets} placeholder="EU, US" onChange={(event) => onDraftChange({ ...draft, markets: event.target.value })} /></label><label>Inventory preference<select value={draft.inventoryPreference} onChange={(event) => onDraftChange({ ...draft, inventoryPreference: event.target.value as BriefReviewDraft['inventoryPreference'] })}><option value="PREFER_AVAILABLE">Prefer available</option><option value="AVAILABLE_ONLY">Available only</option><option value="IGNORE">Ignore availability</option></select></label><label>Diffusion<select value={draft.diffusion} onChange={(event) => onDraftChange({ ...draft, diffusion: event.target.value })}><option value="">Not specified</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label></div>
+        <div className="brief-review-material-picker"><MaterialPicker label="Required reviewed materials" materials={materials} selected={draft.lockedMaterialIds} onChange={(lockedMaterialIds) => onDraftChange({ ...draft, lockedMaterialIds })} /></div>
+        <div className="brief-review-checks"><label className="checkbox-row"><input type="checkbox" checked={draft.workspaceMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, workspaceMaterialsOnly: event.target.checked })} /> Workspace materials only</label><label className="checkbox-row"><input type="checkbox" checked={draft.reviewedMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, reviewedMaterialsOnly: event.target.checked })} /> Reviewed materials only</label></div>
+      </section>
+      {project.briefVersion?.unresolvedQuestions.length ? <FormulaIntelligenceNotice message={project.briefVersion.unresolvedQuestions.map((question) => question.reason).join(' ')} /> : null}
+    </div>
+  </FormulaIntelligenceDialog>
+}
+
 export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialRecords, capabilities, onFormulaSaved, onTrialPlanned }: { apiBaseUrl: string; requestApi: ApiRequest; materialRecords: Material[]; capabilities: FormulaIntelligenceCapabilities; onFormulaSaved: (formula: Formula) => void; onTrialPlanned?: () => void }) {
   const [projects, setProjects] = useState<DesignProject[]>([])
   const [name, setName] = useState('New fragrance brief')
@@ -629,17 +690,6 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   function openBriefReview(project: DesignProject) {
     setReviewProjectId(project.id)
     setReviewDraft(reviewDraftFromVersion(project.briefVersion))
-  }
-
-  async function checkCompiler() {
-    if (!reviewProject) return
-    const scope = `design-brief-compile:${reviewProject.id}`
-    setBusy(true); setNotice(undefined)
-    try {
-      const result = await requestApi<{ mode: string; status: string; message: string }>(`/formula-intelligence/design-projects/${encodeURIComponent(reviewProject.id)}/brief-versions/compile`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' })
-      completeMutation(scope)
-      setNotice(result.status === 'NOT_CONFIGURED' ? 'Assisted brief compilation is not enabled yet. Complete the structured review manually.' : result.message)
-    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to check the brief review status.')) } finally { setBusy(false) }
   }
 
   async function saveBriefReview() {
@@ -768,7 +818,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
       </AnimatedList>
       {selectedDirectionContext ? <DirectionDetail direction={selectedDirectionContext.direction} project={selectedDirectionContext.project} capabilities={capabilities} materialNames={materialNames} feedback={selectedDirectionContext.project.feedback.filter((item) => item.directionId === selectedDirectionContext.direction.directionId)} feedbackDraft={feedbackDrafts[selectedDirectionContext.direction.directionId] ?? { comment: '', rating: 0 }} evidence={activeRun?.run.id === selectedDirectionContext.direction.runId ? activeEvidence : undefined} busy={busy} onShare={() => void openShare(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onSave={() => void requestSave(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onPlanTrial={() => void planTrial(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onFeedbackDraftChange={(draft) => setFeedbackDrafts((current) => ({ ...current, [selectedDirectionContext.direction.directionId]: draft }))} onSubmitFeedback={(selected) => void submitFeedback(selectedDirectionContext.project.id, selectedDirectionContext.direction.directionId, selected)} /> : null}
     </div>
-    {reviewProject ? <FormulaIntelligenceDialog title="Review structured brief" onClose={() => setReviewProjectId(undefined)}><p className="formula-intelligence-copy">{reviewProject.briefVersion?.rawBrief ?? reviewProject.brief?.creativeBrief}</p><div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy} onClick={() => void checkCompiler()}><Sparkles size={14} /> Check review guidance</button><small>Complete this review manually before creating directions.</small></div><div className="form-grid-two"><label>Product type<select value={reviewDraft.productType} onChange={(event) => setReviewDraft((current) => ({ ...current, productType: event.target.value }))}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="HOME_FRAGRANCE">Home fragrance</option><option value="PERSONAL_CARE">Personal care</option><option value="FUNCTIONAL">Functional</option><option value="OTHER">Other</option></select></label><label>Formula type<select value={reviewDraft.formulaType} onChange={(event) => setReviewDraft((current) => ({ ...current, formulaType: event.target.value }))}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="ACCORD">Accord</option></select></label><label>Format<input value={reviewDraft.format} maxLength={160} placeholder="spray, candle, soap" onChange={(event) => setReviewDraft((current) => ({ ...current, format: event.target.value }))} /></label><label>Concentration<select value={reviewDraft.concentrationLabel} onChange={(event) => setReviewDraft((current) => ({ ...current, concentrationLabel: event.target.value }))}><option value="">Select</option><option value="PARFUM">Parfum</option><option value="EDP">EDP</option><option value="EDT">EDT</option><option value="EDC">EDC</option><option value="COLOGNE">Cologne</option><option value="OTHER">Other</option></select></label><label>Final concentration %<input type="number" min="0.01" max="100" value={reviewDraft.concentration} onChange={(event) => setReviewDraft((current) => ({ ...current, concentration: event.target.value }))} /></label><label>Target grams<input type="number" min="0.01" value={reviewDraft.targetGrams} onChange={(event) => setReviewDraft((current) => ({ ...current, targetGrams: event.target.value }))} /></label></div><label>Creative descriptors<input value={reviewDraft.descriptors} placeholder="marine, citrus, amber" onChange={(event) => setReviewDraft((current) => ({ ...current, descriptors: event.target.value }))} /></label><label>Desired notes<input value={reviewDraft.desiredNotes} placeholder="bergamot, cedar" onChange={(event) => setReviewDraft((current) => ({ ...current, desiredNotes: event.target.value }))} /></label><label>Avoided notes<input value={reviewDraft.avoidedNotes} placeholder="powdery" onChange={(event) => setReviewDraft((current) => ({ ...current, avoidedNotes: event.target.value }))} /></label><label>Creative intent<textarea value={reviewDraft.emotionalIntent} maxLength={600} onChange={(event) => setReviewDraft((current) => ({ ...current, emotionalIntent: event.target.value }))} /></label><div className="form-grid-two"><label>IFRA category<input value={reviewDraft.ifraCategory} maxLength={32} placeholder="4" onChange={(event) => setReviewDraft((current) => ({ ...current, ifraCategory: event.target.value }))} /></label><label>Markets<input value={reviewDraft.markets} placeholder="EU, US" onChange={(event) => setReviewDraft((current) => ({ ...current, markets: event.target.value }))} /></label><label>Inventory preference<select value={reviewDraft.inventoryPreference} onChange={(event) => setReviewDraft((current) => ({ ...current, inventoryPreference: event.target.value as BriefReviewDraft['inventoryPreference'] }))}><option value="PREFER_AVAILABLE">Prefer available</option><option value="AVAILABLE_ONLY">Available only</option><option value="IGNORE">Ignore availability</option></select></label><label>Diffusion<select value={reviewDraft.diffusion} onChange={(event) => setReviewDraft((current) => ({ ...current, diffusion: event.target.value }))}><option value="">Not specified</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label></div><MaterialPicker label="Required reviewed materials" materials={materialRecords} selected={reviewDraft.lockedMaterialIds} onChange={(lockedMaterialIds) => setReviewDraft((current) => ({ ...current, lockedMaterialIds }))} /><label className="checkbox-row"><input type="checkbox" checked={reviewDraft.workspaceMaterialsOnly} onChange={(event) => setReviewDraft((current) => ({ ...current, workspaceMaterialsOnly: event.target.checked }))} /> Workspace materials only</label><label className="checkbox-row"><input type="checkbox" checked={reviewDraft.reviewedMaterialsOnly} onChange={(event) => setReviewDraft((current) => ({ ...current, reviewedMaterialsOnly: event.target.checked }))} /> Reviewed materials only</label>{reviewProject.briefVersion?.unresolvedQuestions.length ? <FormulaIntelligenceNotice message={reviewProject.briefVersion.unresolvedQuestions.map((question) => question.reason).join(' ')} /> : null}<div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy || !capabilities.canReviewBrief} onClick={() => void saveBriefReview()}><CheckCircle2 size={16} /> Save structured review</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setReviewProjectId(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
+    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={materialRecords} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
     {shareTarget ? <FormulaIntelligenceDialog title="Share direction" onClose={() => setShareTarget(undefined)}><p className="formula-intelligence-copy">Only active members of this brand can receive this direction. Material names stay hidden unless you opt in.</p>{shareTarget.direction.shares?.length ? <div className="formula-intelligence-share-list">{shareTarget.direction.shares.map((share) => <div key={share.recipientUserId}><span>{shareRecipients.find((recipient) => recipient.userId === share.recipientUserId)?.name ?? 'Active recipient'}{share.allowMaterialNames ? ' / material names visible' : ''}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => void revokeShare(shareTarget.projectId, shareTarget.direction.directionId, share.recipientUserId)}>Revoke</button></div>)}</div> : null}<div className="formula-intelligence-recipient-list">{shareRecipients.map((recipient) => <label key={recipient.userId}><input type="checkbox" checked={selectedRecipientIds.includes(recipient.userId)} onChange={() => setSelectedRecipientIds((current) => current.includes(recipient.userId) ? current.filter((id) => id !== recipient.userId) : [...current, recipient.userId])} /><span><strong>{recipient.name}</strong><small>{recipient.email}</small></span></label>)}</div><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Save sharing</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
     {pending ? <FormulaIntelligenceDialog title="Confirm formula draft" onClose={() => setPending(undefined)}><p className="formula-intelligence-copy">{pending.label}</p><p className="formula-intelligence-copy">This creates one editable draft. It does not reserve or consume inventory.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={16} /> Confirm draft</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setPending(undefined)}>Not now</button></div></FormulaIntelligenceDialog> : null}
   </div>

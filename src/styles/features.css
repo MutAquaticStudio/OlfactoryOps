@@ -168,6 +168,143 @@
   box-shadow: 0 18px 48px rgb(0 0 0 / 0.35);
 }
 
+.workspace-dialog.formula-intelligence-modal.brief-review-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(880px, calc(100vw - 48px));
+  max-height: min(820px, calc(100dvh - 48px));
+  overflow: hidden;
+}
+
+.brief-review-dialog .workspace-dialog-body {
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.structured-brief-review {
+  display: grid;
+  gap: 0;
+  padding: 0 22px 22px;
+}
+
+.brief-review-original {
+  display: grid;
+  gap: 7px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.brief-review-original p {
+  max-width: 76ch;
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.brief-review-section {
+  display: grid;
+  gap: 13px;
+  padding: 19px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.brief-review-section-heading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.brief-review-section-heading p {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 0.8rem;
+  line-height: 1.42;
+}
+
+.brief-review-dialog label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 0.78rem;
+}
+
+.brief-review-dialog input,
+.brief-review-dialog select,
+.brief-review-dialog textarea {
+  width: 100%;
+}
+
+.brief-review-dialog textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.brief-review-grid {
+  gap: 12px;
+}
+
+.brief-review-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.brief-review-material-picker {
+  padding-top: 3px;
+}
+
+.brief-review-material-picker .formula-intelligence-picker-list {
+  max-height: 150px;
+}
+
+.brief-review-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+
+.brief-review-checks .checkbox-row {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.brief-review-footer-actions {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.brief-review-dialog .workspace-dialog-footer {
+  padding: 14px 22px;
+  background: var(--panel-solid);
+}
+
+@media (max-width: 720px) {
+  .brief-review-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .structured-brief-review {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .brief-review-dialog .workspace-dialog-footer {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .brief-review-footer-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .brief-review-footer-actions > button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 960px) {
   .app-shell,
   .app-shell.density-compact,
