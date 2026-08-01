@@ -225,6 +225,13 @@ export class AgentLocalRuntimeService {
     return { data: { mode: 'MANUAL', status: 'NOT_CONFIGURED', message: 'AI brief compilation is not configured. Review the structured brief manually.' } }
   }
 
+  async designMaterialCatalog(service: NorthStarService, _session: AuthSession) {
+    await this.ready()
+    this.requireFormulaPermission(service, 'formulas.viewSensitive')
+    this.requireFormulaPermission(service, 'materials.view')
+    return { data: { materials: this.approvedMaterials(service), reviewedOnly: true as const } }
+  }
+
   async saveDesignBriefVersion(service: NorthStarService, session: AuthSession, projectId: string, body: unknown) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.edit')
@@ -232,6 +239,7 @@ export class AgentLocalRuntimeService {
     const canEdit = project.createdByUserId === session.userId || (project.status === 'BRIEFED' && project.brandId === session.brandId)
     if (!canEdit) throw new NotFoundException('Design project was not found')
     const validation = validateStructuredFormulaDesignBrief(body)
+    this.assertDesignBriefMaterialConstraints(service, validation.brief)
     const prior = this.currentBriefVersion(project)
     const timestamp = now()
     const version: LocalDesignBriefVersion = {
@@ -273,6 +281,7 @@ export class AgentLocalRuntimeService {
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
     }
     if (briefVersion?.state === 'REVIEWED' && briefVersion.structuredBrief) {
+      this.assertDesignBriefMaterialConstraints(service, briefVersion.structuredBrief)
       project.brief = formulaDesignBriefFromStructuredBrief(project.name, briefVersion.structuredBrief)
     }
     if (!project.brief) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
@@ -872,6 +881,23 @@ export class AgentLocalRuntimeService {
       material.catalogueSource?.status !== 'SOURCE_ONLY' &&
       service.materialCompliance(material.id).data?.status === 'APPROVED'
     ))
+  }
+
+  private assertDesignBriefMaterialConstraints(service: NorthStarService, structured: StructuredFormulaDesignBrief) {
+    const required = [...new Set(structured.constraints.requiredMaterialIds)]
+    const prohibited = [...new Set(structured.constraints.prohibitedMaterialIds)]
+    const overlap = required.filter((materialId) => prohibited.includes(materialId))
+    if (overlap.length) throw new UnprocessableEntityException('A material cannot be both required and prohibited in the same brief')
+
+    const workspaceMaterialIds = new Set(service.materials().data.map((material) => material.id))
+    const outsideWorkspace = [...new Set([...required, ...prohibited])].filter((materialId) => !workspaceMaterialIds.has(materialId))
+    if (outsideWorkspace.length) throw new UnprocessableEntityException('Design brief material constraints must reference Materials in this workspace')
+
+    const reviewedMaterialIds = new Set(this.approvedMaterials(service).map((material) => material.id))
+    const notReviewed = required.filter((materialId) => !reviewedMaterialIds.has(materialId))
+    if (notReviewed.length) {
+      throw new UnprocessableEntityException('Required materials must be reviewed and approved in Materials before direction generation')
+    }
   }
 
   private async executeIntelligence(service: NorthStarService, run: LocalRun) {

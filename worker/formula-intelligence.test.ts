@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { Material } from '../src/data/northStar.js'
-import { FormulaIntelligenceStore, formulaIntelligenceMaterialCatalog } from './formula-intelligence.js'
+import { FormulaIntelligenceStore, assertFormulaDesignBriefMaterialConstraints, formulaIntelligenceMaterialCatalog } from './formula-intelligence.js'
 
 type RecordedStatement = { sql: string; values: unknown[] }
 
@@ -131,7 +131,32 @@ describe('Formula Intelligence Worker persistence contract', () => {
       materialCompliance: () => ({ data: { status: 'APPROVED' } }),
     } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
-    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [reviewed], reviewRequired: false })
+    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [reviewed], reviewedOnly: true })
+  })
+
+  it('does not fall back to unreviewed material records for design directions', () => {
+    const unreviewed = { id: 'mat-unreviewed', name: 'Pending material' } as unknown as Material
+    const service = {
+      materials: () => ({ data: [unreviewed] }),
+      materialCompliance: () => ({ data: undefined }),
+    } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
+
+    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [], reviewedOnly: true })
+  })
+
+  it('rejects a required material that is not approved in Materials', () => {
+    const pending = { id: 'mat-pending', name: 'Pending material' } as unknown as Material
+    const service = {
+      materials: () => ({ data: [pending] }),
+      materialCompliance: () => ({ data: { status: 'REVIEW_REQUIRED' } }),
+    } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
+
+    expect(() => assertFormulaDesignBriefMaterialConstraints(service, {
+      schemaVersion: 1,
+      product: {}, creative: { families: [], descriptors: [], references: [], desiredNotes: [], avoidedNotes: [], specialEffects: [] }, performance: {}, audience: { markets: [] },
+      constraints: { workspaceMaterialsOnly: true, reviewedMaterialsOnly: true, targetMarkets: [], inventoryPreference: 'PREFER_AVAILABLE', prohibitedMaterialIds: [], requiredMaterialIds: ['mat-pending'], prohibitedDescriptors: [] },
+      unresolvedQuestions: [],
+    })).toThrow('Required materials must be reviewed and approved')
   })
 
   it('audits a tenant-scoped quota denial before rejecting a new run', async () => {

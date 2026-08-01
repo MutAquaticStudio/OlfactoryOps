@@ -478,9 +478,10 @@ export class FormulaIntelligenceStore {
     }
   }
 
-  async saveBriefVersion(actor: AgentActor, projectId: string, input: unknown, idempotencyKey: string) {
+  async saveBriefVersion(service: NorthStarService, actor: AgentActor, projectId: string, input: unknown, idempotencyKey: string) {
     const project = await this.projectForBriefEdit(actor, projectId)
     const validation = validateStructuredFormulaDesignBrief(input)
+    assertFormulaDesignBriefMaterialConstraints(service, validation.brief)
     const priorVersion = await this.currentBriefVersion(project)
     const latest = await this.db.prepare(
       `SELECT MAX(version_number) AS version_number FROM formula_design_brief_versions WHERE organization_id = ? AND project_id = ?`,
@@ -1256,11 +1257,27 @@ export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
     .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
     .map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
   const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
-  // A tenant may research its material master before a compliance profile exists.
-  // Missing evidence remains REVIEW_REQUIRED and never becomes implicit approval.
-  return approved.length
-    ? { materials: approved, reviewRequired: false }
-    : { materials: catalog.filter(({ profile }) => profile?.status !== 'BLOCKED').map(({ material }) => material), reviewRequired: true }
+  return { materials: approved, reviewedOnly: true as const }
+}
+
+export function assertFormulaDesignBriefMaterialConstraints(
+  service: NorthStarService,
+  structured: ReturnType<typeof structuredFormulaDesignBriefSchema.parse>,
+) {
+  const required = [...new Set(structured.constraints.requiredMaterialIds)]
+  const prohibited = [...new Set(structured.constraints.prohibitedMaterialIds)]
+  const overlap = required.filter((materialId) => prohibited.includes(materialId))
+  if (overlap.length) throw new UnprocessableEntityException('A material cannot be both required and prohibited in the same brief')
+
+  const workspaceMaterialIds = new Set(service.materials().data.map((material) => material.id))
+  const outsideWorkspace = [...new Set([...required, ...prohibited])].filter((materialId) => !workspaceMaterialIds.has(materialId))
+  if (outsideWorkspace.length) throw new UnprocessableEntityException('Design brief material constraints must reference Materials in this workspace')
+
+  const reviewedMaterialIds = new Set(formulaIntelligenceMaterialCatalog(service).materials.map((material) => material.id))
+  const notReviewed = required.filter((materialId) => !reviewedMaterialIds.has(materialId))
+  if (notReviewed.length) {
+    throw new UnprocessableEntityException('Required materials must be reviewed and approved in Materials before direction generation')
+  }
 }
 
 function availabilityRankedMaterials(service: NorthStarService, materials: Material[]) {
@@ -1363,9 +1380,7 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
     constraintSnapshot && evaluations.length ? { constraintSnapshotId: constraintSnapshot.id, evaluations } : undefined,
   )
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: constraintSnapshot ? 3 : 2, directionCount: directions.length }, 94)
-  await store.createAssistantMessage(run, materialCatalog.reviewRequired
-    ? 'I prepared three deterministic design directions from the available material master. Compliance evidence is incomplete, so each direction is marked for review before it can progress.'
-    : 'I prepared three deterministic design directions from compliance-approved workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
+  await store.createAssistantMessage(run, 'I prepared three deterministic design directions from reviewed workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
 }
 
 async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>, materialEvidence?: MaterialEvidenceRag) {
@@ -1524,6 +1539,10 @@ export async function createDesignProjectRun(
   requireFormulaIntelligenceFeature(service, 'designStudioCandidateGeneration')
   const intelligence = new FormulaIntelligenceStore(db)
   const generation = await intelligence.designProjectForGeneration(actor, projectId)
+  if (generation.briefVersion?.state === 'REVIEWED') {
+    const structured = structuredFormulaDesignBriefSchema.parse(parseJson(generation.briefVersion.structured_brief_json ?? '{}', {}))
+    assertFormulaDesignBriefMaterialConstraints(service, structured)
+  }
   await intelligence.assertRunStartAllowed(actor, projectId)
   const store = new AgentRuntimeStore(db)
   const brief = generation.brief

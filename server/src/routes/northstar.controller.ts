@@ -358,6 +358,11 @@ export class NorthStarController {
     }
   }
 
+  @Get('formula-intelligence/materials')
+  formulaIntelligenceMaterials() {
+    return this.agentRuntime.designMaterialCatalog(this.northStar, this.northStar.me().data.session)
+  }
+
   @Post('formula-intelligence/design-projects')
   createFormulaDesignProject(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
     return this.formulaIntelligenceMutation('POST:/formula-intelligence/design-projects', idempotencyKey, body, () => this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body))

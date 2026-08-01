@@ -17,6 +17,7 @@ import {
 } from './agent-runtime.js'
 import {
   FormulaIntelligenceStore,
+  formulaIntelligenceMaterialCatalog,
   auditFormulaIntelligence,
   createDesignProjectRun,
   createOptimizerRun,
@@ -632,6 +633,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
   { method: 'GET', pattern: '/formula-intelligence/capabilities', persistState: false, handler: ({ service }) => formulaIntelligenceCapabilities(service) },
+  { method: 'GET', pattern: '/formula-intelligence/materials', persistState: false, handler: (context) => listFormulaIntelligenceMaterials(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
@@ -1177,6 +1179,18 @@ async function listDesignProjects(service: NorthStarService, env: Env) {
   return { data: await new FormulaIntelligenceStore(env.DB).listDesignProjects(actor, formulaIntelligenceCanViewPrivate(service)) }
 }
 
+async function listFormulaIntelligenceMaterials(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    ensureFormulaIntelligenceExecutionAccess(context.service)
+    return { data: formulaIntelligenceMaterialCatalog(context.service) }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, 'design-material-catalog', error)
+    throw error
+  }
+}
+
 async function createFormulaDesignProject(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   try {
@@ -1225,7 +1239,7 @@ async function saveFormulaDesignBriefVersion(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   try {
     ensureFormulaIntelligencePermission(context.service, 'edit')
-    const version = await new FormulaIntelligenceStore(context.env.DB).saveBriefVersion(actor, context.params.id, context.body, formulaIntelligenceIdempotencyKey(context.request))
+    const version = await new FormulaIntelligenceStore(context.env.DB).saveBriefVersion(context.service, actor, context.params.id, context.body, formulaIntelligenceIdempotencyKey(context.request))
     return { data: { version } }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)

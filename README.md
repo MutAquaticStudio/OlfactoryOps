@@ -2,6 +2,20 @@
 
 ## Competitive Moat: Phase 0-9
 
+### Design Studio và nguồn Materials
+
+Formula Design Studio không duy trì catalogue riêng. Khi review brief, phần
+**Required materials** gọi API tenant-scoped để đọc đúng tập Materials đã
+được review và phê duyệt trong workspace. Danh sách này cũng là nguồn duy
+nhất cho deterministic direction generation ở cả Worker beta và local API.
+
+Catalogue supplier ở trạng thái `SOURCE_ONLY`, material chưa review, material
+bị `BLOCKED`, hoặc ID không thuộc workspace không thể được chọn làm required
+material và không thể xuất hiện trong direction. Inventory chỉ được kiểm tra
+khi tạo direction để xếp hạng tính khả dụng; bước này không reserve hay consume
+stock. Nếu chưa có Material nào được phê duyệt, Studio hiển thị trạng thái rõ
+ràng và yêu cầu hoàn tất review trong **Materials** trước khi generate.
+
 ### Phase 4: Direction to Trial
 
 A saved Formula Design Studio direction can enter **Trials & Sensory** only

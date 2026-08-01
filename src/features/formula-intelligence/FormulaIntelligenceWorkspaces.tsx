@@ -68,6 +68,8 @@ type Direction = {
 
 type ShareRecipient = { userId: string; name: string; email: string }
 type Feedback = { id: string; directionId: string; userId: string; rating?: number | null; comment: string; selected: boolean; createdAt: string }
+type DesignMaterialCatalog = { materials: Material[]; reviewedOnly: true }
+type DesignMaterialCatalogState = 'loading' | 'ready' | 'unavailable'
 type BriefVersion = {
   id: string
   versionNumber: number
@@ -403,12 +405,14 @@ function EvidenceCitations({ evidence }: { evidence?: EvidenceArtifact }) {
   return <section className="formula-intelligence-evidence formula-intelligence-citations"><span>Evidence</span>{evidence.citations.map((citation) => <article key={citation.citationId}><strong>{citation.title}</strong><small>{citation.sourceKind === 'document' ? 'Reviewed document' : 'Material profile'} / {citation.version}{citation.page ? ` / p. ${citation.page}` : ''}{citation.section ? ` / ${citation.section}` : ''}</small><p>{citation.excerpt}</p></article>)}</section>
 }
 
-function MaterialPicker({ label, materials, selected, onChange }: { label: string; materials: Array<{ id: string; name: string }>; selected: string[]; onChange: (value: string[]) => void }) {
+function MaterialPicker({ label, materials, selected, onChange, disabled = false, emptyMessage = 'No materials are available.' }: { label: string; materials: Array<{ id: string; name: string }>; selected: string[]; onChange: (value: string[]) => void; disabled?: boolean; emptyMessage?: string }) {
   const [filter, setFilter] = useState('')
   const visible = materials.filter((material) => material.name.toLowerCase().includes(filter.trim().toLowerCase()))
   const selectedMaterials = materials.filter((material) => selected.includes(material.id))
-  const toggle = (id: string) => onChange(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id])
-  return <div className="formula-intelligence-picker"><label>{label}<input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search approved materials" /></label>{selectedMaterials.length ? <div className="formula-intelligence-picker-chips">{selectedMaterials.map((material) => <button type="button" key={material.id} onClick={() => toggle(material.id)}>{material.name}<X size={13} /></button>)}</div> : <small>No locked materials.</small>}<div className="formula-intelligence-picker-list">{visible.slice(0, 16).map((material) => <label key={material.id}><input type="checkbox" checked={selected.includes(material.id)} onChange={() => toggle(material.id)} /> <span>{material.name}</span></label>)}</div></div>
+  const toggle = (id: string) => {
+    if (!disabled) onChange(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id])
+  }
+  return <div className="formula-intelligence-picker"><label>{label}<input value={filter} disabled={disabled} onChange={(event) => setFilter(event.target.value)} placeholder="Search reviewed materials" /></label>{selectedMaterials.length ? <div className="formula-intelligence-picker-chips">{selectedMaterials.map((material) => <button type="button" key={material.id} disabled={disabled} onClick={() => toggle(material.id)}>{material.name}<X size={13} /></button>)}</div> : <small>{emptyMessage}</small>}<div className="formula-intelligence-picker-list">{visible.length ? visible.slice(0, 16).map((material) => <label key={material.id}><input type="checkbox" disabled={disabled} checked={selected.includes(material.id)} onChange={() => toggle(material.id)} /> <span>{material.name}</span></label>) : <small>{emptyMessage}</small>}</div></div>
 }
 
 function FormulaIntelligenceDialog({ title, description, children, footer, onClose, className = '' }: { title: string; description?: string; children: React.ReactNode; footer?: React.ReactNode; onClose: () => void; className?: string }) {
@@ -505,6 +509,8 @@ function DirectionDetail({
 function DesignProjectCard({
   project,
   capabilities,
+  materialCatalogState,
+  hasEligibleMaterials,
   selectedDirectionId,
   busy,
   onReview,
@@ -513,6 +519,8 @@ function DesignProjectCard({
 }: {
   project: DesignProject
   capabilities: FormulaIntelligenceCapabilities
+  materialCatalogState: DesignMaterialCatalogState
+  hasEligibleMaterials: boolean
   selectedDirectionId?: string
   busy: boolean
   onReview: () => void
@@ -525,6 +533,7 @@ function DesignProjectCard({
     && project.status === 'BRIEFED'
     && (project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED')
     && !hasDirections
+  const materialSourceReady = materialCatalogState === 'ready' && hasEligibleMaterials
 
   return <section className="panel glass formula-intelligence-project design-project-card">
     <header className="design-project-card-heading">
@@ -543,8 +552,11 @@ function DesignProjectCard({
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
       {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className="secondary-button small" type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> Review brief</button> : null}
-      {canGenerate ? <button className="primary-button small" type="button" disabled={busy} onClick={onGenerate}><Play size={15} /> Create directions</button> : null}
+      {canGenerate ? <button className="primary-button small" type="button" disabled={busy || !materialSourceReady} onClick={onGenerate}><Play size={15} /> Create directions</button> : null}
       {project.briefStatus === 'REVIEW_REQUIRED' ? <small>Resolve the brief details before directions can be created.</small> : null}
+      {canGenerate && materialCatalogState === 'loading' ? <small>Loading reviewed Materials.</small> : null}
+      {canGenerate && materialCatalogState === 'unavailable' ? <small>Reviewed Materials are unavailable. Reopen the brief after Materials are restored.</small> : null}
+      {canGenerate && materialCatalogState === 'ready' && !hasEligibleMaterials ? <small>Review and approve at least one Material before creating directions.</small> : null}
     </div>
     {hasDirections ? <div className="formula-intelligence-direction-grid design-direction-list">
       {project.directions.map((direction, index) => <MotionCardButton
@@ -571,6 +583,7 @@ function StructuredBriefReviewDialog({
   project,
   draft,
   materials,
+  materialCatalogState,
   busy,
   canReview,
   onDraftChange,
@@ -580,6 +593,7 @@ function StructuredBriefReviewDialog({
   project: DesignProject
   draft: BriefReviewDraft
   materials: Material[]
+  materialCatalogState: DesignMaterialCatalogState
   busy: boolean
   canReview: boolean
   onDraftChange: (next: BriefReviewDraft) => void
@@ -620,8 +634,7 @@ function StructuredBriefReviewDialog({
       <section className="brief-review-section">
         <div className="brief-review-section-heading"><div><h3>Market and material boundaries</h3><p>These constraints are checked before a direction can move forward.</p></div></div>
         <div className="form-grid-two brief-review-grid"><label>IFRA category<input value={draft.ifraCategory} maxLength={32} placeholder="4" onChange={(event) => onDraftChange({ ...draft, ifraCategory: event.target.value })} /></label><label>Markets<input value={draft.markets} placeholder="EU, US" onChange={(event) => onDraftChange({ ...draft, markets: event.target.value })} /></label><label>Inventory preference<select value={draft.inventoryPreference} onChange={(event) => onDraftChange({ ...draft, inventoryPreference: event.target.value as BriefReviewDraft['inventoryPreference'] })}><option value="PREFER_AVAILABLE">Prefer available</option><option value="AVAILABLE_ONLY">Available only</option><option value="IGNORE">Ignore availability</option></select></label><label>Diffusion<select value={draft.diffusion} onChange={(event) => onDraftChange({ ...draft, diffusion: event.target.value })}><option value="">Not specified</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label></div>
-        <div className="brief-review-material-picker"><MaterialPicker label="Required reviewed materials" materials={materials} selected={draft.lockedMaterialIds} onChange={(lockedMaterialIds) => onDraftChange({ ...draft, lockedMaterialIds })} /></div>
-        <div className="brief-review-checks"><label className="checkbox-row"><input type="checkbox" checked={draft.workspaceMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, workspaceMaterialsOnly: event.target.checked })} /> Workspace materials only</label><label className="checkbox-row"><input type="checkbox" checked={draft.reviewedMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, reviewedMaterialsOnly: event.target.checked })} /> Reviewed materials only</label></div>
+        <div className="brief-review-material-picker"><div className="brief-review-material-source"><strong>Material source</strong><p>{materialCatalogState === 'loading' ? 'Loading reviewed Materials from this workspace.' : materialCatalogState === 'unavailable' ? 'Reviewed Materials are unavailable right now. Save the brief and retry after Materials can be loaded.' : materials.length ? `${materials.length} reviewed Materials from this workspace are eligible. Inventory availability is checked when directions are created and never reserves stock.` : 'No reviewed Materials are ready. Complete material review in Materials before creating directions.'}</p></div><MaterialPicker label="Required materials" materials={materials} selected={draft.lockedMaterialIds} disabled={materialCatalogState !== 'ready'} emptyMessage={materialCatalogState === 'loading' ? 'Loading reviewed Materials...' : 'No reviewed Materials are available.'} onChange={(lockedMaterialIds) => onDraftChange({ ...draft, lockedMaterialIds })} /></div>
       </section>
       {project.briefVersion?.unresolvedQuestions.length ? <FormulaIntelligenceNotice message={project.briefVersion.unresolvedQuestions.map((question) => question.reason).join(' ')} /> : null}
     </div>
@@ -643,9 +656,11 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<string[]>([])
   const [allowMaterialNames, setAllowMaterialNames] = useState(false)
   const [selectedDirectionId, setSelectedDirectionId] = useState<string>()
+  const [designMaterials, setDesignMaterials] = useState<Material[]>([])
+  const [designMaterialCatalogState, setDesignMaterialCatalogState] = useState<DesignMaterialCatalogState>('loading')
   const [activeRunId, setActiveRunId] = usePersistedRunId('olfactoryops.formula-intelligence.design-run')
   const { detail: activeRun, connectionState, loadRun } = useAgentRunMonitor(apiBaseUrl, requestApi, activeRunId)
-  const materialNames = useMemo(() => new Map(materialRecords.map((material) => [material.id, material.name])), [materialRecords])
+  const materialNames = useMemo(() => new Map([...materialRecords, ...designMaterials].map((material) => [material.id, material.name])), [designMaterials, materialRecords])
   const activeEvidence = useMemo(() => evidenceFromRun(activeRun), [activeRun])
   const selectedDirectionContext = useMemo(() => {
     for (const project of projects) {
@@ -658,6 +673,27 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
 
   const refresh = useCallback(async () => setProjects(await requestApi<DesignProject[]>('/formula-intelligence/design-projects')), [requestApi])
   useEffect(() => { void refresh().catch((error) => setNotice(formulaIntelligenceError(error, 'Unable to load saved briefs. Please refresh and try again.'))) }, [refresh])
+  useEffect(() => {
+    let active = true
+    if (!capabilities.canGenerateDirections) {
+      setDesignMaterials([])
+      setDesignMaterialCatalogState('unavailable')
+      return () => { active = false }
+    }
+    setDesignMaterialCatalogState('loading')
+    void requestApi<DesignMaterialCatalog>('/formula-intelligence/materials')
+      .then((catalog) => {
+        if (!active) return
+        setDesignMaterials(catalog.materials)
+        setDesignMaterialCatalogState('ready')
+      })
+      .catch(() => {
+        if (!active) return
+        setDesignMaterials([])
+        setDesignMaterialCatalogState('unavailable')
+      })
+    return () => { active = false }
+  }, [capabilities.canGenerateDirections, requestApi])
   useEffect(() => {
     if (!activeRun) return
     if (activeRun.confirmation?.status === 'PENDING') setPending({ runId: activeRun.run.id, confirmationId: activeRun.confirmation.id, label: activeRun.confirmation.summary })
@@ -711,7 +747,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
           creative: { families: [], descriptors: csv(reviewDraft.descriptors), emotionalIntent: reviewDraft.emotionalIntent || undefined, references: [], desiredNotes: csv(reviewDraft.desiredNotes), avoidedNotes: csv(reviewDraft.avoidedNotes), specialEffects: [] },
           performance: { diffusion: reviewDraft.diffusion || undefined, targetLongevityHours: Number.isFinite(longevity) && longevity >= 0 ? longevity : undefined, opening: undefined, drydown: undefined },
           audience: { target: undefined, positioning: undefined, occasion: undefined, markets: csv(reviewDraft.markets) },
-          constraints: { workspaceMaterialsOnly: reviewDraft.workspaceMaterialsOnly, reviewedMaterialsOnly: reviewDraft.reviewedMaterialsOnly, ifraCategory: reviewDraft.ifraCategory || undefined, targetMarkets: csv(reviewDraft.markets), inventoryPreference: reviewDraft.inventoryPreference, prohibitedMaterialIds: [], requiredMaterialIds: reviewDraft.lockedMaterialIds, prohibitedDescriptors: [] },
+          constraints: { workspaceMaterialsOnly: true, reviewedMaterialsOnly: true, ifraCategory: reviewDraft.ifraCategory || undefined, targetMarkets: csv(reviewDraft.markets), inventoryPreference: reviewDraft.inventoryPreference, prohibitedMaterialIds: [], requiredMaterialIds: reviewDraft.lockedMaterialIds, prohibitedDescriptors: [] },
           unresolvedQuestions: [],
         }),
       })
@@ -814,11 +850,11 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
         <button className="primary-button" data-testid="formula-design-primary-action" type="button" disabled={busy || !capabilities.canCreateBrief || name.trim().length < 2 || creativeBrief.trim().length < 8} onClick={() => void createProject()}><Play size={16} /> Save brief for review</button>{!capabilities.canReviewBrief && capabilities.canCreateBrief ? <small>A perfumer with formula edit access reviews the product constraints.</small> : null}{notice ? <FormulaIntelligenceNotice message={notice} /> : null}<RunStatus detail={activeRun} connectionState={connectionState} busy={busy} onCancel={() => void cancelRun()} />
       </section>
       <AnimatedList className="formula-intelligence-projects design-studio-projects">
-        {projects.length === 0 ? <section className="panel glass"><p className="empty-state">Save a research brief to begin a clear, reviewable creative direction.</p></section> : projects.map((project) => <AnimatedListItem key={project.id}><DesignProjectCard project={project} capabilities={capabilities} selectedDirectionId={selectedDirectionId} busy={busy} onReview={() => openBriefReview(project)} onGenerate={() => void generate(project.id)} onSelectDirection={setSelectedDirectionId} /></AnimatedListItem>)}
+        {projects.length === 0 ? <section className="panel glass"><p className="empty-state">Save a research brief to begin a clear, reviewable creative direction.</p></section> : projects.map((project) => <AnimatedListItem key={project.id}><DesignProjectCard project={project} capabilities={capabilities} materialCatalogState={designMaterialCatalogState} hasEligibleMaterials={designMaterials.length > 0} selectedDirectionId={selectedDirectionId} busy={busy} onReview={() => openBriefReview(project)} onGenerate={() => void generate(project.id)} onSelectDirection={setSelectedDirectionId} /></AnimatedListItem>)}
       </AnimatedList>
       {selectedDirectionContext ? <DirectionDetail direction={selectedDirectionContext.direction} project={selectedDirectionContext.project} capabilities={capabilities} materialNames={materialNames} feedback={selectedDirectionContext.project.feedback.filter((item) => item.directionId === selectedDirectionContext.direction.directionId)} feedbackDraft={feedbackDrafts[selectedDirectionContext.direction.directionId] ?? { comment: '', rating: 0 }} evidence={activeRun?.run.id === selectedDirectionContext.direction.runId ? activeEvidence : undefined} busy={busy} onShare={() => void openShare(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onSave={() => void requestSave(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onPlanTrial={() => void planTrial(selectedDirectionContext.project.id, selectedDirectionContext.direction)} onFeedbackDraftChange={(draft) => setFeedbackDrafts((current) => ({ ...current, [selectedDirectionContext.direction.directionId]: draft }))} onSubmitFeedback={(selected) => void submitFeedback(selectedDirectionContext.project.id, selectedDirectionContext.direction.directionId, selected)} /> : null}
     </div>
-    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={materialRecords} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
+    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
     {shareTarget ? <FormulaIntelligenceDialog title="Share direction" onClose={() => setShareTarget(undefined)}><p className="formula-intelligence-copy">Only active members of this brand can receive this direction. Material names stay hidden unless you opt in.</p>{shareTarget.direction.shares?.length ? <div className="formula-intelligence-share-list">{shareTarget.direction.shares.map((share) => <div key={share.recipientUserId}><span>{shareRecipients.find((recipient) => recipient.userId === share.recipientUserId)?.name ?? 'Active recipient'}{share.allowMaterialNames ? ' / material names visible' : ''}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => void revokeShare(shareTarget.projectId, shareTarget.direction.directionId, share.recipientUserId)}>Revoke</button></div>)}</div> : null}<div className="formula-intelligence-recipient-list">{shareRecipients.map((recipient) => <label key={recipient.userId}><input type="checkbox" checked={selectedRecipientIds.includes(recipient.userId)} onChange={() => setSelectedRecipientIds((current) => current.includes(recipient.userId) ? current.filter((id) => id !== recipient.userId) : [...current, recipient.userId])} /><span><strong>{recipient.name}</strong><small>{recipient.email}</small></span></label>)}</div><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Save sharing</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
     {pending ? <FormulaIntelligenceDialog title="Confirm formula draft" onClose={() => setPending(undefined)}><p className="formula-intelligence-copy">{pending.label}</p><p className="formula-intelligence-copy">This creates one editable draft. It does not reserve or consume inventory.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={16} /> Confirm draft</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setPending(undefined)}>Not now</button></div></FormulaIntelligenceDialog> : null}
   </div>
