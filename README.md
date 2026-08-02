@@ -312,9 +312,10 @@ flowchart LR
 1. Người dùng đăng ký hoặc đăng nhập qua <code>/api/v1/auth/*</code>.
 2. Worker tạo opaque session credential đã one-way hash và gửi bằng secure HTTP-only cookie. Browser JavaScript không nhận session secret.
 3. Audit session ID được tạo bằng cryptographic randomness, không dùng sequence theo số session đã hydrate; đăng nhập mới không thể ghi đè session lịch sử trong D1.
-4. <code>/api/v1/me</code> khôi phục session, workspace context, effective role permission và CSRF token.
-5. Cookie-authenticated mutation cần <code>X-CSRF-Token</code>; route nhạy cảm có rate limit riêng. Opaque bearer credential chỉ được hỗ trợ rõ ràng cho non-browser tooling.
-6. Mỗi request được xác thực, scope vào active organization, kiểm tra permission matrix và ghi audit evidence khi thay đổi controlled state.
+4. Khi đổi seeded admin email, Worker canonicalize credential đúng một lần và xóa credential legacy sau khi canonical credential đã được lưu. Chỉ password hash thực sự thay đổi mới revoke session admin.
+5. <code>/api/v1/me</code> khôi phục session, workspace context, effective role permission và CSRF token.
+6. Cookie-authenticated mutation cần <code>X-CSRF-Token</code>; route nhạy cảm có rate limit riêng. Opaque bearer credential chỉ được hỗ trợ rõ ràng cho non-browser tooling.
+7. Mỗi request được xác thực, scope vào active organization, kiểm tra permission matrix và ghi audit evidence khi thay đổi controlled state.
 
 Authentication không cấp quyền cross-tenant. Owner/Admin vẫn bị giới hạn theo permission: audit evidence được xem khi phù hợp, nhưng agent payload, document, cost, lot và formula composition riêng tư vẫn có capability gate độc lập.
 

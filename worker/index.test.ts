@@ -20,6 +20,7 @@ import {
   normalizeMaterialPersistenceRecord,
   operationRequestHash,
   requiresIdempotency,
+  resolveSeededAdminCredentialState,
   resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
 } from './index'
@@ -184,6 +185,29 @@ describe('Worker session credentials', () => {
       resolveActiveSessionCredential(legacyDb, { sessionSecret: 'SES-0007', source: 'bearer' }),
     ).rejects.toMatchObject({ statusCode: 401 })
     expect(legacyPrepare).not.toHaveBeenCalled()
+  })
+})
+
+describe('Seeded administrator credential migration', () => {
+  const passwordHash = `pbkdf2:v1:sha256:100000:${'a'.repeat(22)}:${'b'.repeat(43)}`
+
+  it('cleans a legacy credential without repeatedly rotating the canonical account', () => {
+    const state = resolveSeededAdminCredentialState([
+      { email: 'm.thuanwork@gmail.com', passwordHash },
+      { email: 'admin@labofscents.org', passwordHash: 'legacy-verifier' },
+    ], passwordHash)
+
+    expect(state.needsCanonicalUpsert).toBe(false)
+    expect(state.legacyCredentialEmails).toEqual(['admin@labofscents.org'])
+  })
+
+  it('migrates a legacy-only credential to the canonical administrator email once', () => {
+    const state = resolveSeededAdminCredentialState([
+      { email: 'admin@labofscents.org', passwordHash: 'legacy-verifier' },
+    ], passwordHash)
+
+    expect(state.needsCanonicalUpsert).toBe(true)
+    expect(state.legacyCredentialEmails).toEqual(['admin@labofscents.org'])
   })
 })
 

@@ -4159,6 +4159,17 @@ async function persistAuthCredentialRecords(db: D1Database, credentials: Array<R
   )
 }
 
+async function deleteAuthCredentialRecords(db: D1Database, emails: string[]) {
+  const normalizedEmails = Array.from(new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean)))
+  if (normalizedEmails.length === 0) return
+  await runStatementBatches(
+    db,
+    normalizedEmails.map((email) =>
+      db.prepare('DELETE FROM auth_credentials WHERE lower(email) = ?1').bind(email),
+    ),
+  )
+}
+
 async function persistPasswordResetRecords(db: D1Database, resets: PasswordResetRecord[], updatedAt: string) {
   if (resets.length === 0) return
   await runStatementBatches(
@@ -4721,31 +4732,35 @@ async function ensureSeededAdminBootstrap(
     await persistRolePolicies(db, bootstrapPolicies, updatedAt)
   }
 
-  const existingAdminCredential = serviceState.authCredentialRecords.find(
-    (credential) => configuredAdminEmails.has(String(credential.email ?? '').toLowerCase()),
-  )
-
   const seededAdminPasswordHash = readConfiguredSeededAdminPasswordHash(configuredAdminPasswordHash)
-
-  const credentialRequiresEmailMigration = existingAdminCredential
-    && String(existingAdminCredential.email ?? '').toLowerCase() !== SEEDED_ADMIN_EMAIL
-  if (seededAdminPasswordHash && (!existingAdminCredential || existingAdminCredential.passwordHash !== seededAdminPasswordHash || credentialRequiresEmailMigration)) {
-    const credentialWasRotated = Boolean(existingAdminCredential)
-    const seededAdminCredential = {
-      email: SEEDED_ADMIN_EMAIL,
-      passwordHash: seededAdminPasswordHash,
-      passwordSetAt: updatedAt,
-    }
+  const credentialState = resolveSeededAdminCredentialState(serviceState.authCredentialRecords, seededAdminPasswordHash)
+  if (seededAdminPasswordHash && (credentialState.needsCanonicalUpsert || credentialState.legacyCredentialEmails.length > 0)) {
+    const credentialWasRotated = credentialState.needsCanonicalUpsert && Boolean(
+      credentialState.canonicalCredential || credentialState.legacyCredentialEmails.length > 0,
+    )
+    const seededAdminCredential = credentialState.needsCanonicalUpsert
+      ? {
+          email: SEEDED_ADMIN_EMAIL,
+          passwordHash: seededAdminPasswordHash,
+          passwordSetAt: updatedAt,
+        }
+      : credentialState.canonicalCredential!
     serviceState.authCredentialRecords = [
       seededAdminCredential,
       ...serviceState.authCredentialRecords.filter(
         (credential) => !configuredAdminEmails.has(String(credential.email ?? '').toLowerCase()),
       ),
     ]
-    await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
+    if (credentialState.needsCanonicalUpsert) {
+      await persistAuthCredentialRecords(db, [seededAdminCredential], updatedAt)
+    }
+    await deleteAuthCredentialRecords(db, credentialState.legacyCredentialEmails)
 
+    const sessionEmailsToRevoke = credentialState.needsCanonicalUpsert
+      ? configuredAdminEmails
+      : new Set(credentialState.legacyCredentialEmails)
     const revokedAdminSessions = serviceState.sessions
-      .filter((session) => configuredAdminEmails.has(session.email.toLowerCase()) && session.status === 'ACTIVE')
+      .filter((session) => sessionEmailsToRevoke.has(session.email.toLowerCase()) && session.status === 'ACTIVE')
       .map((session) => ({
         ...session,
         status: 'REVOKED' as const,
@@ -4763,7 +4778,9 @@ async function ensureSeededAdminBootstrap(
       id: `AUD-TEN-${nextAuditCounter}`,
       at: updatedAt,
       actor: 'system:worker',
-      action: credentialWasRotated ? 'security.adminCredential.rotate' : 'security.adminCredential.bootstrap',
+      action: credentialState.needsCanonicalUpsert
+        ? credentialWasRotated ? 'security.adminCredential.rotate' : 'security.adminCredential.bootstrap'
+        : 'security.adminCredential.legacyCleanup',
       entity: 'seeded-admin-credential',
       requestId: `req_admin_credential_${nextAuditCounter}`,
       outcome: 'allowed',
@@ -4854,6 +4871,32 @@ async function hydrateTenantCoreState(db: D1Database, serviceState: ServiceState
   serviceState.rolePolicyRecords = [...rolePolicies, ...missingPlatformDefaults]
   if (missingPlatformDefaults.length > 0) {
     await persistRolePolicies(db, missingPlatformDefaults, new Date().toISOString())
+  }
+}
+
+export function resolveSeededAdminCredentialState(
+  credentials: Array<Record<string, unknown>>,
+  seededAdminPasswordHash: string | undefined,
+) {
+  const canonicalEmail = SEEDED_ADMIN_EMAIL.toLowerCase()
+  const legacyEmails = new Set(LEGACY_SEEDED_ADMIN_EMAILS.map((email) => email.toLowerCase()))
+  const canonicalCredential = credentials.find(
+    (credential) => String(credential.email ?? '').trim().toLowerCase() === canonicalEmail,
+  )
+  const legacyCredentialEmails = Array.from(new Set(
+    credentials
+      .map((credential) => String(credential.email ?? '').trim().toLowerCase())
+      .filter((email) => legacyEmails.has(email)),
+  ))
+  return {
+    canonicalCredential,
+    legacyCredentialEmails,
+    needsCanonicalUpsert: Boolean(
+      seededAdminPasswordHash && (
+        !canonicalCredential ||
+        String(canonicalCredential.passwordHash ?? '') !== seededAdminPasswordHash
+      ),
+    ),
   }
 }
 
