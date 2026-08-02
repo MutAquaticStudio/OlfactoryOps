@@ -346,6 +346,13 @@ function workspaceBrandingFallback(organizationId?: string): BrandingConfig {
   }
 }
 
+function formatCatalogueEvidenceRange(range?: { value?: string; min?: string; max?: string }) {
+  if (!range) return 'Not documented'
+  if (range.value) return range.value
+  if (range.min && range.max) return `${range.min} to ${range.max}`
+  return range.min ?? range.max ?? 'Not documented'
+}
+
 const clientFallbackCosting: CostingOverview = {
   valuation: {
     asOf: 'client-fallback',
@@ -5807,11 +5814,36 @@ function MaterialWorkspace({
         {selectedIsSourceOnly ? (
           <section className="material-source-notice" aria-label="Supplier source status">
             <strong>Supplier source material</strong>
-            <p>Identity data came from the Lluch catalogue. Add approved technical, cost, IFRA, and compliance evidence before using it in an approved formula, procurement, or inventory workflow.</p>
+            <p>Identity and supplier-declared profile data came from the Lluch catalogue. Technical, cost, IFRA, allergen, and compliance evidence still need their own controlled review before this material can be used in an approved formula, procurement, or inventory workflow.</p>
             <div className="tag-row">
               <DataTag label="Category" value={selected.catalogueSource?.category ?? selected.family} tone="blue" />
               <DataTag label="Catalogue page" value={`p. ${selected.catalogueSource?.page ?? 'n/a'}`} />
             </div>
+            {selected.catalogueEvidence ? (
+              <section className="olfactive-profile" aria-label="Supplier-declared material profile">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <span className="eyebrow">Supplier-declared profile</span>
+                    <strong>{selected.catalogueEvidence.appearance ?? 'Catalogue evidence'}</strong>
+                  </div>
+                  <StatusBadge status="review" label="Evidence only" />
+                </div>
+                {selected.catalogueEvidence.chemicalIdentification ? <p>{selected.catalogueEvidence.chemicalIdentification}</p> : null}
+                <dl className="olfactive-profile-signals" aria-label="Supplier-declared physical profile">
+                  <div><dt>Density</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.density)}</dd></div>
+                  <div><dt>Vapor pressure</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.vaporPressure)}</dd></div>
+                  <div><dt>Molecular weight</dt><dd>Not documented</dd></div>
+                  <div><dt>LogP</dt><dd>Not documented</dd></div>
+                  <div className="olfactive-profile-role"><dt>Declared use</dt><dd>{selected.catalogueEvidence.declaredUse ?? 'Not documented'}</dd></div>
+                </dl>
+                {selected.catalogueEvidence.declaredOdour.length ? (
+                  <div className="odor-row" aria-label="Supplier-declared odour">
+                    {selected.catalogueEvidence.declaredOdour.map((descriptor) => <span key={descriptor}>{descriptor}</span>)}
+                  </div>
+                ) : null}
+                <small>{selected.catalogueEvidence.source} / {selected.catalogueEvidence.version}</small>
+              </section>
+            ) : null}
           </section>
         ) : (
           <>

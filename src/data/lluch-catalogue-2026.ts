@@ -1,4 +1,6 @@
-import type { Material, MaterialCatalogueSource, MaterialOlfactiveProfile, MaterialProvenance, MaterialSupplierCatalogueReference } from './northStar.js'
+import type { Material, MaterialCatalogueEvidence, MaterialCatalogueSource, MaterialOlfactiveProfile, MaterialProvenance, MaterialSupplierCatalogueReference } from './northStar.js'
+import { lluchCatalogue2026EvidenceById } from './lluch-catalogue-2026-evidence.js'
+import { noxLabEditorialMaterialProfileByCas } from './nox-lab-editorial-material-profiles.js'
 import {
   lluchCatalogue2026Products,
   lluchCatalogue2026SourceHash,
@@ -55,11 +57,26 @@ function supplierReferenceForProduct(product: LluchCatalogueProduct): MaterialSu
 
 /**
  * Produces a directory entry from the supplier's published product identity.
- * Missing technical, cost, and compliance values intentionally use guarded
- * placeholders and are marked SOURCE_ONLY rather than asserted as facts.
+ * Supplier-declared odour, appearance, density range, and technical identity
+ * are projected when available. Missing commercial and compliance values stay
+ * guarded placeholders and the row remains SOURCE_ONLY.
  */
 export function lluchCatalogueMaterialForOrganization(product: LluchCatalogueProduct, _organizationId: string): Material {
   const reference = supplierReferenceForProduct(product)
+  const supplierEvidence = lluchCatalogue2026EvidenceById.get(product.id)
+  const olfactiveProfile = catalogueOlfactiveProfileForCas(product.cas)
+  const catalogueEvidence: MaterialCatalogueEvidence | undefined = supplierEvidence
+    ? {
+        source: 'Lluch Platform catalogue snapshot via NOX Lab',
+        version: lluchCatalogue2026Source.catalogueVersion,
+        declaredOdour: [...supplierEvidence.declaredOdour],
+        chemicalIdentification: supplierEvidence.chemicalIdentification,
+        declaredUse: supplierEvidence.declaredUse,
+        appearance: supplierEvidence.appearance,
+        density: supplierEvidence.density ? { ...supplierEvidence.density } : undefined,
+        vaporPressure: supplierEvidence.vaporPressure ? { ...supplierEvidence.vaporPressure } : undefined,
+      }
+    : undefined
   const catalogueSource: MaterialCatalogueSource = {
     sourceProductId: product.id,
     supplier: reference.supplier,
@@ -87,8 +104,10 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
     // IFRA-based approval calculation as though it had a documented limit.
     ifraLimit: 0,
     costPerGram: 0,
-    odor: [],
+    odor: unique([...(catalogueEvidence?.declaredOdour ?? []), ...(olfactiveProfile?.descriptors ?? [])]),
+    olfactiveProfile,
     supplierCatalogueReferences: [reference],
+    catalogueEvidence,
     catalogueSource,
     provenance: [
       {
@@ -97,6 +116,14 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
         version: lluchCatalogue2026Source.catalogueVersion,
         date: lluchCatalogue2026Source.catalogueVersion,
       },
+      ...(catalogueEvidence
+        ? [{
+            field: 'Supplier-declared odour and physical evidence',
+            source: catalogueEvidence.source,
+            version: catalogueEvidence.version,
+            date: lluchCatalogue2026Source.catalogueVersion,
+          }]
+        : []),
     ],
   }
 }
@@ -280,6 +307,38 @@ const olfactiveProfilesByCas: Record<string, Omit<MaterialOlfactiveProfile, 'sou
   },
 }
 
+function catalogueOlfactiveProfileForCas(cas: string | null | undefined): MaterialOlfactiveProfile | undefined {
+  if (!cas) return undefined
+  const curated = olfactiveProfilesByCas[cas]
+  if (curated) {
+    return {
+      ...curated,
+      descriptors: [...curated.descriptors],
+      facets: [...curated.facets],
+      source: 'OlfactoryOps olfactive taxonomy',
+      version: '2026-07.1',
+      reviewedAt: '2026-07-30',
+    }
+  }
+  const editorial = noxLabEditorialMaterialProfileByCas.get(cas)
+  if (!editorial) return undefined
+  return {
+    primaryFamily: editorial.primaryFamily,
+    descriptors: [...editorial.descriptors],
+    facets: [...editorial.facets],
+    description: editorial.description,
+    strength: editorial.strength,
+    diffusion: editorial.diffusion,
+    tenacity: editorial.tenacity,
+    volatility: editorial.volatility,
+    formulaRole: editorial.formulaRole,
+    status: editorial.status,
+    source: 'NOX Lab editorial material profiles',
+    version: '2026-07.18',
+    reviewedAt: editorial.reviewedAt,
+  }
+}
+
 function unique(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
@@ -321,15 +380,7 @@ export function enrichMaterialFromLluchCatalogue(material: Material): LluchCatal
     }
   }
 
-  const profileDefinition = olfactiveProfilesByCas[material.cas]
-  const catalogueOlfactiveProfile = profileDefinition
-    ? {
-        ...profileDefinition,
-        source: 'OlfactoryOps olfactive taxonomy',
-        version: '2026-07.1',
-        reviewedAt: '2026-07-30',
-      }
-    : undefined
+  const catalogueOlfactiveProfile = catalogueOlfactiveProfileForCas(material.cas)
   const olfactiveProfile = catalogueOlfactiveProfile
     ? mergeCatalogueOlfactiveProfile(material.olfactiveProfile, catalogueOlfactiveProfile)
     : material.olfactiveProfile

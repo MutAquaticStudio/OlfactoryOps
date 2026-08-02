@@ -7,6 +7,7 @@ import {
   lluchCatalogueMaterialDirectoryForOrganization,
   searchLluchCatalogue2026,
 } from './lluch-catalogue-2026'
+import { lluchCatalogue2026Evidence } from './lluch-catalogue-2026-evidence'
 
 describe('Lluch catalogue 2026 import source', () => {
   it('keeps the complete supplier product list searchable with source traceability', () => {
@@ -45,5 +46,33 @@ describe('Lluch catalogue 2026 import source', () => {
     expect(astrolide?.supplierCatalogueReferences?.[0]?.sourceProductId).toBe('lluch-2026-0104')
     expect(astrolide?.costPerGram).toBe(0)
     expect(isLluchCatalogueSourceMaterial(astrolide!)).toBe(true)
+  })
+
+  it('projects supplier-declared odour and physical ranges for every imported catalogue product without fabricating compliance data', () => {
+    const directory = lluchCatalogueMaterialDirectoryForOrganization('org-catalogue-evidence')
+    const evidenceBacked = directory.filter((material) => material.catalogueEvidence)
+    const densityBacked = evidenceBacked.filter((material) => material.catalogueEvidence?.density)
+
+    expect(lluchCatalogue2026Evidence).toHaveLength(1986)
+    expect(evidenceBacked).toHaveLength(1986)
+    expect(evidenceBacked.every((material) => material.catalogueEvidence!.declaredOdour.length > 0)).toBe(true)
+    expect(densityBacked).toHaveLength(1646)
+    expect(evidenceBacked.every((material) => material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
+    expect(evidenceBacked.every((material) => material.ifraLimit === 0 && material.costPerGram === 0)).toBe(true)
+  })
+
+  it('reuses NOX Lab editorial sensory profiles by exact CAS without treating them as compliance evidence', () => {
+    const cashmeran = lluchCatalogueMaterialDirectoryForOrganization('org-catalogue-editorial')
+      .find((material) => material.name === 'CASHMERAN')
+
+    expect(cashmeran?.olfactiveProfile).toMatchObject({
+      source: 'NOX Lab editorial material profiles',
+      strength: 'Strong',
+      diffusion: 'High',
+      tenacity: 'Very long',
+      volatility: 'Low',
+    })
+    expect(cashmeran?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(cashmeran?.ifraLimit).toBe(0)
   })
 })

@@ -81,6 +81,12 @@ export interface Material {
   /** Supplier catalogue references are traceable sourcing metadata, not an approved supplier designation. */
   supplierCatalogueReferences?: MaterialSupplierCatalogueReference[]
   /**
+   * Supplier-declared sensory and physical catalogue evidence. This is useful
+   * for research and material discovery, but never substitutes for a reviewed
+   * specification, IFRA certificate, allergen declaration, or compliance file.
+   */
+  catalogueEvidence?: MaterialCatalogueEvidence
+  /**
    * A source-only material is discoverable in the material directory, but its
    * technical and commercial fields still require a controlled review.
    */
@@ -127,6 +133,24 @@ export interface MaterialCatalogueSource {
   category: MaterialSupplierCatalogueReference['category']
   page: number
   status: 'SOURCE_ONLY' | 'REVIEW_REQUIRED'
+}
+
+export interface MaterialCatalogueEvidenceRange {
+  label: string
+  value?: string
+  min?: string
+  max?: string
+}
+
+export interface MaterialCatalogueEvidence {
+  source: string
+  version: string
+  declaredOdour: string[]
+  chemicalIdentification?: string
+  declaredUse?: string
+  appearance?: string
+  density?: MaterialCatalogueEvidenceRange
+  vaporPressure?: MaterialCatalogueEvidenceRange
 }
 
 export interface MaterialProvenance {
