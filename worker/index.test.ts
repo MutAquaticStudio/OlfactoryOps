@@ -10,6 +10,7 @@ import {
 import {
   auditChainHash,
   canonicalAuditChainPayload,
+  canonicalOperationPayload,
   buildCorsHeaders,
   createSessionCredential,
   hashSessionCredential,
@@ -17,9 +18,33 @@ import {
   normalizeFormulaPersistenceRecord,
   normalizeFormulaVersionPersistenceRecord,
   normalizeMaterialPersistenceRecord,
+  operationRequestHash,
+  requiresIdempotency,
   resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
 } from './index'
+
+describe('Worker mutation protocol', () => {
+  it('requires idempotency for protected mutations and excludes public callbacks', () => {
+    expect(requiresIdempotency({ mutates: true })).toBe(true)
+    expect(requiresIdempotency({ mutates: true, public: true })).toBe(false)
+    expect(requiresIdempotency({ mutates: true, idempotent: false })).toBe(false)
+    expect(requiresIdempotency({ mutates: false, idempotent: true })).toBe(true)
+  })
+
+  it('canonicalizes JSON payloads before hashing an operation', async () => {
+    const first = { filter: { status: 'DRAFT', tags: ['citrus', 'marine'] }, name: 'Citrus Lift' }
+    const reordered = { name: 'Citrus Lift', filter: { tags: ['citrus', 'marine'], status: 'DRAFT' } }
+
+    expect(canonicalOperationPayload(first)).toEqual(canonicalOperationPayload(reordered))
+    await expect(operationRequestHash('PATCH', '/formulas/F-001', first)).resolves.toBe(
+      await operationRequestHash('PATCH', '/formulas/F-001', reordered),
+    )
+    await expect(operationRequestHash('PATCH', '/formulas/F-001', first)).resolves.not.toBe(
+      await operationRequestHash('PATCH', '/formulas/F-001', { ...first, name: 'Different formula' }),
+    )
+  })
+})
 
 describe('Material D1 scope normalization', () => {
   it('keeps curated records global and strips legacy tenant metadata', () => {

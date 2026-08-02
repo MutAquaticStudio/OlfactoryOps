@@ -176,6 +176,17 @@ type Route = {
   handler: (context: RouteContext) => unknown
 }
 
+/**
+ * Authenticated mutations are replay-safe by default. Public callbacks and
+ * session issuance use their own bounded flows and opt out explicitly.
+ */
+export function requiresIdempotency(route: Pick<Route, 'mutates' | 'public' | 'idempotent'>) {
+  if (route.idempotent !== undefined) {
+    return route.idempotent
+  }
+  return Boolean(route.mutates && !route.public)
+}
+
 export type AuthCredential = {
   sessionId?: string
   sessionSecret?: string
@@ -349,6 +360,8 @@ type ServiceState = Record<SnapshotKey, unknown> & {
 const API_PREFIX = '/api/v1'
 const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
 const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024
+const MAX_MULTIPART_FIELDS = 24
+const MAX_MULTIPART_FIELD_BYTES = 16 * 1024
 const authenticatedMutationRateLimit: RateLimitPolicy = {
   key: 'authenticated-mutation',
   scope: 'session',
@@ -1410,9 +1423,24 @@ export default {
       routeLabel = `${request.method} ${match.route.pattern}`
       mfaVerificationRequest = match.route.persistScope === 'mfaVerification'
 
-      const rawBody = match.route.rawBody ? await readRawBody(request) : undefined
-      const formData = match.route.formData ? await readDocumentFormData(request) : undefined
-      const body = rawBody === undefined && formData === undefined ? await readJsonBody(request) : {}
+      let rawBody: string | undefined
+      let formData: FormData | undefined
+      let body: Record<string, unknown> = {}
+      let requestBodyLoaded = false
+      const loadRequestBody = async () => {
+        if (requestBodyLoaded) return
+        requestBodyLoaded = true
+        rawBody = match.route.rawBody ? await readRawBody(request) : undefined
+        formData = match.route.formData ? await readDocumentFormData(request) : undefined
+        body = rawBody === undefined && formData === undefined ? await readJsonBody(request) : {}
+      }
+
+      // Public routes need their payload to derive client/email rate-limit keys.
+      // Private payloads, particularly document uploads, are not parsed until
+      // the opaque session and CSRF proof have been accepted.
+      if (match.route.public) {
+        await loadRequestBody()
+      }
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -1450,7 +1478,7 @@ export default {
       }
       const rateLimit = resolveRateLimitPolicy(match.route)
       if (!match.route.public && rateLimit) {
-        await assertRateLimit(env.DB, rateLimit, request, body, credential)
+        await assertRateLimit(env.DB, rateLimit, request, {}, credential)
       }
       if (match.route.mutates && match.route.writeGate !== false) {
         service.assertCommercialWriteAllowed(`${request.method} ${match.route.pattern}`)
@@ -1458,7 +1486,8 @@ export default {
       if (match.route.limitKey) {
         service.assertPlanCapacity(match.route.limitKey)
       }
-      if (match.route.idempotent) {
+      await loadRequestBody()
+      if (requiresIdempotency(match.route)) {
         const key = request.headers.get('Idempotency-Key')?.trim()
         if (!key || key.length < 8 || key.length > 160) {
           throw new UnprocessableEntityException('Idempotency-Key header must be between 8 and 160 characters')
@@ -1468,7 +1497,7 @@ export default {
           throw new UnauthorizedException('Authentication required')
         }
         const operation = `${request.method} ${match.route.pattern} actor:${session.userId}`
-        const requestHash = await operationRequestHash(request.method, path, body)
+        const requestHash = await operationRequestHash(request.method, path, body, formData)
         const claim = await claimOperationIdempotency(env.DB, {
           organizationId: session.organizationId,
           operation,
@@ -1578,6 +1607,7 @@ export default {
       runScheduledAgentRecovery(env),
       runScheduledMaterialEvidence(env),
       pruneFormulaIntelligenceRetention(env.DB),
+      pruneCompletedOperationIdempotency(env.DB),
     ]))
   },
 }
@@ -1586,6 +1616,16 @@ async function pruneFormulaIntelligenceRetention(db: D1Database) {
   // Artifacts are intentionally short-lived. Audit-chain rows are preserved for
   // at least one year and therefore are never pruned on this scheduled path.
   await db.prepare(`DELETE FROM agent_artifacts WHERE created_at < ?`).bind(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()).run()
+}
+
+async function pruneCompletedOperationIdempotency(db: D1Database) {
+  // Keep ordinary retry responses for a week. Pending records are intentionally
+  // retained so a partially completed mutation can never be replayed blindly.
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  await db
+    .prepare(`DELETE FROM operation_idempotency_records WHERE status = 'COMPLETED' AND completed_at < ?`)
+    .bind(cutoff)
+    .run()
 }
 
 async function runScheduledAgentRecovery(env: Env) {
@@ -1807,7 +1847,7 @@ async function publicStatus(env: Env) {
         status: 'degraded',
         checkedAt,
         components: [
-          { name: 'API', status: 'operational' },
+          { name: 'API', status: 'degraded' },
           { name: 'D1 persistence', status: 'degraded' },
         ],
       },
@@ -2277,6 +2317,21 @@ async function readDocumentFormData(request: Request) {
     })
   }
   const formData = await request.formData()
+  const entries = [...formData.entries()]
+  if (entries.length > MAX_MULTIPART_FIELDS) {
+    throw new PayloadTooLargeException({
+      message: 'Document upload contains too many fields',
+      maxFields: MAX_MULTIPART_FIELDS,
+    })
+  }
+  for (const [, value] of entries) {
+    if (typeof value === 'string' && new TextEncoder().encode(value).byteLength > MAX_MULTIPART_FIELD_BYTES) {
+      throw new PayloadTooLargeException({
+        message: 'Document upload metadata field is too large',
+        maxBytes: MAX_MULTIPART_FIELD_BYTES,
+      })
+    }
+  }
   const candidate = formData.get('file')
   if (!(candidate instanceof File)) {
     throw new UnprocessableEntityException('Document upload must include a file field')
@@ -2389,8 +2444,57 @@ async function sha256ForArrayBuffer(value: ArrayBuffer) {
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
-async function operationRequestHash(method: string, path: string, body: Record<string, unknown>) {
-  const payload = new TextEncoder().encode(JSON.stringify(['olfactoryops.operation-idempotency.v1', method, path, body]))
+export function canonicalOperationPayload(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalOperationPayload(item))
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort((left, right) => left.localeCompare(right))
+        .map((key) => [key, canonicalOperationPayload(value[key])]),
+    )
+  }
+  return String(value)
+}
+
+async function multipartIdempotencyPayload(formData: FormData) {
+  const entries = await Promise.all(
+    [...formData.entries()].map(async ([field, value]) => {
+      if (value instanceof File) {
+        return {
+          field,
+          kind: 'file' as const,
+          name: value.name,
+          type: value.type,
+          size: value.size,
+          checksum: await sha256ForArrayBuffer(await value.arrayBuffer()),
+        }
+      }
+      return { field, kind: 'value' as const, value }
+    }),
+  )
+  return entries.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+}
+
+export async function operationRequestHash(
+  method: string,
+  path: string,
+  body: Record<string, unknown>,
+  formData?: FormData,
+) {
+  const requestPayload = formData
+    ? { formData: await multipartIdempotencyPayload(formData) }
+    : body
+  const payload = new TextEncoder().encode(JSON.stringify([
+    'olfactoryops.operation-idempotency.v2',
+    method,
+    path,
+    canonicalOperationPayload(requestPayload),
+  ]))
   const digest = await crypto.subtle.digest('SHA-256', payload)
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }

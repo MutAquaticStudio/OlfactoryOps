@@ -1,5 +1,26 @@
 # OlfactoryOps
 
+## Hoàn thiện Worker API
+
+Cloudflare Worker tại `worker/index.ts` là API production duy nhất dưới
+`/api/v1`. Mọi mutation đã xác thực (POST, PATCH, PUT, DELETE) mặc định yêu
+cầu `Idempotency-Key` dài 8-160 ký tự. Cùng key và cùng payload sẽ trả lại kết
+quả đã persist; dùng lại key với payload khác trả `409`. Frontend tự tạo header
+này trong `requestApi`, còn API client bên ngoài phải gửi key khi retry.
+
+Worker xác thực opaque session và CSRF trước khi parse JSON hoặc multipart của
+route private. Upload SDS/CoA bị giới hạn 25 MB, tối đa 24 field multipart và
+16 KB metadata mỗi field. Response API luôn `no-store`; CORS credential chỉ
+cho phép exact origin trong `CORS_ORIGINS`. Cron dọn response idempotency đã
+hoàn tất sau 7 ngày nhưng giữ record `PENDING` để không replay mù một mutation
+đang cần điều tra.
+
+Để phát hành Worker, áp toàn bộ migration `0001` đến `0039` trên đúng D1 rồi
+chạy `npm.cmd run deploy:check`. Worker production chỉ deploy bằng
+`npm.cmd run deploy:worker`; sau deploy kiểm tra `GET /api/v1/status` và
+`GET /api/v1/health`. Nếu D1 không truy cập được, `/status` báo cả API và D1
+`degraded`, không hiển thị trạng thái operational giả.
+
 ## Kiến trúc UX/UI Quiet Lab
 
 Giao diện OlfactoryOps dùng một hệ thống Quiet Lab thống nhất: nền đen matte, chữ ivory, accent verdigris có kiểm soát và bố cục ưu tiên công việc vận hành. React Bits chỉ được dùng như lớp motion cục bộ trong `src/ui/motion/`; nó không thay thế design system và không mang thông tin bắt buộc.

@@ -1409,6 +1409,9 @@ function idempotencyHeaders(headers?: HeadersInit) {
 
 async function requestApi<T>(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
+  if (isMutatingRequest(init) && !headers.has('Idempotency-Key')) {
+    headers.set('Idempotency-Key', crypto.randomUUID())
+  }
   if (csrfToken && isMutatingRequest(init)) {
     headers.set('X-CSRF-Token', csrfToken)
   }
@@ -1473,6 +1476,7 @@ async function tryRequestOperationApproval(path: string, init: RequestInit | und
       return null
     }
     const headers = new Headers({ 'Content-Type': 'application/json' })
+    headers.set('Idempotency-Key', crypto.randomUUID())
     if (csrfToken) {
       headers.set('X-CSRF-Token', csrfToken)
     }
