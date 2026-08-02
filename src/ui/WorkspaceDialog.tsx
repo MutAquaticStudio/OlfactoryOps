@@ -22,6 +22,7 @@ type WorkspaceDialogProps = {
   showGrip?: boolean
   confirmDiscard?: boolean
   discardConfirmationMessage?: string
+  placement?: 'center' | 'drawer'
 }
 
 /**
@@ -40,6 +41,7 @@ export function WorkspaceDialog({
   showGrip = true,
   confirmDiscard = false,
   discardConfirmationMessage = 'Discard your unsaved changes?',
+  placement = 'center',
 }: WorkspaceDialogProps) {
   const dialogRef = useRef<HTMLElement | null>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
@@ -121,7 +123,7 @@ export function WorkspaceDialog({
 
   return (
     <div
-      className="workspace-dialog-backdrop"
+      className={`workspace-dialog-backdrop is-${placement}`}
       role="presentation"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target) requestClose()
@@ -129,7 +131,7 @@ export function WorkspaceDialog({
     >
       <section
         ref={dialogRef}
-        className={`workspace-dialog ${className}`.trim()}
+        className={`workspace-dialog is-${placement} ${className}`.trim()}
         data-testid="workspace-dialog"
         role="dialog"
         aria-modal="true"

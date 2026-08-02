@@ -445,6 +445,29 @@ small,
   animation: workspace-dialog-in 180ms ease-out both;
 }
 
+.workspace-dialog-backdrop.is-drawer {
+  place-items: stretch end;
+  padding: 12px;
+}
+
+.workspace-dialog.is-drawer {
+  width: min(100%, 760px);
+  height: calc(100dvh - 24px);
+  max-height: none;
+  animation-name: workspace-drawer-in;
+}
+
+.primary-button.danger {
+  border-color: #9f4646;
+  background: #873638;
+  color: #fff8f5;
+}
+
+.primary-button.danger:hover:not(:disabled) {
+  border-color: #b95a58;
+  background: #9a4142;
+}
+
 .workspace-dialog-grip {
   display: none;
 }
@@ -547,6 +570,11 @@ small,
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes workspace-drawer-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @media (max-width: 640px) {
   .task-shortcut {
     min-height: 62px;
@@ -556,6 +584,17 @@ small,
   .workspace-dialog-backdrop {
     align-items: end;
     padding: 0;
+  }
+
+  .workspace-dialog-backdrop.is-drawer {
+    align-items: end;
+    padding: 0;
+  }
+
+  .workspace-dialog.is-drawer {
+    height: auto;
+    max-height: calc(100dvh - 12px);
+    animation-name: workspace-dialog-in;
   }
 
   .workspace-dialog {

@@ -138,6 +138,15 @@ type SalesOrderBody = {
   taxPercent?: number
   shippingCost?: number
   currency?: string
+  contactEmail?: string
+  shippingAddress?: {
+    label?: string
+    line1?: string
+    city?: string
+    country?: string
+  }
+  customerReference?: string
+  deliveryInstructions?: string
 }
 
 type PackOrderBody = {
@@ -145,7 +154,7 @@ type PackOrderBody = {
 }
 
 type ShipOrderBody = {
-  carrier?: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
+  carrier?: 'DHL' | 'FedEx' | 'UPS' | 'GHN' | 'GHTK' | 'VIETTEL_POST' | 'VNPOST' | 'JNT' | 'AHAMOVE' | 'LOCAL_COURIER' | 'Pickup'
   trackingNumber?: string
 }
 
@@ -1489,14 +1498,19 @@ export class NorthStarController {
     return this.northStar.createOrder(body)
   }
 
+  @Patch('orders/:id')
+  updateOrder(@Param('id') id: string, @Body() body: SalesOrderBody) {
+    return this.northStar.updateOrder(id, body)
+  }
+
   @Post('orders/:id/reserve')
   reserveOrder(@Param('id') id: string, @Body() body: { allowPartial?: boolean }) {
     return this.northStar.reserveOrder(id, body)
   }
 
   @Post('orders/:id/cancel')
-  cancelOrder(@Param('id') id: string) {
-    return this.northStar.cancelOrder(id)
+  cancelOrder(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.northStar.cancelOrder(id, body)
   }
 
   @Post('orders/:id/pack')

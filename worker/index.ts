@@ -96,6 +96,7 @@ import {
   type SensoryMemoryRecord,
   type WorkspacePreferenceProfile,
   type ApprovedMaterialSubstitutionRecord,
+  isShipmentCarrier,
   type ShipmentRecord,
   type SsoConfigRecord,
   type StockTakeRecord,
@@ -842,8 +843,9 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/customers', mutates: true, handler: ({ service, body }) => service.createCustomer(body) },
   { method: 'GET', pattern: '/orders', handler: ({ service }) => service.orders() },
   { method: 'POST', pattern: '/orders', mutates: true, handler: ({ service, body }) => service.createOrder(body) },
+  { method: 'PATCH', pattern: '/orders/:id', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.updateOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/reserve', mutates: true, handler: ({ service, params, body }) => service.reserveOrder(params.id, body) },
-  { method: 'POST', pattern: '/orders/:id/cancel', mutates: true, handler: ({ service, params }) => service.cancelOrder(params.id) },
+  { method: 'POST', pattern: '/orders/:id/cancel', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.cancelOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/pack', mutates: true, handler: ({ service, params, body }) => service.packOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/ship', mutates: true, handler: ({ service, params, body }) => service.shipOrder(params.id, body) },
   { method: 'POST', pattern: '/orders/:id/fulfill', mutates: true, handler: ({ service, params }) => service.fulfillOrder(params.id) },
@@ -3546,6 +3548,13 @@ type SalesOrderRow = {
   document_ids_json: string | null
   lines_json: string | null
   created_at: string
+  updated_at: string
+  contact_email: string | null
+  shipping_address_json: string | null
+  customer_reference: string | null
+  delivery_instructions: string | null
+  cancellation_reason: string | null
+  cancelled_at: string | null
 }
 
 type ScheduledReportRow = {
@@ -6139,7 +6148,9 @@ async function hydrateOrderState(db: D1Database, serviceState: ServiceState) {
     .prepare(
       `SELECT id, organization_id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
         tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
-        carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, lines_json, created_at
+        carrier, tracking_number, reservation_allocations_json, shipment_id, document_ids_json, lines_json,
+        contact_email, shipping_address_json, customer_reference, delivery_instructions,
+        cancellation_reason, cancelled_at, created_at, updated_at
        FROM sales_orders
        ORDER BY created_at DESC, id DESC`,
     )
@@ -6200,9 +6211,10 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
             id, organization_id, sku_id, customer_id, customer, quantity, unit_price, discount_percent,
             tax_percent, shipping_cost, total, currency, reserved_grams, fulfilled_grams, status,
             carrier, tracking_number, reservation_allocations_json, shipment_id,
-            document_ids_json, lines_json, created_at, updated_at
+            document_ids_json, lines_json, contact_email, shipping_address_json, customer_reference,
+            delivery_instructions, cancellation_reason, cancelled_at, created_at, updated_at
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
           ON CONFLICT(id) DO UPDATE SET
             organization_id = excluded.organization_id,
             sku_id = excluded.sku_id,
@@ -6224,6 +6236,12 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
             shipment_id = excluded.shipment_id,
             document_ids_json = excluded.document_ids_json,
             lines_json = excluded.lines_json,
+            contact_email = excluded.contact_email,
+            shipping_address_json = excluded.shipping_address_json,
+            customer_reference = excluded.customer_reference,
+            delivery_instructions = excluded.delivery_instructions,
+            cancellation_reason = excluded.cancellation_reason,
+            cancelled_at = excluded.cancelled_at,
             created_at = excluded.created_at,
             updated_at = excluded.updated_at`,
         )
@@ -6249,8 +6267,14 @@ async function persistSalesOrders(db: D1Database, orders: SalesOrderRecord[], up
           order.shipmentId ?? null,
           order.documentIds ? JSON.stringify(order.documentIds) : null,
           order.lines ? JSON.stringify(order.lines) : null,
+          order.contactEmail ?? null,
+          order.shippingAddress ? JSON.stringify(order.shippingAddress) : null,
+          order.customerReference ?? null,
+          order.deliveryInstructions ?? null,
+          order.cancellationReason ?? null,
+          order.cancelledAt ?? null,
           order.createdAt,
-          updatedAt,
+          order.updatedAt ?? updatedAt,
         ),
     ),
   )
@@ -7859,6 +7883,15 @@ function salesOrderFromRow(row: SalesOrderRow): SalesOrderRecord {
     documentIds: row.document_ids_json ? parseJson<string[]>(row.document_ids_json, []) : undefined,
     lines: row.lines_json ? parseJson<NonNullable<SalesOrderRecord['lines']>>(row.lines_json, []) : undefined,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    contactEmail: row.contact_email ?? undefined,
+    shippingAddress: row.shipping_address_json
+      ? parseJson<SalesOrderRecord['shippingAddress']>(row.shipping_address_json, undefined)
+      : undefined,
+    customerReference: row.customer_reference ?? undefined,
+    deliveryInstructions: row.delivery_instructions ?? undefined,
+    cancellationReason: row.cancellation_reason ?? undefined,
+    cancelledAt: row.cancelled_at ?? undefined,
   }
 }
 
@@ -8409,7 +8442,7 @@ function readSalesOrderStatus(value: string): SalesOrderRecord['status'] {
 }
 
 function readShipmentCarrier(value: string): ShipmentRecord['carrier'] {
-  if (value === 'DHL' || value === 'FedEx' || value === 'UPS' || value === 'Pickup') {
+  if (isShipmentCarrier(value)) {
     return value
   }
   return 'DHL'

@@ -111,6 +111,8 @@ import {
   resolveFormulaWithCatalog,
   rolePolicies,
   sampleRequests,
+  shipmentCarrierLabel,
+  shipmentCarrierOptions,
   statusMeta,
   storageLocations,
   stockSummary,
@@ -678,6 +680,8 @@ type SalesOrderCreateResponse = {
   invariant: string
 }
 
+type SalesOrderUpdateResponse = SalesOrderCreateResponse
+
 type OrderReservationResponse = {
   orderId: string
   allocations: Allocation[]
@@ -687,6 +691,7 @@ type OrderReservationResponse = {
 
 type OrderCancellationResponse = {
   orderId: string
+  order?: SalesOrderRecord
   releasedAllocations: Allocation[]
   audit: AuditEvent
   invariant: string
@@ -12736,6 +12741,38 @@ const shipmentStatusTone: Record<ShipmentRecord['status'], DomainStatus> = {
   DELIVERED: 'stable',
 }
 
+type OrderEditDraft = {
+  customerReference: string
+  contactEmail: string
+  shippingLine1: string
+  shippingCity: string
+  shippingCountry: string
+  deliveryInstructions: string
+  discountPercent: number
+  taxPercent: number
+  shippingCost: number
+  lines: Array<{ id: string; skuId: string; quantity: number }>
+}
+
+function orderEditDraftFrom(order: SalesOrderRecord, customer?: CustomerRecord): OrderEditDraft {
+  const address = order.shippingAddress ?? customer?.shippingAddress
+  const lines = order.lines?.length
+    ? order.lines
+    : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+  return {
+    customerReference: order.customerReference ?? '',
+    contactEmail: order.contactEmail ?? customer?.contactEmail ?? '',
+    shippingLine1: address?.line1 ?? '',
+    shippingCity: address?.city ?? '',
+    shippingCountry: address?.country ?? '',
+    deliveryInstructions: order.deliveryInstructions ?? '',
+    discountPercent: order.discountPercent,
+    taxPercent: order.taxPercent,
+    shippingCost: order.shippingCost,
+    lines: lines.map((line, index) => ({ id: `${order.id}-line-${index + 1}`, skuId: line.skuId, quantity: line.quantity })),
+  }
+}
+
 function CommerceWorkspace({
   stock,
   materialRecords,
@@ -13446,6 +13483,10 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>([])
   const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(() => seedSkuAvailability)
   const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null)
+  const [detailMode, setDetailMode] = useState<'view' | 'edit' | 'cancel'>('view')
+  const [orderEditDraft, setOrderEditDraft] = useState<OrderEditDraft | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
   const [customerDraft, setCustomerDraft] = useState({
@@ -13475,6 +13516,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
   const orderById = useMemo(() => new Map(orderRows.map((order) => [order.id, order])), [orderRows])
   const selectedOrder = useMemo(() => orderById.get(selectedOrderId) ?? orderRows[0], [orderById, orderRows, selectedOrderId])
+  const detailOrder = detailOrderId ? orderById.get(detailOrderId) : undefined
   const selectedSku = selectedOrder ? skuById.get(selectedOrder.skuId) : undefined
   const selectedCustomer = selectedOrder ? customerById.get(selectedOrder.customerId) : undefined
   const selectedOrderKey = selectedOrder?.id ?? ''
@@ -13503,6 +13545,23 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const draftSubtotal = draftLineRows.reduce((sum, line) => sum + line.lineTotal, 0)
   const draftTotal = draftSubtotal * (1 - orderDraft.discountPercent / 100) * (1 + orderDraft.taxPercent / 100) + orderDraft.shippingCost
   const creditAvailable = draftCustomer ? draftCustomer.creditLimit - draftTotal : 0
+  const detailCustomer = detailOrder ? customerById.get(detailOrder.customerId) : undefined
+  const detailCanEdit = Boolean(
+    detailOrder && ['DRAFT', 'CONFIRMED', 'HOLD'].includes(detailOrder.status) && detailOrder.reservedGrams <= 0 && detailOrder.fulfilledGrams <= 0 && !detailOrder.shipmentId,
+  )
+  const detailCanCancel = Boolean(
+    detailOrder && detailOrder.fulfilledGrams <= 0 && !['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(detailOrder.status),
+  )
+  const pristineOrderEditDraft = detailOrder ? orderEditDraftFrom(detailOrder, detailCustomer) : null
+  const orderEditDirty = detailMode === 'edit' && orderEditDraft !== null && JSON.stringify(orderEditDraft) !== JSON.stringify(pristineOrderEditDraft)
+  const detailPriceList = priceLists.find((priceList) => priceList.customerGroup === detailCustomer?.group && priceList.status === 'ACTIVE')
+  const detailDraftSubtotal = orderEditDraft?.lines.reduce((sum, line) => {
+    const sku = skuById.get(line.skuId)
+    return sum + (sku?.price ?? 0) * (detailPriceList?.multiplier ?? 1) * Number(line.quantity || 0)
+  }, 0) ?? 0
+  const detailDraftTotal = orderEditDraft
+    ? detailDraftSubtotal * (1 - Number(orderEditDraft.discountPercent) / 100) * (1 + Number(orderEditDraft.taxPercent) / 100) + Number(orderEditDraft.shippingCost)
+    : 0
 
   const refreshOrders = useCallback(async () => {
     const [customerPayload, orderPayload, shipmentPayload, documentPayload, skuPayload] = await Promise.all([
@@ -13545,6 +13604,15 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   useEffect(() => {
     setSkuRows((current) => syncSkuAvailabilityRows(current, stock))
   }, [stock])
+
+  useEffect(() => {
+    if (!selectedOrder) return
+    const currentShipment = shipmentRows.find((shipment) => shipment.orderId === selectedOrder.id)
+    setShipDraft({
+      carrier: selectedOrder.carrier ?? currentShipment?.carrier ?? 'DHL',
+      trackingNumber: selectedOrder.trackingNumber ?? currentShipment?.trackingNumber ?? '',
+    })
+  }, [selectedOrder, shipmentRows])
 
   useEffect(() => {
     setOrderDraft((current) => ({
@@ -13635,9 +13703,107 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     setOrderLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
   }
 
+  function openOrderDetails(order: SalesOrderRecord) {
+    setSelectedOrderId(order.id)
+    setDetailOrderId(order.id)
+    setDetailMode('view')
+    setOrderEditDraft(orderEditDraftFrom(order, customerById.get(order.customerId)))
+    setCancelReason('')
+  }
+
+  function startOrderEdit() {
+    if (!detailOrder || !detailCanEdit) return
+    setOrderEditDraft(orderEditDraftFrom(detailOrder, detailCustomer))
+    setDetailMode('edit')
+  }
+
+  function updateDetailLine(id: string, patch: Partial<{ skuId: string; quantity: number }>) {
+    setOrderEditDraft((current) => current ? {
+      ...current,
+      lines: current.lines.map((line) => (line.id === id ? { ...line, ...patch } : line)),
+    } : current)
+  }
+
+  function addDetailLine() {
+    setOrderEditDraft((current) => {
+      if (!current) return current
+      const skuId = skuRows.find((sku) => !current.lines.some((line) => line.skuId === sku.id))?.id
+      if (!skuId) {
+        setStatusMessage('Every active SKU is already included in this order')
+        return current
+      }
+      return { ...current, lines: [...current.lines, { id: `detail-order-line-${Date.now()}`, skuId, quantity: 1 }] }
+    })
+  }
+
+  function removeDetailLine(id: string) {
+    setOrderEditDraft((current) => current && current.lines.length > 1
+      ? { ...current, lines: current.lines.filter((line) => line.id !== id) }
+      : current)
+  }
+
+  async function saveOrderDetails() {
+    if (!detailOrder || !orderEditDraft || !detailCanEdit) return
+    setBusyId(`update:${detailOrder.id}`)
+    setStatusMessage(`Updating ${detailOrder.id} without touching inventory`)
+    try {
+      const payload = await requestApi<SalesOrderUpdateResponse>(`/orders/${encodeURIComponent(detailOrder.id)}`, {
+        method: 'PATCH',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          lines: orderEditDraft.lines.map((line) => ({ skuId: line.skuId, quantity: Number(line.quantity) })),
+          discountPercent: Number(orderEditDraft.discountPercent),
+          taxPercent: Number(orderEditDraft.taxPercent),
+          shippingCost: Number(orderEditDraft.shippingCost),
+          customerReference: orderEditDraft.customerReference,
+          contactEmail: orderEditDraft.contactEmail,
+          shippingAddress: {
+            line1: orderEditDraft.shippingLine1,
+            city: orderEditDraft.shippingCity,
+            country: orderEditDraft.shippingCountry,
+          },
+          deliveryInstructions: orderEditDraft.deliveryInstructions,
+        }),
+      })
+      setOrderRows((current) => current.map((order) => (order.id === payload.order.id ? payload.order : order)))
+      setOrderEditDraft(orderEditDraftFrom(payload.order, detailCustomer))
+      setDetailMode('view')
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Order update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function cancelSelectedOrder() {
+    if (!detailOrder || !detailCanCancel || cancelReason.trim().length < 3) return
+    setBusyId(`cancel:${detailOrder.id}`)
+    setStatusMessage(`Cancelling ${detailOrder.id} and releasing eligible reservations`)
+    try {
+      const payload = await requestApi<OrderCancellationResponse>(`/orders/${encodeURIComponent(detailOrder.id)}/cancel`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ reason: cancelReason.trim() }),
+      })
+      const refreshedOrders = await refreshOrders()
+      const cancelledOrder = payload.order ?? refreshedOrders.find((order) => order.id === detailOrder.id)
+      if (cancelledOrder) setOrderEditDraft(orderEditDraftFrom(cancelledOrder, detailCustomer))
+      setDetailMode('view')
+      setCancelReason('')
+      setDetailOrderId(detailOrder.id)
+      setSelectedOrderId(detailOrder.id)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Order cancellation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   async function runOrderAction(
     orderId: string,
-    action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill',
+    action: 'reserve' | 'pack' | 'ship' | 'fulfill',
     options: { allowPartial?: boolean } = {},
   ) {
     setBusyId(`${action}:${orderId}`)
@@ -13665,9 +13831,6 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
           body: JSON.stringify({ allowPartial: options.allowPartial === true }),
         })
         invariant = payload.invariant
-      } else if (action === 'cancel') {
-        const payload = await requestApi<OrderCancellationResponse>(endpoint, { method: 'POST' })
-        invariant = payload.invariant
       } else {
         const payload = await requestApi<OrderFulfillmentResponse>(endpoint, { method: 'POST' })
         invariant = payload.invariant
@@ -13682,7 +13845,43 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     }
   }
 
+  const orderDetailFooter = detailOrder ? (
+    <div className="order-detail-footer">
+      {detailMode === 'view' ? (
+        <>
+          <div className="order-detail-footer-context"><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /><span>{formatCurrency(detailOrder.total)}</span></div>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={!detailCanEdit || busyId !== null} onClick={startOrderEdit}>Edit order</button>
+            <button className="ghost-button danger" type="button" disabled={!detailCanCancel || busyId !== null} onClick={() => setDetailMode('cancel')}>Cancel order</button>
+            <button className="primary-button" type="button" onClick={() => setDetailOrderId(null)}>Done</button>
+          </div>
+        </>
+      ) : detailMode === 'edit' ? (
+        <>
+          <span className="order-detail-footer-note">Saving recalculates the order but does not reserve or move stock.</span>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={busyId !== null} onClick={() => {
+              if (orderEditDirty && !window.confirm('Discard the changes made to this order?')) return
+              setOrderEditDraft(pristineOrderEditDraft)
+              setDetailMode('view')
+            }}>Discard</button>
+            <button className="primary-button" type="button" disabled={busyId !== null || !orderEditDraft || orderEditDraft.lines.length === 0 || orderEditDraft.lines.some((line) => line.quantity < 1)} onClick={() => void saveOrderDetails()}>Save changes</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="order-detail-footer-note">Cancellation is recorded in the order audit trail.</span>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={busyId !== null} onClick={() => setDetailMode('view')}>Back</button>
+            <button className="primary-button danger" type="button" disabled={busyId !== null || cancelReason.trim().length < 3} onClick={() => void cancelSelectedOrder()}>Confirm cancellation</button>
+          </div>
+        </>
+      )}
+    </div>
+  ) : undefined
+
   return (
+    <>
     <div className="workspace-grid orders-grid">
       <Panel title="Customer & Order Entry" icon={ShoppingCart} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
         <div className="order-entry-grid">
@@ -13815,13 +14014,6 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                 className={`document-row order-row ${selectedOrder?.id === order.id ? 'is-active' : ''}`}
                 key={order.id}
                 onClick={() => setSelectedOrderId(order.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    setSelectedOrderId(order.id)
-                  }
-                }}
-                role="button"
-                tabIndex={0}
               >
                 <div>
                   <strong>{order.id} / {order.customer}</strong>
@@ -13830,6 +14022,16 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                 </div>
                 <StatusBadge status={orderStatusTone[order.status]} label={order.status} />
                 <div className="document-actions">
+                  <button
+                    className="secondary-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      openOrderDetails(order)
+                    }}
+                  >
+                    View details
+                  </button>
                   <button
                     className="ghost-button small"
                     type="button"
@@ -13885,17 +14087,6 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                   >
                     Fulfill
                   </button>
-                  <button
-                    className="ghost-button small danger"
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void runOrderAction(order.id, 'cancel')
-                    }}
-                    disabled={busy || order.fulfilledGrams > 0 || ['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)}
-                  >
-                    Cancel
-                  </button>
                 </div>
               </div>
             )
@@ -13940,10 +14131,15 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               value={shipDraft.carrier}
               onChange={(event) => setShipDraft((current) => ({ ...current, carrier: event.target.value as ShipmentRecord['carrier'] }))}
             >
-              <option value="DHL">DHL</option>
-              <option value="FedEx">FedEx</option>
-              <option value="UPS">UPS</option>
-              <option value="Pickup">Pickup</option>
+              <optgroup label="Domestic Vietnam">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'VIETNAM').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
+              <optgroup label="International">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'INTERNATIONAL').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
+              <optgroup label="Pickup">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'PICKUP').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
             </select>
           </label>
           <label className="field-row">
@@ -13963,7 +14159,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               selectedShipments.map((shipment) => (
                 <div className="document-row shipment-row" key={shipment.id}>
                   <div>
-                    <strong>{shipment.id} / {shipment.carrier}</strong>
+                    <strong>{shipment.id} / {shipmentCarrierLabel(shipment.carrier)}</strong>
                     <span>{shipment.trackingNumber} / {formatGrams(shipment.weightGrams)}</span>
                   </div>
                   <StatusBadge status={shipmentStatusTone[shipment.status]} label={shipment.status} />
@@ -14003,6 +14199,108 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
       </Panel>
 
     </div>
+    {detailOrder ? (
+      <WorkspaceDialog
+        open
+        placement="drawer"
+        title={`${detailOrder.id} order details`}
+        description={`${detailOrder.customer} / created ${new Date(detailOrder.createdAt).toLocaleString()}`}
+        onClose={() => setDetailOrderId(null)}
+        footer={orderDetailFooter}
+        className="order-detail-dialog"
+        confirmDiscard={orderEditDirty}
+        discardConfirmationMessage="Discard the changes made to this order?"
+      >
+        {detailMode === 'view' ? (
+          <div className="order-detail-content" data-testid="order-detail-view">
+            <section className="order-detail-section order-detail-overview">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Order overview</span><h3>{detailOrder.customer}</h3></div><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /></div>
+              <div className="metric-grid compact-metrics">
+                <Metric label="Order total" value={formatCurrency(detailOrder.total)} />
+                <Metric label="SKU lines" value={String(detailOrder.lines?.length ?? 1)} />
+                <Metric label="Reserved" value={formatGrams(detailOrder.reservedGrams)} />
+                <Metric label="Fulfilled" value={formatGrams(detailOrder.fulfilledGrams)} />
+              </div>
+              {detailOrder.customerReference ? <div className="order-detail-reference"><span>Customer reference</span><strong>{detailOrder.customerReference}</strong></div> : null}
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Items</span><h3>Order lines</h3></div></div>
+              <div className="order-detail-lines">
+                {(detailOrder.lines?.length ? detailOrder.lines : [{ skuId: detailOrder.skuId, quantity: detailOrder.quantity, unitPrice: detailOrder.unitPrice, lineTotal: detailOrder.unitPrice * detailOrder.quantity }]).map((line) => (
+                  <div className="order-detail-line" key={line.skuId}>
+                    <div><strong>{skuById.get(line.skuId)?.name ?? line.skuId}</strong><span>{line.quantity} pack(s) at {formatCurrency(line.unitPrice)}</span></div>
+                    <strong>{formatCurrency(line.lineTotal)}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="order-detail-totals"><span>Discount {detailOrder.discountPercent}%</span><span>Tax {detailOrder.taxPercent}%</span><span>Shipping {formatCurrency(detailOrder.shippingCost)}</span><strong>Total {formatCurrency(detailOrder.total)}</strong></div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Delivery</span><h3>Recipient and shipping</h3></div></div>
+              <dl className="order-detail-definition-list">
+                <div><dt>Contact</dt><dd>{detailOrder.contactEmail ?? detailCustomer?.contactEmail ?? 'Not provided'}</dd></div>
+                <div><dt>Address</dt><dd>{[detailOrder.shippingAddress?.line1 ?? detailCustomer?.shippingAddress.line1, detailOrder.shippingAddress?.city ?? detailCustomer?.shippingAddress.city, detailOrder.shippingAddress?.country ?? detailCustomer?.shippingAddress.country].filter(Boolean).join(', ') || 'Not provided'}</dd></div>
+                <div><dt>Instructions</dt><dd>{detailOrder.deliveryInstructions || 'No special instructions'}</dd></div>
+                <div><dt>Carrier</dt><dd>{detailOrder.carrier ? shipmentCarrierLabel(detailOrder.carrier) : 'Not assigned'}</dd></div>
+                <div><dt>Tracking</dt><dd>{detailOrder.trackingNumber || 'Not assigned'}</dd></div>
+              </dl>
+            </section>
+
+            {detailOrder.status === 'CANCELLED' ? <section className="order-detail-section order-cancellation-evidence"><div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Cancellation</span><h3>Order closed without fulfillment</h3></div></div><p>{detailOrder.cancellationReason ?? 'Cancelled by operator'}</p><small>{detailOrder.cancelledAt ? new Date(detailOrder.cancelledAt).toLocaleString() : 'Cancellation time unavailable'}</small></section> : null}
+          </div>
+        ) : detailMode === 'edit' && orderEditDraft ? (
+          <div className="order-detail-content order-detail-edit" data-testid="order-detail-edit">
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Commercial details</span><h3>Reference and pricing</h3></div></div>
+              <div className="form-grid-two">
+                <label className="field-row"><span>Customer reference</span><input value={orderEditDraft.customerReference} maxLength={80} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, customerReference: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Contact email</span><input type="email" value={orderEditDraft.contactEmail} maxLength={254} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, contactEmail: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Discount %</span><input type="number" min={0} max={90} value={orderEditDraft.discountPercent} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, discountPercent: Number(event.target.value) } : current)} /></label>
+                <label className="field-row"><span>Tax %</span><input type="number" min={0} max={30} value={orderEditDraft.taxPercent} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, taxPercent: Number(event.target.value) } : current)} /></label>
+                <label className="field-row"><span>Shipping cost</span><input type="number" min={0} value={orderEditDraft.shippingCost} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCost: Number(event.target.value) } : current)} /></label>
+                <div className="order-detail-estimate"><span>Repriced estimate</span><strong>{formatCurrency(detailDraftTotal)}</strong></div>
+              </div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Items</span><h3>Editable order lines</h3></div><button className="ghost-button small" type="button" onClick={addDetailLine}>Add SKU</button></div>
+              <div className="order-edit-lines">
+                {orderEditDraft.lines.map((line) => (
+                  <div className="order-edit-line" key={line.id}>
+                    <label className="field-row"><span>SKU</span><select value={line.skuId} onChange={(event) => updateDetailLine(line.id, { skuId: event.target.value })}>{skuRows.map((sku) => <option key={sku.id} value={sku.id}>{sku.name}</option>)}</select></label>
+                    <label className="field-row"><span>Packs</span><input type="number" min={1} max={100000} value={line.quantity} onChange={(event) => updateDetailLine(line.id, { quantity: Number(event.target.value) })} /></label>
+                    <button className="ghost-button danger small" type="button" disabled={orderEditDraft.lines.length === 1} onClick={() => removeDetailLine(line.id)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Delivery</span><h3>Shipping destination</h3></div></div>
+              <div className="form-grid-two">
+                <label className="field-row wide-field"><span>Address</span><input value={orderEditDraft.shippingLine1} maxLength={200} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingLine1: event.target.value } : current)} /></label>
+                <label className="field-row"><span>City</span><input value={orderEditDraft.shippingCity} maxLength={100} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCity: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Country</span><input value={orderEditDraft.shippingCountry} maxLength={100} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCountry: event.target.value } : current)} /></label>
+                <label className="field-row wide-field"><span>Delivery instructions</span><textarea rows={4} maxLength={1000} value={orderEditDraft.deliveryInstructions} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, deliveryInstructions: event.target.value } : current)} /></label>
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="order-detail-content" data-testid="order-cancel-view">
+            <section className="order-detail-section order-cancel-confirmation">
+              <span className="formula-intelligence-eyebrow">Cancel order</span>
+              <h3>Cancel {detailOrder.id}?</h3>
+              <p>This stops the order and releases any active reservation. It does not delete order history or create an inventory movement.</p>
+              <label className="field-row"><span>Cancellation reason</span><textarea autoFocus rows={5} maxLength={500} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Explain why this order is being cancelled" /></label>
+              <small>{cancelReason.trim().length}/500 characters; at least 3 required.</small>
+            </section>
+          </div>
+        )}
+      </WorkspaceDialog>
+    ) : null}
+    </>
   )
 }
 

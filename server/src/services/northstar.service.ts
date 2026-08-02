@@ -57,6 +57,7 @@ import {
   initialMovements,
   inventoryAnalytics,
   inventoryValuationReport,
+  isShipmentCarrier,
   isLotEligibleForInventory,
   lowStockForecast,
   materials,
@@ -521,6 +522,17 @@ type CreateSalesOrderBody = {
   taxPercent?: number
   shippingCost?: number
   currency?: string
+}
+
+type UpdateSalesOrderBody = CreateSalesOrderBody & {
+  contactEmail?: string
+  shippingAddress?: Partial<CustomerAddress>
+  customerReference?: string
+  deliveryInstructions?: string
+}
+
+type CancelOrderBody = {
+  reason?: string
 }
 
 type ReserveOrderBody = {
@@ -7416,6 +7428,7 @@ export class NorthStarService {
       }
     })
     const primaryLine = lines[0]
+    const orderCreatedAt = new Date().toISOString()
     const order: SalesOrderRecord = {
       id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
       organizationId: session.organizationId,
@@ -7434,8 +7447,11 @@ export class NorthStarService {
       status: customer.status === 'CREDIT_HOLD' || quote.total > customer.creditLimit ? 'HOLD' : 'CONFIRMED',
       reservationAllocations: [],
       documentIds: [],
-      createdAt: new Date().toISOString(),
+      createdAt: orderCreatedAt,
+      updatedAt: orderCreatedAt,
       lines,
+      contactEmail: customer.contactEmail,
+      shippingAddress: structuredClone(customer.shippingAddress),
     }
     this.salesOrderRecords = [order, ...this.salesOrderRecords]
     const convertedQuote = { ...quote, status: 'CONVERTED' as const }
@@ -7610,20 +7626,22 @@ export class NorthStarService {
     }
   }
 
-  createOrder(body: CreateSalesOrderBody = {}) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'orders.reserve')
-    const customer = this.customersForSession(session).find((item) => item.id === body.customerId)
-    if (!customer) {
-      throw new NotFoundException(`Customer ${body.customerId ?? 'unknown'} was not found`)
+  private boundedOrderNumber(value: number | undefined, fallback: number, min: number, max: number, label: string) {
+    const parsed = value === undefined ? fallback : Number(value)
+    if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+      throw new UnprocessableEntityException(`${label} must be between ${min} and ${max}`)
     }
-    const requestedLines = body.lines?.length ? body.lines : [{ skuId: body.skuId, quantity: body.quantity }]
+    return parsed
+  }
+
+  private priceSalesOrderLines(
+    session: AuthSession,
+    customer: CustomerRecord,
+    requestedLines: NonNullable<CreateSalesOrderBody['lines']>,
+  ) {
     if (requestedLines.length === 0 || requestedLines.length > 25) {
       throw new UnprocessableEntityException('Order must contain between 1 and 25 SKU lines')
     }
-    const discountPercent = Math.max(0, Math.min(90, Number(body.discountPercent ?? 0)))
-    const taxPercent = Math.max(0, Math.min(30, Number(body.taxPercent ?? 0)))
-    const shippingCost = Math.max(0, Number(body.shippingCost ?? 0))
     const priceList = this.priceListsForSession(session).find(
       (item) => item.customerGroup === customer.group && item.status === 'ACTIVE',
     )
@@ -7642,8 +7660,8 @@ export class NorthStarService {
         throw new UnprocessableEntityException(`SKU ${sku.id} is not active`)
       }
       const quantity = Math.round(Number(line.quantity ?? 1))
-      if (!Number.isFinite(quantity) || quantity <= 0) {
-        throw new UnprocessableEntityException(`Order quantity for ${sku.id} must be greater than 0`)
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 100_000) {
+        throw new UnprocessableEntityException(`Order quantity for ${sku.id} must be between 1 and 100000`)
       }
       const unitPrice = Number((sku.price * (priceList?.multiplier ?? 1)).toFixed(2))
       return {
@@ -7655,11 +7673,27 @@ export class NorthStarService {
         fulfilledGrams: 0,
       }
     })
+    return { lines, priceList }
+  }
+
+  createOrder(body: CreateSalesOrderBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'orders.reserve')
+    const customer = this.customersForSession(session).find((item) => item.id === body.customerId)
+    if (!customer) {
+      throw new NotFoundException(`Customer ${body.customerId ?? 'unknown'} was not found`)
+    }
+    const requestedLines = body.lines?.length ? body.lines : [{ skuId: body.skuId, quantity: body.quantity }]
+    const { lines, priceList } = this.priceSalesOrderLines(session, customer, requestedLines)
+    const discountPercent = this.boundedOrderNumber(body.discountPercent, 0, 0, 90, 'Discount percent')
+    const taxPercent = this.boundedOrderNumber(body.taxPercent, 0, 0, 30, 'Tax percent')
+    const shippingCost = this.boundedOrderNumber(body.shippingCost, 0, 0, 1_000_000, 'Shipping cost')
     const primaryLine = lines[0]
     const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0)
     const discounted = subtotal * (1 - discountPercent / 100)
     const taxed = discounted * (1 + taxPercent / 100)
     const total = Number((taxed + shippingCost).toFixed(2))
+    const now = new Date().toISOString()
     const order: SalesOrderRecord = {
       id: `SO-2026-${String(this.salesOrderRecords.length + 93).padStart(3, '0')}`,
       organizationId: session.organizationId,
@@ -7678,8 +7712,11 @@ export class NorthStarService {
       status: customer.status === 'CREDIT_HOLD' || total > customer.creditLimit ? 'HOLD' : 'CONFIRMED',
       reservationAllocations: [],
       documentIds: [],
-      createdAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
       lines,
+      contactEmail: customer.contactEmail,
+      shippingAddress: structuredClone(customer.shippingAddress),
     }
     this.salesOrderRecords = [order, ...this.salesOrderRecords]
     const audit = this.recordAudit('orders.create', order.id, session.userId, order.status === 'HOLD' ? 'review' : 'allowed')
@@ -7801,18 +7838,22 @@ export class NorthStarService {
     }
   }
 
-  cancelOrder(id: string) {
+  cancelOrder(id: string, body: CancelOrderBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'orders.reserve')
     const order = this.ordersForSession(session).find((item) => item.id === id)
     if (!order) {
       throw new NotFoundException(`Sales order ${id} was not found`)
     }
-    if (['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED'].includes(order.status)) {
+    if (['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)) {
       throw new UnprocessableEntityException(`Sales order ${id} cannot be cancelled from ${order.status}`)
     }
     if (order.fulfilledGrams > 0) {
       throw new UnprocessableEntityException(`Sales order ${id} cannot be cancelled after any fulfillment; process a return instead`)
+    }
+    const cancellationReason = body.reason?.trim() || 'Cancelled by operator'
+    if (cancellationReason.length < 3 || cancellationReason.length > 500) {
+      throw new UnprocessableEntityException('Cancellation reason must be between 3 and 500 characters')
     }
     const allocations = order.reservationAllocations ?? []
     if (allocations.length > 0) {
@@ -7859,6 +7900,9 @@ export class NorthStarService {
             reservedGrams: 0,
             status: 'CANCELLED',
             reservationAllocations: [],
+            cancellationReason,
+            cancelledAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
           }
         : item,
     )
@@ -7866,6 +7910,7 @@ export class NorthStarService {
     return {
       data: {
         orderId: id,
+        order: this.ordersForSession(session).find((item) => item.id === id),
         releasedAllocations: allocations,
         audit,
         invariant: 'cancellation releases reservation without creating InventoryMovement for material lots; finished-good release events remain append-only for traceability',
@@ -7932,10 +7977,13 @@ export class NorthStarService {
       throw new UnprocessableEntityException(`Sales order ${id} must be packed before ship`)
     }
     const carrier = body.carrier ?? order.carrier ?? 'DHL'
-    if (!['DHL', 'FedEx', 'UPS', 'Pickup'].includes(carrier)) {
+    if (!isShipmentCarrier(carrier)) {
       throw new UnprocessableEntityException(`Carrier ${carrier} is not supported`)
     }
-    const trackingNumber = body.trackingNumber?.trim() || `${carrier.toUpperCase()}-${id.replace(/\W/g, '')}`
+    const trackingNumber = body.trackingNumber?.trim() || `${carrier.replace(/\W/g, '').toUpperCase()}-${id.replace(/\W/g, '')}`
+    if (trackingNumber.length > 120) {
+      throw new UnprocessableEntityException('Tracking number must be 120 characters or fewer')
+    }
     const shippedAt = new Date().toISOString()
     this.shipmentRecords = this.shipmentRecords.map((shipment) =>
       shipment.id === order.shipmentId
@@ -7955,6 +8003,7 @@ export class NorthStarService {
             status: 'SHIPPED',
             carrier,
             trackingNumber,
+            updatedAt: shippedAt,
           }
         : item,
     )
@@ -8137,6 +8186,88 @@ export class NorthStarService {
         movements,
         cogs: Number(cogs.toFixed(6)),
         invariant: 'finished-good cost is sourced from released production batch cost and COGS is written only on finished-good fulfillment',
+      },
+    }
+  }
+
+  updateOrder(id: string, body: UpdateSalesOrderBody = {}) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'orders.reserve')
+    const order = this.ordersForSession(session).find((item) => item.id === id)
+    if (!order) {
+      throw new NotFoundException(`Sales order ${id} was not found`)
+    }
+    if (!['DRAFT', 'CONFIRMED', 'HOLD'].includes(order.status) || order.reservedGrams > 0 || order.fulfilledGrams > 0 || order.shipmentId) {
+      throw new UnprocessableEntityException(`Sales order ${id} cannot be edited after reservation or fulfillment has started`)
+    }
+    const customer = this.customersForSession(session).find((item) => item.id === (body.customerId?.trim() || order.customerId))
+    if (!customer) {
+      throw new NotFoundException(`Customer ${body.customerId ?? order.customerId} was not found`)
+    }
+    const existingLines = order.lines?.length
+      ? order.lines.map((line) => ({ skuId: line.skuId, quantity: line.quantity }))
+      : [{ skuId: order.skuId, quantity: order.quantity }]
+    const { lines, priceList } = this.priceSalesOrderLines(session, customer, body.lines?.length ? body.lines : existingLines)
+    const discountPercent = this.boundedOrderNumber(body.discountPercent, order.discountPercent, 0, 90, 'Discount percent')
+    const taxPercent = this.boundedOrderNumber(body.taxPercent, order.taxPercent, 0, 30, 'Tax percent')
+    const shippingCost = this.boundedOrderNumber(body.shippingCost, order.shippingCost, 0, 1_000_000, 'Shipping cost')
+    const subtotal = lines.reduce((sum, line) => sum + line.lineTotal, 0)
+    const total = Number((subtotal * (1 - discountPercent / 100) * (1 + taxPercent / 100) + shippingCost).toFixed(2))
+    const contactEmail = body.contactEmail === undefined ? (order.contactEmail ?? customer.contactEmail) : body.contactEmail.trim()
+    if (!contactEmail || contactEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+      throw new UnprocessableEntityException('Order contact email must be a valid email address')
+    }
+    const customerReference = body.customerReference === undefined ? order.customerReference : body.customerReference.trim()
+    if (customerReference && customerReference.length > 80) {
+      throw new UnprocessableEntityException('Customer reference must be 80 characters or fewer')
+    }
+    const deliveryInstructions = body.deliveryInstructions === undefined ? order.deliveryInstructions : body.deliveryInstructions.trim()
+    if (deliveryInstructions && deliveryInstructions.length > 1000) {
+      throw new UnprocessableEntityException('Delivery instructions must be 1000 characters or fewer')
+    }
+    const fallbackAddress = order.shippingAddress ?? customer.shippingAddress
+    const shippingAddress: CustomerAddress = {
+      id: fallbackAddress.id || `${order.id}-SHIP`,
+      label: body.shippingAddress?.label?.trim() || fallbackAddress.label || 'Shipping',
+      line1: body.shippingAddress?.line1?.trim() ?? fallbackAddress.line1,
+      city: body.shippingAddress?.city?.trim() ?? fallbackAddress.city,
+      country: body.shippingAddress?.country?.trim() ?? fallbackAddress.country,
+    }
+    if (!shippingAddress.line1 || !shippingAddress.city || !shippingAddress.country) {
+      throw new UnprocessableEntityException('Shipping address line, city, and country are required')
+    }
+    if (shippingAddress.line1.length > 200 || shippingAddress.city.length > 100 || shippingAddress.country.length > 100) {
+      throw new UnprocessableEntityException('Shipping address exceeds the supported field length')
+    }
+    const primaryLine = lines[0]
+    const updatedAt = new Date().toISOString()
+    const updatedOrder: SalesOrderRecord = {
+      ...order,
+      skuId: primaryLine.skuId,
+      customerId: customer.id,
+      customer: customer.name,
+      quantity: primaryLine.quantity,
+      unitPrice: primaryLine.unitPrice,
+      discountPercent,
+      taxPercent,
+      shippingCost,
+      total,
+      currency: body.currency?.trim().toUpperCase() || priceList?.currency || order.currency,
+      status: customer.status === 'CREDIT_HOLD' || total > customer.creditLimit ? 'HOLD' : 'CONFIRMED',
+      lines,
+      contactEmail,
+      shippingAddress,
+      customerReference: customerReference || undefined,
+      deliveryInstructions: deliveryInstructions || undefined,
+      updatedAt,
+    }
+    this.salesOrderRecords = this.salesOrderRecords.map((item) => (item.id === id ? updatedOrder : item))
+    const audit = this.recordAudit('orders.update', id, session.userId, updatedOrder.status === 'HOLD' ? 'review' : 'allowed')
+    return {
+      data: {
+        order: updatedOrder,
+        audit,
+        invariant: 'order update reprices the editable order and preserves inventory, reservation, and fulfillment ledgers',
       },
     }
   }
@@ -10208,6 +10339,8 @@ export class NorthStarService {
     if (method === 'POST' && path === '/orders') {
       return build('orders.create', 'orders.reserve', 'orders.view', {}, this.optionalString(payload.customerId) || 'Sales order', 'Order creation requires approval')
     }
+    params = match('PATCH', '/orders/:id')
+    if (params) return build('orders.update', 'orders.reserve', 'orders.view', params, params.id, 'Order update requires approval')
     params = match('POST', '/orders/:id/reserve')
     if (params) return build('orders.reserve', 'orders.reserve', 'orders.view', params, params.id, 'Order reservation requires approval')
     params = match('POST', '/orders/:id/cancel')
@@ -10388,10 +10521,12 @@ export class NorthStarService {
         return this.createCustomer(payload as CreateCustomerBody).data
       case 'orders.create':
         return this.createOrder(payload as CreateSalesOrderBody).data
+      case 'orders.update':
+        return this.updateOrder(params.id, payload as UpdateSalesOrderBody).data
       case 'orders.reserve':
         return this.reserveOrder(params.id).data
       case 'orders.cancel':
-        return this.cancelOrder(params.id).data
+        return this.cancelOrder(params.id, payload as CancelOrderBody).data
       case 'orders.pack':
         return this.packOrder(params.id, payload as PackOrderBody).data
       case 'orders.ship':

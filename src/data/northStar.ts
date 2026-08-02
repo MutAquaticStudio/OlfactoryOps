@@ -1381,11 +1381,50 @@ export interface CustomerRecord {
   status: 'ACTIVE' | 'CREDIT_HOLD' | 'ARCHIVED'
 }
 
+export type ShipmentCarrier =
+  | 'DHL'
+  | 'FedEx'
+  | 'UPS'
+  | 'GHN'
+  | 'GHTK'
+  | 'VIETTEL_POST'
+  | 'VNPOST'
+  | 'JNT'
+  | 'AHAMOVE'
+  | 'LOCAL_COURIER'
+  | 'Pickup'
+
+export const shipmentCarrierOptions: ReadonlyArray<{
+  value: ShipmentCarrier
+  label: string
+  scope: 'INTERNATIONAL' | 'VIETNAM' | 'PICKUP'
+}> = [
+  { value: 'GHN', label: 'GHN', scope: 'VIETNAM' },
+  { value: 'GHTK', label: 'Giao Hang Tiet Kiem', scope: 'VIETNAM' },
+  { value: 'VIETTEL_POST', label: 'Viettel Post', scope: 'VIETNAM' },
+  { value: 'VNPOST', label: 'VNPost', scope: 'VIETNAM' },
+  { value: 'JNT', label: 'J&T Express', scope: 'VIETNAM' },
+  { value: 'AHAMOVE', label: 'Ahamove', scope: 'VIETNAM' },
+  { value: 'LOCAL_COURIER', label: 'Local courier', scope: 'VIETNAM' },
+  { value: 'DHL', label: 'DHL', scope: 'INTERNATIONAL' },
+  { value: 'FedEx', label: 'FedEx', scope: 'INTERNATIONAL' },
+  { value: 'UPS', label: 'UPS', scope: 'INTERNATIONAL' },
+  { value: 'Pickup', label: 'Customer pickup', scope: 'PICKUP' },
+]
+
+export function isShipmentCarrier(value: unknown): value is ShipmentCarrier {
+  return typeof value === 'string' && shipmentCarrierOptions.some((option) => option.value === value)
+}
+
+export function shipmentCarrierLabel(value: ShipmentCarrier) {
+  return shipmentCarrierOptions.find((option) => option.value === value)?.label ?? value
+}
+
 export interface ShipmentRecord {
   id: string
   organizationId?: string
   orderId: string
-  carrier: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
+  carrier: ShipmentCarrier
   trackingNumber: string
   status: 'PICKING' | 'PACKED' | 'SHIPPED' | 'DELIVERED'
   shippedAt?: string
@@ -1439,7 +1478,14 @@ export interface SalesOrderRecord {
   shipmentId?: string
   documentIds?: string[]
   createdAt: string
+  updatedAt?: string
   lines?: SalesOrderLineItem[]
+  contactEmail?: string
+  shippingAddress?: CustomerAddress
+  customerReference?: string
+  deliveryInstructions?: string
+  cancellationReason?: string
+  cancelledAt?: string
 }
 
 export interface SalesOrderLineItem {

@@ -99,3 +99,28 @@ test('Design Studio restores its route and keeps key actions usable', async ({ p
     }
   }
 })
+
+test('Orders exposes responsive detail history and domestic shipping choices', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated role flow runs once and checks desktop and mobile in the same session.')
+  await signIn(page)
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport)
+    await page.goto('/workspace/orders')
+    await expect(page.getByRole('heading', { name: 'Orders & Fulfillment' })).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+
+    const domesticCarrier = page.getByLabel('Carrier').locator('option[value="GHN"]')
+    await expect(domesticCarrier).toHaveText('GHN')
+
+    await page.getByRole('button', { name: 'View details' }).first().click()
+    const dialog = page.getByTestId('workspace-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toHaveClass(/is-drawer/)
+    await expect(dialog.getByTestId('order-detail-view')).toBeVisible()
+    await expectNoHorizontalOverflow(page)
+    await expectNoSeriousAccessibilityViolations(page)
+    await page.getByTestId('workspace-dialog-close').click()
+    await expect(dialog).toBeHidden()
+  }
+})

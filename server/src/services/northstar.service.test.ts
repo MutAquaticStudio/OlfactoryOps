@@ -2665,7 +2665,47 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
-  it('runs order lifecycle through reserve, pack, ship, and fulfillment trace', () => {
+  it('updates editable order details and reprices lines without touching inventory ledgers', () => {
+    const service = createAuthenticatedService()
+    const order = service.createOrder({
+      customerId: 'CUS-DEMO',
+      lines: [{ skuId: 'SKU-ISO-050', quantity: 1 }],
+    }).data.order
+    const beforeMovements = service.inventoryMovements().data
+
+    const updated = service.updateOrder(order.id, {
+      lines: [
+        { skuId: 'SKU-ISO-050', quantity: 2 },
+        { skuId: 'SKU-BER-025', quantity: 1 },
+      ],
+      discountPercent: 5,
+      taxPercent: 10,
+      shippingCost: 5,
+      contactEmail: 'buyer@maison.example',
+      customerReference: 'PO-MAISON-1042',
+      deliveryInstructions: 'Call before the domestic courier arrives.',
+      shippingAddress: {
+        line1: '12 Nguyen Hue',
+        city: 'Ho Chi Minh City',
+        country: 'Vietnam',
+      },
+    }).data
+
+    expect(updated.order.lines).toEqual([
+      expect.objectContaining({ skuId: 'SKU-ISO-050', quantity: 2, unitPrice: 18, lineTotal: 36 }),
+      expect.objectContaining({ skuId: 'SKU-BER-025', quantity: 1, unitPrice: 16, lineTotal: 16 }),
+    ])
+    expect(updated.order.total).toBe(59.34)
+    expect(updated.order.customerReference).toBe('PO-MAISON-1042')
+    expect(updated.order.shippingAddress).toMatchObject({ city: 'Ho Chi Minh City', country: 'Vietnam' })
+    expect(updated.invariant).toContain('preserves inventory, reservation, and fulfillment ledgers')
+    expect(service.inventoryMovements().data).toEqual(beforeMovements)
+
+    service.reserveOrder(order.id)
+    expect(() => service.updateOrder(order.id, { shippingCost: 10 })).toThrow(/cannot be edited after reservation/)
+  })
+
+  it('runs order lifecycle through reserve, pack, domestic shipping, and fulfillment trace', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const order = service.createOrder({
@@ -2682,13 +2722,14 @@ describe('NorthStarService', () => {
     expect(() => service.reserveOrder(order.id)).toThrow(/cannot be reserved/)
 
     const pack = service.packOrder(order.id).data
-    const ship = service.shipOrder(order.id, { carrier: 'DHL', trackingNumber: 'DHL-PHASE12' }).data
+    const ship = service.shipOrder(order.id, { carrier: 'GHN', trackingNumber: 'GHN-PHASE12' }).data
     const fulfillment = service.fulfillOrder(order.id).data
 
     expect(reservation.invariant).toContain('creates no InventoryMovement')
     expect(afterReserveMovements).toBe(beforeMovements)
     expect(pack.document.type).toBe('PACKING_SLIP')
-    expect(ship.shipment?.trackingNumber).toBe('DHL-PHASE12')
+    expect(ship.shipment?.carrier).toBe('GHN')
+    expect(ship.shipment?.trackingNumber).toBe('GHN-PHASE12')
     expect(fulfillment.movements.every((movement) => movement.direction === 'OUT')).toBe(true)
     expect(fulfillment.invariant).toContain('lot traceability')
     expect(service.orderDocuments().data.map((document) => document.type)).toEqual(
@@ -2707,10 +2748,16 @@ describe('NorthStarService', () => {
     const beforeMovements = service.inventoryMovements().data.length
 
     service.reserveOrder(order.id)
-    const cancellation = service.cancelOrder(order.id).data
+    const cancellation = service.cancelOrder(order.id, { reason: 'Customer cancelled before dispatch' }).data
 
     expect(cancellation.invariant).toContain('without creating InventoryMovement')
     expect(cancellation.releasedAllocations.length).toBeGreaterThan(0)
+    expect(cancellation.order).toMatchObject({
+      status: 'CANCELLED',
+      cancellationReason: 'Customer cancelled before dispatch',
+      reservedGrams: 0,
+    })
+    expect(cancellation.order?.cancelledAt).toBeTruthy()
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 

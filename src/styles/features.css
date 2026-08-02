@@ -1278,6 +1278,186 @@
   padding-right: 3px;
 }
 
+/* Orders keep the board scannable; details and mutations live in the contextual drawer. */
+.order-list .order-row {
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.order-list .order-row > .action-row {
+  grid-column: 1 / -1;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.order-detail-dialog .workspace-dialog-body {
+  padding: 0;
+}
+
+.order-detail-content {
+  display: grid;
+  min-width: 0;
+}
+
+.order-detail-section {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.order-detail-section:last-child {
+  border-bottom: 0;
+}
+
+.order-detail-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.order-detail-section-heading h3,
+.order-cancel-confirmation h3 {
+  margin: 3px 0 0;
+  color: var(--text);
+  font-size: var(--text-section-size);
+  line-height: var(--text-section-line);
+}
+
+.order-detail-reference,
+.order-detail-estimate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.order-detail-reference span,
+.order-detail-estimate span {
+  color: var(--text-2);
+  font-size: var(--text-caption-size);
+}
+
+.order-detail-lines,
+.order-edit-lines,
+.order-detail-definition-list {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+}
+
+.order-detail-line,
+.order-detail-definition-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.order-detail-line:first-child,
+.order-detail-definition-list > div:first-child {
+  padding-top: 0;
+}
+
+.order-detail-line:last-child,
+.order-detail-definition-list > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.order-detail-line > div,
+.order-detail-definition-list dd {
+  min-width: 0;
+}
+
+.order-detail-line span,
+.order-detail-definition-list dt {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--text-caption-size);
+}
+
+.order-detail-definition-list dt {
+  margin-top: 0;
+}
+
+.order-detail-definition-list dd {
+  max-width: 440px;
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.order-detail-totals {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-2);
+  font-size: var(--text-caption-size);
+}
+
+.order-detail-totals strong {
+  color: var(--text);
+}
+
+.order-edit-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 120px auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.order-edit-line:first-child {
+  padding-top: 0;
+}
+
+.order-edit-line:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.order-cancellation-evidence,
+.order-cancel-confirmation {
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+
+.order-cancel-confirmation p,
+.order-cancellation-evidence p {
+  margin: 0;
+  color: var(--text-2);
+}
+
+.order-detail-footer {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.order-detail-footer > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* Tablet has one dependable content column before the navigation becomes an overlay. */
 @media (max-width: 1120px) {
   .workspace-grid,
@@ -1320,6 +1500,39 @@
   .formula-lab-analysis-card {
     grid-column: auto;
     min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .order-list .order-row,
+  .order-detail-line,
+  .order-detail-definition-list > div,
+  .order-edit-line {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .order-list .order-row > .action-row {
+    grid-column: auto;
+  }
+
+  .order-detail-section {
+    padding: 16px;
+  }
+
+  .order-detail-section-heading,
+  .order-detail-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .order-detail-definition-list dd {
+    max-width: none;
+    text-align: left;
+  }
+
+  .order-detail-footer > div,
+  .order-detail-footer button {
+    width: 100%;
   }
 }
 

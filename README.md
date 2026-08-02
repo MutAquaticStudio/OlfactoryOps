@@ -32,6 +32,20 @@ npx.cmd playwright test --config playwright.ux.config.ts
 
 Visual gate hiện PASS cho public EN/VI và Owner Design Studio ở 1280/390px. Admin, Perfumer, Lab Manager, Sensory Panelist, Brand, Finance và Read-only vẫn phải chạy bằng fixture riêng trước khi gắn `beta.labofscents.org`; không được suy luận PASS từ Owner.
 
+### Orders & Fulfillment
+
+Order Board hỗ trợ mở drawer chi tiết để xem dòng SKU, giá, thuế, phí giao hàng,
+địa chỉ nhận, hướng dẫn giao, reservation, fulfillment và chứng cứ hủy đơn. Đơn
+chỉ được chỉnh khi còn ở `DRAFT`, `CONFIRMED` hoặc `HOLD` và chưa bắt đầu reserve,
+pack, ship hay fulfill. Server luôn tính lại giá từ catalogue; cập nhật thông tin
+không tạo inventory movement.
+
+Hủy đơn yêu cầu lý do, giữ nguyên lịch sử audit và chỉ giải phóng reservation.
+Danh sách vận chuyển gồm GHN, GHTK, Viettel Post, VNPost, J&T Express, Ahamove,
+Local Courier cùng DHL, FedEx, UPS và Pickup. Migration
+`0038_sales_order_details.sql` phải được áp dụng trước khi deploy Worker dùng các
+trường contact, địa chỉ, customer reference, delivery instruction và cancellation.
+
 ## Competitive Moat: Phase 0-9
 
 ### Design Studio và nguồn Materials
@@ -406,6 +420,7 @@ Production checklist, security requirement, custom domain guidance và live test
 - <code>0028_auth_session_credentials.sql</code> thay legacy session-ID credential bằng opaque one-way-hashed Worker credential và revoke pre-migration session. User phải đăng nhập lại sau migration.
 - <code>0033_material_evidence_rag.sql</code> thêm reviewed evidence source, citation chunk có giới hạn và lease-fenced indexing job theo tenant. Trước khi deploy, tạo Vectorize cosine 768-dimension index riêng cho test/production; thêm binding <code>AI</code> và <code>RAG_INDEX</code>; tạo metadata index cho <code>organizationId</code>, <code>status</code>, <code>materialId</code>, <code>documentId</code>, <code>sourceKind</code> và <code>indexVersion</code>.
 - <code>0035_lluch_supplier_catalogue.sql</code> nhập Lluch Essence Product List 1.986 dòng vào supplier-catalogue table theo tenant trong D1. Áp migration trước Worker; scheduled run đầu tiên hoặc authorized **Sync catalogue** sẽ nhập idempotent cho từng workspace.
+- <code>0038_sales_order_details.sql</code> bổ sung contact, địa chỉ giao hàng snapshot, customer reference, delivery instruction và bằng chứng hủy đơn cho Sales Order. Áp migration này trước khi deploy route update/cancel Orders.
 - Production batch chỉ tạo finished-good lot khi formula input approved, raw-material consumption đầy đủ, QC pass và release. Formula SKU reserve released finished-good lot bằng FEFO và chỉ ghi COGS khi fulfilled.
 - <code>GET /api/v1/audit/chain/verify</code> và <code>GET /api/v1/audit/chain/evidence</code> là evidence endpoint chỉ dành cho Owner/Admin và không bao giờ trả provider secret.
 - Beta integration luôn trung thực: Integration Readiness trả <code>Not configured</code> cho đến khi Worker secret và phụ thuộc DNS/HTTPS thật sự active. <code>managed_beta</code> tiếp tục từ chối toàn bộ Stripe customer-payment mutation ở server.
