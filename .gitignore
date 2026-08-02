@@ -22,6 +22,7 @@ dist-ssr
 .dev.vars.*
 reports/evidence/
 reports/*.md
+reports/ux-playwright/
 .qa/
 .olfactoryops-agent.local.json
 

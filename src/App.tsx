@@ -1807,7 +1807,7 @@ function accentStyleForColor(value: string | undefined | null): CSSProperties {
   const { r, g, b } = hexToRgb(accentColor)
   return {
     '--blue': accentColor,
-    '--blue-bright': mixHexColor(accentColor, '#ffffff', 0.24),
+    '--blue-bright': mixHexColor(accentColor, '#ffffff', 0.08),
     '--blue-deep': mixHexColor(accentColor, '#000000', 0.24),
     '--accent-rgb': `${r} ${g} ${b}`,
   } as CSSProperties
@@ -1920,6 +1920,7 @@ function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
   const [publicRoute, setPublicRoute] = useState<PublicRoute | null>(() => publicRouteForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const [authRestoring, setAuthRestoring] = useState(() => hasStoredAuthMarker())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
   const [authNotice, setAuthNotice] = useState<string | null>(null)
@@ -2169,21 +2170,24 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (currentSession || publicRoute !== null || !isProtectedApplicationPath(window.location.pathname)) return
+    if (authRestoring || currentSession || publicRoute !== null || !isProtectedApplicationPath(window.location.pathname)) return
     const requestedPath = safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`)
     if (requestedPath) setResumePath(requestedPath)
     window.history.replaceState({}, document.title, loginPathForProtectedPath(window.location.pathname, window.location.search, window.location.hash))
     setPublicRoute('login')
-  }, [currentSession, publicRoute])
+  }, [authRestoring, currentSession, publicRoute])
 
   useEffect(() => {
-    if (!currentSession || publicRoute === null || publicRoute === 'trialFeedback') return
-    const target = safeLandingForSession((userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding, currentSession)
+    if (authRestoring || !currentSession || publicRoute === null || publicRoute === 'trialFeedback') return
+    const preferredLanding = (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding
+    const requestedLanding = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : preferredLanding
+    const target = safeLandingForSession(requestedLanding, currentSession)
     setActiveKey(target)
-    const destination = pathForDomainKey(target)
+    const destination = resumePath ?? pathForDomainKey(target)
     if (window.location.pathname !== destination) window.history.replaceState({}, document.title, destination)
     setPublicRoute(null)
-  }, [currentSession, publicRoute, userSettingsRecord])
+    setResumePath(null)
+  }, [authRestoring, currentSession, publicRoute, resumePath, userSettingsRecord])
 
   useEffect(() => {
     function handleAuthExpired() {
@@ -2213,6 +2217,7 @@ function App() {
 
   useEffect(() => {
     if (!hasStoredAuthMarker()) {
+      setAuthRestoring(false)
       return
     }
 
@@ -2227,7 +2232,8 @@ function App() {
           setCurrentSession(session)
           const settings = payload.userSettings ?? userSettingsForSession(payload.session)
           applyUserSettings(settings)
-          setActiveKey(safeLandingForSession(settings.preferredLanding, session))
+          const requestedLanding = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
+          setActiveKey(safeLandingForSession(requestedLanding, session))
         }
       } catch {
         if (active) {
@@ -2236,6 +2242,8 @@ function App() {
           applyUserSettings(null)
           setSidebarCollapsed(false)
         }
+      } finally {
+        if (active) setAuthRestoring(false)
       }
     }
 
@@ -2244,7 +2252,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [applyUserSettings])
+  }, [applyUserSettings, resumePath])
 
   useEffect(() => {
     if (!currentSessionId || !currentOrganizationId) {
@@ -2943,6 +2951,10 @@ function App() {
   if (publicRoute === 'trialFeedback') {
     const token = window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''
     return <PublicTrialFeedback token={token} requestApi={requestApi} />
+  }
+
+  if (authRestoring) {
+    return <main className="auth-restore-screen" aria-live="polite"><div><span className="formula-intelligence-eyebrow">OlfactoryOps</span><strong>Restoring your workspace</strong><small>Checking the active session and requested page.</small></div></main>
   }
 
   if (!currentSession) {

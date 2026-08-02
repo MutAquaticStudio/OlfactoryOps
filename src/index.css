@@ -2,25 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg: #070a0b;
-  --panel: #0d1214;
-  --panel-solid: #0d1214;
-  --border: #263237;
-  --border-strong: #3a494f;
-  --text: #eff5f3;
-  --text-2: #aab7b8;
-  --text-3: #78878b;
-  --blue: #0f766e;
-  --blue-bright: #16877e;
-  --blue-deep: #0b5c56;
-  --accent-rgb: 15 118 110;
-  --gold: #9a6700;
-  --green: #4ade80;
-  --amber: #f59e0b;
-  --red: #fb7185;
-  --radius: 8px;
-  font-family: "Segoe UI Variable", "Aptos", "Helvetica Neue", Arial, sans-serif;
+html {
+  font-family: var(--font-sans);
   color: var(--text);
   background: var(--bg);
   color-scheme: dark;
@@ -34,16 +17,14 @@
   box-sizing: border-box;
 }
 
-html {
-  background: var(--bg);
-}
-
 body {
   min-width: 320px;
   min-height: 100svh;
   margin: 0;
   background: var(--bg);
   overflow-x: hidden;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
 }
 
 button,
@@ -5797,18 +5778,6 @@ input[type='range'] {
 }
 
 /* Operational UI redesign: calm, high-density lab workspace. */
-:root {
-  --surface-raised: #0d1214;
-  --surface-muted: #11191c;
-  --surface-subtle: #172124;
-  --sidebar: #06090a;
-  --sidebar-2: #10191c;
-  --sidebar-text: #eef5f5;
-  --sidebar-muted: #9fb0b5;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.36);
-  --shadow-md: 0 14px 32px rgb(0 0 0 / 0.32);
-}
-
 html,
 body {
   background: var(--bg);

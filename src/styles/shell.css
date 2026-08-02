@@ -23,7 +23,7 @@
 .brand-mark {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   background: var(--blue);
   box-shadow: none;
 }
@@ -63,11 +63,11 @@
 }
 
 .nav-item {
-  min-height: 38px;
+  min-height: var(--touch-target);
   padding: 9px 10px;
   border: 1px solid transparent;
   border-left-width: 2px;
-  border-radius: 7px;
+  border-radius: var(--radius-card);
   color: #aeb8ae;
 }
 
@@ -104,20 +104,21 @@
 }
 
 .topbar-title-block h1 {
-  font-size: clamp(1.25rem, 1.7vw, 1.6rem);
+  font-size: var(--text-page-size);
   font-weight: 650;
+  line-height: var(--text-page-line);
 }
 
 .command-button,
 .icon-button,
 .ghost-button {
   border-color: #2c352d;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: #111511;
 }
 
 .command-button {
-  min-height: 40px;
+  min-height: var(--touch-target);
   background: #111511;
 }
 
@@ -135,11 +136,11 @@
 }
 
 .user-chip {
-  border-radius: 8px;
+  border-radius: var(--radius-card);
 }
 
 .user-avatar {
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--blue);
 }
 
@@ -182,5 +183,19 @@
       'enterprise'
       'ledger'
       'audit';
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar .mobile-menu,
+  .topbar-actions .icon-button,
+  .topbar-actions .user-chip {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .topbar {
+    min-height: 68px;
   }
 }

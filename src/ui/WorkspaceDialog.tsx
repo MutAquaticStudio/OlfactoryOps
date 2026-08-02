@@ -20,6 +20,8 @@ type WorkspaceDialogProps = {
   className?: string
   showHeader?: boolean
   showGrip?: boolean
+  confirmDiscard?: boolean
+  discardConfirmationMessage?: string
 }
 
 /**
@@ -36,16 +38,27 @@ export function WorkspaceDialog({
   className = '',
   showHeader = true,
   showGrip = true,
+  confirmDiscard = false,
+  discardConfirmationMessage = 'Discard your unsaved changes?',
 }: WorkspaceDialogProps) {
   const dialogRef = useRef<HTMLElement | null>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const onCloseRef = useRef(onClose)
+  const confirmDiscardRef = useRef(confirmDiscard)
+  const discardConfirmationMessageRef = useRef(discardConfirmationMessage)
   const titleId = useId()
   const descriptionId = useId()
 
   useEffect(() => {
     onCloseRef.current = onClose
-  }, [onClose])
+    confirmDiscardRef.current = confirmDiscard
+    discardConfirmationMessageRef.current = discardConfirmationMessage
+  }, [confirmDiscard, discardConfirmationMessage, onClose])
+
+  const requestClose = () => {
+    if (confirmDiscardRef.current && !window.confirm(discardConfirmationMessageRef.current)) return
+    onCloseRef.current()
+  }
 
   useEffect(() => {
     if (!open) {
@@ -68,7 +81,7 @@ export function WorkspaceDialog({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        onCloseRef.current()
+        requestClose()
         return
       }
       if (event.key !== 'Tab') return
@@ -111,7 +124,7 @@ export function WorkspaceDialog({
       className="workspace-dialog-backdrop"
       role="presentation"
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose()
+        if (event.currentTarget === event.target) requestClose()
       }}
     >
       <section
@@ -132,7 +145,7 @@ export function WorkspaceDialog({
               <h2 id={titleId}>{title}</h2>
               {description ? <p id={descriptionId}>{description}</p> : null}
             </div>
-            <button className="icon-button" type="button" onClick={onClose} aria-label={`Close ${title}`} title="Close">
+            <button className="icon-button" data-testid="workspace-dialog-close" type="button" onClick={requestClose} aria-label={`Close ${title}`} title="Close">
               <X size={18} strokeWidth={1.8} />
             </button>
           </header>

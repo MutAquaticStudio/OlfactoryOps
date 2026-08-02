@@ -1,5 +1,37 @@
 # OlfactoryOps
 
+## Kiến trúc UX/UI Quiet Lab
+
+Giao diện OlfactoryOps dùng một hệ thống Quiet Lab thống nhất: nền đen matte, chữ ivory, accent verdigris có kiểm soát và bố cục ưu tiên công việc vận hành. React Bits chỉ được dùng như lớp motion cục bộ trong `src/ui/motion/`; nó không thay thế design system và không mang thông tin bắt buộc.
+
+- `src/styles/tokens.css`: nguồn token duy nhất cho màu, spacing, typography, radius, focus, semantic state và touch target 44px.
+- `src/styles/shell.css`: sidebar theo quyền, topbar, page padding và responsive shell.
+- `src/styles/components.css`: panel, form control, action, dialog/drawer, loading và focus contract dùng chung.
+- `src/styles/features.css`: bố cục riêng của Formula Intelligence, Trials, Materials và các module nghiệp vụ.
+- `src/index.css`: reset/base cùng phần legacy đang được di chuyển theo từng checkpoint; không thêm lớp override mới.
+
+Formula Design Studio hiện dùng brief review theo 5 nhóm `Product`, `Creative`, `Performance`, `Constraints` và `Materials`. Desktop giữ composer, project list và direction detail theo ngữ cảnh; dưới 1120px direction detail dùng dialog/sheet có focus trap. Form dài có header/footer cố định, body cuộn độc lập và cảnh báo trước khi bỏ thay đổi chưa lưu.
+
+Audit gốc và trạng thái remediation nằm trong `reports/ux-ui-audit-2026-08-02.md`. Các ảnh regression nằm trong `e2e/visual-snapshots/`.
+
+~~~powershell
+# Unit, typecheck và build
+npm.cmd run test
+npm.cmd run lint
+npm.cmd run build
+
+# Visual + accessibility public; authenticated flow tự skip nếu thiếu credentials
+npm.cmd run test:ux
+
+# Authenticated Design Studio QA với test tenant, không dùng dữ liệu production
+$env:UX_TEST_BASE_URL='http://127.0.0.1:5173'
+$env:UX_TEST_EMAIL='your-test-owner@example.test'
+$env:UX_TEST_PASSWORD='your-test-password'
+npx.cmd playwright test --config playwright.ux.config.ts
+~~~
+
+Visual gate hiện PASS cho public EN/VI và Owner Design Studio ở 1280/390px. Admin, Perfumer, Lab Manager, Sensory Panelist, Brand, Finance và Read-only vẫn phải chạy bằng fixture riêng trước khi gắn `beta.labofscents.org`; không được suy luận PASS từ Owner.
+
 ## Competitive Moat: Phase 0-9
 
 ### Design Studio và nguồn Materials

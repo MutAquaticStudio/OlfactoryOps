@@ -21,6 +21,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:ux": "npm run build && playwright test --config playwright.ux.config.ts",
+    "test:ux:update": "npm run build && playwright test --config playwright.ux.config.ts --update-snapshots",
     "test:formula:live": "node scripts/test-formula-live.mjs",
     "test:functional:report": "node scripts/run-functional-report.mjs",
     "test:signup:tenant": "node scripts/test-signup-tenant.mjs",
@@ -49,7 +51,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@cloudflare/workers-types": "^5.20260722.1",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
