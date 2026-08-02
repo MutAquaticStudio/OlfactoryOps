@@ -5,6 +5,7 @@ import {
   agentNodeDefinitions,
   createAgentEventReconciliation,
   createAgentRunSnapshot,
+  formulaDesignBriefFromStructuredBrief,
   reconcileAgentRuntimeEvent,
   reduceAgentRuntimeEvent,
   toSafeAgentRuntimeError,
@@ -147,6 +148,28 @@ describe('structured Design Studio briefs', () => {
       'constraints.ifraCategory',
       'constraints.targetMarkets',
     ]))
+  })
+
+  it('allows an accord concentrate to generate while retaining its unresolved final-product context', () => {
+    const result = validateStructuredFormulaDesignBrief({
+      ...validBrief,
+      product: {
+        productType: 'FINE_FRAGRANCE', formulaType: 'ACCORD', format: 'compound', targetGrams: 100,
+      },
+      constraints: { ...validBrief.constraints, ifraCategory: undefined },
+    })
+
+    expect(result.state).toBe('REVIEWED')
+    expect(result.unresolvedQuestions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'product.finalUseContext', importance: 'LOW' }),
+      expect.objectContaining({ field: 'constraints.ifraCategory', importance: 'LOW' }),
+    ]))
+    expect(formulaDesignBriefFromStructuredBrief('Citrus accord', result.brief)).toMatchObject({
+      formulaType: 'ACCORD',
+      concentrationType: 'OTHER',
+      finalProductConcentrationPercent: 100,
+      requiresFinalProductContext: true,
+    })
   })
 
   it('rejects arbitrary prompt-shaped fields instead of treating them as configuration', () => {

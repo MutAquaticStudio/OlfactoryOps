@@ -38,7 +38,7 @@ describe('Formula Intelligence deterministic proposals', () => {
     expect(directions.every((direction) => new Set(direction.proposal.ingredients.map((line) => materials.find((material) => material.id === line.materialId)?.tier)).size >= 2)).toBe(true)
   })
 
-  it('keeps fine-fragrance proposals as concentrate compositions evaluated at the requested final concentration', () => {
+  it('turns Fine Fragrance research into carrier-free Accord building blocks', () => {
     const brief = formulaDesignBriefSchema.parse({
       name: 'Twenty percent EDP',
       creativeBrief: 'A balanced citrus woody eau de parfum',
@@ -52,7 +52,29 @@ describe('Formula Intelligence deterministic proposals', () => {
     for (const direction of directions) {
       const carrier = direction.proposal.ingredients.find((line) => materials.find((material) => material.id === line.materialId)?.family === 'Carrier')
       expect(carrier).toBeUndefined()
-      expect(direction.proposal.finalProductConcentrationPercent).toBe(20)
+      expect(direction.proposal.formulaType).toBe('ACCORD')
+      expect(direction.proposal.finalProductConcentrationPercent).toBe(100)
+      expect(direction.proposal.requiresFinalProductContext).toBe(true)
+      expect(direction.proposal.ingredients.reduce((sum, line) => sum + line.percentage, 0)).toBeCloseTo(100, 4)
+    }
+  })
+
+  it('builds accords as carrier-free concentrates and keeps final-product review context explicit', () => {
+    const brief = formulaDesignBriefSchema.parse({
+      name: 'Citrus wood accord',
+      creativeBrief: 'A dry citrus wood accord for later final-product evaluation',
+      formulaType: 'ACCORD',
+      concentrationType: 'OTHER',
+      finalProductConcentrationPercent: 100,
+      ifraCategory: '4',
+      requiresFinalProductContext: true,
+      targetGrams: 100,
+    })
+    const directions = buildDesignDirectionProposals(brief, materials)
+
+    for (const direction of directions) {
+      expect(direction.proposal.ingredients.some((line) => materials.find((material) => material.id === line.materialId)?.family === 'Carrier')).toBe(false)
+      expect(direction.proposal.requiresFinalProductContext).toBe(true)
       expect(direction.proposal.ingredients.reduce((sum, line) => sum + line.percentage, 0)).toBeCloseTo(100, 4)
     }
   })
@@ -60,7 +82,7 @@ describe('Formula Intelligence deterministic proposals', () => {
   it('preserves locked baseline composition while creating deterministic optimization alternatives', () => {
     const baseline = {
       name: 'Baseline', formulaType: 'FINE_FRAGRANCE' as const, targetGrams: 100, concentrationType: 'EDP' as const,
-      finalProductConcentrationPercent: 20, ifraCategory: '4', brief: 'baseline',
+      finalProductConcentrationPercent: 20, ifraCategory: '4', requiresFinalProductContext: false, brief: 'baseline',
       ingredients: materials.slice(0, 3).map((material, index) => ({ materialId: material.id, percentage: [50, 30, 20][index]!, pyramidNote: material.tier === 'Heart' ? 'Middle' as const : material.tier })),
     }
     const lockedId = baseline.ingredients[0]!.materialId
@@ -77,7 +99,7 @@ describe('Formula Intelligence deterministic proposals', () => {
   it('creates useful ratio candidates without introducing an unreviewed replacement material', () => {
     const baseline = {
       name: 'Ratio baseline', formulaType: 'ACCORD' as const, targetGrams: 100, concentrationType: 'OTHER' as const,
-      finalProductConcentrationPercent: 100, ifraCategory: '4', brief: 'baseline',
+      finalProductConcentrationPercent: 100, ifraCategory: '4', requiresFinalProductContext: false, brief: 'baseline',
       ingredients: [
         { materialId: 'mat-bergamot', percentage: 35, pyramidNote: 'Top' as const },
         { materialId: 'mat-hedione', percentage: 30, pyramidNote: 'Middle' as const },
@@ -143,7 +165,7 @@ describe('Formula Intelligence deterministic proposals', () => {
     const replacement = materials.find((material) => material.id !== source.id && material.tier === source.tier)!
     const baseline = {
       name: 'Restricted baseline', formulaType: 'FINE_FRAGRANCE' as const, targetGrams: 100, concentrationType: 'EDP' as const,
-      finalProductConcentrationPercent: 20, ifraCategory: '4', brief: 'baseline',
+      finalProductConcentrationPercent: 20, ifraCategory: '4', requiresFinalProductContext: false, brief: 'baseline',
       ingredients: [{ materialId: source.id, percentage: 100, pyramidNote: source.tier === 'Heart' ? 'Middle' as const : source.tier }],
     }
     const objectives = formulaOptimizationObjectivesSchema.parse({ prohibitedMaterialIds: [source.id], requireApprovedSubstitutions: true })

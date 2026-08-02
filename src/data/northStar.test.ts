@@ -105,6 +105,43 @@ describe('OlfactoryOps domain invariants', () => {
     expect(hedione?.activePercent).toBeCloseTo(6)
   })
 
+  it('resolves a Fine Fragrance Accord component from its pinned immutable version', () => {
+    const accord = {
+      ...structuredClone(formulas[0]!),
+      id: 'pinned-accord',
+      code: 'ACC-PINNED',
+      lines: [{ id: 'live-iso', label: 'Iso E Super', materialId: 'mat-iso', grams: 100 }],
+    }
+    const pinnedVersion = {
+      ...structuredClone(formulaVersions.find((version) => version.formulaId === 'frm-accord-citrus')!),
+      id: 'ACC-PINNED-v1',
+      formulaId: accord.id,
+      formulaCode: accord.code,
+      checksum: 'sha256:pinned-accord-v1',
+      lines: [
+        { id: 'snap-hedione', label: 'Hedione', materialId: 'mat-hedione', grams: 40 },
+        { id: 'snap-iso', label: 'Iso E Super', materialId: 'mat-iso', grams: 60 },
+      ],
+      totalGrams: 100,
+    }
+    const parent = {
+      ...structuredClone(formulas[1]!),
+      id: 'pinned-parent',
+      code: 'FRM-PINNED',
+      targetGrams: 100,
+      lines: [
+        {
+          id: 'parent-accord', label: 'Pinned Accord', childFormulaId: accord.id,
+          childFormulaVersionId: pinnedVersion.id, childFormulaChecksum: pinnedVersion.checksum, grams: 100,
+        },
+      ],
+    }
+    const leaves = resolveFormulaWithCatalog(parent.id, [parent, accord], undefined, [pinnedVersion])
+
+    expect(leaves.find((leaf) => leaf.materialId === 'mat-hedione')?.effectivePercent).toBeCloseTo(40)
+    expect(leaves.find((leaf) => leaf.materialId === 'mat-iso')?.effectivePercent).toBeCloseTo(60)
+  })
+
   it('evaluates IFRA against the final product concentration', () => {
     const formula = formulas.find((item) => item.id === 'frm-0421')!
     const evaluation = evaluateFormulaIfra(formula, resolveFormula(formula.id))

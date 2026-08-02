@@ -201,7 +201,7 @@ import {
 } from '../../../src/data/northStar.js'
 import { agentFormulaProposalSchema, type AgentFormulaProposal } from '../../../src/data/agentRuntime.js'
 
-const seededAdminEmail = 'admin@labofscents.org'
+const seededAdminEmail = 'm.thuanwork@gmail.com'
 const materialLibraryCuratorOrganizationId = 'org-nxl'
 const passwordHashAlgorithm = 'sha256'
 const passwordHashIterations = 100_000
@@ -753,6 +753,8 @@ type MaterialIngestionBody = {
 type FormulaLineMutationBody = {
   materialId?: string
   childFormulaId?: string
+  childFormulaVersionId?: string
+  childFormulaChecksum?: string
   grams?: number
   label?: string
   dilution?: number
@@ -817,8 +819,23 @@ type FormulaDraftMutationBody = {
   bottleVolumeMl?: number
   bottleCount?: number
   ifraCategory?: string
+  requiresFinalProductContext?: boolean
   assignedReviewer?: string
   lines?: FormulaLine[]
+}
+
+type FineFragranceCompositionBody = {
+  name?: string
+  targetGrams?: number
+  concentrationType?: Formula['concentrationType']
+  finalProductConcentrationPercent?: number
+  ifraCategory?: string
+  targetMarkets?: unknown
+  brief?: string
+  project?: string
+  collection?: string
+  accordComponents?: Array<{ formulaId?: string; grams?: number }>
+  materialLines?: Array<Omit<FormulaLineMutationBody, 'childFormulaId' | 'childFormulaVersionId' | 'childFormulaChecksum'>>
 }
 
 type FormulaReviewBody = {
@@ -1124,6 +1141,11 @@ export class NorthStarService {
       bottleVolumeMl: Math.max(0.01, Number(body.bottleVolumeMl ?? 50)),
       bottleCount: Math.max(1, Math.round(Number(body.bottleCount ?? 1))),
       ifraCategory: body.ifraCategory?.trim() || '4',
+      requiresFinalProductContext: formulaType === 'ACCORD' && (
+        Boolean(body.requiresFinalProductContext) ||
+        body.finalProductConcentrationPercent === undefined ||
+        !body.ifraCategory?.trim()
+      ),
       workflowStatus: 'DRAFT',
       draftRevision: 1,
       updatedAt: now,
@@ -1166,6 +1188,131 @@ export class NorthStarService {
     return { data: { formula, invariant: 'agent confirmation draft is idempotent and non-consuming' } }
   }
 
+  /**
+   * Creates a Fine Fragrance draft from immutable Accord components. This is a
+   * composition action only: inventory is evaluated from resolved leaves but
+   * never reserved or consumed.
+   */
+  composeFineFragrance(body: FineFragranceCompositionBody) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.edit')
+    const targetGrams = Number(body.targetGrams ?? 100)
+    if (!Number.isFinite(targetGrams) || targetGrams <= 0 || targetGrams > 100_000) {
+      throw new UnprocessableEntityException('Fine Fragrance target grams must be between 0 and 100,000')
+    }
+    if (!Array.isArray(body.accordComponents) || body.accordComponents.length < 2 || body.accordComponents.length > 24) {
+      throw new UnprocessableEntityException('Fine Fragrance composition requires between two and 24 Accord components')
+    }
+    const accordIds = body.accordComponents.map((component) => component?.formulaId?.trim() ?? '')
+    if (accordIds.some((id) => !id) || new Set(accordIds).size !== accordIds.length) {
+      throw new UnprocessableEntityException('Each Accord component must be selected once')
+    }
+
+    const accordLines = body.accordComponents.map((component, index) => {
+      const grams = Number(component?.grams)
+      if (!Number.isFinite(grams) || grams <= 0) {
+        throw new UnprocessableEntityException('Each Accord component requires grams greater than 0')
+      }
+      const child = this.formulaForSession(component?.formulaId?.trim() ?? '', session)
+      if (child.formulaType !== 'ACCORD') {
+        throw new UnprocessableEntityException('Fine Fragrance components must be Accord formulas')
+      }
+      const version = this.pinnedAccordVersionForComposition(child, session)
+      return {
+        id: `composition-accord-${index + 1}-${Date.now()}`,
+        label: child.name,
+        childFormulaId: child.id,
+        childFormulaVersionId: version.id,
+        childFormulaChecksum: version.checksum,
+        grams: Number(grams.toFixed(4)),
+        concentration: 100,
+        pyramidNote: 'Middle' as const,
+        odorType: 'Accord',
+        accord: child.name.toLowerCase(),
+        tags: ['accord', 'pinned-component'],
+      } satisfies FormulaLine
+    })
+    const materialLines = (body.materialLines ?? []).map((candidate, index) => {
+      const materialId = candidate?.materialId?.trim()
+      const grams = Number(candidate?.grams)
+      if (!materialId || !Number.isFinite(grams) || grams <= 0) {
+        throw new UnprocessableEntityException('Each direct material line requires a material and grams greater than 0')
+      }
+      const material = this.materialForSession(materialId, session)
+      const compliance = this.materialComplianceRecords.find((profile) =>
+        profile.materialId === material.id && (profile.organizationId || 'org-nxl') === session.organizationId,
+      )
+      if (compliance?.status === 'BLOCKED') {
+        throw new UnprocessableEntityException(`Blocked material ${material.name} cannot be added to a Fine Fragrance composition`)
+      }
+      return {
+        id: `composition-material-${index + 1}-${Date.now()}`,
+        label: candidate.label?.trim() || material.name,
+        materialId: material.id,
+        grams: Number(grams.toFixed(4)),
+        ...normalizeFormulaLineMetadata(candidate),
+      } satisfies FormulaLine
+    })
+    if (accordLines.length + materialLines.length > 500) {
+      throw new UnprocessableEntityException('Fine Fragrance composition supports at most 500 total lines')
+    }
+    const lines = [...accordLines, ...materialLines]
+    const total = lines.reduce((sum, line) => sum + line.grams, 0)
+    if (Math.abs(total - targetGrams) > 0.05) {
+      throw new UnprocessableEntityException('Accord and material component grams must total the Fine Fragrance target grams')
+    }
+
+    const created = this.createFormulaDraft({
+      formulaType: 'FINE_FRAGRANCE',
+      name: body.name,
+      targetGrams,
+      concentrationType: body.concentrationType,
+      finalProductConcentrationPercent: body.finalProductConcentrationPercent,
+      ifraCategory: body.ifraCategory,
+      targetMarkets: body.targetMarkets,
+      brief: body.brief,
+      project: body.project,
+      collection: body.collection,
+    }).data.formula
+    const formula = this.touchFormula(created, session, { compositionMode: 'ACCORD_COMPOSED', lines })
+    this.replaceFormula(formula)
+    const evidence = this.formulaEvidence(formula, session)
+    const audit = this.recordAudit('formula.fineFragrance.compose', formula.code, session.userId, evidence.ifra.blockerCount > 0 ? 'review' : 'allowed')
+    return {
+      data: {
+        formula,
+        ...evidence,
+        audit,
+        invariant: 'Fine Fragrance composition pins Accord snapshots and does not reserve or consume inventory',
+      },
+    }
+  }
+
+  refreshFineFragranceAccordComponent(id: string, lineId: string) {
+    const session = this.currentSession()
+    this.requirePermission(session.role, 'formulas.edit')
+    const formula = this.formulaForSession(id, session)
+    this.requireEditableFormula(formula)
+    if (formula.formulaType !== 'FINE_FRAGRANCE') {
+      throw new UnprocessableEntityException('Only Fine Fragrance formulas can refresh Accord components')
+    }
+    const line = formula.lines.find((candidate) => candidate.id === lineId)
+    if (!line?.childFormulaId) throw new NotFoundException('Accord component was not found')
+    const child = this.formulaForSession(line.childFormulaId, session)
+    if (child.formulaType !== 'ACCORD') throw new UnprocessableEntityException('Formula component is not an Accord')
+    const version = this.pinnedAccordVersionForComposition(child, session)
+    const updatedLine: FormulaLine = { ...line, label: child.name, childFormulaVersionId: version.id, childFormulaChecksum: version.checksum }
+    const updatedFormula = this.touchFormula(formula, session, {
+      lines: formula.lines.map((candidate) => candidate.id === line.id ? updatedLine : candidate),
+      status: 'draft',
+      workflowStatus: 'DRAFT',
+    })
+    this.replaceFormula(updatedFormula)
+    const evidence = this.formulaEvidence(updatedFormula, session)
+    const audit = this.recordAudit('formula.fineFragrance.component.refresh', `${updatedFormula.code}:${line.id}`, session.userId, 'allowed')
+    return { data: { formula: updatedFormula, line: updatedLine, ...evidence, audit, invariant: 'refresh pins an explicit Accord snapshot without inventory movement' } }
+  }
+
   updateFormulaDraft(id: string, body: FormulaDraftMutationBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'formulas.edit')
@@ -1184,6 +1331,13 @@ export class NorthStarService {
       return Number.isFinite(next) ? Math.min(maximum, Math.max(minimum, next)) : fallback
     }
     const targetGrams = bounded(body.targetGrams, formula.targetGrams, 0.01, 1_000_000)
+    const finalProductConcentrationPercent = bounded(body.finalProductConcentrationPercent, formula.finalProductConcentrationPercent, 0.01, 100)
+    const ifraCategory = body.ifraCategory === undefined ? formula.ifraCategory : body.ifraCategory.trim() || formula.ifraCategory
+    const completedFinalUseContext = body.finalProductConcentrationPercent !== undefined
+      && typeof body.ifraCategory === 'string'
+      && body.ifraCategory.trim().length > 0
+    const requiresFinalProductContext = formula.formulaType === 'ACCORD'
+      && (Boolean(body.requiresFinalProductContext) || (Boolean(formula.requiresFinalProductContext) && !completedFinalUseContext))
     let lines = formula.lines
     if (body.lines !== undefined) {
       if (!Array.isArray(body.lines) || body.lines.length > 500) {
@@ -1192,12 +1346,27 @@ export class NorthStarService {
       lines = body.lines.map((candidate, index) => {
         const lineBody: FormulaLineMutationBody = { ...candidate, tags: candidate.tags }
         const { grams, material, childFormula } = this.validateFormulaLineMutation(id, lineBody, session)
+        const pinnedChildVersion = childFormula && candidate.childFormulaVersionId
+          ? this.formulaVersionRecords.find((version) => (
+            version.id === candidate.childFormulaVersionId
+            && version.formulaId === childFormula.id
+            && version.organizationId === session.organizationId
+            && version.checksum === candidate.childFormulaChecksum
+          ))
+          : undefined
+        if (candidate.childFormulaVersionId && !pinnedChildVersion) {
+          throw new UnprocessableEntityException('Pinned Accord component version is invalid for this workspace')
+        }
         return {
           id: candidate.id?.trim() || `${id}-line-${index + 1}-${Date.now()}`,
           label: candidate.label?.trim() || material?.name || childFormula?.name || `Formula line ${index + 1}`,
           grams,
           ...(material ? { materialId: material.id } : {}),
           ...(childFormula ? { childFormulaId: childFormula.id } : {}),
+          ...(pinnedChildVersion ? {
+            childFormulaVersionId: pinnedChildVersion.id,
+            childFormulaChecksum: pinnedChildVersion.checksum,
+          } : {}),
           ...normalizeFormulaLineMetadata(lineBody, candidate),
           ...this.normalizeFormulaInventorySource(lineBody, material, grams, session, candidate),
         }
@@ -1211,7 +1380,7 @@ export class NorthStarService {
       name: body.name === undefined ? formula.name : body.name.trim() || formula.name,
       targetGrams,
       concentrationType: body.concentrationType ?? formula.concentrationType,
-      finalProductConcentrationPercent: bounded(body.finalProductConcentrationPercent, formula.finalProductConcentrationPercent, 0.01, 100),
+      finalProductConcentrationPercent,
       targetMarkets: body.targetMarkets === undefined ? formula.targetMarkets : readFormulaTags(body.targetMarkets),
       brief: body.brief === undefined ? formula.brief : body.brief.trim(),
       inspiration: body.inspiration === undefined ? formula.inspiration : body.inspiration.trim(),
@@ -1222,7 +1391,8 @@ export class NorthStarService {
       density: bounded(body.density, formula.density, 0.01, 10),
       bottleVolumeMl: bounded(body.bottleVolumeMl, formula.bottleVolumeMl, 0.1, 100_000),
       bottleCount: Math.round(bounded(body.bottleCount, formula.bottleCount, 1, 1_000_000)),
-      ifraCategory: body.ifraCategory === undefined ? formula.ifraCategory : body.ifraCategory.trim() || formula.ifraCategory,
+      ifraCategory,
+      requiresFinalProductContext,
       assignedReviewer: body.assignedReviewer === undefined ? formula.assignedReviewer : body.assignedReviewer.trim() || undefined,
       workflowStatus: 'DRAFT',
       status: 'draft',
@@ -1528,6 +1698,12 @@ export class NorthStarService {
       grams,
       ...(material ? { materialId: material.id } : {}),
       ...(childFormula ? { childFormulaId: childFormula.id } : {}),
+      ...(childFormula && childFormula.id === line.childFormulaId && line.childFormulaVersionId && line.childFormulaChecksum
+        ? {
+          childFormulaVersionId: line.childFormulaVersionId,
+          childFormulaChecksum: line.childFormulaChecksum,
+        }
+        : {}),
       ...(line.dilution ? { dilution: line.dilution } : {}),
       ...normalizeFormulaLineMetadata(mutationBody, line),
       ...this.normalizeFormulaInventorySource(mutationBody, material, grams, session, line),
@@ -1922,6 +2098,10 @@ export class NorthStarService {
     this.requirePermission(session.role, 'formulas.edit')
     const formula = this.formulaForSession(id, session)
     this.requireEditableFormula(formula)
+    if (formula.requiresFinalProductContext) {
+      throw new UnprocessableEntityException('Add final-product concentration and IFRA category before reviewing this accord')
+    }
+    this.requireFineFragranceAccordComposition(formula, session)
     const reviewer = body.reviewer?.trim() || formula.assignedReviewer?.trim()
     if (!reviewer) {
       throw new UnprocessableEntityException('Assign a reviewer before submitting the formula')
@@ -2136,6 +2316,7 @@ export class NorthStarService {
       targetMarkets: proposal.formulaType === 'ACCORD' ? ['GLOBAL'] : ['EU', 'US'], brief: proposal.brief,
       inspiration: '', pyramidSummary: '', tags: ['agent-proposal'], project: '', collection: '', density: 1,
       bottleVolumeMl: 50, bottleCount: 1, ifraCategory: proposal.ifraCategory, workflowStatus: 'DRAFT',
+      requiresFinalProductContext: proposal.formulaType === 'ACCORD' && proposal.requiresFinalProductContext,
       draftRevision: 0, updatedAt: now, updatedBy: session.email, approvalHistory: [], status: 'draft',
       targetGrams: proposal.targetGrams, owner: session.email, lines,
     }
@@ -2182,7 +2363,7 @@ export class NorthStarService {
           blockedMaterialIds, reviewMaterialIds,
           status: blockedMaterialIds.length > 0 || ifra.blockerCount > 0
             ? 'BLOCKED'
-            : reviewMaterialIds.length > 0 || ifra.nearLimitCount > 0 ? 'REVIEW_REQUIRED' : 'APPROVED',
+            : formula.requiresFinalProductContext || reviewMaterialIds.length > 0 || ifra.nearLimitCount > 0 ? 'REVIEW_REQUIRED' : 'APPROVED',
         },
         invariant: 'agent preview is advisory only and never reserves or consumes inventory',
       },
@@ -2424,6 +2605,7 @@ export class NorthStarService {
     if (formula.workflowStatus !== 'IN_REVIEW') {
       throw new UnprocessableEntityException('Formula must be submitted for review before approval')
     }
+    this.requireFineFragranceAccordComposition(formula, session)
     const evidence = this.formulaEvidence(formula, session)
     const composition = formulaComposition(formula)
     if (!composition.ready) {
@@ -3604,7 +3786,7 @@ export class NorthStarService {
         organization,
         brand,
         membership,
-        subscription,
+        subscription: this.publicBetaAccessSubscription(subscription),
         sso: this.publicSsoConfig(sso),
         session,
         csrfToken: loginResult.csrfToken,
@@ -9162,12 +9344,14 @@ export class NorthStarService {
     const usage = this.billingUsageRecord(subscription)
     const limitChecks = this.billingLimitChecks(usage, plan)
     const invoices = this.invoicesForSubscription(subscription.id)
+    const publicPlan = this.publicBetaAccessPlan(plan)
+    const publicSubscription = this.publicBetaAccessSubscription(subscription)
     return {
       data: {
         billingMode: this.billingMode,
         plans: this.billingMode === 'self_service' ? billingPlans : [],
-        plan,
-        subscription,
+        plan: publicPlan,
+        subscription: publicSubscription,
         usage,
         limitChecks,
         invoices: this.billingMode === 'self_service' ? invoices : [],
@@ -9278,7 +9462,7 @@ export class NorthStarService {
   }
 
   billingSubscription() {
-    return { data: this.currentSubscription() }
+    return { data: this.publicBetaAccessSubscription(this.currentSubscription()) }
   }
 
   billingUsage() {
@@ -11436,6 +11620,43 @@ export class NorthStarService {
     return this.billingPlanForId(subscription.planId)
   }
 
+  /**
+   * Keeps beta access commercially neutral at the response boundary. Internal
+   * subscription records remain the source of truth for write and quota gates.
+   */
+  private publicBetaAccessPlan(plan: BillingPlanRecord): BillingPlanRecord {
+    if (this.billingMode === 'self_service') {
+      return plan
+    }
+    return {
+      ...plan,
+      id: 'BETA_ACCESS',
+      name: 'Beta access',
+      monthlyPrice: 0,
+      features: ['Enabled beta workspace features'],
+    }
+  }
+
+  private publicBetaAccessSubscription(subscription: BillingSubscriptionRecord): BillingSubscriptionRecord {
+    if (this.billingMode === 'self_service') {
+      return subscription
+    }
+    return {
+      id: subscription.id,
+      organizationId: subscription.organizationId,
+      planId: 'BETA_ACCESS',
+      provider: 'manual',
+      collectionMode: 'manual_invoice',
+      status: subscription.canWrite ? 'active' : subscription.status,
+      currentPeriodStart: subscription.currentPeriodStart,
+      currentPeriodEnd: subscription.currentPeriodEnd,
+      canWrite: subscription.canWrite,
+      canExport: subscription.canExport,
+      nextInvoiceAt: '',
+      updatedAt: subscription.updatedAt,
+    }
+  }
+
   private organizationPlanForBillingPlan(planId: string): OrganizationRecord['plan'] {
     if (planId === 'PLAN-APPRENTICE') return 'Free'
     if (planId === 'PLAN-ARTISAN') return 'Pro'
@@ -11535,6 +11756,51 @@ export class NorthStarService {
     const exports = this.auditExportsForOrganization(subscription.organizationId)
     const retryingDelivery = deliveries.some((delivery) => delivery.status === 'retrying')
     const plan = this.planForSubscription(subscription)
+    if (this.billingMode === 'managed_beta') {
+      return [
+        {
+          key: 'workspace-write-gate',
+          label: 'Workspace write gate',
+          status: subscription.canWrite ? 'pass' : 'blocked',
+          detail: `Workspace write access is ${subscription.canWrite ? 'enabled' : 'blocked'} by server-side policy`,
+        },
+        {
+          key: 'beta-capacity-protection',
+          label: 'Beta capacity protection',
+          status: hasBlockedLimit ? 'blocked' : 'pass',
+          detail: hasBlockedLimit ? 'At least one protected capacity is exceeded' : 'All tracked workspace usage is within protected beta capacity',
+        },
+        {
+          key: 'webhook-idempotency',
+          label: 'Webhook retry/idempotency evidence',
+          status: webhooks.length === 0 ? 'warning' : retryingDelivery ? 'warning' : 'pass',
+          detail:
+            webhooks.length === 0
+              ? 'No signed webhook endpoint has been configured'
+              : retryingDelivery
+                ? 'A delivery is retrying with preserved idempotency key'
+                : 'Webhook deliveries are healthy',
+        },
+        {
+          key: 'enterprise-identity',
+          label: 'Identity readiness',
+          status: sso.status === 'enforced' || (sso.status === 'verified' && sso.scim.enabled) ? 'pass' : 'warning',
+          detail: `${sso.provider} is ${sso.status}; SCIM is ${sso.scim.status}`,
+        },
+        {
+          key: 'api-key-lifecycle',
+          label: 'API key lifecycle',
+          status: apiKeys.some((key) => key.status === 'active') ? 'pass' : 'warning',
+          detail: `${apiKeys.filter((key) => key.status === 'active').length} active API key(s); rotation is reveal-once`,
+        },
+        {
+          key: 'audit-export-evidence',
+          label: 'Audit export evidence',
+          status: exports.some((job) => job.status === 'READY') ? 'pass' : 'warning',
+          detail: `${exports.length} tenant-scoped audit export job(s) retained with checksum`,
+        },
+      ] satisfies BillingConsoleResponse['readiness']
+    }
     return [
       {
         key: 'subscription-state',
@@ -11639,7 +11905,7 @@ export class NorthStarService {
 
   private requireSelfServiceBilling() {
     if (this.billingMode !== 'self_service') {
-      throw new UnprocessableEntityException('Self-service billing is disabled while beta access is managed directly by OlfactoryOps')
+      throw new UnprocessableEntityException('Billing plans and payment controls are unavailable while beta access is managed directly by OlfactoryOps')
     }
   }
 
@@ -12965,10 +13231,60 @@ export class NorthStarService {
     }
   }
 
+  private pinnedAccordVersionForComposition(accord: Formula, session: AuthSession) {
+    if (accord.formulaType !== 'ACCORD') {
+      throw new UnprocessableEntityException('Fine Fragrance components must be Accord formulas')
+    }
+    if (!formulaComposition(accord).ready) {
+      throw new UnprocessableEntityException(`Accord ${accord.code} must total 100% before it can be used as a component`)
+    }
+    const versions = this.formulaVersionRecords
+      .filter((version) => version.formulaId === accord.id && (version.organizationId || 'org-nxl') === session.organizationId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.version.localeCompare(left.version))
+    if (accord.workflowStatus === 'APPROVED') {
+      const approved = versions.find((version) => version.status === 'APPROVED')
+      if (!approved) throw new UnprocessableEntityException(`Approved Accord ${accord.code} is missing its immutable version`)
+      return approved
+    }
+    if (accord.owner !== session.email && accord.updatedBy !== session.email) {
+      throw new NotFoundException('Accord component was not found')
+    }
+    // Own working drafts are allowed, but are converted into an immutable
+    // component snapshot before a Fine Fragrance can reference them.
+    return this.createFormulaVersion(accord.id, { note: `Pinned as a Fine Fragrance component by ${session.email}` }).data.version
+  }
+
+  private requireFineFragranceAccordComposition(formula: Formula, session: AuthSession) {
+    if (formula.formulaType !== 'FINE_FRAGRANCE' || formula.compositionMode !== 'ACCORD_COMPOSED') return
+    const componentLines = formula.lines.filter((line) => Boolean(line.childFormulaId))
+    if (componentLines.length < 2) {
+      throw new UnprocessableEntityException('Fine Fragrance review requires at least two Accord components')
+    }
+    for (const line of componentLines) {
+      const child = line.childFormulaId ? this.formulaForSession(line.childFormulaId, session) : undefined
+      if (!child || child.formulaType !== 'ACCORD') {
+        throw new UnprocessableEntityException('Fine Fragrance components must resolve to Accord formulas')
+      }
+      if (!line.childFormulaVersionId || !line.childFormulaChecksum) {
+        throw new UnprocessableEntityException('Fine Fragrance Accord components must be pinned to immutable versions')
+      }
+      const version = this.formulaVersionRecords.find((candidate) =>
+        candidate.id === line.childFormulaVersionId &&
+        candidate.formulaId === child.id &&
+        candidate.checksum === line.childFormulaChecksum &&
+        (candidate.organizationId || 'org-nxl') === session.organizationId,
+      )
+      if (!version) {
+        throw new UnprocessableEntityException(`Pinned Accord component ${line.label} is unavailable`)
+      }
+    }
+  }
+
   private formulaEvidence(formula: Formula, session: AuthSession) {
     const catalog = this.formulaCatalogForSession(session).map((item) => (item.id === formula.id ? formula : item))
     const materials = this.materialCatalogForSession(session)
-    const leaves = resolveFormulaWithCatalog(formula.id, catalog, materials)
+    const versions = this.formulaVersionRecords.filter((version) => (version.organizationId || 'org-nxl') === session.organizationId)
+    const leaves = resolveFormulaWithCatalog(formula.id, catalog, materials, versions)
     return {
       leaves,
       totals: formulaTotals(leaves),

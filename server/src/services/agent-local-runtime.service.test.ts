@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { AgentLocalRuntimeService } from './agent-local-runtime.service'
 import { NorthStarService } from './northstar.service'
 
-const email = 'admin@labofscents.org'
+const email = 'm.thuanwork@gmail.com'
 const password = 'LocalAgentPassword2026!'
 const directories: string[] = []
 
@@ -132,6 +132,56 @@ describe('AgentLocalRuntimeService', () => {
     expect(second.data.version.checksum).toBe(first.data.version.checksum)
   })
 
+  it('archives a private brief for thirty days and restores it without exposing it in the active list', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    const project = await runtime.createDesignProject(service, session, {
+      name: 'Archive this creative brief',
+      rawBrief: 'A private citrus wood brief that should be recoverable after archive.',
+      formulaType: 'ACCORD',
+    })
+
+    const archived = await runtime.archiveDesignProject(service, session, project.data.project.id)
+    expect(archived.data).toMatchObject({ projectId: project.data.project.id, status: 'ARCHIVED', duplicate: false })
+    expect((await runtime.listDesignProjects(service, session, true)).data.some((item) => item.id === project.data.project.id)).toBe(false)
+    expect((await runtime.listDesignProjects(service, session, true, true)).data.find((item) => item.id === project.data.project.id)).toMatchObject({
+      status: 'ARCHIVED', formulaTypeHint: 'ACCORD',
+    })
+
+    const restored = await runtime.restoreDesignProject(service, session, project.data.project.id)
+    expect(restored.data).toMatchObject({ projectId: project.data.project.id, status: 'BRIEFED' })
+    expect((await runtime.listDesignProjects(service, session, true)).data.some((item) => item.id === project.data.project.id)).toBe(true)
+  })
+
+  it('removes an expired unused archive when the local durable state is reloaded', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    const project = await runtime.createDesignProject(service, session, {
+      name: 'Expired unused brief',
+      rawBrief: 'A private brief that was archived before any direction or run existed.',
+    })
+    await runtime.archiveDesignProject(service, session, project.data.project.id)
+
+    const internal = runtime as unknown as {
+      state: { projects: Array<{ id: string; purgeAfter?: string }> }
+      persist: () => Promise<void>
+    }
+    internal.state.projects.find((candidate) => candidate.id === project.data.project.id)!.purgeAfter = '2000-01-01T00:00:00.000Z'
+    await internal.persist()
+
+    const restored = new AgentLocalRuntimeService()
+    Object.defineProperty(restored, 'storagePath', { value: join(directory, 'agent-state.json') })
+    expect((await restored.listDesignProjects(service, session, true, true)).data.some((item) => item.id === project.data.project.id)).toBe(false)
+  })
+
   it('pins a material universe and restores private deterministic candidate evaluations', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
     directories.push(directory)
@@ -206,6 +256,11 @@ describe('AgentLocalRuntimeService', () => {
     const pending = await runtime.requestDesignDraftSave(service, session, project.data.project.id, direction.directionId)
     const confirmed = await runtime.resolveConfirmation(service, session, direction.runId!, pending.data.confirmationId, 'accept')
     const formula = confirmed.data.formula!
+    service.updateFormulaDraft(formula.id, {
+      expectedRevision: formula.draftRevision,
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+    })
     service.submitFormulaForReview(formula.id, { reviewer: email, comment: 'Direction draft is ready for normal approval.' })
     const approval = service.approveFormula(formula.id, { comment: 'Approved for trial planning.' }).data
 

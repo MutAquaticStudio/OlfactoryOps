@@ -52,6 +52,11 @@ type ProjectRow = {
   brief_json: string
   current_brief_version_id: string | null
   selected_direction_id: string | null
+  formula_type_hint?: 'ACCORD' | 'FINE_FRAGRANCE' | null
+  archived_at?: string | null
+  archived_by_user_id?: string | null
+  archive_previous_status?: string | null
+  purge_after?: string | null
   created_at: string
   updated_at: string
 }
@@ -147,6 +152,11 @@ type Preview = ReturnType<NorthStarService['previewFormulaIntelligence']>['data'
 
 function now() {
   return new Date().toISOString()
+}
+
+function isWorkspaceOwnerOrAdmin(role: string) {
+  const normalized = role.trim().toLowerCase()
+  return normalized === 'owner' || normalized === 'admin'
 }
 
 function uuid() {
@@ -364,7 +374,7 @@ export class FormulaIntelligenceStore {
     const key = `design-project:${actor.userId}:${rawKey}`
     if (!rawKey) throw new UnprocessableEntityException('Idempotency-Key is required for a design brief')
     const existing = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
        FROM formula_design_projects WHERE organization_id = ? AND idempotency_key = ?`,
     ).bind(actor.organizationId, key).first<ProjectRow>()
     if (existing) return this.projectPayload(existing, actor, false)
@@ -373,13 +383,15 @@ export class FormulaIntelligenceStore {
     const rawChecksum = await checksum({ schemaVersion: 1, rawBrief, state: 'RAW' })
     const project: ProjectRow = {
       id: uuid(), organization_id: actor.organizationId, brand_id: brandId || null, created_by_user_id: actor.userId,
-      status: 'BRIEFED', name: input.name, brief_json: '{}', current_brief_version_id: briefVersionId, selected_direction_id: null, created_at: timestamp, updated_at: timestamp,
+      status: 'BRIEFED', name: input.name, brief_json: '{}', current_brief_version_id: briefVersionId, selected_direction_id: null,
+      formula_type_hint: input.formulaType ?? null, archived_at: null, archived_by_user_id: null, archive_previous_status: null, purge_after: null,
+      created_at: timestamp, updated_at: timestamp,
     }
     await this.db.batch([
       this.db.prepare(
-        `INSERT INTO formula_design_projects (id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(project.id, project.organization_id, project.brand_id, project.created_by_user_id, project.status, project.name, project.brief_json, project.current_brief_version_id, key, timestamp, timestamp),
+        `INSERT INTO formula_design_projects (id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, formula_type_hint, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(project.id, project.organization_id, project.brand_id, project.created_by_user_id, project.status, project.name, project.brief_json, project.current_brief_version_id, project.formula_type_hint, key, timestamp, timestamp),
       this.db.prepare(
         `INSERT INTO formula_design_brief_versions (
           id, organization_id, project_id, version_number, state, schema_version, raw_brief,
@@ -391,15 +403,16 @@ export class FormulaIntelligenceStore {
     return this.projectPayload(project, actor, false)
   }
 
-  async listDesignProjects(actor: AgentActor, canViewPrivate: boolean) {
+  async listDesignProjects(actor: AgentActor, canViewPrivate: boolean, includeArchived = false) {
+    const archivedFilter = includeArchived ? '' : `AND p.status <> 'ARCHIVED'`
     const result = await this.db.prepare(
-      `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.current_brief_version_id, p.selected_direction_id, p.created_at, p.updated_at
+      `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.current_brief_version_id, p.selected_direction_id, p.formula_type_hint, p.archived_at, p.archived_by_user_id, p.archive_previous_status, p.purge_after, p.created_at, p.updated_at
        FROM formula_design_projects p
        LEFT JOIN formula_design_direction_shares s
          ON s.project_id = p.id AND s.organization_id = p.organization_id AND s.recipient_user_id = ? AND s.revoked_at IS NULL
        LEFT JOIN formula_intelligence_runs r
          ON r.project_id = p.id AND r.organization_id = p.organization_id AND r.created_by_user_id = ?
-       WHERE p.organization_id = ? AND (p.created_by_user_id = ? OR s.id IS NOT NULL OR r.run_id IS NOT NULL)
+       WHERE p.organization_id = ? AND (p.created_by_user_id = ? OR s.id IS NOT NULL OR r.run_id IS NOT NULL) ${archivedFilter}
        ORDER BY p.updated_at DESC LIMIT 80`,
     ).bind(actor.userId, actor.userId, actor.organizationId, actor.userId).all<ProjectRow>()
     const visible = new Map((result.results ?? []).map((project) => [project.id, project]))
@@ -410,7 +423,7 @@ export class FormulaIntelligenceStore {
       if (brandIds.length) {
         const placeholders = brandIds.map(() => '?').join(', ')
         const queued = await this.db.prepare(
-          `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
+          `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
            FROM formula_design_projects
            WHERE organization_id = ? AND status = 'BRIEFED' AND brand_id IN (${placeholders})
            ORDER BY updated_at DESC LIMIT 80`,
@@ -426,12 +439,87 @@ export class FormulaIntelligenceStore {
     return this.projectPayload(project, actor, canViewPrivate)
   }
 
+  async archiveDesignProject(actor: AgentActor, projectId: string) {
+    const project = await this.projectForLifecycle(actor, projectId)
+    if (project.status === 'ARCHIVED') {
+      return { projectId: project.id, status: 'ARCHIVED' as const, purgeAfter: project.purge_after ?? undefined, duplicate: true }
+    }
+    const timestamp = now()
+    const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    const restoreStatus = project.status === 'IN_PROGRESS' ? 'BRIEFED' : project.status
+    const activeRuns = await this.db.prepare(
+      `SELECT r.id, r.progress
+       FROM agent_runs r
+       INNER JOIN formula_intelligence_runs fi ON fi.run_id = r.id AND fi.organization_id = r.organization_id
+       WHERE r.organization_id = ? AND fi.project_id = ?
+         AND r.status IN ('QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION', 'PAUSED')`,
+    ).bind(actor.organizationId, project.id).all<{ id: string; progress: number }>()
+    await this.db.batch([
+      this.db.prepare(
+        `UPDATE formula_design_projects
+         SET status = 'ARCHIVED', archived_at = ?, archived_by_user_id = ?, archive_previous_status = ?, purge_after = ?, updated_at = ?
+         WHERE id = ? AND organization_id = ? AND status <> 'ARCHIVED'`,
+      ).bind(timestamp, actor.userId, restoreStatus, purgeAfter, timestamp, project.id, actor.organizationId),
+      this.db.prepare(
+        `UPDATE formula_design_direction_shares
+         SET revoked_at = ?, revoked_by_user_id = ?, updated_at = ?
+         WHERE organization_id = ? AND project_id = ? AND revoked_at IS NULL`,
+      ).bind(timestamp, actor.userId, timestamp, actor.organizationId, project.id),
+      this.db.prepare(
+        `UPDATE agent_runs
+         SET status = 'CANCELLED', cancel_requested_at = ?, completed_at = ?, updated_at = ?, version = version + 1
+         WHERE organization_id = ? AND id IN (
+           SELECT run_id FROM formula_intelligence_runs WHERE organization_id = ? AND project_id = ?
+         ) AND status IN ('QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION', 'PAUSED')`,
+      ).bind(timestamp, timestamp, timestamp, actor.organizationId, actor.organizationId, project.id),
+      this.db.prepare(
+        `UPDATE agent_jobs
+         SET status = 'CANCELLED', lease_token = NULL, lease_expires_at = NULL, updated_at = ?
+         WHERE organization_id = ? AND run_id IN (
+           SELECT run_id FROM formula_intelligence_runs WHERE organization_id = ? AND project_id = ?
+         ) AND status IN ('QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION', 'PAUSED')`,
+      ).bind(timestamp, actor.organizationId, actor.organizationId, project.id),
+      this.db.prepare(
+        `UPDATE agent_confirmations
+         SET status = 'EXPIRED', responded_at = ?
+         WHERE organization_id = ? AND run_id IN (
+           SELECT run_id FROM formula_intelligence_runs WHERE organization_id = ? AND project_id = ?
+         ) AND status = 'PENDING'`,
+      ).bind(timestamp, actor.organizationId, actor.organizationId, project.id),
+    ])
+    const runtime = new AgentRuntimeStore(this.db)
+    await Promise.all((activeRuns.results ?? []).map((run) => runtime.append(run.id, actor.organizationId, 'run.cancelled', {
+      status: 'CANCELLED', progress: run.progress, reason: 'design-project-archived',
+    }).catch(() => undefined)))
+    await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.design.project.archive', project.id)
+    return { projectId: project.id, status: 'ARCHIVED' as const, purgeAfter, duplicate: false }
+  }
+
+  async restoreDesignProject(actor: AgentActor, projectId: string) {
+    const project = await this.projectForLifecycle(actor, projectId)
+    if (project.status !== 'ARCHIVED') {
+      throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_NOT_ARCHIVED')
+    }
+    const restoredStatus = project.archive_previous_status && project.archive_previous_status !== 'IN_PROGRESS'
+      ? project.archive_previous_status
+      : 'BRIEFED'
+    const timestamp = now()
+    await this.db.prepare(
+      `UPDATE formula_design_projects
+       SET status = ?, archived_at = NULL, archived_by_user_id = NULL, archive_previous_status = NULL, purge_after = NULL, updated_at = ?
+       WHERE id = ? AND organization_id = ? AND status = 'ARCHIVED'`,
+    ).bind(restoredStatus, timestamp, project.id, actor.organizationId).run()
+    await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.design.project.restore', project.id)
+    return { projectId: project.id, status: restoredStatus, duplicate: false }
+  }
+
   async designProjectForGeneration(actor: AgentActor, projectId: string) {
     const project = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
     ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
+    if (project.status === 'ARCHIVED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ARCHIVED')
     const brandIds = await this.activeBrandIds(actor)
     const canStart = project.created_by_user_id === actor.userId || (
       project.status === 'BRIEFED' && Boolean(project.brand_id) && brandIds.includes(project.brand_id!)
@@ -517,9 +605,9 @@ export class FormulaIntelligenceStore {
         ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 'MANUAL', 'competitive-moat.v1', ?, ?, ?, ?)`,
       ).bind(versionId, actor.organizationId, project.id, versionNumber, validation.state, priorVersion?.raw_brief ?? '', JSON.stringify(validation.brief), JSON.stringify(validation.unresolvedQuestions), versionChecksum, scopedIdempotencyKey, actor.userId, timestamp),
       this.db.prepare(
-        `UPDATE formula_design_projects SET current_brief_version_id = ?, brief_json = ?, updated_at = ?
+        `UPDATE formula_design_projects SET current_brief_version_id = ?, brief_json = ?, formula_type_hint = ?, updated_at = ?
          WHERE id = ? AND organization_id = ?`,
-      ).bind(versionId, legacyProjection, timestamp, project.id, actor.organizationId),
+      ).bind(versionId, legacyProjection, validation.brief.product.formulaType ?? project.formula_type_hint ?? null, timestamp, project.id, actor.organizationId),
     ])
     await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.design.brief.version.create', `${project.id}:${versionId}`, validation.state === 'REVIEWED' ? 'allowed' : 'review')
     return this.briefVersionPayload({
@@ -573,6 +661,10 @@ export class FormulaIntelligenceStore {
     directions: DesignDirectionArtifact[],
     evaluationContext?: { constraintSnapshotId: string; evaluations: DesignCandidateEvaluation[] },
   ) {
+    const project = await this.db.prepare(
+      `SELECT status FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
+    ).bind(projectId, actor.organizationId).first<{ status: string }>()
+    if (!project || project.status === 'ARCHIVED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ARCHIVED')
     const timestamp = now()
     const statements = directions.map((direction, index) => this.db.prepare(
       `INSERT INTO formula_design_directions (id, organization_id, project_id, run_id, sequence, title, status, safe_summary_json, proposal_json, created_at, updated_at)
@@ -837,7 +929,8 @@ export class FormulaIntelligenceStore {
     const total = proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0)
     if (Math.abs(total - 100) > 0.05) throw new UnprocessableEntityException('Formula composition must total 100% before it can be saved')
     const preview = service.previewFormulaIntelligence(proposal).data
-    if (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
+    const isAccordAwaitingFinalUse = proposal.formulaType === 'ACCORD' && proposal.requiresFinalProductContext
+    if (preview.compliance.blockedMaterialIds.length > 0 || (!isAccordAwaitingFinalUse && (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0))) {
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
     }
     if (config.workflowKind === 'REFORMULATION_OPTIMIZER') {
@@ -986,9 +1079,21 @@ export class FormulaIntelligenceStore {
     }
   }
 
-  private async projectForActor(actor: AgentActor, projectId: string) {
+  private async projectForLifecycle(actor: AgentActor, projectId: string) {
     const project = await this.db.prepare(
-      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
+       FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
+    ).bind(projectId, actor.organizationId).first<ProjectRow>()
+    if (!project) throw new NotFoundException('Design project was not found')
+    if (project.created_by_user_id !== actor.userId && !isWorkspaceOwnerOrAdmin(actor.role)) {
+      throw new ForbiddenException('Only the brief creator or a workspace Owner/Admin can archive this project')
+    }
+    return project
+  }
+
+  private async projectForActor(actor: AgentActor, projectId: string, includeArchived = false) {
+    const project = await this.db.prepare(
+      `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
     ).bind(projectId, actor.organizationId).first<ProjectRow>()
     if (!project) throw new NotFoundException('Design project was not found')
@@ -999,6 +1104,7 @@ export class FormulaIntelligenceStore {
        WHERE organization_id = ? AND project_id = ? AND recipient_user_id = ? AND revoked_at IS NULL LIMIT 1`,
     ).bind(actor.organizationId, project.id, actor.userId).first<{ found: number }>()
     if (!isCreator && !isProducer && !shared) throw new NotFoundException('Design project was not found')
+    if (!includeArchived && project.status === 'ARCHIVED') throw new NotFoundException('Design project was not found')
     return project
   }
 
@@ -1116,6 +1222,8 @@ export class FormulaIntelligenceStore {
       status: project.status,
       createdByUserId: project.created_by_user_id,
       selectedDirectionId: project.selected_direction_id,
+      formulaTypeHint: project.formula_type_hint ?? undefined,
+      ...(project.status === 'ARCHIVED' ? { archivedAt: project.archived_at ?? undefined, purgeAfter: project.purge_after ?? undefined } : {}),
       ...(legacyBrief.success && canViewBriefDetails ? { brief: legacyBrief.data } : {}),
       currentBriefVersionId: project.current_brief_version_id,
       briefVersion: currentBriefVersion ? this.briefVersionPayload(currentBriefVersion) : undefined,
@@ -1274,6 +1382,30 @@ async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknow
   await store.append(run.id, run.organization_id, 'run.failed', { status: 'FAILED', error: failure.message, errorInfo: failure })
 }
 
+/**
+ * Retention is deliberately conservative: only archived briefs with no
+ * generated run or direction can be deleted. Anything that could support a
+ * formula, trial, or audit investigation remains archived rather than being
+ * destroyed by a scheduled job.
+ */
+export async function purgeExpiredArchivedDesignProjects(db: D1Database) {
+  const cutoff = now()
+  return db.prepare(
+    `DELETE FROM formula_design_projects
+     WHERE status = 'ARCHIVED' AND purge_after IS NOT NULL AND purge_after <= ?
+       AND NOT EXISTS (
+         SELECT 1 FROM formula_design_directions d
+         WHERE d.organization_id = formula_design_projects.organization_id
+           AND d.project_id = formula_design_projects.id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM formula_intelligence_runs r
+         WHERE r.organization_id = formula_design_projects.organization_id
+           AND r.project_id = formula_design_projects.id
+       )`,
+  ).bind(cutoff).run()
+}
+
 export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
   const workspaceMaterials = service.materials().data
   const researchMaterials = workspaceMaterials.filter((material) => material.catalogueSource?.status === 'SOURCE_ONLY')
@@ -1400,17 +1532,23 @@ async function runDesignStudio(
   const previews = proposals.map((direction) => service.previewFormulaIntelligence(direction.proposal).data)
   await recordTool(store, run, complianceId, 'validate_compliance', { directionCount: proposals.length }, { statuses: previews.map((preview) => preview.compliance.status) })
   await store.completeNode(run, complianceId, 'validate_compliance', { statuses: previews.map((preview) => preview.compliance.status) }, 80)
-  const directions: DesignDirectionArtifact[] = proposals.map((direction, index) => ({
-    directionId: uuid(),
-    title: direction.title,
-    narrative: direction.narrative,
-    pyramidSummary: direction.pyramidSummary,
-    availability: availabilityStatus(previews[index]!),
-    complianceStatus: complianceStatus(previews[index]!),
-    proposal: direction.proposal,
-    warnings: candidateWarnings(previews[index]!),
-    historicalEvidence: direction.historicalEvidence,
-  }))
+  const directions: DesignDirectionArtifact[] = proposals.map((direction, index) => {
+    const requiresFinalUseReview = direction.proposal.formulaType === 'ACCORD' && direction.proposal.requiresFinalProductContext
+    return {
+      directionId: uuid(),
+      title: direction.title,
+      narrative: direction.narrative,
+      pyramidSummary: direction.pyramidSummary,
+      availability: availabilityStatus(previews[index]!),
+      complianceStatus: requiresFinalUseReview ? 'REVIEW_REQUIRED' : complianceStatus(previews[index]!),
+      proposal: direction.proposal,
+      warnings: [
+        ...(requiresFinalUseReview ? ['Final-product concentration and IFRA use context are required before review.'] : []),
+        ...candidateWarnings(previews[index]!),
+      ].slice(0, 20),
+      historicalEvidence: direction.historicalEvidence,
+    }
+  })
   const evaluations = constraintSnapshot?.material_universe_hash
     ? await evaluateDesignCandidates(directions, previews, config.brief, constraintSnapshot.material_universe_hash, materials.length)
     : []

@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, ChevronRight, FlaskConical, MessageSquare, Play, Save, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { AlertCircle, Archive, CheckCircle2, ChevronRight, FlaskConical, MessageSquare, Play, RotateCcw, Save, Share2, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createAgentEventReconciliation,
@@ -16,6 +16,8 @@ import { AnimatedContent, AnimatedList, AnimatedListItem, MotionCardButton, Step
 type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>
 
 export type FormulaIntelligenceCapabilities = {
+  currentUserId: string
+  canArchiveAnyDesignProject: boolean
   canCreateBrief: boolean
   canReviewBrief: boolean
   canGenerateDirections: boolean
@@ -101,6 +103,9 @@ type DesignProject = {
   name: string
   status: string
   createdByUserId: string
+  formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE'
+  archivedAt?: string
+  purgeAfter?: string
   selectedDirectionId?: string | null
   brief?: {
     name: string
@@ -108,6 +113,7 @@ type DesignProject = {
     concentrationType: string
     finalProductConcentrationPercent: number
     ifraCategory: string
+    requiresFinalProductContext?: boolean
     targetMarkets: string[]
     creativeBrief: string
     desiredNotes: string[]
@@ -165,6 +171,9 @@ type FormulaVersionResponse = { formula: Formula; versions: Array<Pick<FormulaVe
 type FormulaTrialEvidenceResponse = { formulaId: string; formulaVersion: string; evidence: TrialComparableEvidence; invariant: string }
 type PendingConfirmation = { runId: string; confirmationId: string; label: string }
 type ConnectionState = 'idle' | 'restoring' | 'live' | 'reconnecting' | 'restored'
+type FineFragranceComposerTarget = { project: DesignProject; accords: Formula[] }
+type FineFragranceComponentDraft = { formulaId: string; grams: string }
+type FineFragranceMaterialDraft = { materialId: string; grams: string }
 
 function runArtifactPayload<T>(detail: RunDetail | undefined, type: string): T | undefined {
   const stored = detail?.artifacts.find((item) => item.type === type)?.data
@@ -206,9 +215,9 @@ function emptyBriefReviewDraft(): BriefReviewDraft {
   }
 }
 
-function reviewDraftFromVersion(version?: BriefVersion): BriefReviewDraft {
+function reviewDraftFromVersion(version?: BriefVersion, formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE'): BriefReviewDraft {
   const structured = version?.structuredBrief
-  if (!structured) return emptyBriefReviewDraft()
+  if (!structured) return { ...emptyBriefReviewDraft(), formulaType: formulaTypeHint ?? '' }
   return {
     productType: structured.product.productType ?? '', formulaType: structured.product.formulaType ?? '', format: structured.product.format ?? '',
     concentrationLabel: structured.product.concentrationLabel ?? '', concentration: structured.product.targetConcentrationPercent?.toString() ?? '', targetGrams: structured.product.targetGrams?.toString() ?? '',
@@ -230,6 +239,12 @@ function formulaIntelligenceError(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message : ''
   if (message.includes('FORMULA_INTELLIGENCE_PROJECT_ALREADY_GENERATED')) {
     return 'This brief already has directions. Select one to review, share, or save a new brief to explore another route.'
+  }
+  if (message.includes('FORMULA_INTELLIGENCE_PROJECT_ARCHIVED')) {
+    return 'This brief is archived. Restore it before changing the brief or creating directions.'
+  }
+  if (message.includes('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')) {
+    return 'This draft confirmation is no longer active. Start a new save request from the direction.'
   }
   if (message.includes('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')) {
     return 'Complete the structured brief review before creating directions.'
@@ -267,6 +282,9 @@ function directionDecisionLabel(direction: Direction) {
 }
 
 function projectProgress(project: DesignProject): StepperStep[] {
+  if (project.status === 'ARCHIVED') {
+    return [{ id: 'archived', label: 'Archived', status: 'complete' }]
+  }
   const hasReviewedBrief = project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED'
   const hasDirections = project.directions.length > 0
   const hasDraft = project.directions.some((direction) => Boolean(direction.savedFormulaId))
@@ -279,6 +297,7 @@ function projectProgress(project: DesignProject): StepperStep[] {
 }
 
 function projectStageLabel(project: DesignProject) {
+  if (project.status === 'ARCHIVED') return 'Archived'
   if (project.directions.length > 0) return 'Directions ready'
   if (project.briefStatus === 'RAW' || project.briefStatus === 'REVIEW_REQUIRED') return 'Review required'
   if (project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED') return 'Ready to explore'
@@ -563,7 +582,7 @@ function DirectionDetail({
     {capabilities.canSaveDraft ? <>
       <div className="formula-intelligence-actions">
         <button className="secondary-button small" type="button" disabled={busy} onClick={onShare}><Share2 size={14} /> {direction.shares?.length ? `Sharing (${direction.shares.length})` : 'Share for review'}</button>
-        <button className="primary-button small" type="button" disabled={busy || Boolean(direction.savedFormulaId) || !direction.proposal} onClick={onSave}><Save size={14} /> {direction.savedFormulaId ? 'Draft saved' : 'Save as draft'}</button>
+        <button className="primary-button small" type="button" disabled={busy || Boolean(direction.savedFormulaId) || !direction.proposal} onClick={onSave}><Save size={14} /> {direction.savedFormulaId ? 'Draft saved' : direction.proposal?.formulaType === 'ACCORD' ? 'Save Accord draft' : 'Save as draft'}</button>
         {capabilities.canPlanTrial && direction.savedFormulaId ? <button className="secondary-button small" type="button" disabled={busy || Boolean(direction.trialId)} onClick={onPlanTrial}><FlaskConical size={14} /> {direction.trialId ? 'Trial planned' : 'Plan trial'}</button> : null}
       </div>
       {direction.savedFormulaId && !direction.trialId ? <small className="formula-intelligence-action-hint">An approved immutable formula version is required before this draft can be planned as a trial.</small> : null}
@@ -580,8 +599,12 @@ function DesignProjectCard({
   hasEligibleMaterials,
   selectedDirectionId,
   busy,
+  canArchive,
   onReview,
   onGenerate,
+  onArchive,
+  onRestore,
+  onCompose,
   onSelectDirection,
 }: {
   project: DesignProject
@@ -590,11 +613,17 @@ function DesignProjectCard({
   hasEligibleMaterials: boolean
   selectedDirectionId?: string | null
   busy: boolean
+  canArchive: boolean
   onReview: () => void
   onGenerate: () => void
+  onArchive: () => void
+  onRestore: () => void
+  onCompose: () => void
   onSelectDirection: (directionId: string) => void
 }) {
+  const isArchived = project.status === 'ARCHIVED'
   const hasDirections = project.directions.length > 0
+  const formulaType = project.brief?.formulaType ?? project.formulaTypeHint
   const brief = project.brief?.creativeBrief ?? project.briefVersion?.rawBrief ?? 'Brief details are available to the project owner.'
   const briefIsReviewed = project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED'
   const canGenerate = capabilities.canGenerateDirections
@@ -602,7 +631,9 @@ function DesignProjectCard({
     && briefIsReviewed
     && !hasDirections
   const materialSourceReady = materialCatalogState === 'ready' && hasEligibleMaterials
-  const generationBlocker = hasDirections
+  const generationBlocker = isArchived
+    ? 'Restore this brief before reviewing or creating directions.'
+    : hasDirections
     ? undefined
     : !briefIsReviewed
       ? 'Review and approve the product, concentration, IFRA, and material constraints before generating directions.'
@@ -626,12 +657,13 @@ function DesignProjectCard({
       <span className={`formula-intelligence-project-stage is-${statusTone(project.briefStatus)}`}>{projectStageLabel(project)}</span>
     </header>
     <div className="formula-intelligence-project-meta design-project-card-meta">
-      <span>{project.brief?.formulaType === 'ACCORD' ? 'Accord' : project.brief ? 'Fine fragrance' : 'Research brief'}</span>
+      <span>{formulaType === 'ACCORD' ? 'Accord' : formulaType === 'FINE_FRAGRANCE' ? 'Fine fragrance' : 'Research brief'}</span>
       <span>{project.brief?.ifraCategory ? `IFRA ${project.brief.ifraCategory}` : 'Constraints pending'}</span>
       <span>{project.brief?.targetGrams ? `${project.brief.targetGrams}g target` : 'No batch target'}</span>
     </div>
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
+      {isArchived ? (canArchive ? <button className="secondary-button small" type="button" disabled={busy} onClick={onRestore}><RotateCcw size={15} /> Restore brief</button> : null) : <>
       {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit reviewed brief' : 'Review brief'}</button> : null}
       {capabilities.canGenerateDirections ? <button
         className={hasDirections || !briefIsReviewed ? 'secondary-button small' : 'primary-button small'}
@@ -641,9 +673,12 @@ function DesignProjectCard({
         title={generationBlocker}
         onClick={onGenerate}
       >{hasDirections ? <CheckCircle2 size={15} /> : <Play size={15} />} {hasDirections ? 'Directions generated' : briefIsReviewed ? 'Generate directions' : 'Generate after review'}</button> : null}
+      {formulaType === 'FINE_FRAGRANCE' && hasDirections && capabilities.canSaveDraft ? <button className="secondary-button small" type="button" disabled={busy} onClick={onCompose}><FlaskConical size={15} /> Compose Fine Fragrance</button> : null}
+      {canArchive ? <button className="ghost-button small" type="button" disabled={busy} onClick={onArchive}><Archive size={15} /> Archive brief</button> : null}
+      </>}
       {generationBlocker ? <small className="design-generation-blocker">{generationBlocker}</small> : null}
     </div>
-    {hasDirections ? <div className="formula-intelligence-direction-grid design-direction-list">
+    {hasDirections && !isArchived ? <div className="formula-intelligence-direction-grid design-direction-list">
       {project.directions.map((direction, index) => <MotionCardButton
         type="button"
         className={`formula-intelligence-direction formula-intelligence-direction-choice ${selectedDirectionId === direction.directionId ? 'is-selected' : ''}`}
@@ -660,8 +695,66 @@ function DesignProjectCard({
         </span>
         <ChevronRight className="design-direction-card-arrow" size={18} aria-hidden="true" />
       </MotionCardButton>)}
-    </div> : null}
+    </div> : isArchived ? <p className="design-project-card-archive-note">This brief is hidden from active work. Restore it to access directions and save actions.</p> : null}
   </section>
+}
+
+function FineFragranceComposerDialog({
+  target,
+  materials,
+  busy,
+  onCompose,
+  onClose,
+}: {
+  target: FineFragranceComposerTarget
+  materials: Material[]
+  busy: boolean
+  onCompose: (input: { name: string; targetGrams: number; accordComponents: Array<{ formulaId: string; grams: number }>; materialLines: Array<{ materialId: string; grams: number }> }) => void
+  onClose: () => void
+}) {
+  const suggestedAccordIds = target.project.directions.map((direction) => direction.savedFormulaId).filter((id): id is string => Boolean(id))
+  const initialAccords = target.accords.filter((accord) => suggestedAccordIds.includes(accord.id)).slice(0, 3)
+  const fallbackAccords = initialAccords.length >= 2 ? initialAccords : target.accords.slice(0, 2)
+  const targetGrams = target.project.brief?.targetGrams ?? 100
+  const [name, setName] = useState(`${target.project.name} Fine Fragrance`)
+  const [components, setComponents] = useState<FineFragranceComponentDraft[]>(() => fallbackAccords.map((accord, index) => ({ formulaId: accord.id, grams: String(index === fallbackAccords.length - 1 ? targetGrams - Math.floor(targetGrams / fallbackAccords.length) * index : Math.floor(targetGrams / fallbackAccords.length)) })))
+  const [materialLines, setMaterialLines] = useState<FineFragranceMaterialDraft[]>([])
+  const selectedIds = new Set(components.map((component) => component.formulaId))
+  const total = [...components, ...materialLines].reduce((sum, line) => sum + (Number(line.grams) || 0), 0)
+  const remaining = Number((targetGrams - total).toFixed(4))
+  const canSubmit = components.length >= 2 && Math.abs(remaining) <= 0.05 && components.every((component) => Number(component.grams) > 0)
+  const addAccord = () => {
+    const next = target.accords.find((accord) => !selectedIds.has(accord.id))
+    if (next) setComponents((current) => [...current, { formulaId: next.id, grams: '0' }])
+  }
+  const addMaterial = () => {
+    const material = materials.find((candidate) => !materialLines.some((line) => line.materialId === candidate.id))
+    if (material) setMaterialLines((current) => [...current, { materialId: material.id, grams: '0' }])
+  }
+  return <FormulaIntelligenceDialog title="Compose Fine Fragrance" description="Build the final fragrance from at least two pinned Accord components. Direct raw materials remain available for deliberate adjustments." onClose={onClose} className="fine-fragrance-composer-dialog">
+    <div className="structured-brief-review fine-fragrance-composer">
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Formula identity</h3><p>Accord versions are pinned when this draft is created. Later Accord edits will not change this Fine Fragrance automatically.</p></div></div>
+        <div className="form-grid-two brief-review-grid"><label>Name<input value={name} maxLength={240} onChange={(event) => setName(event.target.value)} /></label><label>Target grams<input type="number" value={targetGrams} disabled /></label></div>
+      </section>
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Accord components</h3><p>Select at least two Accord drafts. Your own drafts and approved workspace Accords are eligible.</p></div></div>
+        <div className="formula-intelligence-composer-list">
+          {components.map((component, index) => <div key={`${component.formulaId}-${index}`} className="formula-intelligence-composer-row"><select value={component.formulaId} onChange={(event) => setComponents((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, formulaId: event.target.value } : item))}>{target.accords.map((accord) => <option key={accord.id} value={accord.id} disabled={selectedIds.has(accord.id) && accord.id !== component.formulaId}>{accord.code} / {accord.name}</option>)}</select><label><span>g</span><input type="number" min="0.01" step="0.01" value={component.grams} onChange={(event) => setComponents((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, grams: event.target.value } : item))} /></label><button className="ghost-button small" type="button" disabled={busy || components.length <= 2} onClick={() => setComponents((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}
+        </div>
+        <button className="secondary-button small" type="button" disabled={busy || components.length >= 24 || target.accords.length <= components.length} onClick={addAccord}>Add Accord</button>
+      </section>
+      <section className="brief-review-section">
+        <div className="brief-review-section-heading"><div><h3>Direct materials</h3><p>Optional: add carrier, solvent, or a direct material adjustment to the final product.</p></div></div>
+        <div className="formula-intelligence-composer-list">
+          {materialLines.map((line, index) => <div key={`${line.materialId}-${index}`} className="formula-intelligence-composer-row"><select value={line.materialId} onChange={(event) => setMaterialLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, materialId: event.target.value } : item))}>{materials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}</select><label><span>g</span><input type="number" min="0.01" step="0.01" value={line.grams} onChange={(event) => setMaterialLines((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, grams: event.target.value } : item))} /></label><button className="ghost-button small" type="button" disabled={busy} onClick={() => setMaterialLines((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button></div>)}
+        </div>
+        <button className="secondary-button small" type="button" disabled={busy || materials.length === 0} onClick={addMaterial}>Add material adjustment</button>
+      </section>
+      <section className={`formula-intelligence-action-note ${canSubmit ? '' : 'is-warning'}`}><strong>{canSubmit ? 'Composition ready' : 'Complete the composition'}</strong><p>{total.toFixed(2)}g of {targetGrams.toFixed(2)}g allocated. {remaining === 0 ? 'The formula is at 100%.' : `${Math.abs(remaining).toFixed(2)}g ${remaining > 0 ? 'remaining' : 'over target'}.`}</p></section>
+      <div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy || !canSubmit || !name.trim()} onClick={() => onCompose({ name: name.trim(), targetGrams, accordComponents: components.map((component) => ({ formulaId: component.formulaId, grams: Number(component.grams) })), materialLines: materialLines.map((line) => ({ materialId: line.materialId, grams: Number(line.grams) })) })}><Save size={16} /> Create Fine Fragrance draft</button><button className="secondary-button" type="button" disabled={busy} onClick={onClose}>Cancel</button></div>
+    </div>
+  </FormulaIntelligenceDialog>
 }
 
 function StructuredBriefReviewDialog({
@@ -688,8 +781,9 @@ function StructuredBriefReviewDialog({
   onClose: () => void
 }) {
   const rawBrief = project.briefVersion?.rawBrief ?? project.brief?.creativeBrief ?? 'No raw brief was saved for this project.'
-  const initialDraft = reviewDraftFromVersion(project.briefVersion)
+  const initialDraft = reviewDraftFromVersion(project.briefVersion, project.formulaTypeHint)
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft)
+  const isAccord = draft.formulaType === 'ACCORD'
   const requestClose = () => {
     if (isDirty && !window.confirm('Discard the changes made to this brief?')) return
     onClose()
@@ -706,13 +800,13 @@ function StructuredBriefReviewDialog({
         <p>{rawBrief}</p>
       </section>
       <section className="brief-review-section">
-        <div className="brief-review-section-heading"><div><h3>Product setup</h3><p>Define what is being made and the intended concentration.</p></div></div>
+        <div className="brief-review-section-heading"><div><h3>Product setup</h3><p>{isAccord ? 'Define the concentrate. Final product context can be added later before review.' : 'Define what is being made and the intended concentration.'}</p></div></div>
         <div className="form-grid-two brief-review-grid">
           <label>Product type<select data-autofocus value={draft.productType} onChange={(event) => onDraftChange({ ...draft, productType: event.target.value })}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="HOME_FRAGRANCE">Home fragrance</option><option value="PERSONAL_CARE">Personal care</option><option value="FUNCTIONAL">Functional</option><option value="OTHER">Other</option></select></label>
           <label>Formula type<select value={draft.formulaType} onChange={(event) => onDraftChange({ ...draft, formulaType: event.target.value })}><option value="">Select</option><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="ACCORD">Accord</option></select></label>
           <label>Format<input value={draft.format} maxLength={160} placeholder="Spray, candle, soap" onChange={(event) => onDraftChange({ ...draft, format: event.target.value })} /></label>
-          <label>Concentration<select value={draft.concentrationLabel} onChange={(event) => onDraftChange({ ...draft, concentrationLabel: event.target.value })}><option value="">Select</option><option value="PARFUM">Parfum</option><option value="EDP">EDP</option><option value="EDT">EDT</option><option value="EDC">EDC</option><option value="COLOGNE">Cologne</option><option value="OTHER">Other</option></select></label>
-          <label>Final concentration %<input type="number" min="0.01" max="100" value={draft.concentration} onChange={(event) => onDraftChange({ ...draft, concentration: event.target.value })} /></label>
+          {isAccord ? <div className="brief-review-accord-note"><strong>Accord concentrate</strong><span>No carrier is proposed. Add final concentration and IFRA use context before formula review.</span></div> : <><label>Concentration<select value={draft.concentrationLabel} onChange={(event) => onDraftChange({ ...draft, concentrationLabel: event.target.value })}><option value="">Select</option><option value="PARFUM">Parfum</option><option value="EDP">EDP</option><option value="EDT">EDT</option><option value="EDC">EDC</option><option value="COLOGNE">Cologne</option><option value="OTHER">Other</option></select></label>
+          <label>Final concentration %<input type="number" min="0.01" max="100" value={draft.concentration} onChange={(event) => onDraftChange({ ...draft, concentration: event.target.value })} /></label></>}
           <label>Target grams<input type="number" min="0.01" value={draft.targetGrams} onChange={(event) => onDraftChange({ ...draft, targetGrams: event.target.value })} /></label>
         </div>
       </section>
@@ -729,7 +823,7 @@ function StructuredBriefReviewDialog({
         <div className="form-grid-two brief-review-grid"><label>Diffusion<select value={draft.diffusion} onChange={(event) => onDraftChange({ ...draft, diffusion: event.target.value })}><option value="">Not specified</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label><label>Target longevity (hours)<input type="number" min="0.1" max="168" value={draft.longevity} placeholder="Not specified" onChange={(event) => onDraftChange({ ...draft, longevity: event.target.value })} /></label></div>
       </section>
       <section className="brief-review-section">
-        <div className="brief-review-section-heading"><div><h3>Constraints</h3><p>Compliance, market and stock preferences are checked before a direction moves forward.</p></div></div>
+        <div className="brief-review-section-heading"><div><h3>Constraints</h3><p>{isAccord ? 'Market preferences guide research. Final-use IFRA context remains optional until the accord is prepared for review.' : 'Compliance, market and stock preferences are checked before a direction moves forward.'}</p></div></div>
         <div className="form-grid-two brief-review-grid"><label>IFRA category<input value={draft.ifraCategory} maxLength={32} placeholder="4" onChange={(event) => onDraftChange({ ...draft, ifraCategory: event.target.value })} /></label><label>Markets<input value={draft.markets} placeholder="EU, US" onChange={(event) => onDraftChange({ ...draft, markets: event.target.value })} /></label><label>Inventory preference<select value={draft.inventoryPreference} onChange={(event) => onDraftChange({ ...draft, inventoryPreference: event.target.value as BriefReviewDraft['inventoryPreference'] })}><option value="PREFER_AVAILABLE">Prefer available</option><option value="AVAILABLE_ONLY">Available only</option><option value="IGNORE">Ignore availability</option></select></label></div>
         <div className="brief-review-checks"><label className="checkbox-row"><input type="checkbox" checked={draft.workspaceMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, workspaceMaterialsOnly: event.target.checked })} /> Workspace materials only</label><label className="checkbox-row"><input type="checkbox" checked={draft.reviewedMaterialsOnly} onChange={(event) => onDraftChange({ ...draft, reviewedMaterialsOnly: event.target.checked })} /> Reviewed materials only</label></div>
       </section>
@@ -746,6 +840,10 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   const [projects, setProjects] = useState<DesignProject[]>([])
   const [name, setName] = useState('New fragrance brief')
   const [creativeBrief, setCreativeBrief] = useState('')
+  const [formulaType, setFormulaType] = useState<'ACCORD' | 'FINE_FRAGRANCE'>('FINE_FRAGRANCE')
+  const [showArchived, setShowArchived] = useState(false)
+  const [archiveTarget, setArchiveTarget] = useState<DesignProject>()
+  const [fineFragranceComposerTarget, setFineFragranceComposerTarget] = useState<FineFragranceComposerTarget>()
   const [reviewProjectId, setReviewProjectId] = useState<string>()
   const [reviewDraft, setReviewDraft] = useState<BriefReviewDraft>(() => emptyBriefReviewDraft())
   const [busy, setBusy] = useState(false)
@@ -774,7 +872,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   }, [projects, selectedDirectionId])
   const reviewProject = useMemo(() => projects.find((project) => project.id === reviewProjectId), [projects, reviewProjectId])
 
-  const refresh = useCallback(async () => setProjects(await requestApi<DesignProject[]>('/formula-intelligence/design-projects')), [requestApi])
+  const refresh = useCallback(async () => setProjects(await requestApi<DesignProject[]>(`/formula-intelligence/design-projects${showArchived ? '?includeArchived=true' : ''}`)), [requestApi, showArchived])
   useEffect(() => { void refresh().catch((error) => setNotice(formulaIntelligenceError(error, 'Unable to load saved briefs. Please refresh and try again.'))) }, [refresh])
   useEffect(() => {
     let active = true
@@ -817,26 +915,27 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
 
   async function createProject() {
     if (!capabilities.canCreateBrief) return
-    const scope = `design-project:${name}:${creativeBrief}`
+    const scope = `design-project:${name}:${formulaType}:${creativeBrief}`
     setBusy(true); setNotice(undefined)
     try {
-      const payload = await requestApi<{ project: DesignProject }>('/formula-intelligence/design-projects', { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ name, rawBrief: creativeBrief }) })
+      const payload = await requestApi<{ project: DesignProject }>('/formula-intelligence/design-projects', { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ name, rawBrief: creativeBrief, formulaType }) })
       completeMutation(scope)
       await refresh()
       setReviewProjectId(payload.project.id)
-      setReviewDraft(emptyBriefReviewDraft())
+      setReviewDraft(reviewDraftFromVersion(undefined, formulaType))
       setNotice('Raw brief saved. Complete the structured review before generating directions.')
     } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to save this research brief.')) } finally { setBusy(false) }
   }
 
   function openBriefReview(project: DesignProject) {
     setReviewProjectId(project.id)
-    setReviewDraft(reviewDraftFromVersion(project.briefVersion))
+    setReviewDraft(reviewDraftFromVersion(project.briefVersion, project.formulaTypeHint))
   }
 
   async function saveBriefReview() {
     if (!reviewProject) return
     const scope = `design-brief-version:${reviewProject.id}:${JSON.stringify(reviewDraft)}`
+    const isAccord = reviewDraft.formulaType === 'ACCORD'
     const concentration = Number(reviewDraft.concentration)
     const targetGrams = Number(reviewDraft.targetGrams)
     const longevity = Number(reviewDraft.longevity)
@@ -847,7 +946,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
           schemaVersion: 1,
           product: {
             productType: reviewDraft.productType || undefined, formulaType: reviewDraft.formulaType || undefined, format: reviewDraft.format || undefined,
-            concentrationLabel: reviewDraft.concentrationLabel || undefined, targetConcentrationPercent: Number.isFinite(concentration) && concentration > 0 ? concentration : undefined,
+            concentrationLabel: !isAccord ? reviewDraft.concentrationLabel || undefined : undefined, targetConcentrationPercent: !isAccord && Number.isFinite(concentration) && concentration > 0 ? concentration : undefined,
             targetGrams: Number.isFinite(targetGrams) && targetGrams > 0 ? targetGrams : undefined,
           },
           creative: { families: [], descriptors: csv(reviewDraft.descriptors), emotionalIntent: reviewDraft.emotionalIntent || undefined, references: [], desiredNotes: csv(reviewDraft.desiredNotes), avoidedNotes: csv(reviewDraft.avoidedNotes), specialEffects: [] },
@@ -875,6 +974,69 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
       if (message.startsWith('This brief already has directions')) await refresh()
       setNotice(message)
     } finally { setBusy(false) }
+  }
+
+  async function archiveProject(project: DesignProject) {
+    const scope = `design-archive:${project.id}`
+    setBusy(true); setNotice(undefined)
+    try {
+      const result = await requestApi<{ purgeAfter?: string }>(`/formula-intelligence/design-projects/${encodeURIComponent(project.id)}`, { method: 'DELETE', headers: mutationHeaders(scope) })
+      completeMutation(scope)
+      setArchiveTarget(undefined)
+      setSelectedDirectionId(null)
+      setShareTarget(undefined)
+      setPending(undefined)
+      await refresh()
+      setNotice(result.purgeAfter ? `Brief archived. It can be restored until ${new Date(result.purgeAfter).toLocaleDateString()}.` : 'Brief archived.')
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to archive this brief.')) } finally { setBusy(false) }
+  }
+
+  async function restoreProject(project: DesignProject) {
+    const scope = `design-restore:${project.id}`
+    setBusy(true); setNotice(undefined)
+    try {
+      await requestApi(`/formula-intelligence/design-projects/${encodeURIComponent(project.id)}/restore`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' })
+      completeMutation(scope)
+      await refresh()
+      setNotice('Brief restored. Its previous shares remain revoked for review safety.')
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to restore this brief.')) } finally { setBusy(false) }
+  }
+
+  async function openFineFragranceComposer(project: DesignProject) {
+    setBusy(true); setNotice(undefined)
+    try {
+      const formulas = await requestApi<Formula[]>('/formulas')
+      const accords = formulas.filter((formula) => formula.formulaType === 'ACCORD' && formula.workflowStatus !== 'ARCHIVED')
+      if (accords.length < 2) {
+        setNotice('Save at least two Accord directions, or create reusable Accord drafts in Formula R&D before composing this Fine Fragrance.')
+        return
+      }
+      setFineFragranceComposerTarget({ project, accords })
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to load eligible Accord components.')) } finally { setBusy(false) }
+  }
+
+  async function composeFineFragrance(input: { name: string; targetGrams: number; accordComponents: Array<{ formulaId: string; grams: number }>; materialLines: Array<{ materialId: string; grams: number }> }) {
+    if (!fineFragranceComposerTarget) return
+    const project = fineFragranceComposerTarget.project
+    const scope = `fine-fragrance-compose:${project.id}:${JSON.stringify(input)}`
+    setBusy(true); setNotice(undefined)
+    try {
+      const result = await requestApi<{ formula: Formula }>('/formulas/compose', {
+        method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({
+          ...input,
+          concentrationType: project.brief?.concentrationType ?? 'EDP',
+          finalProductConcentrationPercent: project.brief?.finalProductConcentrationPercent ?? 20,
+          ifraCategory: project.brief?.ifraCategory ?? '4',
+          targetMarkets: project.brief?.targetMarkets ?? ['EU', 'US'],
+          brief: project.brief?.creativeBrief ?? project.briefVersion?.rawBrief ?? '',
+          project: project.name,
+        }),
+      })
+      completeMutation(scope)
+      onFormulaSaved(result.formula)
+      setFineFragranceComposerTarget(undefined)
+      setNotice(`Fine Fragrance draft ${result.formula.code} created from pinned Accord versions. Review IFRA and inventory evidence before submitting it.`)
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to compose this Fine Fragrance.')) } finally { setBusy(false) }
   }
 
   async function cancelRun() {
@@ -970,15 +1132,20 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     <AnimatedContent><section className="panel glass formula-intelligence-hero"><div><span className="formula-intelligence-eyebrow">Formula intelligence</span><h2>Turn a clear brief into a direction your team can judge</h2><p>Save the creative request, agree the constraints, then compare directions before taking one forward.</p></div><span className="formula-intelligence-hero-note"><Sparkles size={15} /> Guided research</span></section></AnimatedContent>
     <div className={`formula-intelligence-grid design-studio-grid ${selectedDirectionContext ? 'has-selected-direction' : ''}`}>
       <section className="panel glass formula-intelligence-brief design-studio-brief"><div className="panel-title-row"><div><FlaskConical size={18} /><h3>New research brief</h3></div></div><p className="formula-intelligence-copy">Start with the creative request. A perfumer reviews product constraints before directions are created.</p>
-        <label>Project name<input value={name} maxLength={240} onChange={(event) => setName(event.target.value)} /></label><label>Creative request<textarea value={creativeBrief} maxLength={6000} placeholder="Describe the scent, audience, context, and what must be avoided." onChange={(event) => setCreativeBrief(event.target.value)} /></label>
+        <div className="form-grid-two design-brief-create-grid"><label>Project name<input value={name} maxLength={240} onChange={(event) => setName(event.target.value)} /></label><label>Formula type<select value={formulaType} onChange={(event) => setFormulaType(event.target.value as 'ACCORD' | 'FINE_FRAGRANCE')}><option value="FINE_FRAGRANCE">Fine fragrance</option><option value="ACCORD">Accord</option></select></label></div><label>Creative request<textarea value={creativeBrief} maxLength={6000} placeholder="Describe the scent, audience, context, and what must be avoided." onChange={(event) => setCreativeBrief(event.target.value)} /></label>
         <button className="primary-button" data-testid="formula-design-primary-action" type="button" disabled={busy || !capabilities.canCreateBrief || name.trim().length < 2 || creativeBrief.trim().length < 8} onClick={() => void createProject()}><Play size={16} /> Save brief for review</button>{!capabilities.canReviewBrief && capabilities.canCreateBrief ? <small>A perfumer with formula edit access reviews the product constraints.</small> : null}{notice ? <FormulaIntelligenceNotice message={notice} /> : null}<RunStatus detail={activeRun} connectionState={connectionState} busy={busy} onCancel={() => void cancelRun()} />
       </section>
-      <AnimatedList className="formula-intelligence-projects design-studio-projects">
-        {projects.length === 0 ? <section className="panel glass"><p className="empty-state">Save a research brief to begin a clear, reviewable creative direction.</p></section> : projects.map((project) => <AnimatedListItem key={project.id}><DesignProjectCard project={project} capabilities={capabilities} materialCatalogState={designMaterialCatalogState} hasEligibleMaterials={designMaterials.length > 0} selectedDirectionId={selectedDirectionId} busy={busy} onReview={() => openBriefReview(project)} onGenerate={() => void generate(project.id)} onSelectDirection={setSelectedDirectionId} /></AnimatedListItem>)}
-      </AnimatedList>
+      <div className="design-studio-project-list">
+        <div className="design-studio-project-toolbar"><span>{showArchived ? 'Archive shown' : 'Active briefs'}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => setShowArchived((current) => !current)}>{showArchived ? 'Hide archive' : 'View archive'}</button></div>
+        <AnimatedList className="formula-intelligence-projects design-studio-projects">
+          {projects.length === 0 ? <section className="panel glass"><p className="empty-state">{showArchived ? 'No archived briefs are available.' : 'Save a research brief to begin a clear, reviewable creative direction.'}</p></section> : projects.map((project) => <AnimatedListItem key={project.id}><DesignProjectCard project={project} capabilities={capabilities} materialCatalogState={designMaterialCatalogState} hasEligibleMaterials={designMaterials.length > 0} selectedDirectionId={selectedDirectionId} busy={busy} canArchive={project.createdByUserId === capabilities.currentUserId || capabilities.canArchiveAnyDesignProject} onReview={() => openBriefReview(project)} onGenerate={() => void generate(project.id)} onArchive={() => setArchiveTarget(project)} onRestore={() => void restoreProject(project)} onCompose={() => void openFineFragranceComposer(project)} onSelectDirection={setSelectedDirectionId} /></AnimatedListItem>)}
+        </AnimatedList>
+      </div>
       {selectedDirectionContext && compactDirectionDetail ? <AppWorkspaceDialog open title={`${selectedDirectionContext.direction.title} details`} onClose={() => setSelectedDirectionId(null)} showHeader={false} className="formula-intelligence-detail-dialog">{selectedDirectionDetail}</AppWorkspaceDialog> : selectedDirectionDetail}
     </div>
     {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} sourceReferenceCount={designMaterialCounts.sourceReferenceCount} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
+    {fineFragranceComposerTarget ? <FineFragranceComposerDialog key={fineFragranceComposerTarget.project.id} target={fineFragranceComposerTarget} materials={designMaterials} busy={busy} onCompose={(input) => void composeFineFragrance(input)} onClose={() => setFineFragranceComposerTarget(undefined)} /> : null}
+    {archiveTarget ? <FormulaIntelligenceDialog title="Archive this brief?" onClose={() => setArchiveTarget(undefined)}><p className="formula-intelligence-copy">This hides the brief from active work, cancels any active research run, and revokes its direction shares. You can restore it for 30 days.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void archiveProject(archiveTarget)}><Archive size={16} /> Archive brief</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setArchiveTarget(undefined)}>Keep brief</button></div></FormulaIntelligenceDialog> : null}
     {shareTarget ? <FormulaIntelligenceDialog title="Share direction" onClose={() => setShareTarget(undefined)}><p className="formula-intelligence-copy">Only active members of this brand can receive this direction. Material names stay hidden unless you opt in.</p>{shareTarget.direction.shares?.length ? <div className="formula-intelligence-share-list">{shareTarget.direction.shares.map((share) => <div key={share.recipientUserId}><span>{shareRecipients.find((recipient) => recipient.userId === share.recipientUserId)?.name ?? 'Active recipient'}{share.allowMaterialNames ? ' / material names visible' : ''}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => void revokeShare(shareTarget.projectId, shareTarget.direction.directionId, share.recipientUserId)}>Revoke</button></div>)}</div> : null}<div className="formula-intelligence-recipient-list">{shareRecipients.map((recipient) => <label key={recipient.userId}><input type="checkbox" checked={selectedRecipientIds.includes(recipient.userId)} onChange={() => setSelectedRecipientIds((current) => current.includes(recipient.userId) ? current.filter((id) => id !== recipient.userId) : [...current, recipient.userId])} /><span><strong>{recipient.name}</strong><small>{recipient.email}</small></span></label>)}</div><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Save sharing</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
     {pending ? <FormulaIntelligenceDialog title="Confirm formula draft" onClose={() => setPending(undefined)}><p className="formula-intelligence-copy">{pending.label}</p><p className="formula-intelligence-copy">This creates one editable draft. It does not reserve or consume inventory.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={16} /> Confirm draft</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setPending(undefined)}>Not now</button></div></FormulaIntelligenceDialog> : null}
   </div>

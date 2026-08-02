@@ -8,7 +8,7 @@ const reportRoot = path.join(repoRoot, 'reports')
 
 const appUrl = stripTrailingSlash(process.env.FUNCTIONAL_APP_URL ?? 'https://labofscents.pages.dev')
 const apiBaseUrl = stripTrailingSlash(process.env.FUNCTIONAL_API_URL ?? 'https://api.labofscents.org/api/v1')
-const loginEmail = process.env.FUNCTIONAL_LOGIN_EMAIL ?? 'admin@labofscents.org'
+const loginEmail = process.env.FUNCTIONAL_LOGIN_EMAIL ?? 'm.thuanwork@gmail.com'
 const loginPassword = requireEnvironmentSecret('FUNCTIONAL_LOGIN_PASSWORD')
 const documentId = process.env.FUNCTIONAL_DOCUMENT_ID ?? 'DOC-118'
 const browserFallbackReason =
@@ -344,7 +344,7 @@ const testCases = [
     objective: 'Verify the deployed Pages app can authenticate with the cookie session, survive reload, and render customer-facing Production controls.',
     steps: [
       'Open the live Pages app in Chromium.',
-      'Login with admin@labofscents.org.',
+      'Login with m.thuanwork@gmail.com.',
       'Inspect localStorage and API-domain cookies.',
       'Reload and confirm the console restores from cookie.',
       'Open the Production module and capture screenshot evidence.',

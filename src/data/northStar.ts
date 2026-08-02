@@ -219,6 +219,9 @@ export interface FormulaLine {
   grams: number
   materialId?: string
   childFormulaId?: string
+  /** Immutable child snapshot used when a Fine Fragrance composes an Accord. */
+  childFormulaVersionId?: string
+  childFormulaChecksum?: string
   dilution?: number
   concentration?: number
   pyramidNote?: FormulaPyramidNote
@@ -257,6 +260,7 @@ export interface FormulaEvaluationRecord {
 
 export interface FormulaSnapshotMetadata {
   formulaType: FormulaType
+  compositionMode?: 'ACCORD_COMPOSED'
   concentrationType: FormulaConcentrationType
   finalProductConcentrationPercent: number
   targetMarkets: string[]
@@ -270,6 +274,7 @@ export interface FormulaSnapshotMetadata {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  requiresFinalProductContext?: boolean
 }
 
 export interface FormulaIfraRow {
@@ -360,6 +365,8 @@ export interface Formula {
   code: string
   name: string
   formulaType: FormulaType
+  /** Set only for Fine Fragrance drafts created from pinned Accord components. */
+  compositionMode?: 'ACCORD_COMPOSED'
   organizationId: string
   brandId: string
   concentrationType: FormulaConcentrationType
@@ -375,6 +382,8 @@ export interface Formula {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  /** Accord drafts can exist before their final-use concentration is known. */
+  requiresFinalProductContext?: boolean
   workflowStatus: FormulaWorkflowStatus
   draftRevision: number
   updatedAt: string
@@ -3101,7 +3110,7 @@ export const organizations: OrganizationRecord[] = [
     customDomain: 'example.test',
     plan: 'Team',
     status: 'ACTIVE',
-    primaryContact: 'admin@labofscents.org',
+    primaryContact: 'm.thuanwork@gmail.com',
     createdAt: '2026-01-08T03:20:00.000Z',
   },
   {
@@ -3126,7 +3135,7 @@ export const memberships: MembershipRecord[] = [
   {
     id: 'MBR-ADMIN',
     userId: 'usr-admin',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     name: 'Thuan Le Minh',
     organizationId: 'org-nxl',
     brandIds: ['brand-nxl', 'brand-atelier'],
@@ -3463,7 +3472,7 @@ export const authSessions: AuthSession[] = [
   {
     id: 'SES-0000',
     userId: 'usr-admin',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Admin',
@@ -3520,7 +3529,7 @@ export const userSettings: UserSettingsRecord[] = [
   {
     userId: 'usr-admin',
     organizationId: 'org-nxl',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     displayName: 'Thuan Le Minh',
     preferredLanding: 'dashboard',
     uiDensity: 'comfortable',
@@ -4480,9 +4489,11 @@ export function resolveFormulaWithCatalog(
   formulaId: string,
   formulaCatalog: Formula[] = formulas,
   materialCatalog: Material[] = materials,
+  formulaVersionCatalog: FormulaVersionRecord[] = [],
 ): ResolvedLeaf[] {
   const formulaLookup = new Map(formulaCatalog.map((formula) => [formula.id, formula]))
   const materialLookup = new Map(materialCatalog.map((material) => [material.id, material]))
+  const formulaVersionLookup = new Map(formulaVersionCatalog.map((version) => [version.id, version]))
   const root = formulaLookup.get(formulaId)
   if (!root) {
     return []
@@ -4532,10 +4543,27 @@ export function resolveFormulaWithCatalog(
         if (!child) {
           return
         }
+        const pinnedVersion = line.childFormulaVersionId
+          ? formulaVersionLookup.get(line.childFormulaVersionId)
+          : undefined
+        // Legacy child-formula lines retain their live-reference behavior. New
+        // Fine Fragrance components carry a snapshot id, so later Accord edits
+        // cannot silently alter downstream compliance, cost, or inventory math.
+        const resolvedChild = pinnedVersion
+          ? {
+              ...child,
+              lines: pinnedVersion.lines,
+              targetGrams: pinnedVersion.totalGrams,
+              concentrationType: pinnedVersion.metadata.concentrationType,
+              finalProductConcentrationPercent: pinnedVersion.metadata.finalProductConcentrationPercent,
+              ifraCategory: pinnedVersion.metadata.ifraCategory,
+              requiresFinalProductContext: pinnedVersion.metadata.requiresFinalProductContext,
+            }
+          : child
         walk(
-          child,
-          lineGrams / child.targetGrams,
-          activeGrams / child.targetGrams,
+          resolvedChild,
+          lineGrams / resolvedChild.targetGrams,
+          activeGrams / resolvedChild.targetGrams,
           [...path, line.label],
           nextTrail,
         )
@@ -4570,6 +4598,7 @@ export function resolveFormula(formulaId: string): ResolvedLeaf[] {
 export function formulaSnapshotMetadata(formula: Formula): FormulaSnapshotMetadata {
   return {
     formulaType: formula.formulaType,
+    compositionMode: formula.compositionMode,
     concentrationType: formula.concentrationType,
     finalProductConcentrationPercent: formula.finalProductConcentrationPercent,
     targetMarkets: [...formula.targetMarkets],
@@ -4583,6 +4612,7 @@ export function formulaSnapshotMetadata(formula: Formula): FormulaSnapshotMetada
     bottleVolumeMl: formula.bottleVolumeMl,
     bottleCount: formula.bottleCount,
     ifraCategory: formula.ifraCategory,
+    requiresFinalProductContext: formula.requiresFinalProductContext,
   }
 }
 
@@ -4695,7 +4725,11 @@ export function scaleFormula(formula: Formula, targetGrams: number, incrementGra
 }
 
 function formulaVersionLineKey(line: FormulaLine) {
-  return line.materialId ? `material:${line.materialId}` : line.childFormulaId ? `formula:${line.childFormulaId}` : `line:${line.id}`
+  return line.materialId
+    ? `material:${line.materialId}`
+    : line.childFormulaId
+      ? `formula:${line.childFormulaId}:${line.childFormulaVersionId ?? 'live'}`
+      : `line:${line.id}`
 }
 
 export function diffFormulaVersions(before: FormulaVersionRecord, after: FormulaVersionRecord): FormulaVersionDiff {

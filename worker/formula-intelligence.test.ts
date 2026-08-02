@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
+import { ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { Material } from '../src/data/northStar.js'
 import { FormulaIntelligenceStore, assertFormulaDesignBriefMaterialConstraints, formulaIntelligenceMaterialCatalog } from './formula-intelligence.js'
 
@@ -64,6 +64,48 @@ function designProjectAccessD1(options: { brandIds: string[]; existingRunUserId?
     },
     batch: async () => [],
   } as unknown as D1Database
+}
+
+function designProjectLifecycleD1() {
+  const statements: RecordedStatement[] = []
+  const project = {
+    id: 'project-1', organization_id: 'org-a', brand_id: 'brand-a', created_by_user_id: 'usr-perfumer',
+    status: 'BRIEFED', name: 'Archiveable brief', brief_json: '{}', current_brief_version_id: null, selected_direction_id: null,
+    formula_type_hint: 'ACCORD', archived_at: null, archived_by_user_id: null, archive_previous_status: null as string | null, purge_after: null as string | null,
+    created_at: '2026-07-29T00:00:00.000Z', updated_at: '2026-07-29T00:00:00.000Z',
+  }
+  const db = {
+    prepare(sql: string) {
+      return {
+        bind(...values: unknown[]) {
+          statements.push({ sql, values })
+          return {
+            first: async () => {
+              if (sql.includes('FROM formula_design_projects')) return project
+              // Keeping the audit event absent makes audit chaining intentionally
+              // no-op while this test asserts the lifecycle transaction itself.
+              return null
+            },
+            all: async () => ({ results: [] }),
+            run: async () => {
+              if (sql.includes('SET status = ?, archived_at = NULL')) project.status = String(values[0])
+              return { meta: { changes: 1 } }
+            },
+          }
+        },
+      }
+    },
+    batch: async () => {
+      const archive = [...statements].reverse().find((statement) => statement.sql.includes("SET status = 'ARCHIVED'"))
+      if (archive) {
+        project.status = 'ARCHIVED'
+        project.archive_previous_status = String(archive.values[2] ?? 'BRIEFED')
+        project.purge_after = String(archive.values[3] ?? '')
+      }
+      return []
+    },
+  } as unknown as D1Database
+  return { db, statements, project }
 }
 
 function unresolvedProjectD1(hasDirections: boolean) {
@@ -224,6 +266,34 @@ describe('Formula Intelligence Worker persistence contract', () => {
     await store.returnUnresolvedProjectToBrief(actor, 'project-1')
 
     expect(statements.some((statement) => statement.sql.includes("SET status = 'BRIEFED'"))).toBe(false)
+  })
+
+  it('archives a creator project transactionally, revokes shares, cancels work, and allows restore', async () => {
+    const { db, statements, project } = designProjectLifecycleD1()
+    const store = new FormulaIntelligenceStore(db)
+    const actor = { organizationId: 'org-a', userId: 'usr-perfumer', sessionId: 'ses-1', role: 'PERFUMER' }
+
+    await expect(store.archiveDesignProject({ ...actor, userId: 'usr-unrelated' }, 'project-1')).rejects.toBeInstanceOf(ForbiddenException)
+
+    const archived = await store.archiveDesignProject(actor, 'project-1')
+    expect(archived).toMatchObject({ projectId: 'project-1', status: 'ARCHIVED', duplicate: false })
+    expect(project.status).toBe('ARCHIVED')
+    expect(statements.some((statement) => statement.sql.includes('UPDATE formula_design_direction_shares'))).toBe(true)
+    expect(statements.some((statement) => statement.sql.includes("SET status = 'CANCELLED'"))).toBe(true)
+    expect(statements.some((statement) => statement.sql.includes("SET status = 'EXPIRED'"))).toBe(true)
+
+    const restored = await store.restoreDesignProject(actor, 'project-1')
+    expect(restored).toMatchObject({ projectId: 'project-1', status: 'BRIEFED' })
+    expect(project.status).toBe('BRIEFED')
+  })
+
+  it('lets a workspace admin archive another tenant member project without crossing tenants', async () => {
+    const { db, project } = designProjectLifecycleD1()
+    const store = new FormulaIntelligenceStore(db)
+    const admin = { organizationId: 'org-a', userId: 'usr-admin', sessionId: 'ses-admin', role: 'ADMIN' }
+
+    await expect(store.archiveDesignProject(admin, project.id)).resolves.toMatchObject({ status: 'ARCHIVED' })
+    expect(project.status).toBe('ARCHIVED')
   })
 
   it('pins the reviewed material universe before persisting candidate evaluation context', async () => {

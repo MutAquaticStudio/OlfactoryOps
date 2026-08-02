@@ -247,7 +247,7 @@ const clientFallbackOrganization: OrganizationRecord = {
   customDomain: 'api-backed-tenant.labofscents.org',
   plan: 'Enterprise',
   status: 'ACTIVE',
-  primaryContact: 'admin@labofscents.org',
+  primaryContact: 'm.thuanwork@gmail.com',
   createdAt: 'client-fallback',
 }
 
@@ -1181,7 +1181,7 @@ const navigationLabels: Partial<Record<DomainKey, string>> = {
   commerce: 'Catalog & quotes',
   customization: 'Branding',
   identity: 'Members & security',
-  saas: 'Billing & integrations',
+  saas: 'Workspace access',
 }
 
 const workflowNodes: { key: DomainKey; label: string; detail: string }[] = [
@@ -1222,7 +1222,7 @@ const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
 const authExpiredEvent = 'olfactoryops.auth.expired'
 const operationApprovalRequestedEvent = 'olfactoryops.operation.approval.requested'
-const internalAdminEmails = new Set(['admin@labofscents.org', 'admin@labofscents.com'])
+const internalAdminEmails = new Set(['m.thuanwork@gmail.com', 'admin@labofscents.com'])
 const internalOnlyDomainKeys = new Set<DomainKey>(['platform', 'identity', 'customization'])
 const sensitiveApprovalFieldNames = new Set([
   'password',
@@ -2510,6 +2510,7 @@ function App() {
           name: newFormulaName.trim() || 'Untitled Formula',
           formulaType: newFormulaType,
           targetGrams,
+          requiresFinalProductContext: newFormulaType === 'ACCORD',
         }),
       })
       setFormulaRecords((current) => [
@@ -3082,6 +3083,8 @@ function App() {
                   requestApi={requestApi}
                   materialRecords={materialRecords}
                   capabilities={{
+                    currentUserId: currentSession.userId,
+                    canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
                     canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
                     canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
@@ -3109,6 +3112,8 @@ function App() {
                   formulaRecords={scopedFormulaRecords}
                   materialRecords={materialRecords}
                   capabilities={{
+                    currentUserId: currentSession.userId,
+                    canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
                     canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
                     canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
@@ -4155,6 +4160,7 @@ function worstSaasHealthStatus(statuses: SaasHealthStatus[], fallback: SaasHealt
 }
 
 function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
+  const managedBeta = data.billingMode === 'managed_beta'
   const activeApiKeys = data.apiKeys.filter((key) => key.status === 'active').length
   const activeWebhooks = data.webhooks.filter((webhook) => webhook.status === 'active').length
   const failedDeliveries = data.webhookDeliveries.filter((delivery) => delivery.status === 'failed').length
@@ -4168,25 +4174,29 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
   const factors: SaasHealthFactor[] = [
     {
       key: 'subscription-write-gate',
-      label: 'Subscription write gate',
+      label: managedBeta ? 'Workspace write gate' : 'Subscription write gate',
       status: data.subscription.canWrite ? 'pass' : 'blocked',
-      detail: `${data.subscription.status} subscription; write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'}.`,
+      detail: managedBeta
+        ? `Workspace write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'} by server-side policy.`
+        : `${data.subscription.status} subscription; write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'}.`,
     },
     {
       key: 'plan-limits',
-      label: 'Plan limit enforcement',
+      label: managedBeta ? 'Beta capacity protection' : 'Plan limit enforcement',
       status: limitStatus,
       detail:
         data.limitChecks.length > 0
           ? `${data.limitChecks.filter((check) => check.status === 'pass').length}/${data.limitChecks.length} usage checks are inside limits.`
           : 'Usage limits are waiting for live API data.',
     },
-    {
-      key: 'invoice-lifecycle',
-      label: 'Invoice lifecycle',
-      status: openInvoices > 0 || data.subscription.status === 'trialing' ? 'pass' : 'warning',
-      detail: `${data.invoices.length} invoice record(s); ${openInvoices} payable or paid invoice(s).`,
-    },
+    ...(managedBeta
+      ? []
+      : [{
+          key: 'invoice-lifecycle',
+          label: 'Invoice lifecycle',
+          status: openInvoices > 0 || data.subscription.status === 'trialing' ? 'pass' as const : 'warning' as const,
+          detail: `${data.invoices.length} invoice record(s); ${openInvoices} payable or paid invoice(s).`,
+        }]),
     {
       key: 'sso-scim',
       label: 'SSO / SCIM readiness',
@@ -4219,7 +4229,7 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
     },
     {
       key: 'readiness-gate',
-      label: 'Commercial readiness gate',
+      label: managedBeta ? 'Workspace readiness gate' : 'Commercial readiness gate',
       status: readinessStatus,
       detail:
         data.readiness.length > 0
@@ -6245,6 +6255,7 @@ type FormulaMetadataDraft = {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  finalProductContextConfirmed: boolean
   assignedReviewer: string
 }
 
@@ -6445,6 +6456,7 @@ function formulaMetadataDraftFromRecord(formula: Formula): FormulaMetadataDraft 
     bottleVolumeMl: formula.bottleVolumeMl,
     bottleCount: formula.bottleCount,
     ifraCategory: formula.ifraCategory,
+    finalProductContextConfirmed: !formula.requiresFinalProductContext,
     assignedReviewer: formula.assignedReviewer ?? '',
   }
 }
@@ -6579,6 +6591,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
       ? 'Add at least one material before submitting for review.'
       : !formulaFinalReady
         ? `Formula is ${formulaPercent.toFixed(2)}%. Normalize it to 100% before submitting for review.`
+        : formula.requiresFinalProductContext
+          ? 'Add final-product concentration and IFRA category in Details before submitting this accord for review.'
         : formula.targetMarkets.length === 0
           ? 'Choose at least one target market in Details before submitting for review.'
           : formula.finalProductConcentrationPercent <= 0
@@ -6829,6 +6843,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
       bottleVolumeMl: snapshot.bottleVolumeMl,
       bottleCount: snapshot.bottleCount,
       ifraCategory: snapshot.ifraCategory,
+      requiresFinalProductContext: Boolean(snapshot.requiresFinalProductContext),
       assignedReviewer: snapshot.assignedReviewer,
       lines: snapshot.lines,
     }
@@ -6862,6 +6877,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           bottleVolumeMl: metadataDraft.bottleVolumeMl,
           bottleCount: metadataDraft.bottleCount,
           ifraCategory: metadataDraft.ifraCategory,
+          ...(formula.formulaType === 'ACCORD' ? { requiresFinalProductContext: !metadataDraft.finalProductContextConfirmed } : {}),
           assignedReviewer: metadataDraft.assignedReviewer,
         }),
       })
@@ -7539,6 +7555,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             </p>
           </div>
         </section>
+        {formula.requiresFinalProductContext && (
+          <div className="formula-context-warning" role="status">
+            This is an accord concentrate. Add its final-product concentration and IFRA category in Details before submitting it for review.
+          </div>
+        )}
 
         <div className="formula-lab-tools">
           <button className="ghost-button icon-only" type="button" aria-label="Undo last action" title="Undo" onClick={() => void undoFormulaChange()} disabled={!formulaEditable || undoStack.length === 0}>
@@ -7896,6 +7917,17 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                     <input value={metadataDraft.ifraCategory} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ ifraCategory: event.target.value })} />
                   </label>
                 </div>
+                {formula.formulaType === 'ACCORD' && (
+                  <label className="checkbox-row formula-final-use-confirmation">
+                    <input
+                      type="checkbox"
+                      checked={metadataDraft.finalProductContextConfirmed}
+                      disabled={!formulaEditable || !canEditFormula}
+                      onChange={(event) => updateMetadataDraft({ finalProductContextConfirmed: event.target.checked })}
+                    />
+                    <span>I confirmed the final-product concentration and IFRA category for this accord.</span>
+                  </label>
+                )}
                 <label className="field-row">
                   <span>Creative brief</span>
                   <textarea rows={3} value={metadataDraft.brief} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ brief: event.target.value })} />
@@ -10991,7 +11023,7 @@ const vietnameseUiText: Record<string, string> = {
   'Catalog & quotes': 'Danh mục & báo giá',
   Branding: 'Thương hiệu',
   'Members & security': 'Thành viên & bảo mật',
-  'Billing & integrations': 'Thanh toán & tích hợp',
+  'Workspace access': 'Quyền truy cập workspace',
   'Workspace overview': 'Tổng quan workspace',
   'Fragrance operations': 'Vận hành nước hoa',
   'Secure workspace': 'Workspace an toàn',
@@ -14917,10 +14949,10 @@ function AnalyticsWorkspace() {
 
 function SaasWorkspace({ session }: { session: AuthSession }) {
   const internalAdminView = isInternalAdminSession(session)
-  const syncedMessage = internalAdminView ? 'Commercial controls refreshed' : 'Workspace access refreshed'
-  const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading workspace access controls'
+  const syncedMessage = 'Workspace access refreshed'
+  const loadingMessage = 'Loading workspace readiness controls'
   const fallbackMessage = internalAdminView
-    ? 'Live commercial readiness API is unavailable'
+    ? 'Live workspace readiness API is unavailable'
     : 'Live workspace access API is unavailable'
   const [saasData, setSaasData] = useState<SaasConsoleResponse | null>(null)
   const [integrationReadiness, setIntegrationReadiness] = useState<IntegrationReadinessResponse | null>(null)
@@ -14957,6 +14989,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   const saasHealth = useMemo(() => saasData ? buildSaasHealthSummary(saasData) : null, [saasData])
   const saasHealthSource = saasData ? 'Live API' : 'Unavailable'
   const canProvisionCustomDomain = session.role === 'Owner' || session.role === 'Admin'
+  const betaAccess = saasData?.billingMode === 'managed_beta'
 
   function syncSsoDraft(next: SsoConfigRecord) {
     setSsoDraft({
@@ -15343,7 +15376,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             ))}
           </div>
           <div className="action-row">
-            <DataTag label="Billing mode" value={integrationReadiness.billingMode.replace('_', ' ')} tone="blue" />
+            <DataTag label={integrationReadiness.billingMode === 'managed_beta' ? 'Beta access' : 'Billing mode'} value={integrationReadiness.billingMode.replace('_', ' ')} tone="blue" />
             <DataTag label="Checked" value={new Date(integrationReadiness.checkedAt).toLocaleTimeString()} tone="green" />
           </div>
         </Panel>
@@ -15352,20 +15385,20 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
       {internalAdminView ? (
         <Panel
           className="wide saas-health-panel"
-          title="SaaS Health"
+          title="Workspace Health"
           icon={Gauge}
           right={<StatusBadge status={saasHealthTone(saasHealth.status)} label={`${saasHealth.score}%`} />}
         >
           <div className="saas-health-summary">
             <div className="saas-health-score">
-              <span className="mono-small">Commercial readiness</span>
+              <span className="mono-small">{betaAccess ? 'Beta workspace readiness' : 'Commercial readiness'}</span>
               <strong>{saasHealth.score}%</strong>
               <span>
                 {saasHealth.blockedCount > 0
                   ? 'Blocked controls need admin action before launch.'
                   : saasHealth.warningCount > 0
-                    ? 'Sell-ready with warnings to watch before launch.'
-                    : 'All SaaS health controls are passing.'}
+                    ? betaAccess ? 'Beta safeguards have warnings to review.' : 'Sell-ready with warnings to watch before launch.'
+                    : betaAccess ? 'All beta workspace safeguards are passing.' : 'All SaaS health controls are passing.'}
               </span>
             </div>
             <div className="metric-grid saas-health-metrics">
@@ -15402,9 +15435,9 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </Panel>
       ) : null}
 
-      <Panel title="Workspace Access" icon={ShieldCheck}>
+      <Panel title={betaAccess ? 'Beta workspace access' : 'Workspace Access'} icon={ShieldCheck}>
         <div className="metric-grid">
-          <Metric label="Status" value={saasData.subscription.status.toUpperCase()} />
+          <Metric label="Status" value={betaAccess ? 'BETA ENABLED' : saasData.subscription.status.toUpperCase()} />
           <Metric label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} />
           <Metric label="Storage" value={`${storageUsedGb.toFixed(3)}/${saasData.plan.storageGb}GB`} />
         </div>
@@ -15412,7 +15445,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           <span style={{ width: `${Math.min(100, (activeSeats / saasData.plan.seats) * 100)}%` }} />
         </div>
         <div className="action-row">
-          {internalAdminView && saasData.subscription.canWrite ? (
+          {internalAdminView && !betaAccess && saasData.subscription.canWrite ? (
             <button
               className="ghost-button"
               type="button"
@@ -15425,7 +15458,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
               Freeze workspace
             </button>
           ) : null}
-          {internalAdminView && !saasData.subscription.canWrite ? (
+          {internalAdminView && !betaAccess && !saasData.subscription.canWrite ? (
             <button
               className="primary-button"
               type="button"
@@ -15437,9 +15470,11 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           ) : null}
         </div>
         <ul className="policy-list">
-          <li>Workspace capacity controls remain enforced server-side before {internalAdminView ? 'commercial writes' : 'workspace changes'}.</li>
+          <li>{betaAccess ? 'Enabled workspace features are available for member testing during beta.' : `Workspace capacity controls remain enforced server-side before ${internalAdminView ? 'commercial writes' : 'workspace changes'}.`}</li>
           <li>
-            {internalAdminView
+            {betaAccess
+              ? 'Pricing, plan selection, invoices, checkout, and the billing portal are hidden until commercial launch.'
+              : internalAdminView
               ? 'Workspace freeze keeps read/export access and blocks create/update operations.'
               : 'Subscription changes are temporarily managed by OlfactoryOps during beta.'}
           </li>
@@ -15455,7 +15490,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         ) : null}
       </Panel>
 
-      <Panel title="Usage Enforcement" icon={Gauge}>
+      <Panel title={betaAccess ? 'Beta capacity' : 'Usage Enforcement'} icon={Gauge}>
         <div className="document-list compact-list">
           {saasData.limitChecks.map((check) => (
             <div className="document-row" key={check.key}>

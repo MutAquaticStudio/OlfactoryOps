@@ -39,6 +39,7 @@ type FormulaDraftBody = {
   bottleVolumeMl?: number
   bottleCount?: number
   ifraCategory?: string
+  requiresFinalProductContext?: boolean
   assignedReviewer?: string
   lines?: Array<{
     id: string
@@ -46,6 +47,8 @@ type FormulaDraftBody = {
     grams: number
     materialId?: string
     childFormulaId?: string
+    childFormulaVersionId?: string
+    childFormulaChecksum?: string
     dilution?: number
     concentration?: number
     pyramidNote?: 'Top' | 'Middle' | 'Base' | 'Solvent'
@@ -147,6 +150,31 @@ type SalesOrderBody = {
   }
   customerReference?: string
   deliveryInstructions?: string
+}
+
+type FineFragranceCompositionBody = {
+  name?: string
+  targetGrams?: number
+  concentrationType?: 'PARFUM' | 'EDP' | 'EDT' | 'EDC' | 'COLOGNE' | 'OTHER'
+  finalProductConcentrationPercent?: number
+  ifraCategory?: string
+  targetMarkets?: string[]
+  brief?: string
+  project?: string
+  collection?: string
+  accordComponents?: Array<{ formulaId?: string; grams?: number }>
+  materialLines?: Array<{
+    materialId?: string
+    grams?: number
+    label?: string
+    dilution?: number
+    concentration?: number
+    pyramidNote?: 'Top' | 'Middle' | 'Base' | 'Solvent'
+    odorType?: string
+    accord?: string
+    tags?: string[]
+    notes?: string
+  }>
 }
 
 type PackOrderBody = {
@@ -332,9 +360,9 @@ export class NorthStarController {
   }
 
   @Get('formula-intelligence/design-projects')
-  formulaDesignProjects() {
+  formulaDesignProjects(@Query('includeArchived') includeArchived?: string) {
     const context = this.northStar.me().data
-    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'), includeArchived === 'true')
   }
 
   @Get('formula-intelligence/capabilities')
@@ -347,6 +375,8 @@ export class NorthStarController {
     const evidenceRetrievalEnabled = this.northStar.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
     return {
       data: {
+        currentUserId: this.northStar.me().data.session.userId,
+        canArchiveAnyDesignProject: ['owner', 'admin'].includes(this.northStar.me().data.session.role.trim().toLowerCase()),
         canCreateBrief: permissions.has('formulas.view'),
         canReviewBrief: permissions.has('formulas.edit'),
         canGenerateDirections: candidateGenerationEnabled && permissions.has('formulas.edit') && canViewSensitiveComposition,
@@ -376,6 +406,16 @@ export class NorthStarController {
   @Post('formula-intelligence/design-projects')
   createFormulaDesignProject(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
     return this.formulaIntelligenceMutation('POST:/formula-intelligence/design-projects', idempotencyKey, body, () => this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body))
+  }
+
+  @Delete('formula-intelligence/design-projects/:projectId')
+  archiveFormulaDesignProject(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`DELETE:/formula-intelligence/design-projects/${projectId}`, idempotencyKey, {}, () => this.agentRuntime.archiveDesignProject(this.northStar, this.northStar.me().data.session, projectId))
+  }
+
+  @Post('formula-intelligence/design-projects/:projectId/restore')
+  restoreFormulaDesignProject(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/restore`, idempotencyKey, {}, () => this.agentRuntime.restoreDesignProject(this.northStar, this.northStar.me().data.session, projectId))
   }
 
   @Get('formula-intelligence/design-projects/:projectId')
@@ -510,6 +550,11 @@ export class NorthStarController {
     return this.northStar.createFormulaDraft(body)
   }
 
+  @Post('formulas/compose')
+  composeFineFragrance(@Body() body: FineFragranceCompositionBody, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation('POST:/formulas/compose', idempotencyKey, body, async () => this.northStar.composeFineFragrance(body))
+  }
+
   @Patch('formulas/:id')
   updateFormulaDraft(@Param('id') id: string, @Body() body: FormulaDraftBody) {
     return this.northStar.updateFormulaDraft(id, body)
@@ -583,6 +628,11 @@ export class NorthStarController {
     @Body() body: { direction?: 'up' | 'down' },
   ) {
     return this.northStar.moveFormulaLine(id, lineId, body)
+  }
+
+  @Post('formulas/:id/lines/:lineId/refresh-accord')
+  refreshFineFragranceAccordComponent(@Param('id') id: string, @Param('lineId') lineId: string, @Headers('idempotency-key') idempotencyKey?: string) {
+    return this.formulaIntelligenceMutation(`POST:/formulas/${id}/lines/${lineId}/refresh-accord`, idempotencyKey, {}, async () => this.northStar.refreshFineFragranceAccordComponent(id, lineId))
   }
 
   @Get('formulas/:id/resolve')

@@ -2683,6 +2683,25 @@ kbd {
   font-style: italic;
 }
 
+.formula-context-warning {
+  margin: 0 16px 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: var(--text-1);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.formula-final-use-confirmation {
+  align-items: flex-start;
+  padding: 10px 0;
+}
+
+.formula-final-use-confirmation input {
+  margin-top: 3px;
+}
+
 .formula-lab-tools {
   padding: 0 16px 14px;
 }

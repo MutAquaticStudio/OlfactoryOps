@@ -102,6 +102,23 @@ kết quả của selection policy trước đây.
 
 Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Brief `RAW` hoặc `REVIEW_REQUIRED` hiển thị **Review required** và đưa **Review brief** thành hành động chính. Nút tạo direction vẫn hiện dưới tên **Generate after review**, nhưng chỉ chuyển thành **Generate directions** và được bật sau khi product, concentration, IFRA và material constraints đã được lưu thành reviewed brief. Card luôn giải thích gate đang thiếu, gồm tải Materials hoặc phê duyệt ít nhất một formula-ready Material. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
 
+### Vòng đời brief và loại công thức
+
+Design Studio hỗ trợ hai loại brief rõ ràng: **Accord** và **Fine fragrance**.
+Accord được tạo như một concentrate, không tự thêm carrier/solvent. Có thể tạo
+direction và lưu draft khi chưa biết sản phẩm cuối, nhưng hệ thống đánh dấu
+`final-product context required`; draft đó không thể submit review hoặc approve
+cho đến khi perfumer lưu và xác nhận nồng độ của sản phẩm cuối và IFRA category. Fine fragrance
+vẫn yêu cầu concentration và IFRA category ngay trong structured review.
+
+Brief không còn cần xóa ngay khi người dùng đổi ý. Creator của brief hoặc
+Workspace Owner/Admin có thể archive brief. Archive lập tức hủy generation run
+đang hoạt động, hết hạn confirmation đang chờ và revoke mọi direction share.
+Brief bị ẩn khỏi danh sách active, có thể xem trong Archive và restore nguyên
+trạng thái làm việc trước đó. Worker chỉ purge sau 30 ngày đối với brief không
+có direction hay research run bền vững, để không phá formula, trial và audit
+evidence đã được tạo.
+
 ### Phase 4: Direction to Trial
 
 A saved Formula Design Studio direction can enter **Trials & Sensory** only
@@ -256,6 +273,7 @@ flowchart LR
 - <code>src/</code> chứa React 19 + TypeScript application do Vite build: public product site, authentication, role-aware navigation, Materials, Formulas, Inventory, Production, Commerce, Analytics, Formula Intelligence và Trials & Sensory.
 - API client tập trung ở <code>src/App.tsx</code>. Browser gửi request kèm credential, thêm CSRF token cho mutation và coi API là source of truth.
 - <code>VITE_API_BASE_URL</code> chọn API target. Chỉ đặt public API URL vào biến này; mọi biến có tiền tố <code>VITE_</code> đều nằm trong client bundle và không được chứa secret.
+- CORS credential chỉ allow exact origin. Worker production hiện cho phép domain chính, Pages test (<code>test.labofscents.pages.dev</code>), Pages beta và <code>beta.labofscents.org</code>; không dùng wildcard Pages origin.
 - Frontend không phải lớp tin cậy để cấp quyền, tính compliance cuối cùng, cập nhật inventory hoặc ghi audit. UI chỉ hiển thị capability phù hợp; backend kiểm tra lại mọi quyết định bảo mật.
 
 ### Motion và tương tác
@@ -319,7 +337,7 @@ credential hash, opaque session và audit evidence. Nó **không** gán trước
 custom domain hoặc báo hostname là active. Điều này tránh một tenant đăng ký
 chiếm hostname của người khác khi DCV/SSL chưa hoàn tất.
 
-Sau signup, Owner chọn **Connect a domain** trong `Billing & integrations`, nhập
+Sau signup, Owner chọn **Connect a domain** trong `Workspace access`, nhập
 hostname mà họ sở hữu, và Worker mới gọi Cloudflare Custom Hostnames. Trạng thái
 được giữ tenant-scoped: `pending_validation -> active | failed`. UI hiển thị
 TXT/DCV Cloudflare trả về; chỉ khi provider **và** SSL đều `active` thì
@@ -466,7 +484,7 @@ Không đặt password, Cloudflare secret hoặc production credential vào bi�
 
 Development service có seeded administrator:
 
-- Email: <code>admin@labofscents.org</code>
+- Email: <code>m.thuanwork@gmail.com</code>
 - Password: cấu hình bằng password-hash helper bên dưới; source control không lưu default password.
 
 Tạo password verifier tương tác:
@@ -569,7 +587,7 @@ P1 route yêu cầu <code>Idempotency-Key</code> cho mutation tại Worker. Retr
 
 Provider secret chỉ nằm ở Cloudflare Worker. Không có <code>STRIPE_*</code>, <code>RESEND_*</code>, <code>CLOUDFLARE_*</code>, password hoặc provider token nào được dùng tiền tố <code>VITE_</code>.
 
-- **Managed beta billing:** <code>BILLING_MODE=managed_beta</code> là mặc định. Nó ẩn plan/invoice khỏi customer UI và từ chối checkout, portal, plan-change, Stripe webhook ở server. Chỉ chuyển sang <code>self_service</code> sau khi Stripe credential, price ID và webhook validation đã cấu hình.
+- **Beta access:** <code>BILLING_MODE=managed_beta</code> là mặc định. Customer API và UI chỉ hiển thị <strong>Beta access</strong>; không trả gói, giá, invoice, provider ID, checkout, portal hoặc plan-change. Các tính năng workspace đã bật vẫn cho member thử nghiệm, trong khi capacity, write gate và tenant permission tiếp tục được enforce ở server. Chỉ chuyển sang <code>self_service</code> sau khi Stripe credential, price ID và webhook validation đã cấu hình.
 - **Transactional email:** in-app notification outbox được persist trong D1, gửi invite, new-device security, billing và privacy-request qua Resend khi có <code>RESEND_API_KEY</code> và <code>EMAIL_FROM</code>. Lỗi retry bằng bounded backoff và không rollback business mutation.
 - **Cloudflare for SaaS:** Owner/Admin chỉ provision hoặc refresh customer hostname khi Cloudflare API token, SaaS zone ID và optional custom origin đã cấu hình. Workspace hostname chỉ thay đổi khi Cloudflare trả hostname và SSL active; DCV/provider error vẫn hiển thị khi pending.
 - **Import CSV/XLSX:** Material Library nhận CSV/XLSX cho material và inventory lot, cho phép mapping cột, dry-run có row-level error và chỉ commit validated idempotent job. Lot có thể khớp material theo ID, CAS hoặc name.
@@ -620,6 +638,19 @@ binding = "AI"
 RAG v2 dùng multilingual <code>@cf/baai/bge-m3</code> để tạo vector 1.024 chiều. Cron re-index material <code>GLOBAL</code> đã curated và preload dần 1.986 Lluch global master reference vào namespace hệ thống; query chỉ chấp nhận D1 chunk và Vectorize metadata có <code>indexVersion=2</code>. Agent dùng GPT-OSS-120B chỉ để tạo typed research plan; mọi retrieval, formula math, inventory, costing và compliance vẫn do tool/domain service có quyền kiểm soát. Tenant được truy xuất global material evidence và evidence riêng của chính mình; document evidence của tenant khác không bao giờ được truy xuất. Hai index 768 chiều v1 được giữ tạm để rollback nhưng không còn nằm trong binding live.
 
 ### Trải nghiệm Formula Design Studio
+
+### Fine Fragrance theo Accord
+
+Fine Fragrance mới dùng luồng **Accord-first**: Studio tạo ba hướng Accord
+concentrate, perfumer lưu các Accord phù hợp thành draft, rồi dùng **Compose Fine
+Fragrance** để kết hợp ít nhất hai Accord. Raw material vẫn có thể được thêm trực
+tiếp cho các điều chỉnh có chủ đích.
+
+Mỗi Accord component được pin vào immutable Formula Version khi Fine draft được
+tạo. Chỉnh sửa Accord về sau không làm thay đổi Fine Fragrance đã tạo; perfumer
+phải refresh component một cách rõ ràng để tạo parent revision mới. Compose,
+pinning và refresh không reserve hoặc consume inventory. Fine formula legacy vẫn
+được review theo luồng cũ, không bị chặn hồi tố.
 
 Design Studio dùng bố cục quyết định theo luồng **brief → directions → draft**. Brief và hướng sáng tạo được tách rõ; mỗi direction chỉ hiển thị phần tóm tắt để so sánh, còn pyramid, bằng chứng, thành phần riêng tư, chia sẻ và lưu draft nằm trong khu vực review khi người dùng chọn direction. Tiến độ nghiên cứu dùng motion nhẹ từ các component nguồn cục bộ lấy cảm hứng từ React Bits, tôn trọng reduced-motion và không làm thay đổi workflow, quyền hay dữ liệu công thức. Ở màn hình dưới 1380px, review chuyển xuống dưới danh sách directions trước khi các cột bị ép hẹp.
 

@@ -5,7 +5,7 @@ import { NorthStarService } from './northstar.service'
 import { materials, type Material } from '../../../src/data/northStar'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
-const adminEmail = 'admin@labofscents.org'
+const adminEmail = 'm.thuanwork@gmail.com'
 const adminPassword = 'UnitTestAdminPassword2026!'
 
 const testMfaEncryptionKey = 'unit-test-mfa-encryption-key-2026-07-18'
@@ -258,6 +258,7 @@ describe('NorthStarService', () => {
       concentrationType: 'OTHER',
       finalProductConcentrationPercent: 100,
       ifraCategory: '4',
+      requiresFinalProductContext: false,
       brief: 'Verify that missing compliance evidence is never treated as approved.',
       ingredients: [{ materialId: 'mat-ambroxan', percentage: 100, pyramidNote: 'Base' }],
     }).data
@@ -1626,6 +1627,29 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
+  it('keeps an accord editable while blocking review until final-product context is saved', () => {
+    const service = createAuthenticatedService()
+    const accord = service.createFormulaDraft({ name: 'Contextual accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    service.addFormulaLine(accord.id, { materialId: 'mat-iso', grams: 100 })
+
+    expect(() => service.submitFormulaForReview(accord.id, { reviewer: adminEmail })).toThrow('Add final-product concentration and IFRA category')
+
+    const stillBlocked = service.updateFormulaDraft(accord.id, {
+      expectedRevision: accord.draftRevision + 1,
+      finalProductConcentrationPercent: 20,
+      ifraCategory: ' ',
+    }).data.formula
+    expect(stillBlocked.requiresFinalProductContext).toBe(true)
+
+    const updated = service.updateFormulaDraft(accord.id, {
+      expectedRevision: stillBlocked.draftRevision,
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+    }).data.formula
+    expect(updated.requiresFinalProductContext).toBe(false)
+    expect(() => service.submitFormulaForReview(updated.id, { reviewer: adminEmail })).not.toThrow()
+  })
+
   it('consumes the selected inventory lot when adding an inventory-sourced formula line', () => {
     const service = createAuthenticatedService()
     const formula = service.createFormulaDraft({ name: 'Line Test Accord', targetGrams: 80 }).data.formula
@@ -1692,6 +1716,7 @@ describe('NorthStarService', () => {
       concentrationType: 'EDP',
       finalProductConcentrationPercent: 20,
       ifraCategory: '4',
+      requiresFinalProductContext: false,
       brief: 'Marine woody research brief',
       ingredients: [
         { materialId: 'mat-bergamot', percentage: 40, pyramidNote: 'Top' },
@@ -1707,7 +1732,7 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
     expect(() => service.previewAgentFormula({
       name: 'Invalid agent preview', formulaType: 'ACCORD', targetGrams: 10, concentrationType: 'OTHER',
-      finalProductConcentrationPercent: 100, ifraCategory: '4', brief: 'invalid total',
+      finalProductConcentrationPercent: 100, ifraCategory: '4', requiresFinalProductContext: false, brief: 'invalid total',
       ingredients: [{ materialId: 'mat-iso', percentage: 80 }],
     })).toThrow(UnprocessableEntityException)
   })
@@ -1767,6 +1792,40 @@ describe('NorthStarService', () => {
     expect(() =>
       service.addFormulaLine('frm-accord-citrus', { childFormulaId: parent.id, grams: 5 }),
     ).toThrow(UnprocessableEntityException)
+  })
+
+  it('composes a Fine Fragrance from pinned Accord snapshots without inventory movement', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const opening = service.createFormulaDraft({ name: 'Opening accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    const base = service.createFormulaDraft({ name: 'Base accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    const openingLine = service.addFormulaLine(opening.id, { materialId: 'mat-iso', grams: 100 }).data.line
+    service.addFormulaLine(base.id, { materialId: 'mat-hedione', grams: 100 })
+
+    expect(() => service.composeFineFragrance({ targetGrams: 100, accordComponents: [{ formulaId: opening.id, grams: 100 }] })).toThrow('between two')
+
+    const composed = service.composeFineFragrance({
+      name: 'Composed Fine Fragrance', targetGrams: 100, concentrationType: 'EDP', finalProductConcentrationPercent: 20, ifraCategory: '4',
+      accordComponents: [{ formulaId: opening.id, grams: 45 }, { formulaId: base.id, grams: 45 }],
+      materialLines: [{ materialId: 'mat-ethanol', grams: 10, pyramidNote: 'Solvent' }],
+    }).data
+    const pinnedOpening = composed.formula.lines.find((line) => line.childFormulaId === opening.id)
+    expect(composed.formula.formulaType).toBe('FINE_FRAGRANCE')
+    expect(composed.formula.lines.filter((line) => line.childFormulaId)).toHaveLength(2)
+    expect(pinnedOpening?.childFormulaVersionId).toBeTruthy()
+    expect(pinnedOpening?.childFormulaChecksum).toMatch(/^sha256:/)
+    expect(composed.leaves.find((leaf) => leaf.materialId === 'mat-iso')?.effectivePercent).toBeCloseTo(45)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+
+    const resized = service.updateFormulaLine(composed.formula.id, pinnedOpening!.id, { grams: 40 }).data
+    const resizedOpening = resized.formula.lines.find((line) => line.id === pinnedOpening!.id)
+    expect(resizedOpening?.childFormulaVersionId).toBe(pinnedOpening?.childFormulaVersionId)
+    expect(resizedOpening?.childFormulaChecksum).toBe(pinnedOpening?.childFormulaChecksum)
+
+    service.updateFormulaLine(opening.id, openingLine.id, { materialId: 'mat-bergamot', grams: 100 })
+    const resolvedAfterAccordEdit = service.resolveFormula(composed.formula.id).data
+    expect(resolvedAfterAccordEdit.leaves.find((leaf) => leaf.materialId === 'mat-iso')?.effectivePercent).toBeCloseTo(40)
+    expect(resolvedAfterAccordEdit.leaves.some((leaf) => leaf.materialId === 'mat-bergamot')).toBe(false)
   })
 
   it('reviews, approves, evaluates, compares, locks, forks, and exports formula versions without stock movement', () => {
@@ -3200,8 +3259,27 @@ describe('NorthStarService', () => {
     expect(consoleState.billingMode).toBe('managed_beta')
     expect(consoleState.plans).toEqual([])
     expect(consoleState.invoices).toEqual([])
-    expect(() => service.billingPlans()).toThrow(UnprocessableEntityException)
+    expect(consoleState.plan).toMatchObject({
+      id: 'BETA_ACCESS',
+      name: 'Beta access',
+      monthlyPrice: 0,
+    })
+    expect(consoleState.subscription).toMatchObject({
+      planId: 'BETA_ACCESS',
+      provider: 'manual',
+      status: 'active',
+    })
+    expect(consoleState.subscription).not.toHaveProperty('providerCustomerId')
+    expect(consoleState.subscription).not.toHaveProperty('providerSubscriptionId')
+    expect(consoleState.readiness.some((check) => check.key === 'invoice-lifecycle')).toBe(false)
+    expect(JSON.stringify(consoleState)).not.toContain('PLAN-APPRENTICE')
+    expect(service.billingSubscription().data.planId).toBe('BETA_ACCESS')
+    expect(() => service.billingPlan()).toThrow('Billing plans and payment controls are unavailable')
+    expect(() => service.billingPlans()).toThrow('Billing plans and payment controls are unavailable')
+    expect(() => service.billingInvoices()).toThrow('Billing plans and payment controls are unavailable')
     expect(() => service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' })).toThrow(UnprocessableEntityException)
+    expect(() => service.selectBillingPlan({ planId: 'PLAN-ARTISAN' })).toThrow(UnprocessableEntityException)
+    expect(() => service.startBillingCheckout({ planId: 'PLAN-ARTISAN', mode: 'checkout' })).toThrow(UnprocessableEntityException)
     expect(() => service.openBillingPortal()).toThrow(UnprocessableEntityException)
     expect(() => service.freezeSubscription()).toThrow(UnprocessableEntityException)
     expect(() => service.reactivateSubscription()).toThrow(UnprocessableEntityException)
@@ -3221,6 +3299,25 @@ describe('NorthStarService', () => {
     expect(readiness.checks.find((check) => check.key === 'vectorize_rag')?.status).toBe('ready')
     expect(readiness.checks.find((check) => check.key === 'formula_agent')?.status).toBe('ready')
     expect(JSON.stringify(readiness)).not.toContain('STRIPE_SECRET_KEY')
+  })
+
+  it('projects beta signup access without exposing a membership package', () => {
+    const service = new NorthStarService({ mfaEncryptionKey: testMfaEncryptionKey })
+    const signup = service.signup({
+      organizationName: 'Beta Member Workspace',
+      workspaceSlug: 'beta-member-workspace',
+      email: 'owner@beta-member-workspace.test',
+      name: 'Beta Owner',
+      password: 'BetaMemberWorkspace2026!',
+    }).data
+
+    expect(signup.subscription).toMatchObject({
+      planId: 'BETA_ACCESS',
+      provider: 'manual',
+      status: 'active',
+    })
+    expect(JSON.stringify(signup.subscription)).not.toContain('PLAN-APPRENTICE')
+    expect(service.billingConsole().data.plan.name).toBe('Beta access')
   })
 
   it('keeps email delivery retry evidence durable and does not retry before the due time', () => {

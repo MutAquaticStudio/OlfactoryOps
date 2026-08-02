@@ -67,7 +67,9 @@ type LocalDesignConstraintSnapshot = {
 type LocalDesignProject = {
   id: string; organizationId: string; brandId: string; createdByUserId: string; name: string; brief?: FormulaDesignBrief
   briefVersions: LocalDesignBriefVersion[]; currentBriefVersionId?: string; constraintSnapshots?: LocalDesignConstraintSnapshot[]
-  status: 'BRIEFED' | 'IN_PROGRESS' | 'IN_REVIEW' | 'SELECTED'; selectedDirectionId?: string; directions: LocalDesignDirection[]; feedback: LocalDesignFeedback[]; createdAt: string; updatedAt: string
+  status: 'BRIEFED' | 'IN_PROGRESS' | 'IN_REVIEW' | 'SELECTED' | 'ARCHIVED'; selectedDirectionId?: string; formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE'
+  archivedAt?: string; archivedByUserId?: string; archivePreviousStatus?: 'BRIEFED' | 'IN_PROGRESS' | 'IN_REVIEW' | 'SELECTED'; purgeAfter?: string
+  directions: LocalDesignDirection[]; feedback: LocalDesignFeedback[]; createdAt: string; updatedAt: string
 }
 type LocalOptimizerCandidate = OptimizerCandidateArtifact & { status: 'READY' | 'PENDING_SAVE' | 'SAVED'; savedFormulaId?: string }
 type LocalIdempotencyRecord = { requestHash: string; response: unknown; createdAt: string }
@@ -163,12 +165,13 @@ export class AgentLocalRuntimeService {
     return this.detail(session, run.id)
   }
 
-  async listDesignProjects(service: NorthStarService, session: AuthSession, canViewPrivate: boolean) {
+  async listDesignProjects(service: NorthStarService, session: AuthSession, canViewPrivate: boolean, includeArchived = false) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
     const current = actor(session)
     return {
       data: this.state.projects
+        .filter((project) => includeArchived || project.status !== 'ARCHIVED')
         .filter((project) => project.organizationId === current.organizationId && (
           project.createdByUserId === current.userId ||
           this.isProjectProducer(current.userId, project.id) ||
@@ -195,7 +198,7 @@ export class AgentLocalRuntimeService {
     const project: LocalDesignProject = {
       id: crypto.randomUUID(), organizationId: current.organizationId, brandId: session.brandId, createdByUserId: current.userId,
       name: input.name, briefVersions: [initialVersion], currentBriefVersionId: initialVersion.id,
-      status: 'BRIEFED', directions: [], feedback: [], createdAt: timestamp, updatedAt: timestamp,
+      status: 'BRIEFED', formulaTypeHint: input.formulaType, directions: [], feedback: [], createdAt: timestamp, updatedAt: timestamp,
     }
     this.state.projects.unshift(project)
     service.recordIntegrationAudit('formula-intelligence.design.project.create', project.id)
@@ -208,6 +211,54 @@ export class AgentLocalRuntimeService {
     this.requireFormulaPermission(service, 'formulas.view')
     const project = this.projectFor(session, projectId, false)
     return { data: { project: this.exposeProject(project, session, canViewPrivate) } }
+  }
+
+  async archiveDesignProject(service: NorthStarService, session: AuthSession, projectId: string) {
+    await this.ready()
+    this.requireFormulaPermission(service, 'formulas.view')
+    const project = this.projectForLifecycle(session, projectId)
+    if (project.status === 'ARCHIVED') {
+      return { data: { projectId: project.id, status: 'ARCHIVED', purgeAfter: project.purgeAfter, duplicate: true } }
+    }
+    const timestamp = now()
+    const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    project.archivePreviousStatus = project.status === 'IN_PROGRESS' ? 'BRIEFED' : project.status
+    project.status = 'ARCHIVED'
+    project.archivedAt = timestamp
+    project.archivedByUserId = session.userId
+    project.purgeAfter = purgeAfter
+    project.updatedAt = timestamp
+    for (const direction of project.directions) {
+      for (const share of direction.shares ?? []) {
+        if (!share.revokedAt) share.revokedAt = timestamp
+      }
+    }
+    for (const run of this.state.runs.filter((candidate) => candidate.organization_id === session.organizationId && candidate.intelligence?.workflowKind === 'DESIGN_STUDIO' && candidate.intelligence.projectId === project.id && ['QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION', 'PAUSED'].includes(candidate.status))) {
+      run.status = 'CANCELLED'
+      run.updated_at = timestamp
+      if (run.confirmation?.status === 'PENDING') run.confirmation.status = 'EXPIRED'
+      this.event(run, 'run.cancelled', { status: 'CANCELLED', progress: run.progress, reason: 'design-project-archived' })
+    }
+    service.recordIntegrationAudit('formula-intelligence.design.project.archive', project.id)
+    await this.persist()
+    return { data: { projectId: project.id, status: 'ARCHIVED', purgeAfter, duplicate: false } }
+  }
+
+  async restoreDesignProject(service: NorthStarService, session: AuthSession, projectId: string) {
+    await this.ready()
+    this.requireFormulaPermission(service, 'formulas.view')
+    const project = this.projectForLifecycle(session, projectId)
+    if (project.status !== 'ARCHIVED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_NOT_ARCHIVED')
+    const restoredStatus = project.archivePreviousStatus && project.archivePreviousStatus !== 'IN_PROGRESS' ? project.archivePreviousStatus : 'BRIEFED'
+    project.status = restoredStatus
+    delete project.archivedAt
+    delete project.archivedByUserId
+    delete project.archivePreviousStatus
+    delete project.purgeAfter
+    project.updatedAt = now()
+    service.recordIntegrationAudit('formula-intelligence.design.project.restore', project.id)
+    await this.persist()
+    return { data: { projectId: project.id, status: restoredStatus, duplicate: false } }
   }
 
   async designBriefVersions(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean) {
@@ -258,6 +309,7 @@ export class AgentLocalRuntimeService {
     }
     project.briefVersions.unshift(version)
     project.currentBriefVersionId = version.id
+    project.formulaTypeHint = validation.brief.product.formulaType ?? project.formulaTypeHint
     if (validation.state === 'REVIEWED') project.brief = formulaDesignBriefFromStructuredBrief(project.name, validation.brief)
     project.updatedAt = timestamp
     service.recordIntegrationAudit('formula-intelligence.design.brief.version.create', `${project.id}:${version.id}`, validation.state === 'REVIEWED' ? 'allowed' : 'review')
@@ -576,6 +628,7 @@ export class AgentLocalRuntimeService {
     if (confirmation.status === 'PENDING' && confirmation.expiresAt <= now()) {
       confirmation.status = 'EXPIRED'; service.recordIntegrationAudit('formula-intelligence.confirmation.expired', confirmationId, 'blocked'); await this.persist(); throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
     }
+    if (confirmation.status === 'EXPIRED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED')
     if (confirmation.status !== 'PENDING') return { data: { duplicate: true, formulaId: confirmation.savedFormulaId } }
     if (decision === 'reject') {
       confirmation.status = 'REJECTED'; run.status = 'COMPLETED'; run.progress = 100
@@ -591,7 +644,7 @@ export class AgentLocalRuntimeService {
     const created = service.createAgentFormulaDraft(confirmationId, {
       name: confirmation.proposal.name, formulaType: confirmation.proposal.formulaType, targetGrams: confirmation.proposal.targetGrams,
       concentrationType: confirmation.proposal.concentrationType, finalProductConcentrationPercent: confirmation.proposal.finalProductConcentrationPercent,
-      ifraCategory: confirmation.proposal.ifraCategory, brief: confirmation.proposal.brief,
+      ifraCategory: confirmation.proposal.ifraCategory, requiresFinalProductContext: confirmation.proposal.requiresFinalProductContext, brief: confirmation.proposal.brief,
     }).data.formula
     const names = new Map(service.materials().data.map((material) => [material.id, material.name]))
     const formula = service.updateFormulaDraft(created.id, {
@@ -646,7 +699,17 @@ export class AgentLocalRuntimeService {
     }
   }
 
-  private projectFor(session: AuthSession, projectId: string, allowBrandBrief: boolean) {
+  private projectForLifecycle(session: AuthSession, projectId: string) {
+    const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === session.organizationId)
+    if (!project) throw new NotFoundException('Design project was not found')
+    const role = session.role.trim().toLowerCase()
+    if (project.createdByUserId !== session.userId && role !== 'owner' && role !== 'admin') {
+      throw new ForbiddenException('Only the brief creator or a workspace Owner/Admin can archive this project')
+    }
+    return project
+  }
+
+  private projectFor(session: AuthSession, projectId: string, allowBrandBrief: boolean, includeArchived = false) {
     const current = actor(session)
     const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === current.organizationId && (
       candidate.createdByUserId === current.userId ||
@@ -654,7 +717,7 @@ export class AgentLocalRuntimeService {
       candidate.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt)) ||
       (allowBrandBrief && candidate.status === 'BRIEFED' && candidate.brandId === session.brandId)
     ))
-    if (!project) throw new NotFoundException('Design project was not found')
+    if (!project || (!includeArchived && project.status === 'ARCHIVED')) throw new NotFoundException('Design project was not found')
     return project
   }
 
@@ -778,6 +841,8 @@ export class AgentLocalRuntimeService {
     return {
       id: project.id, name: project.name, status: project.status, createdByUserId: project.createdByUserId,
       selectedDirectionId: project.selectedDirectionId,
+      formulaTypeHint: project.formulaTypeHint,
+      ...(project.status === 'ARCHIVED' ? { archivedAt: project.archivedAt, purgeAfter: project.purgeAfter } : {}),
       ...(project.brief && canViewBriefDetails ? { brief: project.brief } : {}),
       currentBriefVersionId: project.currentBriefVersionId,
       briefVersion: canViewBriefDetails && briefVersion ? this.exposeBriefVersion(briefVersion) : undefined,
@@ -821,7 +886,8 @@ export class AgentLocalRuntimeService {
     const total = proposal.ingredients.reduce((sum, item) => sum + item.percentage, 0)
     if (Math.abs(total - 100) > 0.05) throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
     const preview = service.previewFormulaIntelligence(proposal).data
-    if (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0) {
+    const isAccordAwaitingFinalUse = proposal.formulaType === 'ACCORD' && proposal.requiresFinalProductContext
+    if (preview.compliance.blockedMaterialIds.length > 0 || (!isAccordAwaitingFinalUse && (preview.compliance.status === 'BLOCKED' || preview.ifra.blockerCount > 0))) {
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_DRAFT_BLOCKED')
     }
     if (run.pendingSave?.kind === 'design' && run.pendingSave.projectId) {
@@ -970,12 +1036,16 @@ export class AgentLocalRuntimeService {
     this.addNode(run, 'validate_compliance', 80, { statuses: previews.map((preview) => preview.compliance.status) })
     const directions: LocalDesignDirection[] = proposals.map((proposal, index) => {
       const preview = previews[index]!
+      const requiresFinalUseReview = proposal.proposal.formulaType === 'ACCORD' && proposal.proposal.requiresFinalProductContext
       return {
         directionId: crypto.randomUUID(), runId: run.id, title: proposal.title, narrative: proposal.narrative, pyramidSummary: proposal.pyramidSummary,
         availability: preview.visibility.canViewInventory ? (preview.availability.every((item) => item.status === 'AVAILABLE') ? 'AVAILABLE' : 'MIXED') : 'UNKNOWN',
-        complianceStatus: preview.compliance.status === 'APPROVED' ? 'PASS' : preview.compliance.status === 'BLOCKED' ? 'BLOCKED' : 'REVIEW_REQUIRED',
+        complianceStatus: requiresFinalUseReview ? 'REVIEW_REQUIRED' : preview.compliance.status === 'APPROVED' ? 'PASS' : preview.compliance.status === 'BLOCKED' ? 'BLOCKED' : 'REVIEW_REQUIRED',
         proposal: proposal.proposal,
-        warnings: preview.ifra.rows.filter((row) => row.status !== 'PASS' && row.status !== 'NO_LIMIT').map((row) => `${row.materialName}: ${row.status}`).slice(0, 20),
+        warnings: [
+          ...(requiresFinalUseReview ? ['Final-product concentration and IFRA use context are required before review.'] : []),
+          ...preview.ifra.rows.filter((row) => row.status !== 'PASS' && row.status !== 'NO_LIMIT').map((row) => `${row.materialName}: ${row.status}`),
+        ].slice(0, 20),
         historicalEvidence: proposal.historicalEvidence,
         status: 'DRAFT',
       }
@@ -1076,9 +1146,10 @@ export class AgentLocalRuntimeService {
         .slice(0, 4)
       if (!candidates.length) throw new UnprocessableEntityException('No workspace materials are available for this research run')
       const weights = candidates.length === 1 ? [100] : candidates.length === 2 ? [60, 40] : candidates.length === 3 ? [45, 30, 25] : [40, 25, 20, 15]
+      const isAccord = /\baccord\b/i.test(run.input_brief)
       const proposal = agentFormulaProposalSchema.parse({
-        name: `${run.input_brief.slice(0, 52).replace(/\s+/g, ' ')} proposal`, formulaType: /\baccord\b/i.test(run.input_brief) ? 'ACCORD' : 'FINE_FRAGRANCE',
-        targetGrams: 100, concentrationType: 'EDP', finalProductConcentrationPercent: /\baccord\b/i.test(run.input_brief) ? 100 : 20, ifraCategory: '4', brief: run.input_brief,
+        name: `${run.input_brief.slice(0, 52).replace(/\s+/g, ' ')} proposal`, formulaType: isAccord ? 'ACCORD' : 'FINE_FRAGRANCE',
+        targetGrams: 100, concentrationType: isAccord ? 'OTHER' : 'EDP', finalProductConcentrationPercent: isAccord ? 100 : 20, ifraCategory: '4', requiresFinalProductContext: isAccord, brief: run.input_brief,
         ingredients: candidates.map((material, index) => ({ materialId: material.id, percentage: weights[index], pyramidNote: material.tier === 'Heart' ? 'Middle' : material.tier })),
       })
       const preview = service.previewAgentFormula(proposal).data
@@ -1160,6 +1231,7 @@ export class AgentLocalRuntimeService {
         idempotency: parsed.idempotency && typeof parsed.idempotency === 'object' ? parsed.idempotency : {},
       }
       this.pruneIdempotencyRecords()
+      if (this.pruneExpiredArchivedProjects()) await this.persist()
     } catch { this.state = { runs: [], projects: [], optimizerCandidates: {}, idempotency: {} } }
   }
 
@@ -1179,6 +1251,21 @@ export class AgentLocalRuntimeService {
     for (const [scope, record] of Object.entries(this.state.idempotency)) {
       if (!record?.createdAt || Date.parse(record.createdAt) < cutoff) delete this.state.idempotency[scope]
     }
+  }
+
+  private pruneExpiredArchivedProjects() {
+    const cutoff = Date.now()
+    const retained = this.state.projects.filter((project) => {
+      if (project.status !== 'ARCHIVED' || !project.purgeAfter || Date.parse(project.purgeAfter) > cutoff) return true
+      const hasDirection = project.directions.length > 0
+      const hasRun = this.state.runs.some((run) => run.organization_id === project.organizationId && run.intelligence?.workflowKind === 'DESIGN_STUDIO' && run.intelligence.projectId === project.id)
+      // Keep operational lineage intact even after the archive window; only a
+      // standalone, unused brief is eligible for destructive local cleanup.
+      return hasDirection || hasRun
+    })
+    if (retained.length === this.state.projects.length) return false
+    this.state.projects = retained
+    return true
   }
 
   private restoreProject(candidate: LocalDesignProject) {

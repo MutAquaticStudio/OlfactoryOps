@@ -65,6 +65,7 @@ function proposalFromMaterials(
     concentrationType: brief.concentrationType,
     finalProductConcentrationPercent: brief.finalProductConcentrationPercent,
     ifraCategory: brief.ifraCategory,
+    requiresFinalProductContext: brief.requiresFinalProductContext,
     brief: brief.creativeBrief,
     ingredients: materials.map((material, index) => ({
       materialId: material.id,
@@ -74,7 +75,7 @@ function proposalFromMaterials(
   }
 }
 
-function selectDirectionPalette(ranked: MaterialSeed[], locked: MaterialSeed[], directionIndex: number, formulaType: FormulaDesignBrief['formulaType']) {
+function selectDirectionPalette(ranked: MaterialSeed[], locked: MaterialSeed[], directionIndex: number) {
   const targetSize = Math.min(ranked.length, Math.min(24, Math.max(6, locked.length + 4)))
   const selected = [...locked]
   const selectedIds = new Set(selected.map((material) => material.id))
@@ -84,7 +85,9 @@ function selectDirectionPalette(ranked: MaterialSeed[], locked: MaterialSeed[], 
     selectedIds.add(material.id)
   }
 
-  const candidates = ranked.filter((material) => formulaType === 'ACCORD' || !isCarrier(material))
+  // Generated directions are always concentrate compositions. A carrier is a
+  // final-product implementation choice, never an ingredient of the accord.
+  const candidates = ranked.filter((material) => !isCarrier(material))
   for (const tier of ['Top', 'Heart', 'Base'] as const) {
     const tierCandidates = candidates.filter((material) => material.tier === tier && !selectedIds.has(material.id))
     add(tierCandidates[directionIndex % Math.max(1, tierCandidates.length)])
@@ -116,14 +119,31 @@ export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materia
   if (locked.some((material) => !material)) throw new Error('A locked material is not eligible or is not visible in this workspace')
   const resolvedLocked = locked as MaterialSeed[]
   if (ranked.length === 0) throw new Error('No eligible workspace materials match this design brief')
+  // Fine Fragrance research starts with reusable Accord building blocks. The
+  // final product is composed explicitly from two or more saved Accord drafts,
+  // so this generator never disguises a raw-material palette as a finished scent.
+  const directionBrief: FormulaDesignBrief = brief.formulaType === 'FINE_FRAGRANCE'
+    ? {
+        ...brief,
+        formulaType: 'ACCORD',
+        concentrationType: 'OTHER',
+        finalProductConcentrationPercent: 100,
+        ifraCategory: brief.ifraCategory || '4',
+        requiresFinalProductContext: true,
+      }
+    : brief
   return directionProfiles.map(({ label, tierWeights }, index) => {
-    const choice = selectDirectionPalette(ranked, resolvedLocked, index, brief.formulaType)
-    const title = `${brief.name} - ${label}`
+    const choice = selectDirectionPalette(ranked, resolvedLocked, index)
+    const title = brief.formulaType === 'FINE_FRAGRANCE'
+      ? `${brief.name} Accord - ${label}`
+      : `${brief.name} - ${label}`
     return {
       title,
-      narrative: `${label} for ${brief.creativeBrief.slice(0, 180)}. The palette balances brief relevance, note structure, material-family diversity, and eligible availability before a draft is saved.`,
+      narrative: brief.formulaType === 'FINE_FRAGRANCE'
+        ? `${label} Accord building block for ${brief.creativeBrief.slice(0, 180)}. Save the accords you want to keep, then compose the final Fine Fragrance explicitly from them.`
+        : `${label} for ${brief.creativeBrief.slice(0, 180)}. The palette balances brief relevance, note structure, material-family diversity, and eligible availability before a draft is saved.`,
       pyramidSummary: choice.filter((material) => !isCarrier(material)).map((material) => `${noteForTier(material.tier)}: ${material.name}`).join(' / '),
-      proposal: proposalFromMaterials(title, brief, choice, tierWeights),
+      proposal: proposalFromMaterials(title, directionBrief, choice, tierWeights),
     }
   })
 }
@@ -178,6 +198,7 @@ export function proposalFromFormulaVersion(formula: Formula, versionLines: Formu
     concentrationType: formula.concentrationType,
     finalProductConcentrationPercent: formula.finalProductConcentrationPercent,
     ifraCategory: formula.ifraCategory,
+    requiresFinalProductContext: Boolean(formula.requiresFinalProductContext),
     brief: formula.brief,
     ingredients: versionLines
       .filter((line) => Boolean(line.materialId) && line.grams > 0)

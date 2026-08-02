@@ -120,6 +120,10 @@ export const agentFormulaProposalSchema = z.object({
   concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).default('EDP'),
   finalProductConcentrationPercent: z.number().finite().min(0.01).max(100),
   ifraCategory: z.string().min(1).max(32).default('4'),
+  // An accord can be drafted before its final product and IFRA use context are
+  // known. The operating formula workflow must collect that context before
+  // review or approval.
+  requiresFinalProductContext: z.boolean().default(false),
   brief: z.string().max(6000).default(''),
   ingredients: z.array(z.object({
     materialId: z.string().min(1).max(160),
@@ -136,6 +140,7 @@ export const formulaDesignBriefSchema = z.object({
   concentrationType: z.enum(['PARFUM', 'EDP', 'EDT', 'EDC', 'COLOGNE', 'OTHER']).default('EDP'),
   finalProductConcentrationPercent: z.number().finite().min(0.01).max(100).default(20),
   ifraCategory: z.string().min(1).max(32).default('4'),
+  requiresFinalProductContext: z.boolean().default(false),
   targetMarkets: z.array(z.string().min(1).max(64)).max(12).default(['EU', 'US']),
   creativeBrief: z.string().min(8).max(6000),
   desiredNotes: z.array(z.string().min(1).max(80)).max(24).default([]),
@@ -287,10 +292,26 @@ export function validateStructuredFormulaDesignBrief(input: unknown): FormulaDes
   const ifraCategory = parsed.constraints.ifraCategory?.trim().replace(/^category\s+/i, '').toUpperCase()
   if (!parsed.product.productType) questions.push(unresolved('product.productType', 'Select the product type.', 'HIGH'))
   if (!parsed.product.formulaType) questions.push(unresolved('product.formulaType', 'Select Accord or Fine fragrance.', 'HIGH'))
-  if (!parsed.product.concentrationLabel) questions.push(unresolved('product.concentrationLabel', 'Select the concentration label.', 'HIGH'))
-  if (parsed.product.targetConcentrationPercent === undefined) questions.push(unresolved('product.targetConcentrationPercent', 'Set the final-product concentration.', 'HIGH'))
+  const isAccord = parsed.product.formulaType === 'ACCORD'
+  if (!isAccord && !parsed.product.concentrationLabel) questions.push(unresolved('product.concentrationLabel', 'Select the concentration label.', 'HIGH'))
+  if (!isAccord && parsed.product.targetConcentrationPercent === undefined) questions.push(unresolved('product.targetConcentrationPercent', 'Set the final-product concentration.', 'HIGH'))
   if (parsed.product.targetGrams === undefined) questions.push(unresolved('product.targetGrams', 'Set the target trial quantity.', 'MEDIUM'))
-  if (!ifraCategory || !supportedIfraCategories.has(ifraCategory)) questions.push(unresolved('constraints.ifraCategory', 'Select a supported IFRA category.', 'HIGH'))
+  if (!ifraCategory || !supportedIfraCategories.has(ifraCategory)) {
+    questions.push(unresolved(
+      'constraints.ifraCategory',
+      isAccord
+        ? 'Add a supported IFRA category before this accord is reviewed for a final product.'
+        : 'Select a supported IFRA category.',
+      isAccord ? 'LOW' : 'HIGH',
+    ))
+  }
+  if (isAccord && (!parsed.product.concentrationLabel || parsed.product.targetConcentrationPercent === undefined)) {
+    questions.push(unresolved(
+      'product.finalUseContext',
+      'Add final-product concentration and use context before this accord is reviewed for release.',
+      'LOW',
+    ))
+  }
   if (targetMarkets.length === 0) questions.push(unresolved('constraints.targetMarkets', 'Select at least one target market.', 'HIGH'))
   if (!parsed.creative.descriptors.length && !parsed.creative.desiredNotes.length) {
     questions.push(unresolved('creative', 'Describe at least one desired note or creative descriptor.', 'HIGH'))
@@ -314,15 +335,23 @@ export function rawBriefFromProjectCreate(input: FormulaDesignProjectCreate) {
 }
 
 export function formulaDesignBriefFromStructuredBrief(name: string, structured: StructuredFormulaDesignBrief): FormulaDesignBrief {
-  if (!structured.product.formulaType || !structured.product.concentrationLabel || structured.product.targetConcentrationPercent === undefined || structured.product.targetGrams === undefined || !structured.constraints.ifraCategory || structured.constraints.targetMarkets.length === 0) {
+  const formulaType = structured.product.formulaType
+  const isAccord = formulaType === 'ACCORD'
+  const finalUseContextRequired = isAccord && (
+    !structured.product.concentrationLabel ||
+    structured.product.targetConcentrationPercent === undefined ||
+    !structured.constraints.ifraCategory
+  )
+  if (!formulaType || structured.product.targetGrams === undefined || structured.constraints.targetMarkets.length === 0 || (!isAccord && (!structured.product.concentrationLabel || structured.product.targetConcentrationPercent === undefined || !structured.constraints.ifraCategory))) {
     throw new Error('A reviewed structured brief is required before generation')
   }
   return formulaDesignBriefSchema.parse({
     name,
-    formulaType: structured.product.formulaType,
-    concentrationType: structured.product.concentrationLabel,
-    finalProductConcentrationPercent: structured.product.targetConcentrationPercent,
-    ifraCategory: structured.constraints.ifraCategory,
+    formulaType,
+    concentrationType: structured.product.concentrationLabel ?? 'OTHER',
+    finalProductConcentrationPercent: structured.product.targetConcentrationPercent ?? 100,
+    ifraCategory: structured.constraints.ifraCategory ?? '4',
+    requiresFinalProductContext: finalUseContextRequired,
     targetMarkets: structured.constraints.targetMarkets,
     creativeBrief: [structured.creative.emotionalIntent, ...structured.creative.descriptors, ...structured.creative.desiredNotes].filter(Boolean).join('. '),
     desiredNotes: structured.creative.desiredNotes,

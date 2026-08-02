@@ -23,6 +23,7 @@ import {
   createDesignProjectRun,
   createOptimizerRun,
   executeFormulaIntelligenceRun,
+  purgeExpiredArchivedDesignProjects,
 } from './formula-intelligence.js'
 import { MaterialEvidenceRag, type RagAiBinding, type RagVectorIndex } from './material-evidence-rag.js'
 import {
@@ -535,7 +536,8 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
 const SNAPSHOT_KEY_SET = new Set<SnapshotKey>(SNAPSHOT_KEYS)
 const SNAPSHOT_PERSIST_KEYS = SNAPSHOT_KEYS.filter((key) => !NORMALIZED_STATE_KEYS.has(key))
 const D1_NORMALIZED_CUTOVER_KEY = 'd1-normalized-state-v1'
-const SEEDED_ADMIN_EMAIL = 'admin@labofscents.org'
+const SEEDED_ADMIN_EMAIL = 'm.thuanwork@gmail.com'
+const LEGACY_SEEDED_ADMIN_EMAILS = ['admin@labofscents.org']
 const SEEDED_ADMIN_ORGANIZATION_ID = 'org-nxl'
 const SEEDED_ADMIN_ROLE = 'Admin'
 const SEEDED_ADMIN_PASSWORD_SET_AT = '2026-07-16T00:00:00.000Z'
@@ -650,8 +652,10 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
   { method: 'GET', pattern: '/formula-intelligence/capabilities', persistState: false, handler: ({ service }) => formulaIntelligenceCapabilities(service) },
   { method: 'GET', pattern: '/formula-intelligence/materials', persistState: false, handler: (context) => listFormulaIntelligenceMaterials(context) },
-  { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: ({ service, env }) => listDesignProjects(service, env) },
+  { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: (context) => listDesignProjects(context) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
+  { method: 'DELETE', pattern: '/formula-intelligence/design-projects/:id', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => archiveFormulaDesignProject(context) },
+  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/restore', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restoreFormulaDesignProject(context) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
   { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/brief-versions', persistState: false, handler: ({ service, env, params }) => listFormulaDesignBriefVersions(service, env, params.id) },
   { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/brief-versions/compile', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => formulaDesignBriefCompilerStatus(context) },
@@ -680,12 +684,14 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/agent/runs/:id/confirmations/:confirmationId', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resolveAgentConfirmation(context) },
   { method: 'POST', pattern: '/agent/runs/:id/restart', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restartAgentRun(context) },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
+  { method: 'POST', pattern: '/formulas/compose', mutates: true, idempotent: true, limitKey: 'formulas', handler: ({ service, body }) => service.composeFineFragrance(body) },
   { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/fork', mutates: true, limitKey: 'formulas', handler: ({ service, params, body }) => service.forkFormula(params.id, body) },
   { method: 'POST', pattern: '/formulas/:id/lines', mutates: true, handler: ({ service, params, body }) => service.addFormulaLine(params.id, body) },
   { method: 'PATCH', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params, body }) => service.updateFormulaLine(params.id, params.lineId, body) },
   { method: 'DELETE', pattern: '/formulas/:id/lines/:lineId', mutates: true, handler: ({ service, params }) => service.deleteFormulaLine(params.id, params.lineId) },
   { method: 'POST', pattern: '/formulas/:id/lines/:lineId/move', mutates: true, handler: ({ service, params, body }) => service.moveFormulaLine(params.id, params.lineId, body) },
+  { method: 'POST', pattern: '/formulas/:id/lines/:lineId/refresh-accord', mutates: true, idempotent: true, handler: ({ service, params }) => service.refreshFineFragranceAccordComponent(params.id, params.lineId) },
   { method: 'POST', pattern: '/formulas/:id/scale/apply', mutates: true, handler: ({ service, params, body }) => service.applyFormulaScale(params.id, body) },
   { method: 'GET', pattern: '/formulas/:id/resolve', handler: ({ service, params }) => service.resolveFormula(params.id) },
   { method: 'GET', pattern: '/formulas/:id/cost', handler: ({ service, params }) => service.formulaCost(params.id) },
@@ -1097,6 +1103,7 @@ async function resolveAgentConfirmation(context: RouteContext) {
       concentrationType: claimed.proposal.concentrationType,
       finalProductConcentrationPercent: claimed.proposal.finalProductConcentrationPercent,
       ifraCategory: claimed.proposal.ifraCategory,
+      requiresFinalProductContext: claimed.proposal.requiresFinalProductContext,
       brief: claimed.proposal.brief,
     }).data.formula
     const materialNames = new Map(context.service.materials().data.map((material) => [material.id, material.name]))
@@ -1145,7 +1152,9 @@ function formulaIntelligenceCanView(service: NorthStarService) {
 }
 
 function formulaIntelligenceCapabilities(service: NorthStarService) {
-  const granted = new Set(service.me().data.permissions)
+  const context = service.me().data
+  const granted = new Set(context.permissions)
+  const normalizedRole = context.session.role.trim().toLowerCase()
   const canViewSensitiveComposition = granted.has('formulas.viewSensitive') && granted.has('materials.view')
   const candidateGenerationEnabled = service.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')
   const optimizerEnabled = service.formulaIntelligenceFeatureEnabled('designStudioOptimizer')
@@ -1153,6 +1162,8 @@ function formulaIntelligenceCapabilities(service: NorthStarService) {
   const evidenceRetrievalEnabled = service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
   return {
     data: {
+      currentUserId: context.session.userId,
+      canArchiveAnyDesignProject: normalizedRole === 'owner' || normalizedRole === 'admin',
       canCreateBrief: granted.has('formulas.view'),
       canReviewBrief: granted.has('formulas.edit'),
       canGenerateDirections: candidateGenerationEnabled && granted.has('formulas.edit') && canViewSensitiveComposition,
@@ -1192,10 +1203,11 @@ async function auditFormulaIntelligenceAccessFailure(context: RouteContext, acto
   }
 }
 
-async function listDesignProjects(service: NorthStarService, env: Env) {
-  ensureFormulaIntelligencePermission(service, 'view')
-  const actor = ensureAgentReadAccess(service)
-  return { data: await new FormulaIntelligenceStore(env.DB).listDesignProjects(actor, formulaIntelligenceCanViewPrivate(service)) }
+async function listDesignProjects(context: RouteContext) {
+  ensureFormulaIntelligencePermission(context.service, 'view')
+  const actor = ensureAgentReadAccess(context.service)
+  const includeArchived = context.query.get('includeArchived') === 'true'
+  return { data: await new FormulaIntelligenceStore(context.env.DB).listDesignProjects(actor, formulaIntelligenceCanViewPrivate(context.service), includeArchived) }
 }
 
 async function listFormulaIntelligenceMaterials(context: RouteContext) {
@@ -1224,6 +1236,30 @@ async function createFormulaDesignProject(context: RouteContext) {
     return { data: { project } }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, 'design-project', error)
+    throw error
+  }
+}
+
+async function archiveFormulaDesignProject(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    const result = await new FormulaIntelligenceStore(context.env.DB).archiveDesignProject(actor, context.params.id)
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
+    throw error
+  }
+}
+
+async function restoreFormulaDesignProject(context: RouteContext) {
+  const actor = ensureAgentReadAccess(context.service)
+  try {
+    ensureFormulaIntelligencePermission(context.service, 'view')
+    const result = await new FormulaIntelligenceStore(context.env.DB).restoreDesignProject(actor, context.params.id)
+    return { data: result }
+  } catch (error) {
+    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
     throw error
   }
 }
@@ -1607,6 +1643,7 @@ export default {
       runScheduledAgentRecovery(env),
       runScheduledMaterialEvidence(env),
       pruneFormulaIntelligenceRetention(env.DB),
+      purgeExpiredArchivedDesignProjects(env.DB),
       pruneCompletedOperationIdempotency(env.DB),
     ]))
   },
@@ -4599,6 +4636,8 @@ async function ensureSeededAdminBootstrap(
   serviceState: ServiceState,
   configuredAdminPasswordHash?: string,
 ) {
+  const legacyAdminEmails = new Set(LEGACY_SEEDED_ADMIN_EMAILS.map((email) => email.toLowerCase()))
+  const configuredAdminEmails = new Set([SEEDED_ADMIN_EMAIL.toLowerCase(), ...legacyAdminEmails])
   const seedOrganization = seedOrganizations.find((organization) => organization.id === SEEDED_ADMIN_ORGANIZATION_ID)
   const seedMembership = seedMemberships.find(
     (membership) => membership.email.toLowerCase() === SEEDED_ADMIN_EMAIL,
@@ -4629,7 +4668,7 @@ async function ensureSeededAdminBootstrap(
 
   if (seedMembership) {
     const existingMembership = serviceState.membershipRecords.find(
-      (membership) => membership.id === seedMembership.id || membership.email.toLowerCase() === SEEDED_ADMIN_EMAIL,
+      (membership) => membership.id === seedMembership.id || configuredAdminEmails.has(membership.email.toLowerCase()),
     )
     const nextMembership = {
       ...seedMembership,
@@ -4639,7 +4678,7 @@ async function ensureSeededAdminBootstrap(
       serviceState.membershipRecords = [
         nextMembership,
         ...serviceState.membershipRecords.filter(
-          (membership) => membership.id !== nextMembership.id && membership.email.toLowerCase() !== SEEDED_ADMIN_EMAIL,
+          (membership) => membership.id !== nextMembership.id && !configuredAdminEmails.has(membership.email.toLowerCase()),
         ),
       ]
       await persistMemberships(db, [nextMembership], updatedAt)
@@ -4650,9 +4689,15 @@ async function ensureSeededAdminBootstrap(
     const existingUserSetting = serviceState.userSettingsRecords.find(
       (settings) => settings.userId === seedUserSetting.userId && settings.organizationId === seedUserSetting.organizationId,
     )
-    if (!existingUserSetting) {
-      serviceState.userSettingsRecords = [seedUserSetting, ...serviceState.userSettingsRecords]
-      await persistUserSettings(db, [seedUserSetting], updatedAt)
+    const nextUserSetting = existingUserSetting
+      ? { ...existingUserSetting, email: seedUserSetting.email, displayName: seedUserSetting.displayName }
+      : seedUserSetting
+    if (!existingUserSetting || JSON.stringify(existingUserSetting) !== JSON.stringify(nextUserSetting)) {
+      serviceState.userSettingsRecords = [
+        nextUserSetting,
+        ...serviceState.userSettingsRecords.filter((settings) => !(settings.userId === nextUserSetting.userId && settings.organizationId === nextUserSetting.organizationId)),
+      ]
+      await persistUserSettings(db, [nextUserSetting], updatedAt)
     }
   }
 
@@ -4677,12 +4722,14 @@ async function ensureSeededAdminBootstrap(
   }
 
   const existingAdminCredential = serviceState.authCredentialRecords.find(
-    (credential) => String(credential.email ?? '').toLowerCase() === SEEDED_ADMIN_EMAIL,
+    (credential) => configuredAdminEmails.has(String(credential.email ?? '').toLowerCase()),
   )
 
   const seededAdminPasswordHash = readConfiguredSeededAdminPasswordHash(configuredAdminPasswordHash)
 
-  if (seededAdminPasswordHash && (!existingAdminCredential || existingAdminCredential.passwordHash !== seededAdminPasswordHash)) {
+  const credentialRequiresEmailMigration = existingAdminCredential
+    && String(existingAdminCredential.email ?? '').toLowerCase() !== SEEDED_ADMIN_EMAIL
+  if (seededAdminPasswordHash && (!existingAdminCredential || existingAdminCredential.passwordHash !== seededAdminPasswordHash || credentialRequiresEmailMigration)) {
     const credentialWasRotated = Boolean(existingAdminCredential)
     const seededAdminCredential = {
       email: SEEDED_ADMIN_EMAIL,
@@ -4692,13 +4739,13 @@ async function ensureSeededAdminBootstrap(
     serviceState.authCredentialRecords = [
       seededAdminCredential,
       ...serviceState.authCredentialRecords.filter(
-        (credential) => String(credential.email ?? '').toLowerCase() !== SEEDED_ADMIN_EMAIL,
+        (credential) => !configuredAdminEmails.has(String(credential.email ?? '').toLowerCase()),
       ),
     ]
     await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
 
     const revokedAdminSessions = serviceState.sessions
-      .filter((session) => session.email.toLowerCase() === SEEDED_ADMIN_EMAIL && session.status === 'ACTIVE')
+      .filter((session) => configuredAdminEmails.has(session.email.toLowerCase()) && session.status === 'ACTIVE')
       .map((session) => ({
         ...session,
         status: 'REVOKED' as const,

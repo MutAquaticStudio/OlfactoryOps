@@ -14,7 +14,7 @@ describe('seeded admin credentials', () => {
     expect(seededAdminCredentialsForEnv(undefined)).toEqual([])
     expect(seededAdminCredentialsForEnv(validHash)).toEqual([
       {
-        email: 'admin@labofscents.org',
+        email: 'm.thuanwork@gmail.com',
         passwordHash: validHash,
         passwordSetAt: '2026-07-16T00:00:00.000Z',
       },

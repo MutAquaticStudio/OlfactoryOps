@@ -907,13 +907,15 @@ function buildProposal(run: AgentRunRow, service: NorthStarService): AgentFormul
   const materials = selectedMaterials(service, run.input_brief)
   if (materials.length === 0) throw new UnprocessableEntityException('No workspace materials are available for this research run')
   const weights = materials.length === 1 ? [100] : materials.length === 2 ? [60, 40] : materials.length === 3 ? [45, 30, 25] : [40, 25, 20, 15]
+  const isAccord = /\baccord\b/i.test(run.input_brief)
   const body = {
     name: `${run.input_brief.slice(0, 52).replace(/\s+/g, ' ').trim() || 'Research'} proposal`,
-    formulaType: /\baccord\b/i.test(run.input_brief) ? 'ACCORD' : 'FINE_FRAGRANCE',
+    formulaType: isAccord ? 'ACCORD' : 'FINE_FRAGRANCE',
     targetGrams: 100,
-    concentrationType: 'EDP',
-    finalProductConcentrationPercent: /\baccord\b/i.test(run.input_brief) ? 100 : 20,
+    concentrationType: isAccord ? 'OTHER' : 'EDP',
+    finalProductConcentrationPercent: isAccord ? 100 : 20,
     ifraCategory: '4',
+    requiresFinalProductContext: isAccord,
     brief: run.input_brief,
     ingredients: materials.map((material, index) => ({
       materialId: material.id,
