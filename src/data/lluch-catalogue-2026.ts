@@ -58,7 +58,7 @@ function supplierReferenceForProduct(product: LluchCatalogueProduct): MaterialSu
  * Missing technical, cost, and compliance values intentionally use guarded
  * placeholders and are marked SOURCE_ONLY rather than asserted as facts.
  */
-export function lluchCatalogueMaterialForOrganization(product: LluchCatalogueProduct, organizationId: string): Material {
+export function lluchCatalogueMaterialForOrganization(product: LluchCatalogueProduct, _organizationId: string): Material {
   const reference = supplierReferenceForProduct(product)
   const catalogueSource: MaterialCatalogueSource = {
     sourceProductId: product.id,
@@ -71,7 +71,7 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
   }
   return {
     id: `mat-${product.id}`,
-    organizationId,
+    libraryScope: 'GLOBAL',
     name: product.productName,
     cas: product.cas ?? 'Not listed',
     family: reference.category,
@@ -101,19 +101,19 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
   }
 }
 
-const catalogueMaterialDirectoryCache = new Map<string, Material[]>()
+let catalogueMaterialDirectoryCache: Material[] | undefined
 
 /**
- * The supplier catalogue is a deterministic, tenant-scoped material directory.
- * It remains virtual until a workspace reviews or edits a source material, so
- * routine material mutations do not write thousands of unchanged source rows.
+ * The supplier catalogue is a deterministic global material directory. It
+ * remains virtual until a platform curator reviews a source material, so every
+ * tenant reads the same catalogue without duplicating thousands of rows.
  */
 export function lluchCatalogueMaterialDirectoryForOrganization(organizationId: string) {
-  const cached = catalogueMaterialDirectoryCache.get(organizationId)
-  if (cached) return cached
-  const directory = lluchCatalogue2026Products.map((product) => lluchCatalogueMaterialForOrganization(product, organizationId))
-  catalogueMaterialDirectoryCache.set(organizationId, directory)
-  return directory
+  if (catalogueMaterialDirectoryCache) return catalogueMaterialDirectoryCache
+  catalogueMaterialDirectoryCache = lluchCatalogue2026Products.map((product) =>
+    lluchCatalogueMaterialForOrganization(product, organizationId),
+  )
+  return catalogueMaterialDirectoryCache
 }
 
 export function isLluchCatalogueSourceMaterial(material: Material) {

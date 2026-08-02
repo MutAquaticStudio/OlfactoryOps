@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   formulaVersions,
   formulas,
+  materials,
   type Formula,
   type FormulaVersionRecord,
+  type Material,
 } from '../src/data/northStar'
 import {
   auditChainHash,
@@ -14,9 +16,42 @@ import {
   isOpaqueSessionCredential,
   normalizeFormulaPersistenceRecord,
   normalizeFormulaVersionPersistenceRecord,
+  normalizeMaterialPersistenceRecord,
   resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
 } from './index'
+
+describe('Material D1 scope normalization', () => {
+  it('keeps curated records global and strips legacy tenant metadata', () => {
+    const normalized = normalizeMaterialPersistenceRecord(
+      { ...materials[0]!, organizationId: 'legacy-org' },
+      'GLOBAL',
+      null,
+    )
+
+    expect(normalized.libraryScope).toBe('GLOBAL')
+    expect(normalized.organizationId).toBeUndefined()
+  })
+
+  it('requires and preserves organization ownership for tenant records', () => {
+    const privateMaterial = {
+      ...materials[0]!,
+      id: 'mat-private-a',
+      libraryScope: 'TENANT' as const,
+      organizationId: 'org-a',
+    }
+
+    expect(normalizeMaterialPersistenceRecord(privateMaterial)).toMatchObject({
+      id: 'mat-private-a',
+      libraryScope: 'TENANT',
+      organizationId: 'org-a',
+    })
+    expect(() => normalizeMaterialPersistenceRecord({
+      ...privateMaterial,
+      organizationId: undefined,
+    } as Material)).toThrow('missing organization metadata')
+  })
+})
 
 describe('Formula D1 persistence normalization', () => {
   it('backfills tenant and workflow metadata on legacy Formula snapshots', () => {

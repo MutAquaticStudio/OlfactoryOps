@@ -559,16 +559,20 @@ describe('NorthStarService', () => {
     }).data
 
     expect(signup.organization.id).toBe('org-scope-qa-lab')
-    expect(service.materials().data.some((material) => material.id === 'mat-bergamot')).toBe(true)
+    const sharedBergamot = service.materials().data.find((material) => material.id === 'mat-bergamot')
+    expect(sharedBergamot).toMatchObject({ libraryScope: 'GLOBAL' })
+    expect(sharedBergamot?.organizationId).toBeUndefined()
     expect(service.materials().data.some((material) => material.id === privateMaterial.id)).toBe(false)
     expect(() => service.material(privateMaterial.id)).toThrow(/not found/i)
     expect(() => service.compareSupplierRfq({ materialId: privateMaterial.id, quantityGrams: 50 })).toThrow(/not found/i)
+    expect(() => service.updateMaterial('mat-bergamot', { family: 'Cross-tenant edit' })).toThrow(ForbiddenException)
 
     const ownMaterial = service.createMaterial({
       name: 'Tenant Bergamot Reference',
       cas: '67890-12-3',
       costPerGram: 0.14,
     }).data.material
+    const updatedOwnMaterial = service.updateMaterial(ownMaterial.id, { family: 'Tenant-owned citrus' }).data.material
     service.createSupplier({
       name: 'Scope Tenant Supplier',
       country: 'TH',
@@ -578,6 +582,11 @@ describe('NorthStarService', () => {
     const comparison = service.compareSupplierRfq({ materialId: ownMaterial.id, quantityGrams: 50 }).data
 
     expect(service.materials().data.some((material) => material.id === ownMaterial.id)).toBe(true)
+    expect(updatedOwnMaterial).toMatchObject({
+      libraryScope: 'TENANT',
+      organizationId: signup.organization.id,
+      family: 'Tenant-owned citrus',
+    })
     expect(service.materialDedupe('67890-12-3').data.matches).toHaveLength(1)
     expect(comparison.materialId).toBe(ownMaterial.id)
   })
@@ -1394,7 +1403,9 @@ describe('NorthStarService', () => {
     }).data
     const dedupe = service.materialDedupe('9999999-99-9').data
 
-    expect(result.material.id).toBe('mat-test-only-vetiver-material')
+    expect(result.material.id).toMatch(/^mat-test-only-vetiver-material-[a-z0-9]+$/)
+    expect(result.material.libraryScope).toBe('TENANT')
+    expect(result.material.organizationId).toBe('org-nxl')
     expect(result.audit.action).toBe('material.create')
     expect(result.invariant).toContain('does not create stock')
     expect(dedupe.duplicate).toBe(true)
@@ -1458,6 +1469,8 @@ describe('NorthStarService', () => {
     const inventory = service.inventorySummary().data
 
     expect(directory).toHaveLength(1986 + materials.length)
+    expect(astrolide?.libraryScope).toBe('GLOBAL')
+    expect(astrolide?.organizationId).toBeUndefined()
     expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
     expect(astrolide?.supplierCatalogueReferences?.[0]?.supplier).toBe('Lluch Essence')
     expect(inventory.some((summary) => summary.material.id === astrolide?.id)).toBe(false)

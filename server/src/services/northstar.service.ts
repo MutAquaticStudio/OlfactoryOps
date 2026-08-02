@@ -202,6 +202,7 @@ import {
 import { agentFormulaProposalSchema, type AgentFormulaProposal } from '../../../src/data/agentRuntime.js'
 
 const seededAdminEmail = 'admin@labofscents.org'
+const materialLibraryCuratorOrganizationId = 'org-nxl'
 const passwordHashAlgorithm = 'sha256'
 const passwordHashIterations = 100_000
 const passwordHashKeyLength = 32
@@ -1024,9 +1025,10 @@ export class NorthStarService {
     }
 
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `material-${Date.now()}`
-    const materialId = session.organizationId === 'org-nxl' ? `mat-${slug}` : `mat-${slug}-${this.shortId().toLowerCase()}`
+    const materialId = `mat-${slug}-${this.shortId().toLowerCase()}`
     const material: Material = {
       id: materialId,
+      libraryScope: 'TENANT',
       organizationId: session.organizationId,
       name,
       cas,
@@ -1627,6 +1629,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
     const material = this.materialForSession(id, session)
+    this.assertMaterialMetadataWriteAllowed(material, session)
     const updated = this.mergeMaterial(material, body, body.source?.trim() || 'Manual material update', body.version?.trim() || 'v1')
     const exists = this.materialRecords.some((item) => item.id === id)
     this.materialRecords = exists
@@ -1639,6 +1642,7 @@ export class NorthStarService {
   enrichMaterialsFromLluchCatalogue() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
+    this.requireGlobalMaterialCurator(session)
     let updated = 0
     const enrichedMaterials: Material[] = []
     this.materialRecords = this.materialRecords.map((material) => {
@@ -1660,7 +1664,7 @@ export class NorthStarService {
         materials: enrichedMaterials,
         source: lluchCatalogue2026Source,
         audit,
-        invariant: 'Catalogue enrichment is tenant-scoped, idempotent, and does not alter CAS, cost, IFRA, compliance, lots, or inventory movements',
+        invariant: 'Catalogue enrichment is curator-controlled, globally shared, idempotent, and does not alter CAS, cost, IFRA, compliance, lots, or inventory movements',
       },
     }
   }
@@ -1680,6 +1684,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
     const material = this.materialForSession(id, session)
+    this.assertMaterialMetadataWriteAllowed(material, session)
     const documentType = body.documentType === 'CoA' ? 'CoA' : 'SDS'
     const source = body.source?.trim() || `${material.name} ${documentType}`
     const version = body.version?.trim() || 'v1'
@@ -1741,6 +1746,7 @@ export class NorthStarService {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
     const material = this.materialForSession(id, session)
+    this.assertMaterialMetadataWriteAllowed(material, session)
     const profile = this.pubchemProfile(material)
     const updated = this.mergeMaterial(material, profile.fields, 'PubChem curated fill', '2026-07')
     const nextMolecules = profile.molecules.map((molecule, index) => ({
@@ -12161,6 +12167,32 @@ export class NorthStarService {
     )?.permissions ?? []
   }
 
+  private normalizeMaterialLibraryScope(material: Material): Material {
+    if (material.organizationId) {
+      return { ...material, libraryScope: 'TENANT' }
+    }
+    const { organizationId: _organizationId, ...globalMaterial } = material
+    return { ...globalMaterial, libraryScope: 'GLOBAL' }
+  }
+
+  private requireGlobalMaterialCurator(session: AuthSession) {
+    const role = this.normalizeRoleForPermission(session.role)
+    const curatorRole = role === 'Owner' || role === 'Admin' || role === 'Manager' || role === 'Lab Manager'
+    if (session.organizationId !== materialLibraryCuratorOrganizationId || !curatorRole) {
+      throw new ForbiddenException('Shared material library updates require an OlfactoryOps library curator')
+    }
+  }
+
+  private assertMaterialMetadataWriteAllowed(material: Material, session: AuthSession) {
+    if (material.organizationId) {
+      if (material.organizationId !== session.organizationId) {
+        throw new NotFoundException(`Material ${material.id} was not found`)
+      }
+      return
+    }
+    this.requireGlobalMaterialCurator(session)
+  }
+
   private safeMaterialNumber(value: unknown, fallback: number) {
     const next = Number(value)
     return Number.isFinite(next) && next >= 0 ? next : fallback
@@ -12577,7 +12609,7 @@ export class NorthStarService {
   private materialCatalogForSession(session: AuthSession) {
     const workspaceMaterials = this.materialRecords.filter(
       (material) => !material.organizationId || material.organizationId === session.organizationId,
-    )
+    ).map((material) => this.normalizeMaterialLibraryScope(material))
     const persistedIds = new Set(workspaceMaterials.map((material) => material.id))
     const catalogueDirectory = lluchCatalogueMaterialDirectoryForOrganization(session.organizationId)
       .filter((material) => !persistedIds.has(material.id))

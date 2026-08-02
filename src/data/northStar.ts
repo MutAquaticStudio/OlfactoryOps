@@ -60,6 +60,9 @@ export interface DomainModule {
 
 export interface Material {
   id: string
+  /** GLOBAL records are curated once and shared read-only across workspaces. */
+  libraryScope?: 'GLOBAL' | 'TENANT'
+  /** Present only for tenant-owned material records. */
   organizationId?: string
   name: string
   cas: string

@@ -31,12 +31,15 @@ describe('Lluch catalogue 2026 import source', () => {
     expect(result.material.olfactiveProfile?.strength).toBe('Strong')
   })
 
-  it('projects the supplier range into the tenant material directory without asserting missing technical data', () => {
+  it('projects one shared supplier range for every tenant without asserting missing technical data', () => {
     const directory = lluchCatalogueMaterialDirectoryForOrganization('org-catalogue-test')
+    const secondTenantDirectory = lluchCatalogueMaterialDirectoryForOrganization('org-other-tenant')
     const astrolide = directory.find((material) => material.name === 'ASTROLIDE PURE')
 
     expect(directory).toHaveLength(1986)
-    expect(astrolide?.organizationId).toBe('org-catalogue-test')
+    expect(secondTenantDirectory).toBe(directory)
+    expect(astrolide?.libraryScope).toBe('GLOBAL')
+    expect(astrolide?.organizationId).toBeUndefined()
     expect(astrolide?.cas).toBe('1222-05-5')
     expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
     expect(astrolide?.supplierCatalogueReferences?.[0]?.sourceProductId).toBe('lluch-2026-0104')

@@ -1646,16 +1646,17 @@ async function listLluchCatalogue(context: RouteContext) {
 
 async function importLluchCatalogue(context: RouteContext) {
   const actor = catalogueActor(context.service, 'materials.update')
+  // Authorize the global-library mutation before writing supplier import rows.
+  const enrichment = context.service.enrichMaterialsFromLluchCatalogue().data
   const catalogue = await importLluchCatalogueForOrganization(context.env.DB, actor.organizationId)
   if (catalogue.imported) {
     appendSystemCatalogueImportAudit(context.service as unknown as ServiceState, [actor.organizationId])
   }
-  const enrichment = context.service.enrichMaterialsFromLluchCatalogue().data
   return {
     data: {
       ...enrichment,
       catalogue,
-      invariant: 'Catalogue import stores tenant-scoped supplier source data and only enriches matching material references; it never creates materials, inventory, procurement approvals, or compliance decisions.',
+      invariant: 'Catalogue import preserves tenant-scoped evidence while a curator publishes matching metadata to the shared material library; it never creates inventory, procurement approvals, or compliance decisions.',
     },
   }
 }
@@ -3253,6 +3254,8 @@ type RolePolicyRow = {
 
 type MaterialRow = {
   id: string
+  library_scope: string
+  organization_id: string | null
   record_json: string
 }
 
@@ -4701,10 +4704,15 @@ async function persistTenantCoreState(db: D1Database, serviceState: ServiceState
 
 async function hydrateMaterialState(db: D1Database, serviceState: ServiceState) {
   const materialRows = await db
-    .prepare('SELECT id, record_json FROM material_records ORDER BY name ASC')
+    .prepare('SELECT id, library_scope, organization_id, record_json FROM material_records ORDER BY name ASC')
     .all<MaterialRow>()
   const materials = (materialRows.results ?? [])
-    .map((row) => parseJsonOptional<Material>(row.record_json))
+    .map((row) => {
+      const material = parseJsonOptional<Material>(row.record_json)
+      return material
+        ? normalizeMaterialPersistenceRecord(material, row.library_scope, row.organization_id)
+        : undefined
+    })
     .filter(isDefined)
   if (materials.length > 0) {
     serviceState.materialRecords = materials
@@ -4828,12 +4836,15 @@ async function persistMaterials(db: D1Database, materials: Material[], updatedAt
   }
   await runStatementBatches(
     db,
-    materials.map((material) =>
-      db
+    materials.map((material) => {
+      const normalized = normalizeMaterialPersistenceRecord(material)
+      return db
         .prepare(
-          `INSERT INTO material_records (id, name, cas, family, tier, record_json, updated_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+          `INSERT INTO material_records (id, library_scope, organization_id, name, cas, family, tier, record_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
            ON CONFLICT(id) DO UPDATE SET
+             library_scope = excluded.library_scope,
+             organization_id = excluded.organization_id,
              name = excluded.name,
              cas = excluded.cas,
              family = excluded.family,
@@ -4841,8 +4852,18 @@ async function persistMaterials(db: D1Database, materials: Material[], updatedAt
              record_json = excluded.record_json,
              updated_at = excluded.updated_at`,
         )
-        .bind(material.id, material.name, material.cas, material.family, material.tier, JSON.stringify(material), updatedAt),
-    ),
+        .bind(
+          normalized.id,
+          normalized.libraryScope,
+          normalized.organizationId ?? null,
+          normalized.name,
+          normalized.cas,
+          normalized.family,
+          normalized.tier,
+          JSON.stringify(normalized),
+          updatedAt,
+        )
+    }),
   )
 }
 
@@ -4946,6 +4967,33 @@ async function hydrateFormulaState(db: D1Database, serviceState: ServiceState) {
   } else if (Array.isArray(serviceState.formulaVersionRecords) && serviceState.formulaVersionRecords.length > 0) {
     await persistFormulaVersions(db, serviceState.formulaVersionRecords, new Date().toISOString())
   }
+}
+
+export function normalizeMaterialPersistenceRecord(
+  material: Material,
+  persistedScope?: string,
+  persistedOrganizationId?: string | null,
+): Material {
+  const id = typeof material.id === 'string' ? material.id.trim() : ''
+  const name = typeof material.name === 'string' ? material.name.trim() : ''
+  const cas = typeof material.cas === 'string' ? material.cas.trim() : ''
+  if (!id || !name || !cas) {
+    throw new Error('Material persistence record is missing identity metadata')
+  }
+
+  const requestedScope = persistedScope ?? (material.organizationId ? 'TENANT' : material.libraryScope ?? 'GLOBAL')
+  if (requestedScope === 'TENANT') {
+    const organizationId = (persistedOrganizationId ?? material.organizationId)?.trim()
+    if (!organizationId) {
+      throw new Error('Tenant material persistence record is missing organization metadata')
+    }
+    return { ...material, id, name, cas, libraryScope: 'TENANT', organizationId }
+  }
+  if (requestedScope !== 'GLOBAL') {
+    throw new Error('Material persistence record has an invalid library scope')
+  }
+  const { organizationId: _organizationId, ...globalMaterial } = material
+  return { ...globalMaterial, id, name, cas, libraryScope: 'GLOBAL' }
 }
 
 export function normalizeFormulaPersistenceRecord(formula: Formula, updatedAt = new Date().toISOString()): Formula {

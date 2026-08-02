@@ -5059,6 +5059,7 @@ function MaterialWorkspace({
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
   const selectedIsSourceOnly = isLluchCatalogueSourceMaterial(selected)
+  const selectedIsShared = (selected.libraryScope ?? (selected.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL'
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
@@ -5085,6 +5086,9 @@ function MaterialWorkspace({
   })
   const canCreateMaterials = sessionHasPermission(session, 'materials.create')
   const canUpdateMaterials = sessionHasPermission(session, 'materials.update')
+  const canCurateSharedMaterials = session.organizationId === 'org-nxl'
+    && ['Owner', 'Admin', 'Manager', 'Lab Manager'].includes(session.role)
+  const canEditSelectedMaterial = canUpdateMaterials && (!selectedIsShared || canCurateSharedMaterials)
   const canManageCompliance = session.role === 'Owner' || session.role === 'Admin'
   const canViewMaterialEvidence = sessionHasPermission(session, 'materials.view') && sessionHasPermission(session, 'documents.view')
   const canManageMaterialEvidence = sessionHasPermission(session, 'documents.manage')
@@ -5492,8 +5496,10 @@ function MaterialWorkspace({
   }
 
   async function saveMaterialUpdate() {
-    if (!canUpdateMaterials) {
-      setMaterialStatus('Current role is not authorized to edit materials.')
+    if (!canEditSelectedMaterial) {
+      setMaterialStatus(selectedIsShared
+        ? 'Shared library records are read-only in this workspace. Create a workspace material for private data.'
+        : 'Current role is not authorized to edit materials.')
       return
     }
     const materialId = selected.id?.trim()
@@ -5566,8 +5572,10 @@ function MaterialWorkspace({
   }
 
   async function fillFromPubChem() {
-    if (!canUpdateMaterials) {
-      setMaterialStatus('Current role is not authorized to enrich data from PubChem.')
+    if (!canEditSelectedMaterial) {
+      setMaterialStatus(selectedIsShared
+        ? 'Shared library enrichment is restricted to OlfactoryOps library curators.'
+        : 'Current role is not authorized to enrich data from PubChem.')
       return
     }
     setPubChemSaving(true)
@@ -5665,6 +5673,7 @@ function MaterialWorkspace({
             Create material
           </button>
         </div>
+        <p className="helper-copy">New materials and material imports belong only to this workspace. Shared library records are published separately by OlfactoryOps curators.</p>
         <section className="import-panel" aria-label="Data import">
           <div className="section-heading compact-heading">
             <div>
@@ -5761,7 +5770,11 @@ function MaterialWorkspace({
                   <strong>{material.name}</strong>
                   <span>{sourceOnly ? `${material.catalogueSource?.supplier} / ${material.catalogueSource?.category}` : material.family}</span>
                 </div>
-                <DataTag label={sourceOnly ? 'Review' : material.tier} value={sourceOnly ? 'Source only' : material.cas} tone={sourceOnly ? 'amber' : 'blue'} />
+                <DataTag
+                  label={sourceOnly ? 'Review' : (material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
+                  value={sourceOnly ? 'Source only' : material.cas}
+                  tone={sourceOnly ? 'amber' : 'blue'}
+                />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
             )
@@ -5776,6 +5789,7 @@ function MaterialWorkspace({
 
       <Panel className="material-inspector-panel" title="Details" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
         <div className="tag-row">
+          <DataTag label="Library" value={selectedIsShared ? 'Shared' : 'Workspace private'} tone={selectedIsShared ? 'blue' : 'green'} />
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
           {selectedIsSourceOnly ? <DataTag label="Status" value="Needs review" tone="amber" /> : <DataTag label="Molecules" value={String(moleculeRows.length)} />}
@@ -5902,11 +5916,15 @@ function MaterialWorkspace({
             ) : null}
           </section>
         ) : null}
+        {selectedIsShared && !canCurateSharedMaterials ? (
+          <p className="helper-copy">This material is maintained in the shared OlfactoryOps library. Its metadata is read-only here; compliance evidence and inventory remain scoped to your workspace.</p>
+        ) : null}
         <div className="material-form-grid">
           <label className="field-row">
             <span>Family</span>
             <input
               aria-label="Material family"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.family}
               onChange={(event) => setEditDraft((current) => ({ ...current, family: event.target.value }))}
             />
@@ -5915,6 +5933,7 @@ function MaterialWorkspace({
             <span>Tier</span>
             <select
               aria-label="Material tier"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.tier}
               onChange={(event) => setEditDraft((current) => ({ ...current, tier: event.target.value as Material['tier'] }))}
             >
@@ -5927,6 +5946,7 @@ function MaterialWorkspace({
             <span>Density</span>
             <input
               aria-label="Material density"
+              disabled={!canEditSelectedMaterial}
               step={0.001}
               type="number"
               value={editDraft.density}
@@ -5937,6 +5957,7 @@ function MaterialWorkspace({
             <span>Vapor pressure</span>
             <input
               aria-label="Material vapor pressure"
+              disabled={!canEditSelectedMaterial}
               step={0.0001}
               type="number"
               value={editDraft.vaporPressure}
@@ -5947,6 +5968,7 @@ function MaterialWorkspace({
             <span>Cost / gram</span>
             <input
               aria-label="Material cost per gram"
+              disabled={!canEditSelectedMaterial}
               step={0.001}
               type="number"
               value={editDraft.costPerGram}
@@ -5957,6 +5979,7 @@ function MaterialWorkspace({
             <span>IFRA limit %</span>
             <input
               aria-label="Material IFRA limit"
+              disabled={!canEditSelectedMaterial}
               step={0.1}
               type="number"
               value={editDraft.ifraLimit}
@@ -5967,6 +5990,7 @@ function MaterialWorkspace({
             <span>Odor tags</span>
             <input
               aria-label="Material odor tags"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.odor}
               onChange={(event) => setEditDraft((current) => ({ ...current, odor: event.target.value }))}
             />
@@ -5976,7 +6000,7 @@ function MaterialWorkspace({
             data-testid="production-create-batch"
             type="button"
             onClick={() => void saveMaterialUpdate()}
-            disabled={!canUpdateMaterials || materialSaving}
+            disabled={!canEditSelectedMaterial || materialSaving}
             aria-label="Save material metadata"
           >
             {materialSaving ? 'Saving...' : 'Save metadata'}
@@ -5985,7 +6009,7 @@ function MaterialWorkspace({
             className="ghost-button"
             type="button"
             onClick={() => void fillFromPubChem()}
-            disabled={!canUpdateMaterials || pubChemSaving}
+            disabled={!canEditSelectedMaterial || pubChemSaving}
           >
             {pubChemSaving ? 'Filling...' : 'PubChem fill'}
           </button>
