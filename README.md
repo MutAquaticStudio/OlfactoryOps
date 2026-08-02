@@ -62,6 +62,10 @@ khi tạo direction để xếp hạng tính khả dụng; bước này không r
 stock. Nếu chưa có Material nào được phê duyệt, Studio hiển thị trạng thái rõ
 ràng và yêu cầu hoàn tất review trong **Materials** trước khi generate.
 
+### Luồng generate trong Design Studio
+
+Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Nút **Generate directions** không biến mất khi brief chưa sẵn sàng; nó ở trạng thái disabled và giải thích rõ cần review brief, tải Materials hay phê duyệt Material trước. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
+
 ### Phase 4: Direction to Trial
 
 A saved Formula Design Studio direction can enter **Trials & Sensory** only

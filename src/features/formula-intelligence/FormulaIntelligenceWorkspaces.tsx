@@ -243,8 +243,9 @@ function projectProgress(project: DesignProject): StepperStep[] {
   const hasDirections = project.directions.length > 0
   const hasDraft = project.directions.some((direction) => Boolean(direction.savedFormulaId))
   return [
-    { id: 'brief', label: 'Brief', status: hasReviewedBrief ? 'complete' : 'active' },
-    { id: 'directions', label: 'Directions', status: hasDraft || hasDirections ? 'complete' : hasReviewedBrief ? 'active' : 'upcoming' },
+    { id: 'brief', label: 'Brief', status: 'complete' },
+    { id: 'review', label: 'Review', status: hasReviewedBrief ? 'complete' : 'active' },
+    { id: 'generate', label: 'Generate', status: hasDirections ? 'complete' : hasReviewedBrief ? 'active' : 'upcoming' },
     { id: 'draft', label: 'Draft', status: hasDraft ? 'complete' : hasDirections ? 'active' : 'upcoming' },
   ]
 }
@@ -543,9 +544,10 @@ function DesignProjectCard({
 }) {
   const hasDirections = project.directions.length > 0
   const brief = project.brief?.creativeBrief ?? project.briefVersion?.rawBrief ?? 'Brief details are available to the project owner.'
+  const briefIsReviewed = project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED'
   const canGenerate = capabilities.canGenerateDirections
     && project.status === 'BRIEFED'
-    && (project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED')
+    && briefIsReviewed
     && !hasDirections
   const materialSourceReady = materialCatalogState === 'ready' && hasEligibleMaterials
 
@@ -566,8 +568,15 @@ function DesignProjectCard({
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
       {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className="secondary-button small" type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> Review brief</button> : null}
-      {canGenerate ? <button className="primary-button small" type="button" disabled={busy || !materialSourceReady} onClick={onGenerate}><Play size={15} /> Create directions</button> : null}
-      {project.briefStatus === 'REVIEW_REQUIRED' ? <small>Resolve the brief details before directions can be created.</small> : null}
+      {capabilities.canGenerateDirections ? <button
+        className={hasDirections ? 'secondary-button small' : 'primary-button small'}
+        data-testid={`design-generate-${project.id}`}
+        type="button"
+        disabled={busy || !canGenerate || !materialSourceReady}
+        onClick={onGenerate}
+      >{hasDirections ? <CheckCircle2 size={15} /> : <Play size={15} />} {hasDirections ? 'Directions generated' : 'Generate directions'}</button> : null}
+      {project.briefStatus === 'REVIEW_REQUIRED' ? <small>Review and approve the brief before generating directions.</small> : null}
+      {!hasDirections && briefIsReviewed && project.status !== 'BRIEFED' ? <small>Direction generation is already in progress. Follow the run status above.</small> : null}
       {canGenerate && materialCatalogState === 'loading' ? <small>Loading reviewed Materials.</small> : null}
       {canGenerate && materialCatalogState === 'unavailable' ? <small>Reviewed Materials are unavailable. Reopen the brief after Materials are restored.</small> : null}
       {canGenerate && materialCatalogState === 'ready' && !hasEligibleMaterials ? <small>Review and approve at least one Material before creating directions.</small> : null}

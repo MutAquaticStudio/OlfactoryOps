@@ -67,6 +67,8 @@ test('Design Studio restores its route and keeps key actions usable', async ({ p
     } else {
       await reviewButton.click()
     }
+    const generateButtons = page.getByRole('button', { name: 'Generate directions' })
+    expect(await generateButtons.count()).toBeGreaterThan(0)
     const dialog = page.getByTestId('workspace-dialog')
     await expect(dialog).toBeVisible()
     await page.waitForTimeout(250)
