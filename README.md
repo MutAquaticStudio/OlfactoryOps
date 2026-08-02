@@ -100,7 +100,7 @@ kết quả của selection policy trước đây.
 
 ### Luồng generate trong Design Studio
 
-Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Brief `RAW` hoặc `REVIEW_REQUIRED` hiển thị **Review required** và đưa **Review brief** thành hành động chính. Nút tạo direction vẫn hiện dưới tên **Generate after review**, nhưng chỉ chuyển thành **Generate directions** và được bật sau khi product, concentration, IFRA và material constraints đã được lưu thành reviewed brief. Card luôn giải thích gate đang thiếu, gồm tải Materials hoặc phê duyệt ít nhất một formula-ready Material. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
+Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Brief `RAW` hoặc `REVIEW_REQUIRED` hiển thị **Review required** cùng danh sách trường còn thiếu. Người có `formulas.approve` (Admin/Manager theo role mặc định) thấy hành động **Review & approve brief**; trong review sheet, nút chính chỉ chuyển thành **Approve brief & unlock directions** khi product, concentration, IFRA, market và creative descriptor hợp lệ. Khi chưa đủ dữ liệu, cùng nút đó lưu review requirements thay vì giả vờ đã approval. Approver có thể mở và xử lý mọi brief `BRIEFED` trong tenant; permission và tenant scope vẫn được kiểm tra ở Worker/local API. Nút tạo direction chỉ chuyển thành **Generate directions** sau brief `REVIEWED`; card luôn giải thích gate đang thiếu, gồm tải Materials hoặc phê duyệt ít nhất một formula-ready Material. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
 
 ### Vòng đời brief và loại công thức
 
@@ -656,7 +656,7 @@ pinning và refresh không reserve hoặc consume inventory. Fine formula legacy
 
 Design Studio dùng bố cục quyết định theo luồng **brief → directions → draft**. Brief và hướng sáng tạo được tách rõ; mỗi direction chỉ hiển thị phần tóm tắt để so sánh, còn pyramid, bằng chứng, thành phần riêng tư, chia sẻ và lưu draft nằm trong khu vực review khi người dùng chọn direction. Tiến độ nghiên cứu dùng motion nhẹ từ các component nguồn cục bộ lấy cảm hứng từ React Bits, tôn trọng reduced-motion và không làm thay đổi workflow, quyền hay dữ liệu công thức. Ở màn hình dưới 1380px, review chuyển xuống dưới danh sách directions trước khi các cột bị ép hẹp.
 
-Dialog **Review structured brief** là review sheet có header/footer cố định, brief gốc, product setup, creative direction và material constraints thành các section riêng. Trên màn hình hẹp, các trường chuyển thành một cột và action chính luôn nằm ở footer để không bị lẫn trong danh sách material.
+Dialog **Review & approve brief** là review sheet có header/footer cố định, brief gốc, trạng thái gate rõ ràng, product setup, creative direction và material constraints thành các section riêng. Trên màn hình hẹp, các trường chuyển thành một cột và action chính luôn nằm ở footer để không bị lẫn trong danh sách material.
 
 Tài liệu kiến trúc, protocol event, mô hình bảo mật công cụ và báo cáo checkpoint nằm tại [docs/agent-platform](docs/agent-platform/). Khi triển khai checkpoint Agent Platform, chạy tối thiểu:
 

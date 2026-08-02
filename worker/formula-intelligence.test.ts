@@ -246,6 +246,14 @@ describe('Formula Intelligence Worker persistence contract', () => {
     await expect(store.designProjectForGeneration(actor, 'project-1')).rejects.toThrow('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
   })
 
+  it('lets a tenant approver reach another member’s brief without bypassing the review gate', async () => {
+    const store = new FormulaIntelligenceStore(designProjectAccessD1({ brandIds: [], briefState: 'RAW' }))
+    const actor = { organizationId: 'org-a', userId: 'usr-admin', sessionId: 'ses-admin', role: 'ADMIN' }
+
+    await expect(store.designProjectForGeneration(actor, 'project-1', true))
+      .rejects.toThrow('FORMULA_INTELLIGENCE_REVIEWED_BRIEF_REQUIRED')
+  })
+
   it('returns an unresolved failed design brief to the retryable state', async () => {
     const { db, statements } = unresolvedProjectD1(false)
     const store = new FormulaIntelligenceStore(db)

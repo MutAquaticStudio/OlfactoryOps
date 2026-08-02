@@ -1142,6 +1142,10 @@ function formulaIntelligenceCanEdit(service: NorthStarService) {
   return service.me().data.permissions.includes('formulas.edit')
 }
 
+function formulaIntelligenceCanApproveBrief(service: NorthStarService) {
+  return service.me().data.permissions.includes('formulas.approve')
+}
+
 function formulaIntelligenceCanViewPrivate(service: NorthStarService) {
   const granted = new Set(service.me().data.permissions)
   return granted.has('formulas.viewSensitive') && granted.has('materials.view')
@@ -1166,6 +1170,7 @@ function formulaIntelligenceCapabilities(service: NorthStarService) {
       canArchiveAnyDesignProject: normalizedRole === 'owner' || normalizedRole === 'admin',
       canCreateBrief: granted.has('formulas.view'),
       canReviewBrief: granted.has('formulas.edit'),
+      canApproveBrief: granted.has('formulas.approve'),
       canGenerateDirections: candidateGenerationEnabled && granted.has('formulas.edit') && canViewSensitiveComposition,
       canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
       canViewSensitiveComposition,
@@ -1207,7 +1212,12 @@ async function listDesignProjects(context: RouteContext) {
   ensureFormulaIntelligencePermission(context.service, 'view')
   const actor = ensureAgentReadAccess(context.service)
   const includeArchived = context.query.get('includeArchived') === 'true'
-  return { data: await new FormulaIntelligenceStore(context.env.DB).listDesignProjects(actor, formulaIntelligenceCanViewPrivate(context.service), includeArchived) }
+  return { data: await new FormulaIntelligenceStore(context.env.DB).listDesignProjects(
+    actor,
+    formulaIntelligenceCanViewPrivate(context.service),
+    includeArchived,
+    formulaIntelligenceCanApproveBrief(context.service),
+  ) }
 }
 
 async function listFormulaIntelligenceMaterials(context: RouteContext) {
@@ -1267,13 +1277,23 @@ async function restoreFormulaDesignProject(context: RouteContext) {
 async function getFormulaDesignProject(service: NorthStarService, env: Env, projectId: string) {
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
-  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(actor, projectId, formulaIntelligenceCanViewPrivate(service)) } }
+  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(
+    actor,
+    projectId,
+    formulaIntelligenceCanViewPrivate(service),
+    formulaIntelligenceCanApproveBrief(service),
+  ) } }
 }
 
 async function listFormulaDesignBriefVersions(service: NorthStarService, env: Env, projectId: string) {
   ensureFormulaIntelligencePermission(service, 'view')
   const actor = ensureAgentReadAccess(service)
-  return { data: await new FormulaIntelligenceStore(env.DB).briefVersions(actor, projectId, formulaIntelligenceCanViewPrivate(service)) }
+  return { data: await new FormulaIntelligenceStore(env.DB).briefVersions(
+    actor,
+    projectId,
+    formulaIntelligenceCanViewPrivate(service),
+    formulaIntelligenceCanApproveBrief(service),
+  ) }
 }
 
 async function formulaDesignBriefCompilerStatus(context: RouteContext) {
@@ -1283,7 +1303,12 @@ async function formulaDesignBriefCompilerStatus(context: RouteContext) {
     if (!context.service.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
       return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
     }
-    return { data: await new FormulaIntelligenceStore(context.env.DB).briefCompilerStatus(actor, context.params.id, formulaIntelligenceCanViewPrivate(context.service)) }
+    return { data: await new FormulaIntelligenceStore(context.env.DB).briefCompilerStatus(
+      actor,
+      context.params.id,
+      formulaIntelligenceCanViewPrivate(context.service),
+      formulaIntelligenceCanApproveBrief(context.service),
+    ) }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
     throw error

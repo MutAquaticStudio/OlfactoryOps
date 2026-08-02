@@ -165,7 +165,7 @@ export class AgentLocalRuntimeService {
     return this.detail(session, run.id)
   }
 
-  async listDesignProjects(service: NorthStarService, session: AuthSession, canViewPrivate: boolean, includeArchived = false) {
+  async listDesignProjects(service: NorthStarService, session: AuthSession, canViewPrivate: boolean, includeArchived = false, canApproveBrief = false) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
     const current = actor(session)
@@ -176,7 +176,8 @@ export class AgentLocalRuntimeService {
           project.createdByUserId === current.userId ||
           this.isProjectProducer(current.userId, project.id) ||
           project.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt)) ||
-          (canViewPrivate && project.status === 'BRIEFED' && project.brandId === session.brandId)
+          (canViewPrivate && project.status === 'BRIEFED' && project.brandId === session.brandId) ||
+          (canApproveBrief && project.status === 'BRIEFED')
         ))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .map((project) => this.exposeProject(project, session, canViewPrivate)),
@@ -206,10 +207,10 @@ export class AgentLocalRuntimeService {
     return { data: { project: this.exposeProject(project, session, false) } }
   }
 
-  async designProject(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean) {
+  async designProject(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
-    const project = this.projectFor(session, projectId, false)
+    const project = this.projectFor(session, projectId, false, false, canApproveBrief)
     return { data: { project: this.exposeProject(project, session, canViewPrivate) } }
   }
 
@@ -261,18 +262,18 @@ export class AgentLocalRuntimeService {
     return { data: { projectId: project.id, status: restoredStatus, duplicate: false } }
   }
 
-  async designBriefVersions(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean) {
+  async designBriefVersions(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
-    const project = this.projectFor(session, projectId, true)
+    const project = this.projectFor(session, projectId, true, false, canApproveBrief)
     if (!canViewPrivate && project.createdByUserId !== session.userId) throw new NotFoundException('Design project was not found')
     return { data: { currentBriefVersionId: project.currentBriefVersionId, versions: project.briefVersions.map((version) => this.exposeBriefVersion(version)) } }
   }
 
-  async designBriefCompilerStatus(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean) {
+  async designBriefCompilerStatus(service: NorthStarService, session: AuthSession, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.view')
-    const project = this.projectFor(session, projectId, true)
+    const project = this.projectFor(session, projectId, true, false, canApproveBrief)
     if (!canViewPrivate && project.createdByUserId !== session.userId) throw new NotFoundException('Design project was not found')
     return { data: { mode: 'MANUAL', status: 'NOT_CONFIGURED', message: 'AI brief compilation is not configured. Review the structured brief manually.' } }
   }
@@ -293,8 +294,9 @@ export class AgentLocalRuntimeService {
   async saveDesignBriefVersion(service: NorthStarService, session: AuthSession, projectId: string, body: unknown) {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.edit')
-    const project = this.projectFor(session, projectId, true)
-    const canEdit = project.createdByUserId === session.userId || (project.status === 'BRIEFED' && project.brandId === session.brandId)
+    const canApproveBrief = this.canApproveBrief(service, session)
+    const project = this.projectFor(session, projectId, true, false, canApproveBrief)
+    const canEdit = project.createdByUserId === session.userId || (project.status === 'BRIEFED' && project.brandId === session.brandId) || (canApproveBrief && project.status === 'BRIEFED')
     if (!canEdit) throw new NotFoundException('Design project was not found')
     const validation = validateStructuredFormulaDesignBrief(body)
     this.assertDesignBriefMaterialConstraints(service, validation.brief)
@@ -312,7 +314,13 @@ export class AgentLocalRuntimeService {
     project.formulaTypeHint = validation.brief.product.formulaType ?? project.formulaTypeHint
     if (validation.state === 'REVIEWED') project.brief = formulaDesignBriefFromStructuredBrief(project.name, validation.brief)
     project.updatedAt = timestamp
-    service.recordIntegrationAudit('formula-intelligence.design.brief.version.create', `${project.id}:${version.id}`, validation.state === 'REVIEWED' ? 'allowed' : 'review')
+    service.recordIntegrationAudit(
+      validation.state === 'REVIEWED' && canApproveBrief
+        ? 'formula-intelligence.design.brief.approve'
+        : 'formula-intelligence.design.brief.version.create',
+      `${project.id}:${version.id}`,
+      validation.state === 'REVIEWED' ? 'allowed' : 'review',
+    )
     await this.persist()
     return { data: { version: this.exposeBriefVersion(version) } }
   }
@@ -333,7 +341,7 @@ export class AgentLocalRuntimeService {
     if (!service.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')) {
       throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_FEATURE_DISABLED')
     }
-    const project = this.projectFor(session, projectId, true)
+    const project = this.projectFor(session, projectId, true, false, this.canApproveBrief(service, session))
     if (project.status !== 'BRIEFED') throw new UnprocessableEntityException('FORMULA_INTELLIGENCE_PROJECT_ALREADY_GENERATED')
     const briefVersion = this.currentBriefVersion(project)
     if (briefVersion?.state === 'RAW' || briefVersion?.state === 'REVIEW_REQUIRED') {
@@ -709,16 +717,25 @@ export class AgentLocalRuntimeService {
     return project
   }
 
-  private projectFor(session: AuthSession, projectId: string, allowBrandBrief: boolean, includeArchived = false) {
+  private projectFor(session: AuthSession, projectId: string, allowBrandBrief: boolean, includeArchived = false, canApproveBrief = false) {
     const current = actor(session)
     const project = this.state.projects.find((candidate) => candidate.id === projectId && candidate.organizationId === current.organizationId && (
       candidate.createdByUserId === current.userId ||
       this.isProjectProducer(current.userId, candidate.id) ||
       candidate.directions.some((direction) => direction.shares?.some((share) => share.recipientUserId === current.userId && !share.revokedAt)) ||
-      (allowBrandBrief && candidate.status === 'BRIEFED' && candidate.brandId === session.brandId)
+      (allowBrandBrief && candidate.status === 'BRIEFED' && candidate.brandId === session.brandId) ||
+      (canApproveBrief && candidate.status === 'BRIEFED')
     ))
     if (!project || (!includeArchived && project.status === 'ARCHIVED')) throw new NotFoundException('Design project was not found')
     return project
+  }
+
+  private canApproveBrief(service: NorthStarService, session: AuthSession) {
+    const context = service.me().data
+    return context.session.id === session.id
+      && context.session.userId === session.userId
+      && context.session.organizationId === session.organizationId
+      && context.permissions.includes('formulas.approve')
   }
 
   private isProjectProducer(userId: string, projectId: string) {

@@ -220,6 +220,45 @@
   line-height: 1.55;
 }
 
+.brief-review-gate {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.brief-review-gate > div {
+  display: grid;
+  gap: 3px;
+}
+
+.brief-review-gate strong {
+  color: var(--text);
+  font-size: var(--text-label-size);
+}
+
+.brief-review-gate p,
+.brief-review-gate ul {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.brief-review-gate ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 18px;
+}
+
+.brief-review-gate.is-ready strong {
+  color: var(--success);
+}
+
+.brief-review-gate.is-pending strong {
+  color: var(--warning);
+}
+
 .brief-review-section {
   display: grid;
   gap: 13px;

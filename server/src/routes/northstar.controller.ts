@@ -362,7 +362,13 @@ export class NorthStarController {
   @Get('formula-intelligence/design-projects')
   formulaDesignProjects(@Query('includeArchived') includeArchived?: string) {
     const context = this.northStar.me().data
-    return this.agentRuntime.listDesignProjects(this.northStar, context.session, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'), includeArchived === 'true')
+    return this.agentRuntime.listDesignProjects(
+      this.northStar,
+      context.session,
+      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
+      includeArchived === 'true',
+      context.permissions.includes('formulas.approve'),
+    )
   }
 
   @Get('formula-intelligence/capabilities')
@@ -379,6 +385,7 @@ export class NorthStarController {
         canArchiveAnyDesignProject: ['owner', 'admin'].includes(this.northStar.me().data.session.role.trim().toLowerCase()),
         canCreateBrief: permissions.has('formulas.view'),
         canReviewBrief: permissions.has('formulas.edit'),
+        canApproveBrief: permissions.has('formulas.approve'),
         canGenerateDirections: candidateGenerationEnabled && permissions.has('formulas.edit') && canViewSensitiveComposition,
         canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
         canViewSensitiveComposition,
@@ -421,13 +428,25 @@ export class NorthStarController {
   @Get('formula-intelligence/design-projects/:projectId')
   formulaDesignProject(@Param('projectId') projectId: string) {
     const context = this.northStar.me().data
-    return this.agentRuntime.designProject(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+    return this.agentRuntime.designProject(
+      this.northStar,
+      context.session,
+      projectId,
+      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
+      context.permissions.includes('formulas.approve'),
+    )
   }
 
   @Get('formula-intelligence/design-projects/:projectId/brief-versions')
   formulaDesignBriefVersions(@Param('projectId') projectId: string) {
     const context = this.northStar.me().data
-    return this.agentRuntime.designBriefVersions(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'))
+    return this.agentRuntime.designBriefVersions(
+      this.northStar,
+      context.session,
+      projectId,
+      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
+      context.permissions.includes('formulas.approve'),
+    )
   }
 
   @Post('formula-intelligence/design-projects/:projectId/brief-versions/compile')
@@ -436,7 +455,13 @@ export class NorthStarController {
     if (!this.northStar.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
       return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
     }
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions/compile`, idempotencyKey, {}, () => this.agentRuntime.designBriefCompilerStatus(this.northStar, context.session, projectId, context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view')))
+    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions/compile`, idempotencyKey, {}, () => this.agentRuntime.designBriefCompilerStatus(
+      this.northStar,
+      context.session,
+      projectId,
+      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
+      context.permissions.includes('formulas.approve'),
+    ))
   }
 
   @Post('formula-intelligence/design-projects/:projectId/brief-versions')

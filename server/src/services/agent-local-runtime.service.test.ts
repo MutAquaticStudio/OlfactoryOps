@@ -132,6 +132,26 @@ describe('AgentLocalRuntimeService', () => {
     expect(second.data.version.checksum).toBe(first.data.version.checksum)
   })
 
+  it('lets the authenticated tenant admin approve a brief created by another member', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    const project = await runtime.createDesignProject(service, session, {
+      name: 'Admin review queue', rawBrief: 'A woody amber fine fragrance that needs an approval gate.',
+    })
+    const state = runtime as unknown as { state: { projects: Array<{ id: string; createdByUserId: string }> } }
+    state.state.projects.find((candidate) => candidate.id === project.data.project.id)!.createdByUserId = 'usr-perfumer'
+
+    const queue = await runtime.listDesignProjects(service, session, true, false, true)
+    expect(queue.data.some((item) => item.id === project.data.project.id)).toBe(true)
+
+    const approved = await runtime.saveDesignBriefVersion(service, session, project.data.project.id, reviewedBrief())
+    expect(approved).toMatchObject({ data: { version: { state: 'REVIEWED' } } })
+  })
+
   it('archives a private brief for thirty days and restores it without exposing it in the active list', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
     directories.push(directory)

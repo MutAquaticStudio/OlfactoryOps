@@ -403,7 +403,7 @@ export class FormulaIntelligenceStore {
     return this.projectPayload(project, actor, false)
   }
 
-  async listDesignProjects(actor: AgentActor, canViewPrivate: boolean, includeArchived = false) {
+  async listDesignProjects(actor: AgentActor, canViewPrivate: boolean, includeArchived = false, canApproveBrief = false) {
     const archivedFilter = includeArchived ? '' : `AND p.status <> 'ARCHIVED'`
     const result = await this.db.prepare(
       `SELECT DISTINCT p.id, p.organization_id, p.brand_id, p.created_by_user_id, p.status, p.name, p.brief_json, p.current_brief_version_id, p.selected_direction_id, p.formula_type_hint, p.archived_at, p.archived_by_user_id, p.archive_previous_status, p.purge_after, p.created_at, p.updated_at
@@ -431,11 +431,20 @@ export class FormulaIntelligenceStore {
         for (const project of queued.results ?? []) visible.set(project.id, project)
       }
     }
+    if (canApproveBrief) {
+      const queued = await this.db.prepare(
+        `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
+         FROM formula_design_projects
+         WHERE organization_id = ? AND status = 'BRIEFED'
+         ORDER BY updated_at DESC LIMIT 80`,
+      ).bind(actor.organizationId).all<ProjectRow>()
+      for (const project of queued.results ?? []) visible.set(project.id, project)
+    }
     return Promise.all([...visible.values()].sort((left, right) => right.updated_at.localeCompare(left.updated_at)).map((project) => this.projectPayload(project, actor, canViewPrivate)))
   }
 
-  async designProject(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
-    const project = await this.projectForActor(actor, projectId)
+  async designProject(actor: AgentActor, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
+    const project = await this.projectForActor(actor, projectId, false, canApproveBrief)
     return this.projectPayload(project, actor, canViewPrivate)
   }
 
@@ -513,7 +522,7 @@ export class FormulaIntelligenceStore {
     return { projectId: project.id, status: restoredStatus, duplicate: false }
   }
 
-  async designProjectForGeneration(actor: AgentActor, projectId: string) {
+  async designProjectForGeneration(actor: AgentActor, projectId: string, canApproveBrief = false) {
     const project = await this.db.prepare(
       `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
@@ -523,7 +532,7 @@ export class FormulaIntelligenceStore {
     const brandIds = await this.activeBrandIds(actor)
     const canStart = project.created_by_user_id === actor.userId || (
       project.status === 'BRIEFED' && Boolean(project.brand_id) && brandIds.includes(project.brand_id!)
-    )
+    ) || (canApproveBrief && project.status === 'BRIEFED')
     if (!canStart) throw new NotFoundException('Design project was not found')
     const existingRun = await this.db.prepare(
       `SELECT created_by_user_id FROM formula_intelligence_runs
@@ -554,8 +563,8 @@ export class FormulaIntelligenceStore {
     }
   }
 
-  async briefVersions(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
-    const project = await this.projectForActor(actor, projectId)
+  async briefVersions(actor: AgentActor, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
+    const project = await this.projectForActor(actor, projectId, false, canApproveBrief)
     if (!canViewPrivate && project.created_by_user_id !== actor.userId) throw new NotFoundException('Design project was not found')
     const versions = await this.db.prepare(
       `SELECT id, organization_id, project_id, version_number, state, schema_version, raw_brief, structured_brief_json,
@@ -565,8 +574,8 @@ export class FormulaIntelligenceStore {
     return { currentBriefVersionId: project.current_brief_version_id, versions: (versions.results ?? []).map((version) => this.briefVersionPayload(version)) }
   }
 
-  async briefCompilerStatus(actor: AgentActor, projectId: string, canViewPrivate: boolean) {
-    const project = await this.projectForActor(actor, projectId)
+  async briefCompilerStatus(actor: AgentActor, projectId: string, canViewPrivate: boolean, canApproveBrief = false) {
+    const project = await this.projectForActor(actor, projectId, false, canApproveBrief)
     if (!canViewPrivate && project.created_by_user_id !== actor.userId) throw new NotFoundException('Design project was not found')
     return {
       mode: 'MANUAL',
@@ -576,7 +585,8 @@ export class FormulaIntelligenceStore {
   }
 
   async saveBriefVersion(service: NorthStarService, actor: AgentActor, projectId: string, input: unknown, idempotencyKey: string) {
-    const project = await this.projectForBriefEdit(actor, projectId)
+    const canApproveBrief = service.me().data.permissions.includes('formulas.approve')
+    const project = await this.projectForBriefEdit(actor, projectId, canApproveBrief)
     const validation = validateStructuredFormulaDesignBrief(input)
     assertFormulaDesignBriefMaterialConstraints(service, validation.brief)
     const priorVersion = await this.currentBriefVersion(project)
@@ -609,7 +619,15 @@ export class FormulaIntelligenceStore {
          WHERE id = ? AND organization_id = ?`,
       ).bind(versionId, legacyProjection, validation.brief.product.formulaType ?? project.formula_type_hint ?? null, timestamp, project.id, actor.organizationId),
     ])
-    await auditFormulaIntelligence(this.db, actor, 'formula-intelligence.design.brief.version.create', `${project.id}:${versionId}`, validation.state === 'REVIEWED' ? 'allowed' : 'review')
+    await auditFormulaIntelligence(
+      this.db,
+      actor,
+      validation.state === 'REVIEWED' && canApproveBrief
+        ? 'formula-intelligence.design.brief.approve'
+        : 'formula-intelligence.design.brief.version.create',
+      `${project.id}:${versionId}`,
+      validation.state === 'REVIEWED' ? 'allowed' : 'review',
+    )
     return this.briefVersionPayload({
       id: versionId, organization_id: actor.organizationId, project_id: project.id, version_number: versionNumber,
       state: validation.state, schema_version: 1, raw_brief: priorVersion?.raw_brief ?? '', structured_brief_json: JSON.stringify(validation.brief),
@@ -944,7 +962,7 @@ export class FormulaIntelligenceStore {
     return preview
   }
 
-  private async projectForBriefEdit(actor: AgentActor, projectId: string) {
+  private async projectForBriefEdit(actor: AgentActor, projectId: string, canApproveBrief = false) {
     const project = await this.db.prepare(
       `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
@@ -953,7 +971,7 @@ export class FormulaIntelligenceStore {
     const brandIds = await this.activeBrandIds(actor)
     const canEdit = project.created_by_user_id === actor.userId || (
       project.status === 'BRIEFED' && Boolean(project.brand_id) && brandIds.includes(project.brand_id!)
-    )
+    ) || (canApproveBrief && project.status === 'BRIEFED')
     if (!canEdit) throw new NotFoundException('Design project was not found')
     return project
   }
@@ -1091,7 +1109,7 @@ export class FormulaIntelligenceStore {
     return project
   }
 
-  private async projectForActor(actor: AgentActor, projectId: string, includeArchived = false) {
+  private async projectForActor(actor: AgentActor, projectId: string, includeArchived = false, canApproveBrief = false) {
     const project = await this.db.prepare(
       `SELECT id, organization_id, brand_id, created_by_user_id, status, name, brief_json, current_brief_version_id, selected_direction_id, formula_type_hint, archived_at, archived_by_user_id, archive_previous_status, purge_after, created_at, updated_at
        FROM formula_design_projects WHERE id = ? AND organization_id = ?`,
@@ -1103,7 +1121,9 @@ export class FormulaIntelligenceStore {
       `SELECT 1 AS found FROM formula_design_direction_shares
        WHERE organization_id = ? AND project_id = ? AND recipient_user_id = ? AND revoked_at IS NULL LIMIT 1`,
     ).bind(actor.organizationId, project.id, actor.userId).first<{ found: number }>()
-    if (!isCreator && !isProducer && !shared) throw new NotFoundException('Design project was not found')
+    if (!isCreator && !isProducer && !shared && !(canApproveBrief && project.status === 'BRIEFED')) {
+      throw new NotFoundException('Design project was not found')
+    }
     if (!includeArchived && project.status === 'ARCHIVED') throw new NotFoundException('Design project was not found')
     return project
   }
@@ -1765,7 +1785,11 @@ export async function createDesignProjectRun(
   requirePermission(service, 'formulas.edit')
   requireFormulaIntelligenceFeature(service, 'designStudioCandidateGeneration')
   const intelligence = new FormulaIntelligenceStore(db)
-  const generation = await intelligence.designProjectForGeneration(actor, projectId)
+  const generation = await intelligence.designProjectForGeneration(
+    actor,
+    projectId,
+    service.me().data.permissions.includes('formulas.approve'),
+  )
   if (generation.briefVersion?.state === 'REVIEWED') {
     const structured = structuredFormulaDesignBriefSchema.parse(parseJson(generation.briefVersion.structured_brief_json ?? '{}', {}))
     assertFormulaDesignBriefMaterialConstraints(service, structured)

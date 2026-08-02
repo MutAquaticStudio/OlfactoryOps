@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   createAgentEventReconciliation,
   reconcileAgentRuntimeEvent,
+  validateStructuredFormulaDesignBrief,
   type AgentFormulaProposal,
   type AgentRuntimeEvent,
   type FormulaOptimizerIntent,
@@ -20,6 +21,7 @@ export type FormulaIntelligenceCapabilities = {
   canArchiveAnyDesignProject: boolean
   canCreateBrief: boolean
   canReviewBrief: boolean
+  canApproveBrief: boolean
   canGenerateDirections: boolean
   canRunOptimizer: boolean
   canViewSensitiveComposition: boolean
@@ -217,7 +219,13 @@ function emptyBriefReviewDraft(): BriefReviewDraft {
 
 function reviewDraftFromVersion(version?: BriefVersion, formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE'): BriefReviewDraft {
   const structured = version?.structuredBrief
-  if (!structured) return { ...emptyBriefReviewDraft(), formulaType: formulaTypeHint ?? '' }
+  if (!structured) {
+    return {
+      ...emptyBriefReviewDraft(),
+      formulaType: formulaTypeHint ?? '',
+      productType: formulaTypeHint === 'FINE_FRAGRANCE' ? 'FINE_FRAGRANCE' : formulaTypeHint === 'ACCORD' ? 'OTHER' : '',
+    }
+  }
   return {
     productType: structured.product.productType ?? '', formulaType: structured.product.formulaType ?? '', format: structured.product.format ?? '',
     concentrationLabel: structured.product.concentrationLabel ?? '', concentration: structured.product.targetConcentrationPercent?.toString() ?? '', targetGrams: structured.product.targetGrams?.toString() ?? '',
@@ -226,6 +234,45 @@ function reviewDraftFromVersion(version?: BriefVersion, formulaTypeHint?: 'ACCOR
     ifraCategory: structured.constraints.ifraCategory ?? '', markets: structured.constraints.targetMarkets.join(', '),
     inventoryPreference: structured.constraints.inventoryPreference, workspaceMaterialsOnly: structured.constraints.workspaceMaterialsOnly,
     reviewedMaterialsOnly: structured.constraints.reviewedMaterialsOnly, lockedMaterialIds: structured.constraints.requiredMaterialIds,
+  }
+}
+
+function briefReviewPayload(draft: BriefReviewDraft) {
+  const isAccord = draft.formulaType === 'ACCORD'
+  const concentration = Number(draft.concentration)
+  const targetGrams = Number(draft.targetGrams)
+  const longevity = Number(draft.longevity)
+  return {
+    schemaVersion: 1 as const,
+    product: {
+      productType: draft.productType || undefined,
+      formulaType: draft.formulaType || undefined,
+      format: draft.format || undefined,
+      concentrationLabel: !isAccord ? draft.concentrationLabel || undefined : undefined,
+      targetConcentrationPercent: !isAccord && Number.isFinite(concentration) && concentration > 0 ? concentration : undefined,
+      targetGrams: Number.isFinite(targetGrams) && targetGrams > 0 ? targetGrams : undefined,
+    },
+    creative: {
+      families: [], descriptors: csv(draft.descriptors), emotionalIntent: draft.emotionalIntent || undefined,
+      references: [], desiredNotes: csv(draft.desiredNotes), avoidedNotes: csv(draft.avoidedNotes), specialEffects: [],
+    },
+    performance: {
+      diffusion: draft.diffusion || undefined,
+      targetLongevityHours: Number.isFinite(longevity) && longevity >= 0 ? longevity : undefined,
+      opening: undefined, drydown: undefined,
+    },
+    audience: { target: undefined, positioning: undefined, occasion: undefined, markets: csv(draft.markets) },
+    constraints: {
+      workspaceMaterialsOnly: true,
+      reviewedMaterialsOnly: true,
+      ifraCategory: draft.ifraCategory || undefined,
+      targetMarkets: csv(draft.markets),
+      inventoryPreference: draft.inventoryPreference,
+      prohibitedMaterialIds: [],
+      requiredMaterialIds: draft.lockedMaterialIds,
+      prohibitedDescriptors: [],
+    },
+    unresolvedQuestions: [],
   }
 }
 
@@ -664,7 +711,7 @@ function DesignProjectCard({
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
       {isArchived ? (canArchive ? <button className="secondary-button small" type="button" disabled={busy} onClick={onRestore}><RotateCcw size={15} /> Restore brief</button> : null) : <>
-      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit reviewed brief' : 'Review brief'}</button> : null}
+      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit approved brief' : capabilities.canApproveBrief ? 'Review & approve brief' : 'Review brief'}</button> : null}
       {capabilities.canGenerateDirections ? <button
         className={hasDirections || !briefIsReviewed ? 'secondary-button small' : 'primary-button small'}
         data-testid={`design-generate-${project.id}`}
@@ -765,6 +812,7 @@ function StructuredBriefReviewDialog({
   sourceReferenceCount,
   busy,
   canReview,
+  canApprove,
   onDraftChange,
   onSave,
   onClose,
@@ -776,6 +824,7 @@ function StructuredBriefReviewDialog({
   sourceReferenceCount: number
   busy: boolean
   canReview: boolean
+  canApprove: boolean
   onDraftChange: (next: BriefReviewDraft) => void
   onSave: () => void
   onClose: () => void
@@ -784,20 +833,30 @@ function StructuredBriefReviewDialog({
   const initialDraft = reviewDraftFromVersion(project.briefVersion, project.formulaTypeHint)
   const isDirty = JSON.stringify(draft) !== JSON.stringify(initialDraft)
   const isAccord = draft.formulaType === 'ACCORD'
+  const validation = useMemo(() => validateStructuredFormulaDesignBrief(briefReviewPayload(draft)), [draft])
+  const blockingQuestions = validation.unresolvedQuestions.filter((question) => question.importance === 'HIGH')
+  const readyToApprove = validation.state === 'REVIEWED'
   const requestClose = () => {
     if (isDirty && !window.confirm('Discard the changes made to this brief?')) return
     onClose()
   }
   const footer = <div className="formula-intelligence-actions brief-review-footer-actions">
-    <button className="primary-button" type="button" disabled={busy || !canReview} onClick={onSave}><CheckCircle2 size={16} /> Save reviewed brief</button>
+    <button className="primary-button" type="button" disabled={busy || !canReview} onClick={onSave}><CheckCircle2 size={16} /> {readyToApprove ? canApprove ? 'Approve brief & unlock directions' : 'Mark brief reviewed' : 'Save review requirements'}</button>
     <button className="secondary-button" type="button" disabled={busy} onClick={requestClose}>Cancel</button>
   </div>
 
-  return <FormulaIntelligenceDialog title="Review structured brief" description="Set the product and material boundaries that guide direction creation." onClose={onClose} footer={footer} className="brief-review-dialog" confirmDiscard={isDirty}>
+  return <FormulaIntelligenceDialog title={canApprove ? 'Review & approve brief' : 'Review structured brief'} description="Confirm the product and material boundaries before directions can be created." onClose={onClose} footer={footer} className="brief-review-dialog" confirmDiscard={isDirty}>
     <div className="structured-brief-review">
       <section className="brief-review-original">
         <span className="formula-intelligence-eyebrow">Original request</span>
         <p>{rawBrief}</p>
+      </section>
+      <section className={`brief-review-gate ${readyToApprove ? 'is-ready' : 'is-pending'}`} aria-live="polite">
+        <div>
+          <strong>{readyToApprove ? 'Ready to approve' : 'Review required'}</strong>
+          <p>{readyToApprove ? 'The brief is complete. Approving it unlocks direction generation without moving inventory.' : 'Complete the required fields below before this brief can move to direction generation.'}</p>
+        </div>
+        {!readyToApprove ? <ul>{blockingQuestions.map((question) => <li key={`${question.field}:${question.reason}`}>{question.reason}</li>)}</ul> : null}
       </section>
       <section className="brief-review-section">
         <div className="brief-review-section-heading"><div><h3>Product setup</h3><p>{isAccord ? 'Define the concentrate. Final product context can be added later before review.' : 'Define what is being made and the intended concentration.'}</p></div></div>
@@ -935,31 +994,15 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   async function saveBriefReview() {
     if (!reviewProject) return
     const scope = `design-brief-version:${reviewProject.id}:${JSON.stringify(reviewDraft)}`
-    const isAccord = reviewDraft.formulaType === 'ACCORD'
-    const concentration = Number(reviewDraft.concentration)
-    const targetGrams = Number(reviewDraft.targetGrams)
-    const longevity = Number(reviewDraft.longevity)
     setBusy(true); setNotice(undefined)
     try {
       const result = await requestApi<{ version: BriefVersion }>(`/formula-intelligence/design-projects/${encodeURIComponent(reviewProject.id)}/brief-versions`, {
-        method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({
-          schemaVersion: 1,
-          product: {
-            productType: reviewDraft.productType || undefined, formulaType: reviewDraft.formulaType || undefined, format: reviewDraft.format || undefined,
-            concentrationLabel: !isAccord ? reviewDraft.concentrationLabel || undefined : undefined, targetConcentrationPercent: !isAccord && Number.isFinite(concentration) && concentration > 0 ? concentration : undefined,
-            targetGrams: Number.isFinite(targetGrams) && targetGrams > 0 ? targetGrams : undefined,
-          },
-          creative: { families: [], descriptors: csv(reviewDraft.descriptors), emotionalIntent: reviewDraft.emotionalIntent || undefined, references: [], desiredNotes: csv(reviewDraft.desiredNotes), avoidedNotes: csv(reviewDraft.avoidedNotes), specialEffects: [] },
-          performance: { diffusion: reviewDraft.diffusion || undefined, targetLongevityHours: Number.isFinite(longevity) && longevity >= 0 ? longevity : undefined, opening: undefined, drydown: undefined },
-          audience: { target: undefined, positioning: undefined, occasion: undefined, markets: csv(reviewDraft.markets) },
-          constraints: { workspaceMaterialsOnly: true, reviewedMaterialsOnly: true, ifraCategory: reviewDraft.ifraCategory || undefined, targetMarkets: csv(reviewDraft.markets), inventoryPreference: reviewDraft.inventoryPreference, prohibitedMaterialIds: [], requiredMaterialIds: reviewDraft.lockedMaterialIds, prohibitedDescriptors: [] },
-          unresolvedQuestions: [],
-        }),
+        method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify(briefReviewPayload(reviewDraft)),
       })
       completeMutation(scope)
       await refresh()
       setReviewProjectId(undefined)
-      setNotice(result.version.state === 'REVIEWED' ? 'Structured brief reviewed. Direction generation is now available.' : 'Structured brief saved with questions that still need review.')
+      setNotice(result.version.state === 'REVIEWED' ? 'Brief approved. Direction generation is now available.' : 'Review saved. Complete the remaining required fields before generating directions.')
     } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to save the structured brief review.')) } finally { setBusy(false) }
   }
 
@@ -1143,7 +1186,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
       </div>
       {selectedDirectionContext && compactDirectionDetail ? <AppWorkspaceDialog open title={`${selectedDirectionContext.direction.title} details`} onClose={() => setSelectedDirectionId(null)} showHeader={false} className="formula-intelligence-detail-dialog">{selectedDirectionDetail}</AppWorkspaceDialog> : selectedDirectionDetail}
     </div>
-    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} sourceReferenceCount={designMaterialCounts.sourceReferenceCount} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
+    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} sourceReferenceCount={designMaterialCounts.sourceReferenceCount} busy={busy} canReview={capabilities.canReviewBrief} canApprove={capabilities.canApproveBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
     {fineFragranceComposerTarget ? <FineFragranceComposerDialog key={fineFragranceComposerTarget.project.id} target={fineFragranceComposerTarget} materials={designMaterials} busy={busy} onCompose={(input) => void composeFineFragrance(input)} onClose={() => setFineFragranceComposerTarget(undefined)} /> : null}
     {archiveTarget ? <FormulaIntelligenceDialog title="Archive this brief?" onClose={() => setArchiveTarget(undefined)}><p className="formula-intelligence-copy">This hides the brief from active work, cancels any active research run, and revokes its direction shares. You can restore it for 30 days.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void archiveProject(archiveTarget)}><Archive size={16} /> Archive brief</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setArchiveTarget(undefined)}>Keep brief</button></div></FormulaIntelligenceDialog> : null}
     {shareTarget ? <FormulaIntelligenceDialog title="Share direction" onClose={() => setShareTarget(undefined)}><p className="formula-intelligence-copy">Only active members of this brand can receive this direction. Material names stay hidden unless you opt in.</p>{shareTarget.direction.shares?.length ? <div className="formula-intelligence-share-list">{shareTarget.direction.shares.map((share) => <div key={share.recipientUserId}><span>{shareRecipients.find((recipient) => recipient.userId === share.recipientUserId)?.name ?? 'Active recipient'}{share.allowMaterialNames ? ' / material names visible' : ''}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => void revokeShare(shareTarget.projectId, shareTarget.direction.directionId, share.recipientUserId)}>Revoke</button></div>)}</div> : null}<div className="formula-intelligence-recipient-list">{shareRecipients.map((recipient) => <label key={recipient.userId}><input type="checkbox" checked={selectedRecipientIds.includes(recipient.userId)} onChange={() => setSelectedRecipientIds((current) => current.includes(recipient.userId) ? current.filter((id) => id !== recipient.userId) : [...current, recipient.userId])} /><span><strong>{recipient.name}</strong><small>{recipient.email}</small></span></label>)}</div><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Save sharing</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
