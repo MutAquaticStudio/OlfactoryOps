@@ -1,5 +1,4 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import QRCode from 'qrcode'
 import {
   Activity,
   Atom,
@@ -9379,6 +9378,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         method: 'POST',
       })
       setLabelPayload(payload.label)
+      const { default: QRCode } = await import('qrcode')
       const qrSvg = await QRCode.toString(payload.label.qrValue, {
         type: 'svg',
         errorCorrectionLevel: 'M',
