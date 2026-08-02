@@ -18,13 +18,13 @@ sequence; SSE is a delivery transport and is never the source of truth.
 against tenant-scoped domain data and produces deterministic artifact output.
 
 `CloudflareWorkersAiFormulaProvider` uses the server-side `AI` binding and the
-multilingual `@cf/zai-org/glm-4.7-flash` model. It returns one bounded,
+reasoning-capable `@cf/openai/gpt-oss-120b` model. It returns one bounded,
 schema-validated research plan through a function call. The plan may refine a
 material-evidence query, but it cannot execute SQL, write a formula, reserve
 inventory, calculate IFRA, or bypass confirmation. Enable it with:
 
 - `AGENT_PROVIDER=workers_ai`
-- `WORKERS_AI_FORMULA_AGENT_MODEL=@cf/zai-org/glm-4.7-flash`
+- `WORKERS_AI_FORMULA_AGENT_MODEL=@cf/openai/gpt-oss-120b`
 - `[ai] binding = "AI"`
 
 `OpenAiResponsesProvider` remains isolated and server-only, so its `fetch`

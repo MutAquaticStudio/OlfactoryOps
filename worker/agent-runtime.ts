@@ -315,7 +315,7 @@ export function configuredAgentProvider(env: {
   AI?: WorkersAiBinding
 }): { provider: AgentProvider; model: string } {
   if (env.AGENT_PROVIDER === 'workers_ai' && env.AI) {
-    return { provider: 'workers_ai', model: env.WORKERS_AI_FORMULA_AGENT_MODEL?.trim() || '@cf/zai-org/glm-4.7-flash' }
+    return { provider: 'workers_ai', model: env.WORKERS_AI_FORMULA_AGENT_MODEL?.trim() || '@cf/openai/gpt-oss-120b' }
   }
   return { provider: 'mock', model: 'deterministic-v1' }
 }
@@ -326,7 +326,7 @@ export function agentModelProviderForRun(env: {
 }, run: Pick<AgentRunRow, 'provider' | 'model_name'>): AgentModelProvider {
   if (run.provider === 'workers_ai') {
     if (!env.AI) throw new UnprocessableEntityException('Workers AI formula agent provider is unavailable')
-    return new CloudflareWorkersAiFormulaProvider(env.AI, run.model_name?.trim() || env.WORKERS_AI_FORMULA_AGENT_MODEL?.trim() || '@cf/zai-org/glm-4.7-flash')
+    return new CloudflareWorkersAiFormulaProvider(env.AI, run.model_name?.trim() || env.WORKERS_AI_FORMULA_AGENT_MODEL?.trim() || '@cf/openai/gpt-oss-120b')
   }
   return new DeterministicMockFormulaProvider()
 }

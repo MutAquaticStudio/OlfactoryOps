@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { chunkEvidenceText, isCurrentEvidenceDocument, isEligibleEvidenceDocument, MaterialEvidenceRag, materialEvidenceQuerySchema, materialEvidenceQueryScopes, safeEvidenceExcerpt } from './material-evidence-rag.js'
+import {
+  chunkEvidenceText,
+  isCurrentEvidenceDocument,
+  isEligibleEvidenceDocument,
+  MaterialEvidenceRag,
+  MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS,
+  MATERIAL_EVIDENCE_EMBEDDING_MODEL,
+  MATERIAL_EVIDENCE_INDEX_VERSION,
+  materialEvidenceQuerySchema,
+  materialEvidenceQueryScopes,
+  safeEvidenceExcerpt,
+} from './material-evidence-rag.js'
 
 describe('controlled material evidence RAG', () => {
+  it('uses the versioned multilingual BGE-M3 retrieval contract', () => {
+    expect(MATERIAL_EVIDENCE_EMBEDDING_MODEL).toBe('@cf/baai/bge-m3')
+    expect(MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS).toBe(1024)
+    expect(MATERIAL_EVIDENCE_INDEX_VERSION).toBe(2)
+  })
+
   it('creates bounded, overlapping evidence chunks without losing the source tail', () => {
     const text = Array.from({ length: 80 }, (_, index) => `Sentence ${index + 1} carries approved material evidence.`).join(' ')
     const chunks = chunkEvidenceText(text, 180, 30)

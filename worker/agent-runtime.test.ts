@@ -16,9 +16,9 @@ describe('formula agent provider boundary', () => {
     const ai = { run: vi.fn() }
     expect(configuredAgentProvider({
       AGENT_PROVIDER: 'workers_ai',
-      WORKERS_AI_FORMULA_AGENT_MODEL: '@cf/zai-org/glm-4.7-flash',
+      WORKERS_AI_FORMULA_AGENT_MODEL: '@cf/openai/gpt-oss-120b',
       AI: ai,
-    })).toEqual({ provider: 'workers_ai', model: '@cf/zai-org/glm-4.7-flash' })
+    })).toEqual({ provider: 'workers_ai', model: '@cf/openai/gpt-oss-120b' })
     expect(configuredAgentProvider({ AGENT_PROVIDER: 'workers_ai' })).toEqual({ provider: 'mock', model: 'deterministic-v1' })
   })
 
@@ -44,12 +44,12 @@ describe('formula agent provider boundary', () => {
         }],
       }),
     }
-    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/zai-org/glm-4.7-flash')
+    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/openai/gpt-oss-120b')
     const plan = await provider.researchPlan({ brief: 'Marine mineral fragrance', tools: [] })
 
     expect(plan.searchQuery).toBe('marine mineral woody amber citrus')
     expect(plan.recommendedTools).toEqual(['search_materials', 'retrieve_material_evidence', 'validate_compliance'])
-    expect(ai.run).toHaveBeenCalledWith('@cf/zai-org/glm-4.7-flash', expect.objectContaining({
+    expect(ai.run).toHaveBeenCalledWith('@cf/openai/gpt-oss-120b', expect.objectContaining({
       tool_choice: 'required',
       parallel_tool_calls: false,
       store: false,
@@ -64,7 +64,7 @@ describe('formula agent provider boundary', () => {
         }) } }] } }],
       }),
     }
-    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/zai-org/glm-4.7-flash')
+    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/openai/gpt-oss-120b')
     await expect(provider.researchPlan({ brief: 'Amber fragrance', tools: [] })).rejects.toThrow('invalid research plan')
   })
 

@@ -454,7 +454,7 @@ Production checklist, security requirement, custom domain guidance và live test
 - Chạy D1 migration trước khi deploy Worker. <code>0025_enterprise_persistence_audit_chain.sql</code> hoàn tất normalized-state cutover và thêm append-only audit-chain evidence. <code>0026_finished_goods_operational_trace.sql</code> thêm finished-good lot, finished-good ledger/COGS, formula SKU support và organization scope cho commerce record.
 - <code>0027_operational_p1_enterprise.sql</code> thêm tenant-scoped material compliance, approved supplier offer, receipt/inspection/RMA quarantine, immutable landed-cost allocation, QC specification/result, yield reconciliation và operation idempotency record. Phải áp migration này trước Worker mở Operational P1 route.
 - <code>0028_auth_session_credentials.sql</code> thay legacy session-ID credential bằng opaque one-way-hashed Worker credential và revoke pre-migration session. User phải đăng nhập lại sau migration.
-- <code>0033_material_evidence_rag.sql</code> thêm reviewed evidence source, citation chunk có giới hạn và lease-fenced indexing job theo tenant. Trước khi deploy, tạo Vectorize cosine 768-dimension index riêng cho test/production; thêm binding <code>AI</code> và <code>RAG_INDEX</code>; tạo metadata index cho <code>organizationId</code>, <code>status</code>, <code>materialId</code>, <code>documentId</code>, <code>sourceKind</code> và <code>indexVersion</code>.
+- <code>0033_material_evidence_rag.sql</code> thêm reviewed evidence source, citation chunk có giới hạn và lease-fenced indexing job theo tenant. RAG v2 dùng Vectorize cosine 1.024 chiều riêng cho test/production; binding <code>AI</code> và <code>RAG_INDEX</code> có metadata index cho <code>organizationId</code>, <code>status</code>, <code>materialId</code>, <code>documentId</code>, <code>sourceKind</code> và <code>indexVersion</code>.
 - <code>0035_lluch_supplier_catalogue.sql</code> nhập Lluch Essence Product List 1.986 dòng vào supplier-catalogue table theo tenant trong D1. Áp migration trước Worker; scheduled run đầu tiên hoặc authorized **Sync catalogue** sẽ nhập idempotent cho từng workspace.
 - <code>0038_sales_order_details.sql</code> bổ sung contact, địa chỉ giao hàng snapshot, customer reference, delivery instruction và bằng chứng hủy đơn cho Sales Order. Áp migration này trước khi deploy route update/cancel Orders.
 - <code>0039_global_material_library.sql</code> bổ sung <code>library_scope</code> và <code>organization_id</code> cho material master. Migration backfill bản ghi cũ có ownership trong JSON thành <code>TENANT</code>; các seed/catalogue record không có owner trở thành <code>GLOBAL</code>. Worker luôn ghi hai cột này cùng JSON và từ chối tenant sửa metadata global.
@@ -528,7 +528,7 @@ npm run security:client-bundle
 
 ## Nền tảng AI/Agent
 
-Môi trường Cloudflare dùng <code>AGENT_PROVIDER=workers_ai</code> với model mặc định <code>@cf/zai-org/glm-4.7-flash</code>. Workers AI chỉ tạo research plan có schema: tóm tắt brief, search query, note focus/avoid và danh sách tool đọc được phép. Output của model phải qua Zod validation; tool không đăng ký, payload quá giới hạn hoặc response không đúng schema sẽ bị từ chối.
+Môi trường Cloudflare dùng <code>AGENT_PROVIDER=workers_ai</code> với model mặc định <code>@cf/openai/gpt-oss-120b</code>. Workers AI chỉ tạo research plan có schema: tóm tắt brief, search query, note focus/avoid và danh sách tool đọc được phép. Output của model phải qua Zod validation; tool không đăng ký, payload quá giới hạn hoặc response không đúng schema sẽ bị từ chối.
 
 Formula Agent, Design Studio và Reformulation Optimizer dùng research plan này để truy xuất material/evidence phù hợp. Formula math, IFRA/compliance, inventory, cost, ranking cuối cùng và save draft vẫn do deterministic domain services thực hiện. LLM không chạy SQL, không truy cập URL tuỳ ý, không tự ghi formula, không reserve/consume inventory và không bỏ qua confirmation.
 
@@ -537,13 +537,13 @@ Local/CI không có Workers AI binding sẽ giữ <code>deterministic-v1</code>.
 ~~~toml
 [vars]
 AGENT_PROVIDER = "workers_ai"
-WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/zai-org/glm-4.7-flash"
+WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/openai/gpt-oss-120b"
 
 [ai]
 binding = "AI"
 ~~~
 
-RAG dùng <code>@cf/baai/bge-base-en-v1.5</code> để tạo vector 768 chiều. Cron index material <code>GLOBAL</code> đã curated vào namespace hệ thống; tenant query được truy xuất cả global material evidence và evidence riêng của chính tenant. Document evidence của tenant khác không bao giờ được truy xuất.
+RAG v2 dùng multilingual <code>@cf/baai/bge-m3</code> để tạo vector 1.024 chiều. Cron re-index material <code>GLOBAL</code> đã curated vào namespace hệ thống; query chỉ chấp nhận D1 chunk và Vectorize metadata có <code>indexVersion=2</code>. Tenant được truy xuất global material evidence và evidence riêng của chính mình; document evidence của tenant khác không bao giờ được truy xuất. Hai index 768 chiều v1 được giữ tạm để rollback nhưng không còn nằm trong binding live.
 
 ### Trải nghiệm Formula Design Studio
 

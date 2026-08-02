@@ -4,8 +4,9 @@ import type { DocumentRecord, Material } from '../src/data/northStar.js'
 import type { AgentActor } from './agent-runtime.js'
 import { auditFormulaIntelligence } from './formula-intelligence.js'
 
-const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5'
-const INDEX_VERSION = 1
+export const MATERIAL_EVIDENCE_EMBEDDING_MODEL = '@cf/baai/bge-m3'
+export const MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS = 1024
+export const MATERIAL_EVIDENCE_INDEX_VERSION = 2
 const MAX_EXCERPT_CHARS = 700
 const MAX_REVIEW_TEXT_CHARS = 100_000
 const MAX_QUERY_CHARS = 320
@@ -284,7 +285,7 @@ export class MaterialEvidenceRag {
 
   private async enqueue(actor: MaterialEvidenceActor, evidenceDocumentId: string, action: 'EXTRACT' | 'INDEX' | 'INVALIDATE', idempotencyKey: string) {
     const stamp = now()
-    const inputHash = await sha256(`${evidenceDocumentId}:${action}:${INDEX_VERSION}`)
+    const inputHash = await sha256(`${evidenceDocumentId}:${action}:${MATERIAL_EVIDENCE_INDEX_VERSION}`)
     const existing = await this.env.DB.prepare(
       `SELECT id, status, correlation_id FROM material_evidence_jobs
        WHERE organization_id = ? AND idempotency_key = ?`,
@@ -325,15 +326,15 @@ export class MaterialEvidenceRag {
           id, organization_id, source_kind, material_id, source_title, source_version, content_hash,
           approval_status, extraction_status, reviewed_text, index_version, created_at, updated_at
         ) VALUES (?, ?, 'MATERIAL', ?, ?, ?, ?, 'APPROVED', 'QUEUED', ?, ?, ?, ?)`,
-      ).bind(id, evidenceOrganizationId, material.id, material.name, sourceVersion, hash, text, INDEX_VERSION, stamp, stamp).run()
+      ).bind(id, evidenceOrganizationId, material.id, material.name, sourceVersion, hash, text, MATERIAL_EVIDENCE_INDEX_VERSION, stamp, stamp).run()
       evidence = { id }
     } else {
       await this.env.DB.prepare(
         `UPDATE material_evidence_documents
          SET source_title = ?, content_hash = ?, reviewed_text = ?, approval_status = 'APPROVED',
-             extraction_status = 'QUEUED', error_code = NULL, updated_at = ?
+             extraction_status = 'QUEUED', error_code = NULL, index_version = ?, updated_at = ?
          WHERE id = ? AND organization_id = ?`,
-      ).bind(material.name, hash, text, stamp, evidence.id, evidenceOrganizationId).run()
+      ).bind(material.name, hash, text, MATERIAL_EVIDENCE_INDEX_VERSION, stamp, evidence.id, evidenceOrganizationId).run()
     }
     const job = await this.enqueue(evidenceActor, evidence.id, 'INDEX', idempotencyKey)
     await this.audit(actor, 'material-evidence.material.index.queued', material.id)
@@ -363,16 +364,16 @@ export class MaterialEvidenceRag {
           id, organization_id, source_kind, material_id, document_id, source_title, source_version, content_hash,
           approval_status, extraction_status, index_version, created_at, updated_at
         ) VALUES (?, ?, 'DOCUMENT', ?, ?, ?, ?, ?, 'APPROVED', 'QUEUED', ?, ?, ?)`,
-      ).bind(id, actor.organizationId, material?.id ?? null, document.id, document.title, sourceVersion, document.checksum, INDEX_VERSION, stamp, stamp).run()
+      ).bind(id, actor.organizationId, material?.id ?? null, document.id, document.title, sourceVersion, document.checksum, MATERIAL_EVIDENCE_INDEX_VERSION, stamp, stamp).run()
       evidence = { id }
     } else {
       await this.env.DB.prepare(
         `UPDATE material_evidence_documents
          SET material_id = ?, source_title = ?, content_hash = ?, approval_status = 'APPROVED',
              extraction_status = CASE WHEN reviewed_text IS NULL THEN 'QUEUED' ELSE 'QUEUED' END,
-             error_code = NULL, updated_at = ?
+             error_code = NULL, index_version = ?, updated_at = ?
          WHERE id = ? AND organization_id = ?`,
-      ).bind(material?.id ?? null, document.title, document.checksum, stamp, evidence.id, actor.organizationId).run()
+      ).bind(material?.id ?? null, document.title, document.checksum, MATERIAL_EVIDENCE_INDEX_VERSION, stamp, evidence.id, actor.organizationId).run()
     }
     const action = (await this.evidenceDocument(evidence.id, actor.organizationId))?.reviewed_text ? 'INDEX' : 'EXTRACT'
     const job = await this.enqueue(actor, evidence.id, action, idempotencyKey)
@@ -394,8 +395,8 @@ export class MaterialEvidenceRag {
     await this.env.DB.prepare(
       `UPDATE material_evidence_documents
        SET reviewed_text = ?, extraction_status = 'QUEUED', reviewed_by_user_id = ?, reviewed_at = ?,
-           error_code = NULL, updated_at = ? WHERE id = ? AND organization_id = ?`,
-    ).bind(reviewedText, actor.userId, now(), now(), evidence.id, actor.organizationId).run()
+           error_code = NULL, index_version = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
+    ).bind(reviewedText, actor.userId, now(), MATERIAL_EVIDENCE_INDEX_VERSION, now(), evidence.id, actor.organizationId).run()
     const job = await this.enqueue(actor, evidence.id, 'INDEX', payload.idempotencyKey)
     await this.audit(actor, 'material-evidence.document.reviewed', document.id)
     return { evidenceDocumentId: evidence.id, ...job }
@@ -410,9 +411,9 @@ export class MaterialEvidenceRag {
     ).bind(actor.organizationId, document.id).first<{ id: string; reviewed_text: string | null }>()
     if (!evidence) return this.queueDocumentExtraction(actor, documentId, idempotencyKey)
     await this.env.DB.prepare(
-      `UPDATE material_evidence_documents SET extraction_status = 'QUEUED', error_code = NULL, updated_at = ?
+      `UPDATE material_evidence_documents SET extraction_status = 'QUEUED', error_code = NULL, index_version = ?, updated_at = ?
        WHERE id = ? AND organization_id = ?`,
-    ).bind(now(), evidence.id, actor.organizationId).run()
+    ).bind(MATERIAL_EVIDENCE_INDEX_VERSION, now(), evidence.id, actor.organizationId).run()
     const job = await this.enqueue(actor, evidence.id, evidence.reviewed_text ? 'INDEX' : 'EXTRACT', idempotencyKey)
     await this.audit(actor, 'material-evidence.document.retry.queued', document.id)
     return { evidenceDocumentId: evidence.id, ...job }
@@ -508,14 +509,14 @@ export class MaterialEvidenceRag {
     const documentIds = request.documentIds ?? []
     const sourceKinds = request.sourceKinds ?? ['MATERIAL', 'DOCUMENT']
     const queryInput = { text: [request.query] }
-    const embeddings = await this.env.AI.run(EMBEDDING_MODEL, queryInput)
+    const embeddings = await this.env.AI.run(MATERIAL_EVIDENCE_EMBEDDING_MODEL, queryInput)
     const vector = embeddings.data?.[0]
-    if (!Array.isArray(vector) || vector.length !== 768) throw new UnprocessableEntityException('Material evidence embedding provider returned an invalid vector')
+    if (!Array.isArray(vector) || vector.length !== MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS) throw new UnprocessableEntityException('Material evidence embedding provider returned an invalid vector')
     const topK = request.topK ?? 6
     const scopes = materialEvidenceQueryScopes(actor.organizationId, sourceKinds)
     const scopedMatches: Array<{ id: string; score: number; organizationId: string; sourceKinds: Array<'MATERIAL' | 'DOCUMENT'> }> = []
     for (const scope of scopes) {
-      const filter: Record<string, unknown> = { organizationId: scope.organizationId, status: 'READY', indexVersion: INDEX_VERSION }
+      const filter: Record<string, unknown> = { organizationId: scope.organizationId, status: 'READY', indexVersion: MATERIAL_EVIDENCE_INDEX_VERSION }
       filter.sourceKind = scope.sourceKinds.length === 1 ? scope.sourceKinds[0] : { $in: scope.sourceKinds }
       if (materialIds.length) filter.materialId = materialIds.length === 1 ? materialIds[0] : { $in: materialIds }
       if (documentIds.length && scope.organizationId === actor.organizationId) filter.documentId = documentIds.length === 1 ? documentIds[0] : { $in: documentIds }
@@ -532,6 +533,7 @@ export class MaterialEvidenceRag {
          JOIN material_evidence_documents d ON d.id = c.evidence_document_id AND d.organization_id = c.organization_id
          WHERE c.organization_id = ? AND c.vector_id = ? AND c.status = 'READY'
            AND d.extraction_status = 'READY' AND d.approval_status = 'APPROVED'
+           AND c.index_version = ? AND d.index_version = ?
            ${materialIds.length ? `AND d.material_id IN (${materialIds.map(() => '?').join(', ')})` : ''}
            ${scopedDocumentIds.length ? `AND d.document_id IN (${scopedDocumentIds.map(() => '?').join(', ')})` : ''}
            ${match.sourceKinds.length ? `AND d.source_kind IN (${match.sourceKinds.map(() => '?').join(', ')})` : ''}
@@ -539,6 +541,8 @@ export class MaterialEvidenceRag {
       ).bind(
         match.organizationId,
         match.id,
+        MATERIAL_EVIDENCE_INDEX_VERSION,
+        MATERIAL_EVIDENCE_INDEX_VERSION,
         ...materialIds,
         ...scopedDocumentIds,
         ...match.sourceKinds,
@@ -737,13 +741,13 @@ export class MaterialEvidenceRag {
     const vectors: Array<{ id: string; values: number[]; metadata: Record<string, string | number | boolean> }> = []
     const chunkRows: Array<{ id: string; vectorId: string; index: number; excerpt: string; hash: string }> = []
     for (let index = 0; index < chunks.length; index += 1) {
-      const data = await this.env.AI.run(EMBEDDING_MODEL, { text: [chunks[index]] })
+      const data = await this.env.AI.run(MATERIAL_EVIDENCE_EMBEDDING_MODEL, { text: [chunks[index]] })
       const values = data.data?.[0]
-      if (!Array.isArray(values) || values.length !== 768) throw new UnprocessableEntityException('Material evidence embedding provider returned an invalid vector')
-      const vectorId = `${row.organization_id}:${row.id}:${INDEX_VERSION}:${index}`
+      if (!Array.isArray(values) || values.length !== MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS) throw new UnprocessableEntityException('Material evidence embedding provider returned an invalid vector')
+      const vectorId = `${row.organization_id}:${row.id}:${MATERIAL_EVIDENCE_INDEX_VERSION}:${index}`
       vectors.push({ id: vectorId, values, metadata: {
         organizationId: row.organization_id, sourceKind: row.source_kind, materialId: row.material_id ?? 'global',
-        documentId: row.document_id ?? 'none', status: 'READY', indexVersion: INDEX_VERSION,
+        documentId: row.document_id ?? 'none', status: 'READY', indexVersion: MATERIAL_EVIDENCE_INDEX_VERSION,
       } })
       chunkRows.push({ id: uuid(), vectorId, index, excerpt: safeEvidenceExcerpt(chunks[index], MAX_CHUNK_CHARS), hash: await sha256(chunks[index]) })
     }
@@ -754,11 +758,11 @@ export class MaterialEvidenceRag {
         `INSERT INTO material_evidence_chunks (
           id, organization_id, evidence_document_id, vector_id, chunk_index, excerpt, content_hash, status, index_version, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'READY', ?, ?, ?)`,
-      ).bind(chunk.id, row.organization_id, row.id, chunk.vectorId, chunk.index, chunk.excerpt, chunk.hash, INDEX_VERSION, stamp, stamp)),
+      ).bind(chunk.id, row.organization_id, row.id, chunk.vectorId, chunk.index, chunk.excerpt, chunk.hash, MATERIAL_EVIDENCE_INDEX_VERSION, stamp, stamp)),
       this.env.DB.prepare(
         `UPDATE material_evidence_documents
-         SET extraction_status = 'READY', error_code = NULL, indexed_at = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
-      ).bind(stamp, stamp, row.id, row.organization_id),
+         SET extraction_status = 'READY', error_code = NULL, index_version = ?, indexed_at = ?, updated_at = ? WHERE id = ? AND organization_id = ?`,
+      ).bind(MATERIAL_EVIDENCE_INDEX_VERSION, stamp, stamp, row.id, row.organization_id),
     ])
     return 'READY' as const
   }
@@ -825,17 +829,17 @@ export class MaterialEvidenceRag {
        FROM material_records m
        LEFT JOIN material_evidence_documents d
          ON d.organization_id = ? AND d.source_kind = 'MATERIAL' AND d.material_id = m.id
-        AND d.extraction_status != 'INVALIDATED'
+        AND d.extraction_status != 'INVALIDATED' AND d.index_version = ?
        WHERE m.library_scope = 'GLOBAL' AND d.id IS NULL
        ORDER BY m.name ASC LIMIT ?`,
-    ).bind(GLOBAL_LIBRARY_ORGANIZATION_ID, Math.min(Math.max(1, limit), 8)).all<{ id: string }>()
+    ).bind(GLOBAL_LIBRARY_ORGANIZATION_ID, MATERIAL_EVIDENCE_INDEX_VERSION, Math.min(Math.max(1, limit), 8)).all<{ id: string }>()
     const actor: MaterialEvidenceActor = {
       organizationId: GLOBAL_LIBRARY_ORGANIZATION_ID,
       userId: 'system:global-material-curator',
       permissions: ['documents.view', 'documents.manage', 'materials.view'],
     }
     for (const material of rows.results ?? []) {
-      await this.queueMaterial(actor, material.id, `global-material-bootstrap:${INDEX_VERSION}:${material.id}`)
+      await this.queueMaterial(actor, material.id, `global-material-bootstrap:${MATERIAL_EVIDENCE_INDEX_VERSION}:${material.id}`)
     }
     return { queued: rows.results?.length ?? 0, state: 'QUEUED' as const }
   }

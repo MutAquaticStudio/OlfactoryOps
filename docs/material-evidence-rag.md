@@ -53,25 +53,29 @@ decisions. Those decisions remain in the deterministic domain services.
 
 ## Cloudflare Setup
 
-Create two Vectorize indexes before binding a Worker. The current embedding
-model is `@cf/baai/bge-base-en-v1.5`, which uses 768 dimensions and cosine
-metric.
+Create two Vectorize v2 indexes before binding a Worker. The current embedding
+model is the multilingual `@cf/baai/bge-m3`, which returns 1,024 dimensions in
+the deployed Workers AI contract and uses cosine distance. Version 1 indexes
+remain available only as a short rollback path and are not queried after the
+v2 cutover.
 
 ```powershell
-npx.cmd wrangler vectorize create olfactoryops-material-evidence-test --dimensions=768 --metric=cosine
-npx.cmd wrangler vectorize create olfactoryops-material-evidence --dimensions=768 --metric=cosine
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=organizationId --type=string
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=status --type=string
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=materialId --type=string
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=documentId --type=string
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=sourceKind --type=string
-npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test --propertyName=indexVersion --type=number
+npx.cmd wrangler vectorize create olfactoryops-material-evidence-test-v2 --dimensions=1024 --metric=cosine
+npx.cmd wrangler vectorize create olfactoryops-material-evidence-v2 --dimensions=1024 --metric=cosine
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=organizationId --type=string
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=status --type=string
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=materialId --type=string
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=documentId --type=string
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=sourceKind --type=string
+npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-test-v2 --propertyName=indexVersion --type=number
 ```
 
 Repeat metadata indexes for production. Add the `AI` and `RAG_INDEX` bindings
 in the matching Wrangler configuration, apply migration `0033` to the target
-D1 database, then deploy the Worker. Until both bindings exist, the API returns
-`Not configured` and does not produce synthetic citations.
+D1 database, then deploy the Worker. Cron re-indexes curated global materials
+with `index_version=2`; D1 rejects stale v1 chunks during retrieval. Until both
+bindings exist, the API returns `Not configured` and does not produce synthetic
+citations.
 
 ## Operational Limits
 
