@@ -10,9 +10,12 @@ import App from './App.tsx'
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     const reloadKey = 'olfactoryops.service-worker-reloaded'
+    const hadExistingController = Boolean(navigator.serviceWorker.controller)
     let reloading = false
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloading || window.sessionStorage.getItem(reloadKey) === '1') return
+      // A first visit receives its initial controller here. Only refresh a tab that
+      // was already controlled, so a cache upgrade is invisible to new visitors.
+      if (!hadExistingController || reloading || window.sessionStorage.getItem(reloadKey) === '1') return
       reloading = true
       window.sessionStorage.setItem(reloadKey, '1')
       window.location.reload()

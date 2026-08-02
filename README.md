@@ -322,9 +322,10 @@ Readiness sẽ báo `Not configured` đến khi đủ secret; đây là trạng 
 không phải kết quả provision giả.
 
 Pages PWA dùng cache shell có version. Mỗi checkpoint thay đổi cache revision và
-Worker mới gọi `skipWaiting`/`clients.claim`; browser đang mở được reload một lần
-khi service worker mới nhận quyền. Cách này tránh giữ UI signup hoặc policy cũ
-sau deploy mà vẫn chỉ dùng cache shell làm offline fallback.
+Worker mới gọi `skipWaiting`/`clients.claim`; chỉ tab đang được service worker cũ
+điều khiển mới reload một lần khi phiên bản mới nhận quyền. Lượt truy cập đầu tiên
+không bị reload. Cách này tránh giữ UI signup hoặc policy cũ sau deploy mà vẫn chỉ
+dùng cache shell làm offline fallback.
 
 ### Luồng dữ liệu
 
