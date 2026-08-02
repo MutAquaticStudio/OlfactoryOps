@@ -1,4 +1,4 @@
-const CACHE_NAME = 'olfactoryops-shell-v1'
+const CACHE_NAME = 'olfactoryops-shell-v2'
 const APP_SHELL = ['/', '/manifest.webmanifest', '/olfactoryops-mark.svg']
 
 self.addEventListener('install', (event) => {

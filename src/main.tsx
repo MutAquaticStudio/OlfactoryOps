@@ -9,7 +9,16 @@ import App from './App.tsx'
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js')
+    const reloadKey = 'olfactoryops.service-worker-reloaded'
+    let reloading = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading || window.sessionStorage.getItem(reloadKey) === '1') return
+      reloading = true
+      window.sessionStorage.setItem(reloadKey, '1')
+      window.location.reload()
+    })
+    void navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .then((registration) => registration.update())
   })
 }
 

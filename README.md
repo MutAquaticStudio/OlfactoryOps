@@ -321,6 +321,11 @@ phải URL có `https://` và không phải hostname khách hàng. Integration
 Readiness sẽ báo `Not configured` đến khi đủ secret; đây là trạng thái an toàn,
 không phải kết quả provision giả.
 
+Pages PWA dùng cache shell có version. Mỗi checkpoint thay đổi cache revision và
+Worker mới gọi `skipWaiting`/`clients.claim`; browser đang mở được reload một lần
+khi service worker mới nhận quyền. Cách này tránh giữ UI signup hoặc policy cũ
+sau deploy mà vẫn chỉ dùng cache shell làm offline fallback.
+
 ### Luồng dữ liệu
 
 **Operational mutation**
