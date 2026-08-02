@@ -502,6 +502,7 @@ Provider secret chỉ nằm ở Cloudflare Worker. Không có <code>STRIPE_*</co
 - **PWA và QR:** Production build đăng ký privacy-safe app-shell service worker; API response không cache. Inventory quét QR lot qua browser camera và chỉ chọn lot trong workspace hiện tại.
 - **Notification và legal:** Member inbox hỗ trợ invitation, security, billing, low-stock và expiry. Password-reset token one-time/hash; legal consent có version; member tải scoped JSON personal-data export hoặc yêu cầu erasure review.
 - **Observability và ngôn ngữ:** <code>GET /api/v1/status</code> báo D1 và số slow/error event gần đây. Optional Sentry chỉ nhận route, status, duration cho Worker 5xx. Tenant locale hỗ trợ English/Vietnamese ở shell, navigation, authentication và notification; dữ liệu hương liệu kỹ thuật giữ language-neutral.
+- Cửa sổ health 15 phút chuẩn hóa timestamp ISO qua <code>julianday()</code>, vì vậy lỗi cron cũ không giữ API ở trạng thái <code>degraded</code> sau khi đã hết thời gian quan sát.
 
 Public status page tại <code>/status.html</code> trên test Pages, Vercel beta hoặc production frontend host. Trang chỉ poll public health endpoint và không lộ workspace data.
 

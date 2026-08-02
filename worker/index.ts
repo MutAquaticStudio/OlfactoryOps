@@ -1784,7 +1784,7 @@ async function publicStatus(env: Env) {
           SUM(CASE WHEN category = 'error' THEN 1 ELSE 0 END) AS error_count,
           SUM(CASE WHEN category = 'latency' THEN 1 ELSE 0 END) AS slow_count
          FROM runtime_events
-         WHERE occurred_at >= datetime('now', '-15 minutes')`,
+         WHERE julianday(occurred_at) >= julianday('now', '-15 minutes')`,
       )
       .first<{ error_count: number | null; slow_count: number | null }>()
     const errorCount = Number(telemetry?.error_count ?? 0)
