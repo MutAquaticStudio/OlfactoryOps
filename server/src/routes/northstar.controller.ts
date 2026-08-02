@@ -234,6 +234,7 @@ export class NorthStarController {
       odor?: string[]
       source?: string
       version?: string
+      libraryScope?: 'GLOBAL' | 'TENANT'
     },
   ) {
     return this.northStar.createMaterial(body)

@@ -1012,6 +1012,11 @@ export class NorthStarService {
   createMaterial(body: MaterialMutationBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.create')
+    const mayPublishGlobal = this.isGlobalMaterialCurator(session)
+    if (body.libraryScope === 'GLOBAL' && !mayPublishGlobal) {
+      throw new ForbiddenException('Only an OlfactoryOps library curator can publish a shared material')
+    }
+    const libraryScope = body.libraryScope === 'TENANT' || !mayPublishGlobal ? 'TENANT' : 'GLOBAL'
     const name = body.name?.trim()
     const cas = body.cas?.trim()
     if (!name) {
@@ -1028,8 +1033,8 @@ export class NorthStarService {
     const materialId = `mat-${slug}-${this.shortId().toLowerCase()}`
     const material: Material = {
       id: materialId,
-      libraryScope: 'TENANT',
-      organizationId: session.organizationId,
+      libraryScope,
+      ...(libraryScope === 'TENANT' ? { organizationId: session.organizationId } : {}),
       name,
       cas,
       family: body.family?.trim() || 'Unclassified',
@@ -1052,8 +1057,16 @@ export class NorthStarService {
       ],
     }
     this.materialRecords = [material, ...this.materialRecords]
-    const audit = this.recordAudit('material.create', material.id, session.userId, 'allowed')
-    return { data: { material, audit, invariant: 'material master create does not create stock' } }
+    const audit = this.recordAudit(libraryScope === 'GLOBAL' ? 'material.global.publish' : 'material.create', material.id, session.userId, 'allowed')
+    return {
+      data: {
+        material,
+        audit,
+        invariant: libraryScope === 'GLOBAL'
+          ? 'curator material is published to the shared library without creating stock'
+          : 'tenant material remains workspace-private and does not create stock',
+      },
+    }
   }
 
   formulas() {
@@ -8941,7 +8954,7 @@ export class NorthStarService {
       return { data: { job: existing, idempotent: true } }
     }
     const errors = entity === 'materials'
-      ? this.materialImportIssues(rows, session.organizationId)
+      ? this.materialImportIssues(rows, session)
       : this.lotImportIssues(rows, session)
     const invalidRows = new Set(errors.map((issue) => issue.row)).size
     const now = new Date().toISOString()
@@ -8976,7 +8989,7 @@ export class NorthStarService {
       return { data: { job, created: 0, idempotent: true } }
     }
     const errors = job.entity === 'materials'
-      ? this.materialImportIssues(job.rows, session.organizationId)
+      ? this.materialImportIssues(job.rows, session)
       : this.lotImportIssues(job.rows, session)
     if (errors.length > 0) {
       const failed = { ...job, status: 'FAILED' as const, errors, invalidRows: new Set(errors.map((issue) => issue.row)).size }
@@ -8998,7 +9011,7 @@ export class NorthStarService {
           version: 'import-v1',
         })
       } else {
-        const material = this.importMaterialForLot(row, session.organizationId)
+        const material = this.importMaterialForLot(row, session)
         if (!material) {
           throw new UnprocessableEntityException('Imported lot material could not be matched')
         }
@@ -9047,9 +9060,10 @@ export class NorthStarService {
     return notification
   }
 
-  private materialImportIssues(rows: Array<Record<string, unknown>>, organizationId: string) {
+  private materialImportIssues(rows: Array<Record<string, unknown>>, session: AuthSession) {
     const errors: DataImportIssue[] = []
     const seenCas = new Set<string>()
+    const visibleMaterials = this.materialCatalogForSession(session)
     rows.forEach((row, index) => {
       const line = index + 2
       const name = this.importString(row.name)
@@ -9059,7 +9073,7 @@ export class NorthStarService {
       const normalizedCas = cas.toLowerCase()
       if (normalizedCas && seenCas.has(normalizedCas)) errors.push({ row: line, field: 'cas', message: 'CAS is duplicated in this file' })
       seenCas.add(normalizedCas)
-      if (this.materialRecords.some((material) => (material.organizationId || 'org-nxl') === organizationId && material.cas.toLowerCase() === normalizedCas)) {
+      if (visibleMaterials.some((material) => material.cas.toLowerCase() === normalizedCas)) {
         errors.push({ row: line, field: 'cas', message: 'CAS already exists in this workspace' })
       }
       if (this.importNumber(row.costPerGram, -1) < 0) errors.push({ row: line, field: 'costPerGram', message: 'Cost per gram cannot be negative' })
@@ -9078,19 +9092,18 @@ export class NorthStarService {
       if (lotNumber && seenLots.has(lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number is duplicated in this file' })
       seenLots.add(lotNumber.toLowerCase())
       if (this.lotsForSession(session).some((lot) => lot.lotNumber.toLowerCase() === lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number already exists in this workspace' })
-      if (!this.importMaterialForLot(row, session.organizationId, false)) errors.push({ row: line, field: 'material', message: 'Material ID, CAS, or name could not be matched' })
+      if (!this.importMaterialForLot(row, session, false)) errors.push({ row: line, field: 'material', message: 'Material ID, CAS, or name could not be matched' })
       if (this.importNumber(row.quantityGrams, 0) <= 0) errors.push({ row: line, field: 'quantityGrams', message: 'Quantity grams must be greater than 0' })
       if (!/^\d{4}-\d{2}-\d{2}$/.test(this.importString(row.expiryDate))) errors.push({ row: line, field: 'expiryDate', message: 'Expiry date must use YYYY-MM-DD' })
     })
     return errors
   }
 
-  private importMaterialForLot(row: Record<string, unknown>, organizationId: string, throwIfMissing = true) {
+  private importMaterialForLot(row: Record<string, unknown>, session: AuthSession, throwIfMissing = true) {
     const materialId = this.importString(row.materialId)
     const materialCas = this.importString(row.materialCas || row.cas)
     const materialName = this.importString(row.materialName || row.material)
-    const material = this.materialRecords.find((candidate) =>
-      (candidate.organizationId || 'org-nxl') === organizationId &&
+    const material = this.materialCatalogForSession(session).find((candidate) =>
       (candidate.id === materialId || candidate.cas.toLowerCase() === materialCas.toLowerCase() || candidate.name.toLowerCase() === materialName.toLowerCase()),
     )
     if (!material && throwIfMissing) throw new UnprocessableEntityException('Imported lot material could not be matched')
@@ -12176,11 +12189,15 @@ export class NorthStarService {
   }
 
   private requireGlobalMaterialCurator(session: AuthSession) {
-    const role = this.normalizeRoleForPermission(session.role)
-    const curatorRole = role === 'Owner' || role === 'Admin' || role === 'Manager' || role === 'Lab Manager'
-    if (session.organizationId !== materialLibraryCuratorOrganizationId || !curatorRole) {
+    if (!this.isGlobalMaterialCurator(session)) {
       throw new ForbiddenException('Shared material library updates require an OlfactoryOps library curator')
     }
+  }
+
+  private isGlobalMaterialCurator(session: AuthSession) {
+    const role = this.normalizeRoleForPermission(session.role)
+    const curatorRole = role === 'Owner' || role === 'Admin' || role === 'Manager' || role === 'Lab Manager'
+    return session.organizationId === materialLibraryCuratorOrganizationId && curatorRole
   }
 
   private assertMaterialMetadataWriteAllowed(material: Material, session: AuthSession) {

@@ -5393,7 +5393,9 @@ function MaterialWorkspace({
       })
       upsertMaterial(payload.material)
       setCreateName('')
-      setMaterialStatus(`${payload.material.name} created without stock movement`)
+      setMaterialStatus(payload.material.libraryScope === 'GLOBAL'
+        ? `${payload.material.name} published to the shared library without stock movement`
+        : `${payload.material.name} created privately for this workspace without stock movement`)
     } catch (error) {
       setMaterialStatus(
         error instanceof Error ? error.message : 'Material create blocked; check required fields or duplicate CAS',
@@ -5487,7 +5489,11 @@ function MaterialWorkspace({
       const refreshed = await requestApi<Material[]>('/materials')
       onMaterialsChange(refreshed)
       setImportJob(payload.job)
-      setImportStatus(`Imported ${payload.created} ${importEntity === 'materials' ? 'material' : 'inventory lot'} record(s).`)
+      setImportStatus(
+        importEntity === 'materials'
+          ? `Imported ${payload.created} material record(s) ${canCurateSharedMaterials ? 'to the shared library' : 'privately into this workspace'}.`
+          : `Imported ${payload.created} inventory lot record(s).`,
+      )
     } catch (error) {
       setImportStatus(error instanceof Error ? error.message : 'Import commit failed')
     } finally {
@@ -5670,10 +5676,14 @@ function MaterialWorkspace({
             disabled={!canCreateMaterials || !createName.trim() || !createCas.trim()}
           >
             <Plus size={16} />
-            Create material
+            {canCurateSharedMaterials ? 'Publish material' : 'Create material'}
           </button>
         </div>
-        <p className="helper-copy">New materials and material imports belong only to this workspace. Shared library records are published separately by OlfactoryOps curators.</p>
+        <p className="helper-copy">
+          {canCurateSharedMaterials
+            ? 'You are publishing as an OlfactoryOps curator. New materials and material imports become part of the shared library for every workspace.'
+            : 'New materials and material imports belong only to this workspace. Other tenants cannot search, edit, or use them.'}
+        </p>
         <section className="import-panel" aria-label="Data import">
           <div className="section-heading compact-heading">
             <div>

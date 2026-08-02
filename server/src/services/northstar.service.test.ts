@@ -549,6 +549,12 @@ describe('NorthStarService', () => {
       name: 'NOXELIS Private Material',
       cas: '98765-43-2',
       costPerGram: 0.14,
+      libraryScope: 'TENANT',
+    }).data.material
+    const publishedMaterial = service.createMaterial({
+      name: 'OlfactoryOps Shared Material',
+      cas: '98765-43-3',
+      costPerGram: 0.18,
     }).data.material
     const signup = service.signup({
       email: 'scope.owner@example.test',
@@ -562,6 +568,10 @@ describe('NorthStarService', () => {
     const sharedBergamot = service.materials().data.find((material) => material.id === 'mat-bergamot')
     expect(sharedBergamot).toMatchObject({ libraryScope: 'GLOBAL' })
     expect(sharedBergamot?.organizationId).toBeUndefined()
+    expect(service.materials().data).toContainEqual(expect.objectContaining({
+      id: publishedMaterial.id,
+      libraryScope: 'GLOBAL',
+    }))
     expect(service.materials().data.some((material) => material.id === privateMaterial.id)).toBe(false)
     expect(() => service.material(privateMaterial.id)).toThrow(/not found/i)
     expect(() => service.compareSupplierRfq({ materialId: privateMaterial.id, quantityGrams: 50 })).toThrow(/not found/i)
@@ -572,7 +582,19 @@ describe('NorthStarService', () => {
       cas: '67890-12-3',
       costPerGram: 0.14,
     }).data.material
+    expect(() => service.createMaterial({
+      name: 'Unauthorized Shared Material',
+      cas: '67890-12-4',
+      libraryScope: 'GLOBAL',
+    })).toThrow(ForbiddenException)
     const updatedOwnMaterial = service.updateMaterial(ownMaterial.id, { family: 'Tenant-owned citrus' }).data.material
+    const privateImport = service.previewImport({
+      entity: 'materials',
+      fileName: 'tenant-private-materials.csv',
+      rows: [{ name: 'Tenant Imported Material', cas: '67890-12-5', family: 'Private floral', costPerGram: 0.1, ifraLimit: 100 }],
+    }).data.job
+    service.commitImport(privateImport.id)
+    const importedPrivateMaterial = service.materials().data.find((material) => material.cas === '67890-12-5')
     service.createSupplier({
       name: 'Scope Tenant Supplier',
       country: 'TH',
@@ -586,6 +608,10 @@ describe('NorthStarService', () => {
       libraryScope: 'TENANT',
       organizationId: signup.organization.id,
       family: 'Tenant-owned citrus',
+    })
+    expect(importedPrivateMaterial).toMatchObject({
+      libraryScope: 'TENANT',
+      organizationId: signup.organization.id,
     })
     expect(service.materialDedupe('67890-12-3').data.matches).toHaveLength(1)
     expect(comparison.materialId).toBe(ownMaterial.id)
@@ -1387,7 +1413,7 @@ describe('NorthStarService', () => {
     expect(() => service.updateBranding({ accentColor: 'blue' })).toThrow(UnprocessableEntityException)
   })
 
-  it('creates materials with CAS duplicate guard and no stock side effect', () => {
+  it('publishes curator-created materials globally with CAS duplicate guard and no stock side effect', () => {
     const service = createAuthenticatedService()
     const beforeStockRows = service.inventorySummary().data.length
     const result = service.createMaterial({
@@ -1404,10 +1430,10 @@ describe('NorthStarService', () => {
     const dedupe = service.materialDedupe('9999999-99-9').data
 
     expect(result.material.id).toMatch(/^mat-test-only-vetiver-material-[a-z0-9]+$/)
-    expect(result.material.libraryScope).toBe('TENANT')
-    expect(result.material.organizationId).toBe('org-nxl')
-    expect(result.audit.action).toBe('material.create')
-    expect(result.invariant).toContain('does not create stock')
+    expect(result.material.libraryScope).toBe('GLOBAL')
+    expect(result.material.organizationId).toBeUndefined()
+    expect(result.audit.action).toBe('material.global.publish')
+    expect(result.invariant).toContain('without creating stock')
     expect(dedupe.duplicate).toBe(true)
     expect(service.inventorySummary().data.length).toBe(beforeStockRows + 1)
     expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '9999999-99-9' })).toThrow(
@@ -3058,7 +3084,9 @@ describe('NorthStarService', () => {
     const commit = service.commitImport(preview.job.id).data
     expect(commit.created).toBe(1)
     expect(service.commitImport(preview.job.id).data.idempotent).toBe(true)
-    expect(service.materials().data.some((material) => material.cas === '9000-00-1')).toBe(true)
+    const importedMaterial = service.materials().data.find((material) => material.cas === '9000-00-1')
+    expect(importedMaterial?.libraryScope).toBe('GLOBAL')
+    expect(importedMaterial?.organizationId).toBeUndefined()
   })
 
   it('dry-runs lot imports and activates a custom hostname only after provider confirmation', () => {
