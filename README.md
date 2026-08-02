@@ -279,6 +279,12 @@ Authentication không cấp quyền cross-tenant. Owner/Admin vẫn bị giới 
 - **Production:** Cloudflare Pages phục vụ public/workspace frontend; Worker <code>olfactoryops-api</code> dùng D1 và Vectorize index production. Production binding, custom domain và provider secret được cấu hình trong Cloudflare, không commit vào Git hoặc đưa ra frontend.
 - <code>wrangler.test.toml</code> là cấu hình test; <code>wrangler.toml</code> là production binding. Luôn chạy migration trên đúng D1 database trước khi deploy Worker.
 
+### Vệ sinh dữ liệu môi trường
+
+- Tại checkpoint ngày 02/08/2026, D1 test và production chỉ giữ workspace owner <code>org-nxl</code>. Các tenant signup/demo/QA tự động, dữ liệu tenant-scoped, credential mồ côi, rate-limit tạm và snapshot legacy đã được xóa sau khi xác nhận normalized-state cutover hoàn tất.
+- Việc xóa tenant phải lấy D1 Time Travel bookmark trước, xóa từ <code>tenant_organizations</code> để kích hoạt cascade, rồi kiểm tra toàn bộ bảng có <code>organization_id</code> không còn dữ liệu ngoài owner. Không xóa global material/evidence thuộc <code>org-nxl</code> và không commit bookmark phục hồi vào Git.
+- QA tenant chỉ được tạo trong D1 test, phải dùng tên/email nhận diện tự động và được dọn sau checkpoint. Production không được dùng cho signup, billing hoặc formula smoke test tự động.
+
 ### Luồng dữ liệu
 
 **Operational mutation**
