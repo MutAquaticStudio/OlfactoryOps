@@ -28,6 +28,7 @@ import {
   proposalFromFormulaVersion,
   sensoryMemoryEvidenceForDirection,
 } from '../src/data/formulaIntelligence.js'
+import { rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { FormulaIntelligenceTrialSource, Material } from '../src/data/northStar.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
@@ -1275,14 +1276,16 @@ async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknow
 
 export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
   const workspaceMaterials = service.materials().data
+  const researchMaterials = workspaceMaterials.filter((material) => material.catalogueSource?.status === 'SOURCE_ONLY')
   const catalog = workspaceMaterials
     .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
     .map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
   const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
   return {
     materials: approved,
+    researchMaterials,
     reviewedOnly: true as const,
-    sourceReferenceCount: workspaceMaterials.filter((material) => material.catalogueSource?.status === 'SOURCE_ONLY').length,
+    sourceReferenceCount: researchMaterials.length,
     workspaceMaterialCount: workspaceMaterials.length,
   }
 }
@@ -1345,18 +1348,33 @@ async function runDesignStudio(
   const materialCatalog = formulaIntelligenceMaterialCatalog(service)
   const materials = availabilityRankedMaterials(service, materialCatalog.materials)
   if (!materials.length) throw new UnprocessableEntityException('No eligible workspace materials are available for this design brief')
+  const masterReferences = rankLluchCatalogueGlobalMasterMaterials(
+    [researchPlan.searchQuery, ...researchPlan.focusNotes].join(' '),
+    8,
+  ).filter((material) => materialCatalog.researchMaterials.some((candidate) => candidate.id === material.id))
+  const evidenceMaterialIds = [...new Set([
+    ...masterReferences.map((material) => material.id),
+    ...materials.map((material) => material.id),
+  ])].slice(0, 12)
   const constraintSnapshot = config.constraintSnapshotId && config.briefVersionId
     ? await intelligence.pinMaterialUniverse(actor, run.id, config.constraintSnapshotId, materials)
     : undefined
-  await recordTool(store, run, searchId, 'search_materials', { query: researchPlan.searchQuery }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
+  await recordTool(store, run, searchId, 'search_materials', { query: researchPlan.searchQuery }, {
+    approvedMaterialIds: materials.slice(0, 12).map((material) => material.id),
+    masterReferenceIds: masterReferences.map((material) => material.id),
+  })
   const granted = new Set(service.me().data.permissions)
   const evidence = materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')
-    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: materials.slice(0, 12).map((material) => material.id), topK: 6 })
+    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds, topK: 6 })
     : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
   if (materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')) {
-    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: materials.slice(0, 12).map((material) => material.id) }, { state: evidence.state, citationCount: evidence.citations.length })
+    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
   }
-  await store.completeNode(run, searchId, 'search_materials', { materialCount: materials.length, evidenceState: evidence.state }, 28)
+  await store.completeNode(run, searchId, 'search_materials', {
+    materialCount: materials.length,
+    masterReferenceCount: masterReferences.length,
+    evidenceState: evidence.state,
+  }, 28)
   const sensoryMemory = service.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory') && granted.has('trials.view')
     ? service.workspaceSensoryMemory().data
     : undefined
@@ -1423,8 +1441,8 @@ async function runDesignStudio(
   )
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: constraintSnapshot ? 3 : 2, directionCount: directions.length }, 94)
   await store.createAssistantMessage(run, modelProvider.kind === 'workers_ai'
-    ? 'Cloudflare Workers AI interpreted the creative brief and requested a governed material search. Three directions were then calculated and validated against reviewed workspace materials, inventory visibility, and compliance gates.'
-    : 'I prepared three deterministic design directions from reviewed workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
+    ? `Cloudflare Workers AI interpreted the creative brief and searched ${masterReferences.length} global master references with governed evidence retrieval. Three directions were calculated only from reviewed workspace materials, inventory visibility, and compliance gates.`
+    : `I reviewed ${masterReferences.length} global master references as evidence and prepared three deterministic directions from reviewed workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.`)
 }
 
 async function runOptimizer(

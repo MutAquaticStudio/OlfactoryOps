@@ -57,10 +57,13 @@ nhất cho deterministic direction generation ở cả Worker beta và local API
 
 Catalogue supplier ở trạng thái `SOURCE_ONLY`, material chưa review, material
 bị `BLOCKED`, hoặc ID không thuộc workspace không thể được chọn làm required
-material và không thể xuất hiện trong direction. Inventory chỉ được kiểm tra
+material hay thành phần của direction có thể lưu. Tuy nhiên, catalogue global
+được dùng ở bước **research**: Formula Agent và Design Studio tìm các global
+master reference phù hợp, rồi RAG chỉ trả về citation/excerpt bị giới hạn từ
+supplier-declared evidence. Inventory chỉ được kiểm tra cho material đã review
 khi tạo direction để xếp hạng tính khả dụng; bước này không reserve hay consume
 stock. Nếu chưa có Material nào được phê duyệt, Studio hiển thị trạng thái rõ
-ràng và yêu cầu hoàn tất review trong **Materials** trước khi generate.
+ràng và yêu cầu hoàn tất review trong **Materials** trước khi generate công thức.
 
 API và giao diện phân biệt rõ **formula-ready materials** với **supplier
 references**. 1.986 dòng Lluch là nguồn nhận dạng và truy xuất trong Materials,
@@ -262,7 +265,8 @@ flowchart LR
 - Toàn bộ 1.986 sản phẩm Lluch hiện xuất hiện trực tiếp trong **Materials**, không có catalogue workspace riêng. Có thể tìm bằng product name, CAS, EINECS, FEMA hoặc supplier; hàng catalogue có nhãn **Needs review** và liên kết về supplier/category/page.
 - Hàng Lluch source-only có thể được khám phá và chọn để bổ sung dữ liệu, nhưng không xuất hiện trong Inventory khi chưa có lot. Snapshot Lluch Platform do NOX Lab trích xuất đã bổ sung supplier-declared odour, appearance, chemical identification và declared use cho toàn bộ 1.986 dòng; 1.646 dòng có thêm density range. Đây là evidence supplier hiển thị trực tiếp trong **Materials**, không phải chứng nhận kỹ thuật đã phê duyệt.
 - 11 profile biên tập NOX Lab được nối bằng exact CAS, gồm descriptor, strength, diffusion, tenacity, volatility và formula role. Các profile này chỉ là sensory guidance; chúng không tạo IFRA limit, allergen declaration, EU/UK regulatory flag, commercial cost, molecular weight, LogP hoặc vapor pressure. Khi supplier không công bố một trường, UI hiển thị `Not documented`, không thay bằng `0` hoặc giá trị suy diễn.
-- Compliance vẫn tách riêng và bắt buộc evidence-controlled: source-only material không thể vào Inventory, procurement, approved formula, Optimizer hoặc formula draft. Formula Agent và Design Studio chỉ dùng material đã được review/approved cho thành phần có thể lưu; catalogue profile chỉ hỗ trợ discovery và research cho tới khi chứng từ IFRA/SDS/CoA/allergen hợp lệ được review.
+- Toàn bộ 1.986 dòng là **global master reference** read-only: không thuộc tenant, dùng chung trong Materials, có thể được index vào Vectorize như supplier evidence và được truy xuất bởi RAG/Agent trong bước research. Indexing chạy bằng D1 job lease + retry; `SOURCE_ONLY` vẫn giữ nguyên cho tới khi platform curator review evidence chính thức.
+- Compliance vẫn tách riêng và bắt buộc evidence-controlled: source-only material không thể vào Inventory, procurement, approved formula, Optimizer hoặc formula draft. Formula Agent và Design Studio có thể dùng catalogue profile/citation để discovery, nhưng chỉ material đã được review/approved mới được dùng làm thành phần có thể lưu; chứng từ IFRA/SDS/CoA/allergen hợp lệ vẫn phải được review độc lập.
 
 ### Authentication và authorization
 
@@ -551,7 +555,7 @@ WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/openai/gpt-oss-120b"
 binding = "AI"
 ~~~
 
-RAG v2 dùng multilingual <code>@cf/baai/bge-m3</code> để tạo vector 1.024 chiều. Cron re-index material <code>GLOBAL</code> đã curated vào namespace hệ thống; query chỉ chấp nhận D1 chunk và Vectorize metadata có <code>indexVersion=2</code>. Tenant được truy xuất global material evidence và evidence riêng của chính mình; document evidence của tenant khác không bao giờ được truy xuất. Hai index 768 chiều v1 được giữ tạm để rollback nhưng không còn nằm trong binding live.
+RAG v2 dùng multilingual <code>@cf/baai/bge-m3</code> để tạo vector 1.024 chiều. Cron re-index material <code>GLOBAL</code> đã curated và preload dần 1.986 Lluch global master reference vào namespace hệ thống; query chỉ chấp nhận D1 chunk và Vectorize metadata có <code>indexVersion=2</code>. Agent dùng GPT-OSS-120B chỉ để tạo typed research plan; mọi retrieval, formula math, inventory, costing và compliance vẫn do tool/domain service có quyền kiểm soát. Tenant được truy xuất global material evidence và evidence riêng của chính mình; document evidence của tenant khác không bao giờ được truy xuất. Hai index 768 chiều v1 được giữ tạm để rollback nhưng không còn nằm trong binding live.
 
 ### Trải nghiệm Formula Design Studio
 

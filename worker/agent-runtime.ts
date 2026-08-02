@@ -18,6 +18,7 @@ import {
   type AgentRuntimeEvent,
   type AgentRunStatus,
 } from '../src/data/agentRuntime.js'
+import { rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { MaterialEvidenceRag } from './material-evidence-rag.js'
@@ -274,7 +275,7 @@ export const agentFunctionTools: AgentModelRequest['tools'] = [
   { name: 'validate_formula_math', description: 'Validate proposal material percentages total 100 percent.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
   { name: 'validate_compliance', description: 'Validate IFRA and workspace compliance evidence.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
   { name: 'find_material_substitutions', description: 'Suggest workspace-scoped alternatives only.', parameters: { type: 'object', properties: { materialId: { type: 'string', maxLength: 160 } }, required: ['materialId'], additionalProperties: false } },
-  { name: 'retrieve_material_evidence', description: 'Retrieve bounded citations from approved workspace material evidence.', parameters: { type: 'object', properties: { query: { type: 'string', maxLength: 320 }, materialIds: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 160 } } }, required: ['query'], additionalProperties: false } },
+  { name: 'retrieve_material_evidence', description: 'Retrieve bounded citations from permitted workspace evidence and the read-only global master material library.', parameters: { type: 'object', properties: { query: { type: 'string', maxLength: 320 }, materialIds: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 160 } } }, required: ['query'], additionalProperties: false } },
   { name: 'save_formula_draft', description: 'Request confirmation before creating a non-consuming draft.', parameters: { type: 'object', properties: { proposal: { type: 'object' } }, required: ['proposal'], additionalProperties: false } },
 ]
 
@@ -894,6 +895,14 @@ export function selectedMaterials(service: NorthStarService, brief: string) {
     .slice(0, Math.min(4, materialResult.length))
 }
 
+export function selectedGlobalMasterReferences(service: NorthStarService, brief: string, limit = 8) {
+  const visibleSourceIds = new Set(service.materials().data
+    .filter((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'SOURCE_ONLY')
+    .map((material) => material.id))
+  return rankLluchCatalogueGlobalMasterMaterials(brief, limit)
+    .filter((material) => visibleSourceIds.has(material.id))
+}
+
 function buildProposal(run: AgentRunRow, service: NorthStarService): AgentFormulaProposal {
   const materials = selectedMaterials(service, run.input_brief)
   if (materials.length === 0) throw new UnprocessableEntityException('No workspace materials are available for this research run')
@@ -967,15 +976,27 @@ export async function executeDeterministicAgentRun(
     await store.startNode(run, searchId, 'search_materials')
     const materialSearch = [researchPlan.searchQuery, ...researchPlan.focusNotes].join(' ').trim()
     const candidates = selectedMaterials(service, materialSearch)
-    await logTool(store, run, searchId, 'search_materials', { query: researchPlan.searchQuery }, { count: candidates.length, materialIds: candidates.map((item) => item.id) })
+    const masterReferences = selectedGlobalMasterReferences(service, materialSearch)
+    const evidenceMaterialIds = [...new Set([
+      ...masterReferences.map((material) => material.id),
+      ...candidates.map((material) => material.id),
+    ])].slice(0, 12)
+    await logTool(store, run, searchId, 'search_materials', { query: researchPlan.searchQuery }, {
+      approvedMaterialIds: candidates.map((item) => item.id),
+      masterReferenceIds: masterReferences.map((item) => item.id),
+    })
     const granted = new Set(service.me().data.permissions)
     const evidence = materialEvidence && granted.has('documents.view') && granted.has('materials.view')
-      ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: candidates.map((item) => item.id), topK: 6 })
+      ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds, topK: 6 })
       : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
     if (materialEvidence && granted.has('documents.view') && granted.has('materials.view')) {
-      await logTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: candidates.map((item) => item.id) }, { state: evidence.state, citationCount: evidence.citations.length })
+      await logTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
     }
-    await store.completeNode(run, searchId, 'search_materials', { materialIds: candidates.map((item) => item.id), evidenceState: evidence.state }, 25)
+    await store.completeNode(run, searchId, 'search_materials', {
+      approvedMaterialIds: candidates.map((item) => item.id),
+      masterReferenceIds: masterReferences.map((item) => item.id),
+      evidenceState: evidence.state,
+    }, 25)
     const proposal = buildProposal(run, service)
     const inventoryId = await store.createNode(run, 'check_inventory', { proposal })
     await store.startNode(run, inventoryId, 'check_inventory')
@@ -1029,8 +1050,8 @@ export async function executeDeterministicAgentRun(
     await store.createArtifact(run, { type: 'assumptions', version: 1, data: {
       assumptions: [
         modelProvider.kind === 'workers_ai'
-          ? 'Cloudflare Workers AI produced a bounded research plan; workspace tools and deterministic services produced every operational result.'
-          : 'Deterministic mock mode selected workspace materials and calculated evidence through the domain services.',
+          ? `Cloudflare Workers AI produced a bounded research plan and searched ${masterReferences.length} global master references; workspace tools and deterministic services produced every operational result.`
+          : `Deterministic mock mode searched ${masterReferences.length} global master references and selected only reviewed workspace materials for the formula proposal.`,
         'Inventory availability is advisory until a separate lab or production operation consumes lots.',
       ],
       warnings: preview.availability.filter((item) => item.status !== 'AVAILABLE').map((item) => `${item.materialName}: ${item.status.toLowerCase()}`),

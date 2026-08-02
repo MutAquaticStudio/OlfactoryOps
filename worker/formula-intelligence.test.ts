@@ -133,6 +133,7 @@ describe('Formula Intelligence Worker persistence contract', () => {
 
     expect(formulaIntelligenceMaterialCatalog(service)).toEqual({
       materials: [reviewed],
+      researchMaterials: [sourceOnly],
       reviewedOnly: true,
       sourceReferenceCount: 1,
       workspaceMaterialCount: 2,
@@ -148,6 +149,7 @@ describe('Formula Intelligence Worker persistence contract', () => {
 
     expect(formulaIntelligenceMaterialCatalog(service)).toEqual({
       materials: [],
+      researchMaterials: [],
       reviewedOnly: true,
       sourceReferenceCount: 0,
       workspaceMaterialCount: 1,

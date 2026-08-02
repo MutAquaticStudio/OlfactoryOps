@@ -4,7 +4,10 @@ import {
   enrichMaterialFromLluchCatalogue,
   isLluchCatalogueSourceMaterial,
   lluchCatalogue2026Source,
+  lluchCatalogueGlobalMasterMaterialById,
+  lluchCatalogueGlobalMasterMaterials,
   lluchCatalogueMaterialDirectoryForOrganization,
+  rankLluchCatalogueGlobalMasterMaterials,
   searchLluchCatalogue2026,
 } from './lluch-catalogue-2026'
 import { lluchCatalogue2026Evidence } from './lluch-catalogue-2026-evidence'
@@ -74,5 +77,17 @@ describe('Lluch catalogue 2026 import source', () => {
     })
     expect(cashmeran?.catalogueSource?.status).toBe('SOURCE_ONLY')
     expect(cashmeran?.ifraLimit).toBe(0)
+  })
+
+  it('exposes every Lluch source row as a global master reference for governed research while retaining its source-only gate', () => {
+    const masters = lluchCatalogueGlobalMasterMaterials()
+    const astrolide = lluchCatalogueGlobalMasterMaterialById('mat-lluch-2026-0104')
+    const citrusResearch = rankLluchCatalogueGlobalMasterMaterials('fresh citric citrus', 8)
+
+    expect(masters).toHaveLength(1986)
+    expect(masters.every((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
+    expect(astrolide?.name).toBe('ASTROLIDE PURE')
+    expect(citrusResearch).toHaveLength(8)
+    expect(citrusResearch.some((material) => material.odor.some((descriptor) => /citric|citrus/i.test(descriptor)))).toBe(true)
   })
 })

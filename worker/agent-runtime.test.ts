@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Material } from '../src/data/northStar.js'
-import { CloudflareWorkersAiFormulaProvider, OpenAiResponsesProvider, configuredAgentProvider, selectedMaterials } from './agent-runtime'
+import { lluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
+import { CloudflareWorkersAiFormulaProvider, OpenAiResponsesProvider, configuredAgentProvider, selectedGlobalMasterReferences, selectedMaterials } from './agent-runtime'
 
 describe('formula agent provider boundary', () => {
   it('keeps every deployment in deterministic mock mode until the provider rollout is explicitly completed', () => {
@@ -90,5 +91,15 @@ describe('formula agent provider boundary', () => {
     const service = { materials: () => ({ data: [sourceOnly, reviewed] }) } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
     expect(selectedMaterials(service, 'citrus fine fragrance').map((material) => material.id)).toEqual(['mat-reviewed'])
+  })
+
+  it('allows the agent research step to search global master references without promoting them into formula candidates', () => {
+    const reviewed = { id: 'mat-reviewed', name: 'Bergamot FCF', family: 'citrus', odor: ['citrus'] } as unknown as Material
+    const service = { materials: () => ({ data: [...lluchCatalogueGlobalMasterMaterials(), reviewed] }) } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
+
+    const references = selectedGlobalMasterReferences(service, 'clean musky amber', 4)
+    expect(references).toHaveLength(4)
+    expect(references.every((material) => material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
+    expect(selectedMaterials(service, 'clean musky amber').map((material) => material.id)).toEqual(['mat-reviewed'])
   })
 })

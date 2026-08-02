@@ -131,16 +131,55 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
 let catalogueMaterialDirectoryCache: Material[] | undefined
 
 /**
- * The supplier catalogue is a deterministic global material directory. It
- * remains virtual until a platform curator reviews a source material, so every
- * tenant reads the same catalogue without duplicating thousands of rows.
+ * The supplier catalogue is the global master-reference directory. It remains
+ * virtual until a platform curator reviews a source material, so every tenant
+ * and governed research workflow reads the same evidence without duplicating
+ * thousands of operational material records.
  */
-export function lluchCatalogueMaterialDirectoryForOrganization(organizationId: string) {
+export function lluchCatalogueGlobalMasterMaterials() {
   if (catalogueMaterialDirectoryCache) return catalogueMaterialDirectoryCache
   catalogueMaterialDirectoryCache = lluchCatalogue2026Products.map((product) =>
-    lluchCatalogueMaterialForOrganization(product, organizationId),
+    lluchCatalogueMaterialForOrganization(product, 'global-master-library'),
   )
   return catalogueMaterialDirectoryCache
+}
+
+/**
+ * A catalogue master is global and read-only. The active organization is not
+ * part of its identity; this wrapper preserves the existing Materials API.
+ */
+export function lluchCatalogueMaterialDirectoryForOrganization(_organizationId: string) {
+  return lluchCatalogueGlobalMasterMaterials()
+}
+
+export function lluchCatalogueGlobalMasterMaterialById(id: string) {
+  return lluchCatalogueGlobalMasterMaterials().find((material) => material.id === id)
+}
+
+export function rankLluchCatalogueGlobalMasterMaterials(query: string, limit = 12) {
+  const terms = normalizeName(query).split(' ').filter((term) => term.length >= 3)
+  const score = (material: Material) => {
+    const evidence = material.catalogueEvidence
+    const name = normalizeName(material.name)
+    const descriptors = normalizeName([
+      ...material.odor,
+      ...(material.olfactiveProfile?.descriptors ?? []),
+      ...(material.olfactiveProfile?.facets ?? []),
+    ].join(' '))
+    const identity = normalizeName([
+      material.family,
+      evidence?.chemicalIdentification ?? '',
+      evidence?.declaredUse ?? '',
+      evidence?.appearance ?? '',
+    ].join(' '))
+    return terms.reduce((total, term) => total
+      + (name.includes(term) ? 8 : 0)
+      + (descriptors.includes(term) ? 5 : 0)
+      + (identity.includes(term) ? 2 : 0), 0)
+  }
+  return [...lluchCatalogueGlobalMasterMaterials()]
+    .sort((left, right) => score(right) - score(left) || left.name.localeCompare(right.name))
+    .slice(0, Math.max(1, Math.min(limit, 24)))
 }
 
 export function isLluchCatalogueSourceMaterial(material: Material) {
