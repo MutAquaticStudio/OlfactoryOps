@@ -3537,13 +3537,16 @@ export class NorthStarService {
     if (this.organizationRecords.some((organization) => organization.slug === workspaceSlug)) {
       throw new UnprocessableEntityException('Workspace slug is already taken')
     }
-    const customDomain = this.normalizeSignupDomain(body.customDomain, this.defaultTenantDomain(workspaceSlug))
-    const normalizedDomain = customDomain.toLowerCase()
-    const domainAlreadyTaken =
-      this.organizationRecords.some((organization) => organization.customDomain?.toLowerCase() === normalizedDomain) ||
-      this.ssoConfigRecords.some((config) => config.domain.toLowerCase() === normalizedDomain)
-    if (domainAlreadyTaken) {
-      throw new UnprocessableEntityException('Workspace domain is already taken')
+    // Earlier web clients sent a generated <slug>.labofscents.org value during
+    // signup. Accept that one legacy value for a rolling deployment, but never
+    // assign it as an active customer hostname. Cloudflare must own the later
+    // provision -> DCV -> SSL activation lifecycle.
+    const legacyWorkspaceDomain = this.defaultTenantDomain(workspaceSlug)
+    if (typeof body.customDomain === 'string' && body.customDomain.trim()) {
+      const requestedDomain = this.normalizeDomain(body.customDomain, '')
+      if (requestedDomain !== legacyWorkspaceDomain) {
+        throw new UnprocessableEntityException('Connect a custom domain after workspace creation so its owner can complete Cloudflare validation')
+      }
     }
 
     const createdAt = new Date().toISOString()
@@ -3554,7 +3557,6 @@ export class NorthStarService {
       id: organizationId,
       name: organizationName,
       slug: workspaceSlug,
-      customDomain,
       plan: 'Free',
       status: 'ACTIVE',
       primaryContact: email,
@@ -3608,7 +3610,11 @@ export class NorthStarService {
         csrfToken: loginResult.csrfToken,
         permissions: loginResult.permissions,
         audit,
-        invariant: 'signup provisions a password-protected tenant, generated domain, and owner session before app access',
+        customDomain: {
+          status: 'NOT_REQUESTED',
+          nextAction: 'An Owner or Admin can connect a customer-owned hostname after signup. Cloudflare activation requires DNS validation and active SSL.',
+        },
+        invariant: 'signup provisions a password-protected tenant and owner session before app access; custom domains are provisioned separately after owner authorization',
       },
     }
   }
@@ -10946,20 +10952,20 @@ export class NorthStarService {
   private defaultSsoConfigForOrganization(organizationId: string): SsoConfigRecord {
     const organization = this.organizationRecords.find((item) => item.id === organizationId)
     const slug = organization?.slug || organizationId.replace(/^org-/, '')
-    const domain = organization?.customDomain || this.defaultTenantDomain(slug)
+    const domain = organization?.customDomain ?? ''
     const now = new Date().toISOString()
     return {
       id: `SSO-${organizationId.toUpperCase().replace(/[^A-Z0-9]+/g, '-').slice(0, 36)}`,
       organizationId,
       provider: 'OIDC',
       domain,
-      status: 'verified',
-      issuerUrl: `https://idp.${domain}/oauth2/default`,
-      metadataUrl: `https://idp.${domain}/.well-known/openid-configuration`,
+      status: 'draft',
+      issuerUrl: '',
+      metadataUrl: undefined,
       clientId: undefined,
       acsUrl: `https://api.labofscents.org/api/v1/auth/sso/callback/${organizationId}`,
       entityId: `urn:olfactoryops:${organizationId}`,
-      domainVerifiedAt: now,
+      domainVerifiedAt: undefined,
       jitProvisioning: true,
       enforceSso: false,
       scim: {
@@ -11073,10 +11079,6 @@ export class NorthStarService {
 
   private defaultTenantDomain(slug: string) {
     return `${slug}.labofscents.org`
-  }
-
-  private normalizeSignupDomain(value: unknown, fallback: string) {
-    return this.normalizeDomain(value, fallback)
   }
 
   private assertSignupPassword(password: string) {

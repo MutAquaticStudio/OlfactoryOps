@@ -291,6 +291,36 @@ Authentication không cấp quyền cross-tenant. Owner/Admin vẫn bị giới 
 - Việc xóa tenant phải lấy D1 Time Travel bookmark trước, xóa từ <code>tenant_organizations</code> để kích hoạt cascade, rồi kiểm tra toàn bộ bảng có <code>organization_id</code> không còn dữ liệu ngoài owner. Không xóa global material/evidence thuộc <code>org-nxl</code> và không commit bookmark phục hồi vào Git.
 - QA tenant chỉ được tạo trong D1 test, phải dùng tên/email nhận diện tự động và được dọn sau checkpoint. Production không được dùng cho signup, billing hoặc formula smoke test tự động.
 
+### Signup multi-tenant và Cloudflare for SaaS
+
+`POST /api/v1/auth/signup` chỉ tạo tenant D1, brand mặc định, Owner, role policy,
+credential hash, opaque session và audit evidence. Nó **không** gán trước một
+custom domain hoặc báo hostname là active. Điều này tránh một tenant đăng ký
+chiếm hostname của người khác khi DCV/SSL chưa hoàn tất.
+
+Sau signup, Owner chọn **Connect a domain** trong `Billing & integrations`, nhập
+hostname mà họ sở hữu, và Worker mới gọi Cloudflare Custom Hostnames. Trạng thái
+được giữ tenant-scoped: `pending_validation -> active | failed`. UI hiển thị
+TXT/DCV Cloudflare trả về; chỉ khi provider **và** SSL đều `active` thì
+`tenant_organizations.custom_domain` mới được cập nhật. Retry/Refresh là
+idempotent và hostname không thể thuộc hai tenant.
+
+Cloudflare Dashboard bật SaaS chưa đủ để Worker provision. Mỗi môi trường cần
+secret Worker riêng, không đưa giá trị vào Git, frontend hay chat:
+
+~~~powershell
+npx.cmd wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.test.toml
+npx.cmd wrangler secret put CLOUDFLARE_SAAS_ZONE_ID --config wrangler.test.toml
+npx.cmd wrangler secret put CLOUDFLARE_SAAS_ORIGIN --config wrangler.test.toml
+~~~
+
+Token chỉ cần quyền Zone `SSL and Certificates: Write` cho zone SaaS. Lặp lại
+không có `--config` khi cấu hình Worker production. `CLOUDFLARE_SAAS_ORIGIN`
+là **hostname origin** của Pages/app (ví dụ `test.labofscents.pages.dev`), không
+phải URL có `https://` và không phải hostname khách hàng. Integration
+Readiness sẽ báo `Not configured` đến khi đủ secret; đây là trạng thái an toàn,
+không phải kết quả provision giả.
+
 ### Luồng dữ liệu
 
 **Operational mutation**

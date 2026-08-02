@@ -43,6 +43,17 @@ test('public landing is responsive, accessible, and language-aware', async ({ pa
   await expect(page.getByRole('heading', { level: 1 })).toContainText('He dieu hanh cho doi ngu nuoc hoa')
 })
 
+test('signup creates a workspace before a custom domain is connected', async ({ page }) => {
+  await page.goto('/signup')
+  await expect(page.getByRole('heading', { name: 'Create your lab workspace' })).toBeVisible()
+  await expect(page.getByLabel('Signup organization')).toHaveValue('')
+  await expect(page.getByLabel('Signup owner name')).toHaveValue('')
+  await expect(page.getByLabel('Signup workspace domain')).toHaveCount(0)
+  await expect(page.getByText('Cloudflare will provide the DNS validation record before it goes live.')).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await expectNoSeriousAccessibilityViolations(page)
+})
+
 test('Design Studio restores its route and keeps key actions usable', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated role flow runs once and checks both desktop and mobile viewports in the same session.')
   await signIn(page)

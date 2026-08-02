@@ -1045,7 +1045,7 @@ describe('NorthStarService', () => {
     }).data
 
     expect(result.organization.slug).toBe('atelier-smoke')
-    expect(result.organization.customDomain).toBe('atelier-smoke.labofscents.org')
+    expect(result.organization.customDomain).toBeUndefined()
     expect(result.organization.plan).toBe('Free')
     expect(result.brand.organizationId).toBe(result.organization.id)
     expect(result.membership.id).toBe('MBR-ATELIER-SMOKE')
@@ -1059,8 +1059,9 @@ describe('NorthStarService', () => {
     expect(result.subscription.organizationId).toBe(result.organization.id)
     expect(result.subscription.planId).toBe('PLAN-APPRENTICE')
     expect(result.sso.organizationId).toBe(result.organization.id)
-    expect(result.sso.domain).toBe('atelier-smoke.labofscents.org')
-    expect(result.sso.status).toBe('verified')
+    expect(result.sso.domain).toBe('')
+    expect(result.sso.status).toBe('draft')
+    expect(result.customDomain).toMatchObject({ status: 'NOT_REQUESTED' })
     expect(result.audit.action).toBe('auth.signup')
     expect(credentialForEmail(service, 'owner@atelier-smoke.test')?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
     expect(service.me().data.userSettings).toMatchObject({
@@ -1081,7 +1082,7 @@ describe('NorthStarService', () => {
     expect(service.memberSummary().data).not.toHaveProperty('memberships')
     expect(() => service.tenantConsole()).toThrow(ForbiddenException)
     expect(service.billingConsole().data.subscription.organizationId).toBe(result.organization.id)
-    expect(service.billingConsole().data.sso.domain).toBe('atelier-smoke.labofscents.org')
+    expect(service.billingConsole().data.sso.domain).toBe('')
     expect(service.billingConsole().data.usage).toMatchObject({
       organizationId: result.organization.id,
       formulas: 0,
@@ -1110,6 +1111,33 @@ describe('NorthStarService', () => {
       }),
     ).toThrow(UnprocessableEntityException)
     expect(() => service.tenantProbe('org-weak-signup-lab')).toThrow(ForbiddenException)
+  })
+
+  it('does not assign a customer hostname during public signup', () => {
+    const service = createAuthenticatedService()
+
+    const legacyClient = service.signup({
+      organizationName: 'Legacy Signup Lab',
+      workspaceSlug: 'legacy-signup-lab',
+      customDomain: 'legacy-signup-lab.labofscents.org',
+      email: 'owner@legacy-signup.test',
+      name: 'Legacy Owner',
+      password: 'LegacyOwner2026',
+    }).data
+
+    expect(legacyClient.organization.customDomain).toBeUndefined()
+    expect(legacyClient.customDomain.status).toBe('NOT_REQUESTED')
+    expect(service.customDomains().data.domains).toEqual([])
+
+    const anotherService = createAuthenticatedService()
+    expect(() => anotherService.signup({
+      organizationName: 'Unsafe Signup Lab',
+      workspaceSlug: 'unsafe-signup-lab',
+      customDomain: 'app.customer-domain.test',
+      email: 'owner@unsafe-signup.test',
+      name: 'Unsafe Owner',
+      password: 'UnsafeOwner2026',
+    })).toThrow('Connect a custom domain after workspace creation')
   })
 
   it('does not require MFA for formula approval when role is allowed', () => {
@@ -3014,8 +3042,8 @@ describe('NorthStarService', () => {
     expect(selection.mode).toBe('plan_selected')
     expect(consoleState.subscription.organizationId).toBe(signup.organization.id)
     expect(consoleState.sso.organizationId).toBe(signup.organization.id)
-    expect(consoleState.sso.domain).toBe('billing-onboarding-lab.labofscents.org')
-    expect(consoleState.sso.status).toBe('verified')
+    expect(consoleState.sso.domain).toBe('')
+    expect(consoleState.sso.status).toBe('draft')
     expect(consoleState.apiKeys).toEqual([])
     expect(consoleState.webhooks).toEqual([])
     expect(consoleState.auditExports).toEqual([])

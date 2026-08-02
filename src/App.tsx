@@ -489,6 +489,10 @@ type SignupResponse = {
   csrfToken: string
   permissions: string[]
   audit: AuditEvent
+  customDomain: {
+    status: 'NOT_REQUESTED'
+    nextAction: string
+  }
   invariant: string
 }
 
@@ -2144,17 +2148,18 @@ function App() {
     }
     setSidebarCollapsed((value) => !value)
   }, [mobileNavOpen])
-  const closeBillingGate = useCallback(() => {
+  const closeBillingGate = useCallback((preferredDestination?: DomainKey) => {
     if (!currentSession) {
       return
     }
     setBillingOnboarding(false)
-    setActiveKey(
-      safeLandingForSession(
-        (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding,
-        currentSession,
-      ),
+    const destination = safeLandingForSession(
+      preferredDestination ?? (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding,
+      currentSession,
     )
+    setActiveKey(destination)
+    const path = pathForDomainKey(destination)
+    if (window.location.pathname !== path) window.history.replaceState({}, document.title, path)
   }, [currentSession, userSettingsRecord])
 
   useEffect(() => {
@@ -2898,7 +2903,6 @@ function App() {
     email: string
     name: string
     password: string
-    customDomain: string
   }) {
     const payload = await requestApi<SignupResponse>('/auth/signup', {
       method: 'POST',
@@ -2906,7 +2910,6 @@ function App() {
       body: JSON.stringify({
         organizationName: input.organizationName.trim(),
         workspaceSlug: toWorkspaceSlug(input.workspaceSlug),
-        customDomain: input.customDomain,
         email: input.email.trim().toLowerCase(),
         name: input.name.trim(),
         password: input.password,
@@ -2916,7 +2919,7 @@ function App() {
     setCurrentSession(session)
     setResumePath(null)
     setAuthNotice(null)
-    rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain ?? payload.sso.domain)
+    rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain)
     void syncUserSettings(session)
     setBillingOnboarding(true)
     return payload
@@ -3004,6 +3007,7 @@ function App() {
       <PostSignupWorkspaceReady
         session={currentSession}
         onComplete={closeBillingGate}
+        onConnectDomain={() => closeBillingGate('saas')}
       />
     )
   }
@@ -4135,10 +4139,6 @@ function toWorkspaceSlug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
 }
 
-function toWorkspaceDomain(slug: string) {
-  return `${toWorkspaceSlug(slug) || 'workspace'}.labofscents.org`
-}
-
 function saasHealthTone(status: SaasHealthStatus): DomainStatus {
   if (status === 'blocked') return 'alert'
   if (status === 'warning') return 'review'
@@ -4245,9 +4245,11 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
 function PostSignupWorkspaceReady({
   session,
   onComplete,
+  onConnectDomain,
 }: {
   session: AuthSession
   onComplete: () => void
+  onConnectDomain: () => void
 }) {
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
@@ -4264,16 +4266,20 @@ function PostSignupWorkspaceReady({
                 <div className="mono-small">{session.organizationId}</div>
               </div>
             </div>
-            <h1>Your beta workspace is ready.</h1>
+            <h1>Your workspace is ready.</h1>
             <p className="lead">
-              Start building with your team now. Subscription options are temporarily hidden while beta access is managed directly by OlfactoryOps.
+              Your tenant, owner account, and workspace policies are active. A customer domain is not connected yet; connect one only when you are ready to complete DNS validation.
             </p>
             <div className="tag-row">
               <DataTag icon={ShieldCheck} label="Workspace" value="Ready" tone="green" />
               <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
+              <DataTag icon={Globe2} label="Custom domain" value="Not connected" tone="amber" />
             </div>
           </div>
           <div className="action-row">
+            <button className="ghost-button" type="button" onClick={onConnectDomain}>
+              Connect a domain
+            </button>
             <button className="primary-button" type="button" onClick={onComplete}>
               Open workspace
             </button>
@@ -4302,7 +4308,6 @@ function AuthGateway({
     email: string
     name: string
     password: string
-    customDomain: string
   }) => Promise<SignupResponse>
   onRequestPasswordReset: (email: string) => Promise<void>
   onCompletePasswordReset: (token: string, password: string) => Promise<void>
@@ -4323,7 +4328,6 @@ function AuthGateway({
   const [status, setStatus] = useState(
     notice ?? 'Login with an active workspace account, or sign up a new workspace.',
   )
-  const workspaceDomain = toWorkspaceDomain(workspaceSlug)
   const signupPasswordReady = password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password)
   const signupReady = Boolean(
     organizationName.trim() &&
@@ -4362,8 +4366,8 @@ function AuthGateway({
           setStatus('Passwords must match before creating the workspace.')
           return
         }
-        const result = await onSignup({ organizationName, workspaceSlug, email, name, password, customDomain: workspaceDomain })
-        setStatus(`${result.organization.name} provisioned at ${result.organization.customDomain ?? result.sso.domain}`)
+        const result = await onSignup({ organizationName, workspaceSlug, email, name, password })
+        setStatus(`${result.organization.name} is ready. ${result.customDomain.nextAction}`)
       } else if (mode === 'reset-request') {
         await onRequestPasswordReset(email)
         setStatus('If the account exists, a one-time reset link has been sent. Check your inbox.')
@@ -4393,11 +4397,10 @@ function AuthGateway({
     setStatus(nextMode === 'login' ? 'Sign in with your active workspace account.' : 'Create a new lab workspace and owner account.')
     setWorkspaceSlugTouched(false)
     if (nextMode === 'signup') {
-      const defaultOrganizationName = 'New Fragrance Lab'
-      setEmail('owner@newlab.test')
-      setName('Workspace Owner')
-      setOrganizationName(defaultOrganizationName)
-      setWorkspaceSlug(toWorkspaceSlug(defaultOrganizationName))
+      setEmail('')
+      setName('')
+      setOrganizationName('')
+      setWorkspaceSlug('')
       setPassword('')
       setConfirmPassword('')
     } else {
@@ -4450,7 +4453,7 @@ function AuthGateway({
               Secure access for your workspace. We confirm your account, role, and workspace settings before you begin.
             </p>
             {mode === 'login' || mode === 'signup' ? (
-              <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
+              <div className="auth-mode-switch" role="group" aria-label="Authentication mode">
                 <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
                   {uiText('Login')}
                 </button>
@@ -4484,11 +4487,9 @@ function AuthGateway({
                     onChange={(event) => updateWorkspaceSlug(event.target.value)}
                   />
                 </label>
-                <label className="field-row">
-                  <span>Workspace domain</span>
-                  <input aria-label="Signup workspace domain" value={workspaceDomain} readOnly />
-                  <small className="field-hint">Auto-created for this workspace; map a customer-owned domain in Cloudflare later.</small>
-                </label>
+                <div className="field-hint auth-signup-domain-note">
+                  Your workspace is isolated immediately. Connect a customer-owned domain after signup; Cloudflare will provide the DNS validation record before it goes live.
+                </div>
                 <label className="field-row">
                   <span>Owner name</span>
                   <input
@@ -15269,7 +15270,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     try {
       const payload = await requestApi<{ domain: SaasCustomDomainRecord }>('/saas/custom-domains/provision', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ hostname: customDomainDraft.trim().toLowerCase() }),
       })
       setCustomDomainProvisioning(payload.domain)
@@ -15288,6 +15289,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     try {
       const payload = await requestApi<{ domain: SaasCustomDomainRecord }>(`/saas/custom-domains/${encodeURIComponent(domain.id)}/refresh`, {
         method: 'POST',
+        headers: idempotencyHeaders(),
       })
       setCustomDomainProvisioning(payload.domain)
       setCustomDomains((current) => current.map((candidate) => candidate.id === payload.domain.id ? payload.domain : candidate))
