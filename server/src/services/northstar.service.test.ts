@@ -128,6 +128,19 @@ describe('NorthStarService', () => {
     expect(credentialForEmail(service, adminEmail)?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
   })
 
+  it('allocates a collision-resistant session ID without overwriting a hydrated session', () => {
+    const service = createTestService()
+    const internals = service as unknown as { sessions: Array<{ id: string }> }
+    const collisionId = `SES-${String(internals.sessions.length + 1).padStart(4, '0')}`
+    internals.sessions = internals.sessions.map((session, index) => (index === 0 ? { ...session, id: collisionId } : session))
+
+    const login = service.login(adminEmail, adminPassword).data
+
+    expect(login.session.id).toMatch(/^SES-[a-f0-9]{32}$/)
+    expect(login.session.id).not.toBe(collisionId)
+    expect(new Set(internals.sessions.map((session) => session.id)).size).toBe(internals.sessions.length)
+  })
+
   it('resets a password with a one-time expiring token and revokes active sessions', () => {
     const service = createTestService()
     const active = service.login(adminEmail, adminPassword).data.session

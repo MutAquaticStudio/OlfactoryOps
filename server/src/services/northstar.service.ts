@@ -3633,7 +3633,7 @@ export class NorthStarService {
       (item) => item.email.toLowerCase() === normalizedEmail && item.deviceId === deviceId,
     )
     const session: AuthSession = {
-      id: `SES-${String(this.sessions.length + 1).padStart(4, '0')}`,
+      id: this.createSessionId(),
       userId: membership.userId,
       email: membership.email,
       organizationId: membership.organizationId,
@@ -11519,6 +11519,14 @@ export class NorthStarService {
     const salt = randomBytes(passwordHashSaltBytes).toString('base64url')
     const digest = this.pbkdf2PasswordDigest(email, password, salt, passwordHashIterations, passwordHashKeyLength)
     return `pbkdf2:v1:${passwordHashAlgorithm}:${passwordHashIterations}:${salt}:${digest}`
+  }
+
+  private createSessionId() {
+    let id = ''
+    do {
+      id = `SES-${randomBytes(16).toString('hex')}`
+    } while (this.sessions.some((session) => session.id === id))
+    return id
   }
 
   private verifyPasswordCredential(credential: AuthCredentialRecord, email: string, password: string) {
