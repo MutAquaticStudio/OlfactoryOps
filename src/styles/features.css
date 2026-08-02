@@ -675,6 +675,12 @@
   font-weight: 600;
 }
 
+.design-generation-blocker {
+  flex-basis: 100%;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
 .formula-intelligence-decision-grid strong {
   overflow-wrap: anywhere;
   font-size: 0.84rem;

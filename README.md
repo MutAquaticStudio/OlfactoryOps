@@ -76,7 +76,7 @@ kết quả của selection policy trước đây.
 
 ### Luồng generate trong Design Studio
 
-Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Nút **Generate directions** không biến mất khi brief chưa sẵn sàng; nó ở trạng thái disabled và giải thích rõ cần review brief, tải Materials hay phê duyệt Material trước. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
+Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Brief `RAW` hoặc `REVIEW_REQUIRED` hiển thị **Review required** và đưa **Review brief** thành hành động chính. Nút tạo direction vẫn hiện dưới tên **Generate after review**, nhưng chỉ chuyển thành **Generate directions** và được bật sau khi product, concentration, IFRA và material constraints đã được lưu thành reviewed brief. Card luôn giải thích gate đang thiếu, gồm tải Materials hoặc phê duyệt ít nhất một formula-ready Material. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.
 
 ### Phase 4: Direction to Trial
 

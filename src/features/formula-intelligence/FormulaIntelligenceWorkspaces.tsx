@@ -280,7 +280,7 @@ function projectProgress(project: DesignProject): StepperStep[] {
 
 function projectStageLabel(project: DesignProject) {
   if (project.directions.length > 0) return 'Directions ready'
-  if (project.briefStatus === 'REVIEW_REQUIRED') return 'Brief needs review'
+  if (project.briefStatus === 'RAW' || project.briefStatus === 'REVIEW_REQUIRED') return 'Review required'
   if (project.briefStatus === 'REVIEWED' || project.briefStatus === 'LEGACY_UNSTRUCTURED') return 'Ready to explore'
   return 'Brief saved'
 }
@@ -602,6 +602,19 @@ function DesignProjectCard({
     && briefIsReviewed
     && !hasDirections
   const materialSourceReady = materialCatalogState === 'ready' && hasEligibleMaterials
+  const generationBlocker = hasDirections
+    ? undefined
+    : !briefIsReviewed
+      ? 'Review and approve the product, concentration, IFRA, and material constraints before generating directions.'
+      : project.status !== 'BRIEFED'
+        ? 'Direction generation is already in progress. Follow the research status above.'
+        : materialCatalogState === 'loading'
+          ? 'Loading formula-ready Materials.'
+          : materialCatalogState === 'unavailable'
+            ? 'Formula-ready Materials are unavailable. Retry after Materials can be loaded.'
+            : !hasEligibleMaterials
+              ? 'Review and approve at least one Material before creating directions.'
+              : undefined
 
   return <section className="panel glass formula-intelligence-project design-project-card">
     <header className="design-project-card-heading">
@@ -619,19 +632,16 @@ function DesignProjectCard({
     </div>
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
-      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className="secondary-button small" type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> Review brief</button> : null}
+      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit reviewed brief' : 'Review brief'}</button> : null}
       {capabilities.canGenerateDirections ? <button
-        className={hasDirections ? 'secondary-button small' : 'primary-button small'}
+        className={hasDirections || !briefIsReviewed ? 'secondary-button small' : 'primary-button small'}
         data-testid={`design-generate-${project.id}`}
         type="button"
         disabled={busy || !canGenerate || !materialSourceReady}
+        title={generationBlocker}
         onClick={onGenerate}
-      >{hasDirections ? <CheckCircle2 size={15} /> : <Play size={15} />} {hasDirections ? 'Directions generated' : 'Generate directions'}</button> : null}
-      {project.briefStatus === 'REVIEW_REQUIRED' ? <small>Review and approve the brief before generating directions.</small> : null}
-      {!hasDirections && briefIsReviewed && project.status !== 'BRIEFED' ? <small>Direction generation is already in progress. Follow the run status above.</small> : null}
-      {canGenerate && materialCatalogState === 'loading' ? <small>Loading reviewed Materials.</small> : null}
-      {canGenerate && materialCatalogState === 'unavailable' ? <small>Reviewed Materials are unavailable. Reopen the brief after Materials are restored.</small> : null}
-      {canGenerate && materialCatalogState === 'ready' && !hasEligibleMaterials ? <small>Review and approve at least one Material before creating directions.</small> : null}
+      >{hasDirections ? <CheckCircle2 size={15} /> : <Play size={15} />} {hasDirections ? 'Directions generated' : briefIsReviewed ? 'Generate directions' : 'Generate after review'}</button> : null}
+      {generationBlocker ? <small className="design-generation-blocker">{generationBlocker}</small> : null}
     </div>
     {hasDirections ? <div className="formula-intelligence-direction-grid design-direction-list">
       {project.directions.map((direction, index) => <MotionCardButton
