@@ -329,8 +329,8 @@ dùng cache shell làm offline fallback.
 
 Các JavaScript và CSS do Vite tạo trong `/assets/` luôn có content hash. Pages đặt
 `Cache-Control: public, max-age=31536000, immutable` riêng cho các asset này, còn
-HTML, API và session response vẫn không cache. QR label generator chỉ tải khi người
-dùng thực sự in nhãn, không nằm trong bundle khởi động.
+HTML, API và session response vẫn không cache. QR label generator có lazy chunk
+riêng và chỉ tải khi người dùng thực sự in nhãn, không nằm trong bundle khởi động.
 
 ### Luồng dữ liệu
 
