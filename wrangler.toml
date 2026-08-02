@@ -11,6 +11,8 @@ crons = ["* * * * *"]
 [vars]
 CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev"
 BILLING_MODE = "managed_beta"
+AGENT_PROVIDER = "workers_ai"
+WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/zai-org/glm-4.7-flash"
 
 [[routes]]
 pattern = "api.labofscents.org"

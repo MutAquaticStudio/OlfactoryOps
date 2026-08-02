@@ -102,8 +102,8 @@ function selectDirectionPalette(ranked: MaterialSeed[], locked: MaterialSeed[], 
   return selected
 }
 
-export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materials: MaterialSeed[]): Array<{ title: string; narrative: string; pyramidSummary: string; proposal: AgentFormulaProposal }> {
-  const desiredTerms = normalizedTerms([brief.creativeBrief, ...brief.desiredNotes])
+export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materials: MaterialSeed[], researchFocus: string[] = []): Array<{ title: string; narrative: string; pyramidSummary: string; proposal: AgentFormulaProposal }> {
+  const desiredTerms = normalizedTerms([brief.creativeBrief, ...brief.desiredNotes, ...researchFocus])
   const avoidedTerms = normalizedTerms(brief.avoidedNotes)
   const ranked = [...materials]
     .sort((left, right) => {

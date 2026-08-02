@@ -11,6 +11,10 @@ decisions. Those decisions remain in the deterministic domain services.
 
 - D1 stores tenant-scoped source metadata, review state, chunk excerpts, jobs,
   and audit evidence.
+- Curated `GLOBAL` material profiles are indexed once under the internal
+  curator organization. Customer queries may search those global material
+  vectors plus their own tenant vectors; global or cross-tenant documents are
+  never included in that shared scope.
 - Private document content is read only inside the Worker from `DOCUMENTS`.
   Signed download URLs are never used for indexing.
 - Workers AI creates embeddings and converts text-bearing PDFs to Markdown.
@@ -41,6 +45,9 @@ decisions. Those decisions remain in the deterministic domain services.
 - Queue, extraction review, retry, and invalidation require `documents.manage`.
 - Formula Agent, Design Studio, and Optimizer call retrieval only with those
   permissions and render `Not evaluated` when evidence is unavailable.
+- A customer tenant cannot index or mutate global material evidence. Only the
+  internal curator organization can queue global material profiles; Worker
+  cron incrementally queues missing curated profiles.
 - Brand projections do not receive sensitive composition, cost, lot, CAS, raw
   compliance warnings, or document evidence.
 

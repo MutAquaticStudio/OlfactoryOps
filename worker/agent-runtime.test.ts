@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Material } from '../src/data/northStar.js'
-import { OpenAiResponsesProvider, configuredAgentProvider, selectedMaterials } from './agent-runtime'
+import { CloudflareWorkersAiFormulaProvider, OpenAiResponsesProvider, configuredAgentProvider, selectedMaterials } from './agent-runtime'
 
 describe('formula agent provider boundary', () => {
   it('keeps every deployment in deterministic mock mode until the provider rollout is explicitly completed', () => {
@@ -10,6 +10,62 @@ describe('formula agent provider boundary', () => {
       OPENAI_FORMULA_AGENT_MODEL: 'test-model',
       AGENT_CONTEXT_ENCRYPTION_KEY: 'test-context-key',
     })).toEqual({ provider: 'mock', model: 'deterministic-v1' })
+  })
+
+  it('selects Workers AI only when the binding and explicit provider flag are both present', () => {
+    const ai = { run: vi.fn() }
+    expect(configuredAgentProvider({
+      AGENT_PROVIDER: 'workers_ai',
+      WORKERS_AI_FORMULA_AGENT_MODEL: '@cf/zai-org/glm-4.7-flash',
+      AI: ai,
+    })).toEqual({ provider: 'workers_ai', model: '@cf/zai-org/glm-4.7-flash' })
+    expect(configuredAgentProvider({ AGENT_PROVIDER: 'workers_ai' })).toEqual({ provider: 'mock', model: 'deterministic-v1' })
+  })
+
+  it('validates a bounded Workers AI tool-call plan and never executes model-supplied actions', async () => {
+    const ai = {
+      run: vi.fn().mockResolvedValue({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              function: {
+                name: 'submit_formula_research_plan',
+                arguments: JSON.stringify({
+                  summary: 'Explore a marine mineral structure with a dry woody trail.',
+                  searchQuery: 'marine mineral woody amber citrus',
+                  focusNotes: ['marine', 'mineral', 'woody'],
+                  avoidNotes: ['powdery'],
+                  recommendedTools: ['search_materials', 'retrieve_material_evidence', 'validate_compliance'],
+                }),
+              },
+            }],
+          },
+        }],
+      }),
+    }
+    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/zai-org/glm-4.7-flash')
+    const plan = await provider.researchPlan({ brief: 'Marine mineral fragrance', tools: [] })
+
+    expect(plan.searchQuery).toBe('marine mineral woody amber citrus')
+    expect(plan.recommendedTools).toEqual(['search_materials', 'retrieve_material_evidence', 'validate_compliance'])
+    expect(ai.run).toHaveBeenCalledWith('@cf/zai-org/glm-4.7-flash', expect.objectContaining({
+      tool_choice: 'required',
+      parallel_tool_calls: false,
+      store: false,
+    }))
+  })
+
+  it('rejects Workers AI plans that request an unregistered tool', async () => {
+    const ai = {
+      run: vi.fn().mockResolvedValue({
+        choices: [{ message: { tool_calls: [{ function: { name: 'submit_formula_research_plan', arguments: JSON.stringify({
+          summary: 'Unsafe plan', searchQuery: 'amber', focusNotes: [], avoidNotes: [], recommendedTools: ['execute_sql'],
+        }) } }] } }],
+      }),
+    }
+    const provider = new CloudflareWorkersAiFormulaProvider(ai, '@cf/zai-org/glm-4.7-flash')
+    await expect(provider.researchPlan({ brief: 'Amber fragrance', tools: [] })).rejects.toThrow('invalid research plan')
   })
 
   it('keeps the Responses adapter isolated, streamed, strict, and provider-store disabled', async () => {

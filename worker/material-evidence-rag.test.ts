@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chunkEvidenceText, isCurrentEvidenceDocument, isEligibleEvidenceDocument, MaterialEvidenceRag, materialEvidenceQuerySchema, safeEvidenceExcerpt } from './material-evidence-rag.js'
+import { chunkEvidenceText, isCurrentEvidenceDocument, isEligibleEvidenceDocument, MaterialEvidenceRag, materialEvidenceQuerySchema, materialEvidenceQueryScopes, safeEvidenceExcerpt } from './material-evidence-rag.js'
 
 describe('controlled material evidence RAG', () => {
   it('creates bounded, overlapping evidence chunks without losing the source tail', () => {
@@ -54,5 +54,18 @@ describe('controlled material evidence RAG', () => {
     const rag = new MaterialEvidenceRag({ DB: db })
     await expect(rag.materialEvidence({ organizationId: 'org-a', userId: 'usr-a', permissions: ['documents.view', 'materials.view'] }, 'mat-a')).resolves.toMatchObject({ state: 'NOT_CONFIGURED', citations: [] })
     expect(calls.some((values) => values.includes('org-a'))).toBe(true)
+  })
+
+  it('queries tenant-private evidence plus global material evidence without exposing global documents', () => {
+    expect(materialEvidenceQueryScopes('org-customer', ['MATERIAL', 'DOCUMENT'])).toEqual([
+      { organizationId: 'org-customer', sourceKinds: ['MATERIAL', 'DOCUMENT'] },
+      { organizationId: 'org-nxl', sourceKinds: ['MATERIAL'] },
+    ])
+    expect(materialEvidenceQueryScopes('org-customer', ['DOCUMENT'])).toEqual([
+      { organizationId: 'org-customer', sourceKinds: ['DOCUMENT'] },
+    ])
+    expect(materialEvidenceQueryScopes('org-nxl', ['MATERIAL', 'DOCUMENT'])).toEqual([
+      { organizationId: 'org-nxl', sourceKinds: ['MATERIAL', 'DOCUMENT'] },
+    ])
   })
 })

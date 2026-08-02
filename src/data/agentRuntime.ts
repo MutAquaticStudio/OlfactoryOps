@@ -95,6 +95,24 @@ export const formulaIntelligenceWorkflowKindSchema = z.enum([
 ])
 export type FormulaIntelligenceWorkflowKind = z.infer<typeof formulaIntelligenceWorkflowKindSchema>
 
+export const agentProviderSchema = z.enum(['mock', 'openai', 'workers_ai'])
+export type AgentProvider = z.infer<typeof agentProviderSchema>
+
+export const agentResearchPlanSchema = z.object({
+  summary: z.string().trim().min(1).max(600),
+  searchQuery: z.string().trim().min(1).max(320),
+  focusNotes: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  avoidNotes: z.array(z.string().trim().min(1).max(80)).max(12).default([]),
+  recommendedTools: z.array(z.enum([
+    'search_materials',
+    'retrieve_material_evidence',
+    'get_material_details',
+    'check_inventory',
+    'validate_compliance',
+  ])).max(5).default(['search_materials']),
+}).strict()
+export type AgentResearchPlan = z.infer<typeof agentResearchPlanSchema>
+
 export const agentFormulaProposalSchema = z.object({
   name: z.string().min(1).max(240),
   formulaType: z.enum(['ACCORD', 'FINE_FRAGRANCE']).default('FINE_FRAGRANCE'),

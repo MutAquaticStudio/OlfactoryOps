@@ -9,6 +9,7 @@ import {
 } from './provider-adapters.js'
 import {
   AgentRuntimeStore,
+  agentModelProviderForRun,
   actorFromService,
   configuredAgentProvider,
   ensureAgentReadAccess,
@@ -136,10 +137,11 @@ type Env = {
   CLOUDFLARE_API_TOKEN?: string
   CLOUDFLARE_SAAS_ZONE_ID?: string
   CLOUDFLARE_SAAS_ORIGIN?: string
-  AGENT_PROVIDER?: 'mock' | 'openai'
+  AGENT_PROVIDER?: 'mock' | 'openai' | 'workers_ai'
   OPENAI_API_KEY?: string
   OPENAI_FORMULA_AGENT_MODEL?: string
   AGENT_CONTEXT_ENCRYPTION_KEY?: string
+  WORKERS_AI_FORMULA_AGENT_MODEL?: string
   AI?: RagAiBinding
   RAG_INDEX?: RagVectorIndex
 }
@@ -1042,8 +1044,10 @@ async function executeAgentRun(store: AgentRuntimeStore, service: NorthStarServi
     `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
   ).bind(runId, actor.organizationId, actor.userId).first()
   const materialEvidence = new MaterialEvidenceRag(env)
-  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId, materialEvidence)
-  return executeDeterministicAgentRun(store, service, actor, runId, materialEvidence)
+  const run = await store.runForActor(actor, runId)
+  const modelProvider = agentModelProviderForRun(env, run)
+  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId, materialEvidence, modelProvider)
+  return executeDeterministicAgentRun(store, service, actor, runId, materialEvidence, modelProvider)
 }
 
 async function resolveAgentConfirmation(context: RouteContext) {
@@ -1260,8 +1264,9 @@ async function generateFormulaDesignDirections(context: RouteContext) {
   try {
     ensureFormulaIntelligencePermission(context.service, 'edit')
     ensureFormulaIntelligenceExecutionAccess(context.service)
-    const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request))
-    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, new MaterialEvidenceRag(context.env)))
+    const provider = configuredAgentProvider(context.env)
+    const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request), provider)
+    context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, context.env))
     return { data: result }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
@@ -1347,8 +1352,9 @@ async function startFormulaOptimizer(context: RouteContext) {
   const actor = ensureAgentReadAccess(context.service)
   try {
     ensureFormulaIntelligenceExecutionAccess(context.service)
-    const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request))
-    context.ctx.waitUntil(executeFormulaIntelligenceRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, new MaterialEvidenceRag(context.env)))
+    const provider = configuredAgentProvider(context.env)
+    const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request), provider)
+    context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, context.env))
     return { data: result }
   } catch (error) {
     await auditFormulaIntelligenceAccessFailure(context, actor, 'optimizer', error)
@@ -1608,7 +1614,9 @@ async function runScheduledAgentRecovery(env: Env) {
 }
 
 async function runScheduledMaterialEvidence(env: Env) {
-  await new MaterialEvidenceRag(env).processDueJobs()
+  const rag = new MaterialEvidenceRag(env)
+  await rag.queueMissingGlobalMaterials()
+  await rag.processDueJobs()
 }
 
 function applyScheduledMaterialCatalogueBackfill(service: NorthStarService) {
@@ -1760,6 +1768,9 @@ async function integrationReadiness(service: NorthStarService, env: Env) {
     cloudflareSaasConfigured: Boolean(env.CLOUDFLARE_API_TOKEN?.trim() && env.CLOUDFLARE_SAAS_ZONE_ID?.trim()),
     betaHostnameConfigured,
     betaHostnameReachable,
+    workersAiConfigured: Boolean(env.AI),
+    vectorizeConfigured: Boolean(env.RAG_INDEX),
+    formulaAgentProvider: configuredAgentProvider(env).provider,
   })
 }
 

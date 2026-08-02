@@ -213,7 +213,7 @@ flowchart LR
   Worker["Cloudflare Worker<br/>/api/v1<br/>auth, policy, domain service"]
   D1[("Cloudflare D1<br/>dữ liệu theo tenant<br/>audit, ledger, job")]
   KV[("Workers KV riêng tư<br/>payload SDS/CoA")]
-  AI["Workers AI<br/>embedding và text extraction"]
+  AI["Workers AI<br/>LLM planning, embedding và text extraction"]
   Vectorize[("Vectorize<br/>material evidence vector")]
   Providers["Provider tuỳ chọn<br/>Resend, Stripe, Cloudflare for SaaS"]
 
@@ -527,7 +527,22 @@ npm run security:client-bundle
 
 ## Nền tảng AI/Agent
 
-Formula Intelligence vận hành theo chế độ **deterministic mock mode**: kết quả được tạo từ các công cụ đã đăng ký chạy trên dữ liệu workspace có kiểm soát, không gọi LLM bên ngoài và không tự tiêu hao tồn kho. Browser nhận tiến độ qua SSE có replay từ event đã persist; API là nguồn dữ liệu chuẩn và mọi bản nháp công thức vẫn cần xác nhận rõ ràng trước khi lưu.
+Môi trường Cloudflare dùng <code>AGENT_PROVIDER=workers_ai</code> với model mặc định <code>@cf/zai-org/glm-4.7-flash</code>. Workers AI chỉ tạo research plan có schema: tóm tắt brief, search query, note focus/avoid và danh sách tool đọc được phép. Output của model phải qua Zod validation; tool không đăng ký, payload quá giới hạn hoặc response không đúng schema sẽ bị từ chối.
+
+Formula Agent, Design Studio và Reformulation Optimizer dùng research plan này để truy xuất material/evidence phù hợp. Formula math, IFRA/compliance, inventory, cost, ranking cuối cùng và save draft vẫn do deterministic domain services thực hiện. LLM không chạy SQL, không truy cập URL tuỳ ý, không tự ghi formula, không reserve/consume inventory và không bỏ qua confirmation.
+
+Local/CI không có Workers AI binding sẽ giữ <code>deterministic-v1</code>. Browser nhận tiến độ qua SSE có replay từ event đã persist; API là nguồn dữ liệu chuẩn. Cấu hình Cloudflare không cần API key trong frontend:
+
+~~~toml
+[vars]
+AGENT_PROVIDER = "workers_ai"
+WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/zai-org/glm-4.7-flash"
+
+[ai]
+binding = "AI"
+~~~
+
+RAG dùng <code>@cf/baai/bge-base-en-v1.5</code> để tạo vector 768 chiều. Cron index material <code>GLOBAL</code> đã curated vào namespace hệ thống; tenant query được truy xuất cả global material evidence và evidence riêng của chính tenant. Document evidence của tenant khác không bao giờ được truy xuất.
 
 ### Trải nghiệm Formula Design Studio
 

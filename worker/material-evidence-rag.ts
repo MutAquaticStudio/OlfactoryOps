@@ -13,9 +13,23 @@ const MAX_CHUNK_CHARS = 1_200
 const MAX_CHUNKS_PER_SOURCE = 48
 const JOB_LEASE_MS = 90_000
 const RETRY_BACKOFF_MS = [30_000, 120_000]
+export const GLOBAL_LIBRARY_ORGANIZATION_ID = 'org-nxl'
+
+export function materialEvidenceQueryScopes(
+  actorOrganizationId: string,
+  sourceKinds: Array<'MATERIAL' | 'DOCUMENT'>,
+) {
+  const scopes: Array<{ organizationId: string; sourceKinds: Array<'MATERIAL' | 'DOCUMENT'> }> = [
+    { organizationId: actorOrganizationId, sourceKinds },
+  ]
+  if (actorOrganizationId !== GLOBAL_LIBRARY_ORGANIZATION_ID && sourceKinds.includes('MATERIAL')) {
+    scopes.push({ organizationId: GLOBAL_LIBRARY_ORGANIZATION_ID, sourceKinds: ['MATERIAL'] })
+  }
+  return scopes
+}
 
 export type RagAiBinding = {
-  run(model: string, input: unknown): Promise<{ data: number[][] }>
+  run<T = { data: number[][] }>(model: string, input: unknown): Promise<T>
   toMarkdown?(input: { name: string; blob: Blob }, options?: Record<string, unknown>): Promise<{ format: string; data: string; error?: string }>
 }
 
@@ -250,10 +264,22 @@ export class MaterialEvidenceRag {
 
   private async materialForActor(actor: MaterialEvidenceActor, materialId: string) {
     const row = await this.env.DB.prepare(
-      `SELECT id, organization_id, record_json FROM material_records WHERE id = ? AND organization_id = ?`,
-    ).bind(materialId, actor.organizationId).first<{ id: string; organization_id: string; record_json: string }>()
+      `SELECT id, library_scope, organization_id, record_json
+       FROM material_records
+       WHERE id = ? AND (library_scope = 'GLOBAL' OR organization_id = ?)`,
+    ).bind(materialId, actor.organizationId).first<{ id: string; library_scope: 'GLOBAL' | 'TENANT'; organization_id: string | null; record_json: string }>()
     if (!row) throw new NotFoundException('Material not found')
-    return parseJson<Material>(row.record_json, { id: row.id, organizationId: row.organization_id } as Material)
+    const material = parseJson<Material>(row.record_json, { id: row.id } as Material)
+    return {
+      ...material,
+      id: row.id,
+      libraryScope: row.library_scope,
+      organizationId: row.library_scope === 'GLOBAL' ? undefined : row.organization_id ?? actor.organizationId,
+    }
+  }
+
+  private evidenceOrganizationForMaterial(material: Pick<Material, 'libraryScope' | 'organizationId'>, actorOrganizationId: string) {
+    return material.libraryScope === 'GLOBAL' ? GLOBAL_LIBRARY_ORGANIZATION_ID : material.organizationId ?? actorOrganizationId
   }
 
   private async enqueue(actor: MaterialEvidenceActor, evidenceDocumentId: string, action: 'EXTRACT' | 'INDEX' | 'INVALIDATE', idempotencyKey: string) {
@@ -278,6 +304,12 @@ export class MaterialEvidenceRag {
   async queueMaterial(actor: MaterialEvidenceActor, materialId: string, idempotencyKey: string) {
     await this.requireManage(actor, materialId)
     const material = await this.materialForActor(actor, materialId)
+    if (material.libraryScope === 'GLOBAL' && actor.organizationId !== GLOBAL_LIBRARY_ORGANIZATION_ID) {
+      await this.audit(actor, 'material-evidence.global.manage.denied', materialId, 'denied')
+      throw new ForbiddenException('Only the internal material curator can index global material evidence')
+    }
+    const evidenceOrganizationId = this.evidenceOrganizationForMaterial(material, actor.organizationId)
+    const evidenceActor = { ...actor, organizationId: evidenceOrganizationId }
     const text = materialText(material)
     const hash = await sha256(text)
     const stamp = now()
@@ -285,7 +317,7 @@ export class MaterialEvidenceRag {
     let evidence = await this.env.DB.prepare(
       `SELECT id FROM material_evidence_documents
        WHERE organization_id = ? AND source_kind = 'MATERIAL' AND material_id = ? AND source_version = ?`,
-    ).bind(actor.organizationId, material.id, sourceVersion).first<{ id: string }>()
+    ).bind(evidenceOrganizationId, material.id, sourceVersion).first<{ id: string }>()
     if (!evidence) {
       const id = uuid()
       await this.env.DB.prepare(
@@ -293,7 +325,7 @@ export class MaterialEvidenceRag {
           id, organization_id, source_kind, material_id, source_title, source_version, content_hash,
           approval_status, extraction_status, reviewed_text, index_version, created_at, updated_at
         ) VALUES (?, ?, 'MATERIAL', ?, ?, ?, ?, 'APPROVED', 'QUEUED', ?, ?, ?, ?)`,
-      ).bind(id, actor.organizationId, material.id, material.name, sourceVersion, hash, text, INDEX_VERSION, stamp, stamp).run()
+      ).bind(id, evidenceOrganizationId, material.id, material.name, sourceVersion, hash, text, INDEX_VERSION, stamp, stamp).run()
       evidence = { id }
     } else {
       await this.env.DB.prepare(
@@ -301,9 +333,9 @@ export class MaterialEvidenceRag {
          SET source_title = ?, content_hash = ?, reviewed_text = ?, approval_status = 'APPROVED',
              extraction_status = 'QUEUED', error_code = NULL, updated_at = ?
          WHERE id = ? AND organization_id = ?`,
-      ).bind(material.name, hash, text, stamp, evidence.id, actor.organizationId).run()
+      ).bind(material.name, hash, text, stamp, evidence.id, evidenceOrganizationId).run()
     }
-    const job = await this.enqueue(actor, evidence.id, 'INDEX', idempotencyKey)
+    const job = await this.enqueue(evidenceActor, evidence.id, 'INDEX', idempotencyKey)
     await this.audit(actor, 'material-evidence.material.index.queued', material.id)
     return { evidenceDocumentId: evidence.id, ...job }
   }
@@ -317,7 +349,7 @@ export class MaterialEvidenceRag {
       : []
     const stamp = now()
     const material = await this.env.DB.prepare(
-      `SELECT id FROM material_records WHERE id = ? AND organization_id = ?`,
+      `SELECT id FROM material_records WHERE id = ? AND (library_scope = 'GLOBAL' OR organization_id = ?)`,
     ).bind(document.linkedTo, actor.organizationId).first<{ id: string }>()
     const sourceVersion = document.version || 'v1'
     let evidence = await this.env.DB.prepare(
@@ -398,13 +430,14 @@ export class MaterialEvidenceRag {
 
   async materialSources(actor: MaterialEvidenceActor, materialId: string): Promise<EvidenceSource[]> {
     await this.requireView(actor, materialId)
-    await this.materialForActor(actor, materialId)
+    const material = await this.materialForActor(actor, materialId)
+    const evidenceOrganizationId = this.evidenceOrganizationForMaterial(material, actor.organizationId)
     const rows = await this.env.DB.prepare(
       `SELECT source_kind, document_id, source_title, source_version, extraction_status, updated_at
        FROM material_evidence_documents
        WHERE organization_id = ? AND material_id = ? AND extraction_status != 'INVALIDATED'
        ORDER BY updated_at DESC LIMIT 24`,
-    ).bind(actor.organizationId, materialId).all<{
+    ).bind(evidenceOrganizationId, materialId).all<{
       source_kind: 'MATERIAL' | 'DOCUMENT'
       document_id: string | null
       source_title: string
@@ -449,11 +482,12 @@ export class MaterialEvidenceRag {
 
   async materialEvidence(actor: MaterialEvidenceActor, materialId: string, requestedQuery?: string | null) {
     await this.requireView(actor, materialId)
-    await this.materialForActor(actor, materialId)
+    const material = await this.materialForActor(actor, materialId)
+    const evidenceOrganizationId = this.evidenceOrganizationForMaterial(material, actor.organizationId)
     const sources = await this.env.DB.prepare(
       `SELECT extraction_status FROM material_evidence_documents
        WHERE organization_id = ? AND material_id = ? AND extraction_status != 'INVALIDATED'`,
-    ).bind(actor.organizationId, materialId).all<{ extraction_status: EvidenceState }>()
+    ).bind(evidenceOrganizationId, materialId).all<{ extraction_status: EvidenceState }>()
     const ready = (sources.results ?? []).filter((row) => row.extraction_status === 'READY').length
     const hasUnconfigured = (sources.results ?? []).some((row) => row.extraction_status === 'NOT_CONFIGURED')
     if (!requestedQuery?.trim()) {
@@ -477,13 +511,20 @@ export class MaterialEvidenceRag {
     const embeddings = await this.env.AI.run(EMBEDDING_MODEL, queryInput)
     const vector = embeddings.data?.[0]
     if (!Array.isArray(vector) || vector.length !== 768) throw new UnprocessableEntityException('Material evidence embedding provider returned an invalid vector')
-    const filter: Record<string, unknown> = { organizationId: actor.organizationId, status: 'READY', indexVersion: INDEX_VERSION }
-    filter.sourceKind = sourceKinds.length === 1 ? sourceKinds[0] : { $in: sourceKinds }
-    if (materialIds.length) filter.materialId = materialIds.length === 1 ? materialIds[0] : { $in: materialIds }
-    if (documentIds.length) filter.documentId = documentIds.length === 1 ? documentIds[0] : { $in: documentIds }
-    const vectorResult = await this.env.RAG_INDEX.query(vector, { topK: request.topK ?? 6, filter, returnMetadata: 'all' })
+    const topK = request.topK ?? 6
+    const scopes = materialEvidenceQueryScopes(actor.organizationId, sourceKinds)
+    const scopedMatches: Array<{ id: string; score: number; organizationId: string; sourceKinds: Array<'MATERIAL' | 'DOCUMENT'> }> = []
+    for (const scope of scopes) {
+      const filter: Record<string, unknown> = { organizationId: scope.organizationId, status: 'READY', indexVersion: INDEX_VERSION }
+      filter.sourceKind = scope.sourceKinds.length === 1 ? scope.sourceKinds[0] : { $in: scope.sourceKinds }
+      if (materialIds.length) filter.materialId = materialIds.length === 1 ? materialIds[0] : { $in: materialIds }
+      if (documentIds.length && scope.organizationId === actor.organizationId) filter.documentId = documentIds.length === 1 ? documentIds[0] : { $in: documentIds }
+      const result = await this.env.RAG_INDEX.query(vector, { topK, filter, returnMetadata: 'all' })
+      scopedMatches.push(...result.matches.map((match) => ({ ...match, organizationId: scope.organizationId, sourceKinds: scope.sourceKinds })))
+    }
     const citations: EvidenceCitation[] = []
-    for (const match of vectorResult.matches.slice(0, request.topK ?? 6)) {
+    for (const match of scopedMatches.sort((left, right) => right.score - left.score).slice(0, topK)) {
+      const scopedDocumentIds = match.organizationId === actor.organizationId ? documentIds : []
       const chunk = await this.env.DB.prepare(
         `SELECT c.id, c.evidence_document_id, c.vector_id, c.chunk_index, c.page_number, c.section_label, c.excerpt,
                 d.source_title, d.source_version, d.source_kind, d.material_id, d.document_id, d.content_hash
@@ -492,12 +533,18 @@ export class MaterialEvidenceRag {
          WHERE c.organization_id = ? AND c.vector_id = ? AND c.status = 'READY'
            AND d.extraction_status = 'READY' AND d.approval_status = 'APPROVED'
            ${materialIds.length ? `AND d.material_id IN (${materialIds.map(() => '?').join(', ')})` : ''}
-           ${documentIds.length ? `AND d.document_id IN (${documentIds.map(() => '?').join(', ')})` : ''}
-           ${sourceKinds.length ? `AND d.source_kind IN (${sourceKinds.map(() => '?').join(', ')})` : ''}
+           ${scopedDocumentIds.length ? `AND d.document_id IN (${scopedDocumentIds.map(() => '?').join(', ')})` : ''}
+           ${match.sourceKinds.length ? `AND d.source_kind IN (${match.sourceKinds.map(() => '?').join(', ')})` : ''}
          LIMIT 1`,
-      ).bind(actor.organizationId, match.id, ...materialIds, ...documentIds, ...sourceKinds).first<EvidenceChunkRow>()
+      ).bind(
+        match.organizationId,
+        match.id,
+        ...materialIds,
+        ...scopedDocumentIds,
+        ...match.sourceKinds,
+      ).first<EvidenceChunkRow>()
       if (!chunk) continue
-      if (!(await this.chunkStillEligible(chunk, actor.organizationId))) continue
+      if (!(await this.chunkStillEligible(chunk, match.organizationId, actor.organizationId))) continue
       citations.push({
         citationId: chunk.id,
         sourceKind: chunk.source_kind === 'MATERIAL' ? 'material' : 'document',
@@ -622,12 +669,30 @@ export class MaterialEvidenceRag {
     return isCurrentEvidenceDocument({ ...record, checksum: document.checksum, version: document.version }, row.source_version, row.content_hash)
   }
 
-  private async chunkStillEligible(chunk: EvidenceChunkRow, organizationId: string) {
-    if (chunk.source_kind === 'MATERIAL') return true
+  private async chunkStillEligible(chunk: EvidenceChunkRow, evidenceOrganizationId: string, actorOrganizationId: string) {
+    if (chunk.source_kind === 'MATERIAL') {
+      if (!chunk.material_id) return false
+      const material = await this.env.DB.prepare(
+        `SELECT library_scope, organization_id FROM material_records
+         WHERE id = ? AND (
+           (library_scope = 'GLOBAL' AND ? = ?)
+           OR (library_scope = 'TENANT' AND organization_id = ? AND ? = ?)
+         )`,
+      ).bind(
+        chunk.material_id,
+        evidenceOrganizationId,
+        GLOBAL_LIBRARY_ORGANIZATION_ID,
+        actorOrganizationId,
+        evidenceOrganizationId,
+        actorOrganizationId,
+      ).first<{ library_scope: string; organization_id: string | null }>()
+      return Boolean(material)
+    }
     if (!chunk.document_id) return false
+    if (evidenceOrganizationId !== actorOrganizationId) return false
     const document = await this.env.DB.prepare(
       `SELECT record_json, checksum, version FROM document_records WHERE id = ? AND organization_id = ?`,
-    ).bind(chunk.document_id, organizationId).first<{ record_json: string | null; checksum: string; version: string }>()
+    ).bind(chunk.document_id, actorOrganizationId).first<{ record_json: string | null; checksum: string; version: string }>()
     if (!document) return false
     const record = parseJson<DocumentRecord>(document.record_json, {} as DocumentRecord)
     return isCurrentEvidenceDocument({ ...record, checksum: document.checksum, version: document.version }, chunk.source_version, chunk.content_hash)
@@ -751,6 +816,28 @@ export class MaterialEvidenceRag {
       await this.failJob(job, error)
       await this.audit(actor, 'material-evidence.job.failed', job.evidence_document_id, 'review').catch(() => undefined)
     }
+  }
+
+  async queueMissingGlobalMaterials(limit = 3) {
+    if (!this.configured) return { queued: 0, state: 'NOT_CONFIGURED' as const }
+    const rows = await this.env.DB.prepare(
+      `SELECT m.id
+       FROM material_records m
+       LEFT JOIN material_evidence_documents d
+         ON d.organization_id = ? AND d.source_kind = 'MATERIAL' AND d.material_id = m.id
+        AND d.extraction_status != 'INVALIDATED'
+       WHERE m.library_scope = 'GLOBAL' AND d.id IS NULL
+       ORDER BY m.name ASC LIMIT ?`,
+    ).bind(GLOBAL_LIBRARY_ORGANIZATION_ID, Math.min(Math.max(1, limit), 8)).all<{ id: string }>()
+    const actor: MaterialEvidenceActor = {
+      organizationId: GLOBAL_LIBRARY_ORGANIZATION_ID,
+      userId: 'system:global-material-curator',
+      permissions: ['documents.view', 'documents.manage', 'materials.view'],
+    }
+    for (const material of rows.results ?? []) {
+      await this.queueMaterial(actor, material.id, `global-material-bootstrap:${INDEX_VERSION}:${material.id}`)
+    }
+    return { queued: rows.results?.length ?? 0, state: 'QUEUED' as const }
   }
 
   async processDueJobs(limit = 5) {

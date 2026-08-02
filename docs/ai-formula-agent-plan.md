@@ -17,21 +17,28 @@ sequence; SSE is a delivery transport and is never the source of truth.
 `mock` is the default local and CI provider. It runs the same tool registry
 against tenant-scoped domain data and produces deterministic artifact output.
 
-`OpenAiResponsesProvider` is isolated and server-only, so its `fetch` contract
-can be mocked without an SDK. The current beta rollout intentionally executes
-only `mock` mode. This prevents a secret-only configuration from falsely
-labeling deterministic output as an OpenAI result. A later provider rollout
-must add its tool-call continuation loop, then enable it only with the following
-Worker secrets or variables:
+`CloudflareWorkersAiFormulaProvider` uses the server-side `AI` binding and the
+multilingual `@cf/zai-org/glm-4.7-flash` model. It returns one bounded,
+schema-validated research plan through a function call. The plan may refine a
+material-evidence query, but it cannot execute SQL, write a formula, reserve
+inventory, calculate IFRA, or bypass confirmation. Enable it with:
+
+- `AGENT_PROVIDER=workers_ai`
+- `WORKERS_AI_FORMULA_AGENT_MODEL=@cf/zai-org/glm-4.7-flash`
+- `[ai] binding = "AI"`
+
+`OpenAiResponsesProvider` remains isolated and server-only, so its `fetch`
+contract can be mocked without an SDK. OpenAI execution remains disabled. A
+later OpenAI rollout would require the following Worker secrets or variables:
 
 - `AGENT_PROVIDER=openai`
 - `OPENAI_API_KEY`
 - `OPENAI_FORMULA_AGENT_MODEL`
 - `AGENT_CONTEXT_ENCRYPTION_KEY`
 
-Until that rollout is complete, the application remains in `Deterministic mock
-mode`, regardless of any partially configured provider variable. No browser
-bundle, D1 record, audit event, or response exposes the provider secret.
+Local development and CI remain in deterministic mode unless a Workers AI
+binding is explicitly supplied. No browser bundle, D1 record, audit event, or
+response exposes a provider secret or raw model reasoning.
 
 ## Security Boundaries
 
@@ -65,7 +72,9 @@ The runtime powers two separate tenant-safe modules while the legacy
 `/ai/formula-agent` URL redirects to Formula Design Studio for compatibility.
 
 - **Formula Design Studio** stores a structured brand brief and produces three
-  deterministic directions from compliance-approved workspace materials. Brand
+  directions from compliance-approved workspace materials. Workers AI may
+  interpret the creative brief and refine material search terms; deterministic
+  services still construct ratios and validate the result. Brand
   users can create a brief and review only deliberately shared safe summaries.
   Perfumers with `formulas.edit`, `formulas.viewSensitive`, and
   `materials.view` generate directions, share them, and request an explicit

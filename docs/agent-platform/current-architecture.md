@@ -2,7 +2,7 @@
 
 ## Scope
 
-OlfactoryOps runs Formula Intelligence on the existing React, NestJS, and Cloudflare Worker/D1 architecture. The active provider is deterministic mock mode. It executes registered tools against the caller's tenant data and does not call an external model or persist model reasoning.
+OlfactoryOps runs Formula Intelligence on the existing React, NestJS, and Cloudflare Worker/D1 architecture. Hosted Cloudflare environments use a Workers AI provider for bounded brief planning; local development and CI retain deterministic mode. Neither mode persists model reasoning, and all operational results still come from permission-checked tenant tools and deterministic domain services.
 
 ## Runtime boundaries
 
@@ -19,7 +19,7 @@ OlfactoryOps runs Formula Intelligence on the existing React, NestJS, and Cloudf
 1. An authenticated user creates a run or Formula Intelligence workflow.
 2. The Worker writes a run, durable job, user message, and append-only events.
 3. `ctx.waitUntil` starts worker execution; the scheduled handler can reclaim an expired job lease.
-4. Registered deterministic tools call the existing NorthStar domain service.
+4. Workers AI may return a schema-validated research plan and read-only tool recommendations; registered tools call the existing NorthStar domain service.
 5. Structured artifacts are persisted and rendered through an allowlist.
 6. A draft save pauses for explicit confirmation and remains non-consuming.
 7. The confirmation id is the durable exactly-once key for formula draft save.
@@ -36,4 +36,4 @@ OlfactoryOps runs Formula Intelligence on the existing React, NestJS, and Cloudf
 
 - The local and Worker transports had different replay behavior. The shared protocol now accepts `Last-Event-ID` semantics in both targets, but direct Worker/D1 contention coverage still needs expansion.
 - Design Studio and Optimizer previously refreshed the full run for each SSE event. They are being moved to buffered persisted-event replay with a throttled authoritative detail refresh.
-- External provider execution remains intentionally disabled. `AGENT_PROVIDER` configuration alone must never make the beta appear model-backed.
+- OpenAI execution remains intentionally disabled. Workers AI is selected only when both `AGENT_PROVIDER=workers_ai` and the server-side `AI` binding exist; otherwise the run is persisted as deterministic mode rather than being mislabeled.

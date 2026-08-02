@@ -233,7 +233,13 @@ export function FormulaAgentWorkspace({ apiBaseUrl, requestApi, onFormulaSaved }
     <div className="domain-page formula-agent-page">
       <section className="panel glass formula-agent-hero">
         <div><span className="mono-small">Formula Research Agent</span><h2>Structured formula research</h2><p>Use workspace materials and live inventory evidence. The agent cannot consume stock and cannot save a formula without your confirmation.</p></div>
-        <span className="status-chip green"><Sparkles size={14} /> {activeRun?.provider === 'openai' ? 'OpenAI configured' : 'Deterministic mock mode'}</span>
+        <span className="status-chip green"><Sparkles size={14} /> {
+          activeRun?.provider === 'workers_ai'
+            ? 'Cloudflare Workers AI'
+            : activeRun?.provider === 'openai'
+              ? 'OpenAI configured'
+              : 'Deterministic mode'
+        }</span>
       </section>
       <div className="formula-agent-grid">
         <section className="panel glass formula-agent-compose">

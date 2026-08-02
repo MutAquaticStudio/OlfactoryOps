@@ -435,6 +435,9 @@ export type IntegrationReadinessConfig = {
   cloudflareSaasConfigured: boolean
   betaHostnameConfigured: boolean
   betaHostnameReachable?: boolean
+  workersAiConfigured?: boolean
+  vectorizeConfigured?: boolean
+  formulaAgentProvider?: 'mock' | 'openai' | 'workers_ai'
 }
 
 type CreatePurchaseOrderBody = {
@@ -9180,6 +9183,9 @@ export class NorthStarService {
     emailConfigured: false,
     cloudflareSaasConfigured: false,
     betaHostnameConfigured: false,
+    workersAiConfigured: false,
+    vectorizeConfigured: false,
+    formulaAgentProvider: 'mock',
   }): { data: IntegrationReadinessResponse } {
     const session = this.currentSession()
     if (!['Owner', 'Admin', 'Platform Admin'].includes(session.role)) {
@@ -9233,6 +9239,30 @@ export class NorthStarService {
               : betaHostnameStatus === 'blocked'
                 ? 'beta.labofscents.org is configured but has not completed DNS or HTTPS validation.'
                 : 'beta.labofscents.org is not configured for this environment.',
+          },
+          {
+            key: 'workers_ai',
+            label: 'Cloudflare Workers AI',
+            status: config.workersAiConfigured ? 'ready' : 'not_configured',
+            detail: config.workersAiConfigured
+              ? 'The server-side Workers AI binding is available for governed LLM planning and evidence embeddings.'
+              : 'Workers AI is not bound in this environment. AI workflows use deterministic mode only.',
+          },
+          {
+            key: 'vectorize_rag',
+            label: 'Material evidence RAG',
+            status: config.workersAiConfigured && config.vectorizeConfigured ? 'ready' : 'not_configured',
+            detail: config.workersAiConfigured && config.vectorizeConfigured
+              ? 'Workers AI embeddings and the tenant-filtered Vectorize index are configured. Sources still require review and indexing before retrieval returns citations.'
+              : 'Material evidence retrieval requires both Workers AI and Vectorize bindings.',
+          },
+          {
+            key: 'formula_agent',
+            label: 'Formula Intelligence model',
+            status: config.formulaAgentProvider === 'workers_ai' && config.workersAiConfigured ? 'ready' : 'not_configured',
+            detail: config.formulaAgentProvider === 'workers_ai' && config.workersAiConfigured
+              ? 'Cloudflare Workers AI creates bounded research plans; deterministic services retain formula math, IFRA, inventory, costing, and draft-save authority.'
+              : 'Formula Intelligence remains in deterministic mode until the Workers AI provider is explicitly enabled.',
           },
         ],
         checkedAt: new Date().toISOString(),

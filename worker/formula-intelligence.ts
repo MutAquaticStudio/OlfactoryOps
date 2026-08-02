@@ -31,7 +31,14 @@ import {
 import type { FormulaIntelligenceTrialSource, Material } from '../src/data/northStar.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
-import { AgentRuntimeStore, type AgentActor, type AgentRunRow } from './agent-runtime.js'
+import {
+  AgentRuntimeStore,
+  DeterministicMockFormulaProvider,
+  agentFunctionTools,
+  type AgentActor,
+  type AgentModelProvider,
+  type AgentRunRow,
+} from './agent-runtime.js'
 import type { MaterialEvidenceRag } from './material-evidence-rag.js'
 
 type ProjectRow = {
@@ -1313,11 +1320,26 @@ function availabilityRankedMaterials(service: NorthStarService, materials: Mater
     .sort((left, right) => right.availabilityRank - left.availabilityRank || left.name.localeCompare(right.name))
 }
 
-async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>, materialEvidence?: MaterialEvidenceRag) {
+async function runDesignStudio(
+  store: AgentRuntimeStore,
+  service: NorthStarService,
+  actor: AgentActor,
+  run: AgentRunRow,
+  config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'DESIGN_STUDIO' }>,
+  materialEvidence: MaterialEvidenceRag | undefined,
+  modelProvider: AgentModelProvider,
+) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const analyzeId = await store.createNode(run, 'analyze_brief', { brief: config.brief.creativeBrief })
   await store.startNode(run, analyzeId, 'analyze_brief')
-  await store.completeNode(run, analyzeId, 'analyze_brief', { designProjectId: config.projectId, availabilityFirst: config.brief.availabilityFirst }, 12)
+  const researchPlan = await modelProvider.researchPlan({ brief: config.brief.creativeBrief, tools: agentFunctionTools })
+  await store.completeNode(run, analyzeId, 'analyze_brief', {
+    designProjectId: config.projectId,
+    availabilityFirst: config.brief.availabilityFirst,
+    provider: modelProvider.kind,
+    model: modelProvider.model,
+    summary: researchPlan.summary,
+  }, 12)
   const searchId = await store.createNode(run, 'search_materials', { brief: config.brief.creativeBrief })
   await store.startNode(run, searchId, 'search_materials')
   const materialCatalog = formulaIntelligenceMaterialCatalog(service)
@@ -1326,19 +1348,19 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
   const constraintSnapshot = config.constraintSnapshotId && config.briefVersionId
     ? await intelligence.pinMaterialUniverse(actor, run.id, config.constraintSnapshotId, materials)
     : undefined
-  await recordTool(store, run, searchId, 'search_materials', { query: config.brief.creativeBrief }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
+  await recordTool(store, run, searchId, 'search_materials', { query: researchPlan.searchQuery }, { materialIds: materials.slice(0, 12).map((material) => material.id) })
   const granted = new Set(service.me().data.permissions)
   const evidence = materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')
-    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id), topK: 6 })
+    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: materials.slice(0, 12).map((material) => material.id), topK: 6 })
     : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
   if (materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')) {
-    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: config.brief.creativeBrief, materialIds: materials.slice(0, 12).map((material) => material.id) }, { state: evidence.state, citationCount: evidence.citations.length })
+    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: materials.slice(0, 12).map((material) => material.id) }, { state: evidence.state, citationCount: evidence.citations.length })
   }
   await store.completeNode(run, searchId, 'search_materials', { materialCount: materials.length, evidenceState: evidence.state }, 28)
   const sensoryMemory = service.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory') && granted.has('trials.view')
     ? service.workspaceSensoryMemory().data
     : undefined
-  const proposals = buildDesignDirectionProposals(config.brief, materials)
+  const proposals = buildDesignDirectionProposals(config.brief, materials, researchPlan.focusNotes)
     .map((proposal) => ({
       ...proposal,
       historicalEvidence: sensoryMemory
@@ -1400,10 +1422,20 @@ async function runDesignStudio(store: AgentRuntimeStore, service: NorthStarServi
     constraintSnapshot && evaluations.length ? { constraintSnapshotId: constraintSnapshot.id, evaluations } : undefined,
   )
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: constraintSnapshot ? 3 : 2, directionCount: directions.length }, 94)
-  await store.createAssistantMessage(run, 'I prepared three deterministic design directions from reviewed workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
+  await store.createAssistantMessage(run, modelProvider.kind === 'workers_ai'
+    ? 'Cloudflare Workers AI interpreted the creative brief and requested a governed material search. Three directions were then calculated and validated against reviewed workspace materials, inventory visibility, and compliance gates.'
+    : 'I prepared three deterministic design directions from reviewed workspace materials. A perfumer can share a direction for brand review or explicitly save one as a draft.')
 }
 
-async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, run: AgentRunRow, config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>, materialEvidence?: MaterialEvidenceRag) {
+async function runOptimizer(
+  store: AgentRuntimeStore,
+  service: NorthStarService,
+  actor: AgentActor,
+  run: AgentRunRow,
+  config: Extract<FormulaIntelligenceRunConfig, { workflowKind: 'REFORMULATION_OPTIMIZER' }>,
+  materialEvidence: MaterialEvidenceRag | undefined,
+  modelProvider: AgentModelProvider,
+) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const { request } = config
   const versions = service.formulaVersions(request.baselineFormulaId).data
@@ -1411,7 +1443,17 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   if (!baseline) throw new UnprocessableEntityException('Select an immutable baseline formula version before optimizing')
   const analyzeId = await store.createNode(run, 'analyze_brief', { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion })
   await store.startNode(run, analyzeId, 'analyze_brief')
-  await store.completeNode(run, analyzeId, 'analyze_brief', { intent: request.intent, lockedMaterialIds: request.lockedMaterialIds }, 12)
+  const researchPlan = await modelProvider.researchPlan({
+    brief: `Reformulate ${versions.formula.name}. Intent: ${request.intent}. Preserve locked materials and deterministic compliance gates.`,
+    tools: agentFunctionTools,
+  })
+  await store.completeNode(run, analyzeId, 'analyze_brief', {
+    intent: request.intent,
+    lockedMaterialIds: request.lockedMaterialIds,
+    provider: modelProvider.kind,
+    model: modelProvider.model,
+    summary: researchPlan.summary,
+  }, 12)
   const baselineLines = optimizerBaselineLines(baseline)
   if (baselineLines.length === 0) throw new UnprocessableEntityException('Optimizer requires an immutable baseline version that resolves to raw materials')
   const materialIdSet = new Set(baselineLines.map((line) => line.materialId).filter((id): id is string => Boolean(id)))
@@ -1424,10 +1466,10 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   const granted = new Set(service.me().data.permissions)
   const evidenceMaterialIds = [...new Set([...materialIdSet, ...materials.slice(0, 12).map((material) => material.id)])].slice(0, 12)
   const evidence = materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')
-    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: `Optimize ${request.intent} for ${versions.formula.name}`, materialIds: evidenceMaterialIds, topK: 6 })
+    ? await materialEvidence.retrieve({ organizationId: actor.organizationId, userId: actor.userId, permissions: [...granted] }, { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds, topK: 6 })
     : { state: 'NOT_EVALUATED' as const, citations: [], indexedSourceCount: 0 }
   if (materialEvidence && service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag') && granted.has('documents.view') && granted.has('materials.view')) {
-    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: `Optimize ${request.intent}`, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
+    await recordTool(store, run, searchId, 'retrieve_material_evidence', { query: researchPlan.searchQuery, materialIds: evidenceMaterialIds }, { state: evidence.state, citationCount: evidence.citations.length })
   }
   await store.completeNode(run, searchId, 'search_materials', { candidateMaterialCount: materials.length, evidenceState: evidence.state }, 28)
   const availableMaterialIds = new Set<string>()
@@ -1523,10 +1565,19 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   await store.assertExecutionLease(run.id, run.organization_id)
   await intelligence.persistOptimizerCandidates(actor, run.id, request, candidates)
   await store.completeNode(run, resultId, 'prepare_result', { artifactCount: 2, candidateCount: candidates.length }, 94)
-  await store.createAssistantMessage(run, 'I ranked deterministic reformulation candidates by compliance feasibility, eligible inventory, cost evidence when permitted, and minimum composition change. Select a candidate before saving a normal editable draft.')
+  await store.createAssistantMessage(run, modelProvider.kind === 'workers_ai'
+    ? 'Cloudflare Workers AI analyzed the reformulation intent and requested governed evidence. Candidate construction and ranking remain deterministic: compliance, eligible inventory, visible cost, then minimum change from the immutable baseline.'
+    : 'I ranked deterministic reformulation candidates by compliance feasibility, eligible inventory, cost evidence when permitted, and minimum composition change. Select a candidate before saving a normal editable draft.')
 }
 
-export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string, materialEvidence?: MaterialEvidenceRag) {
+export async function executeFormulaIntelligenceRun(
+  store: AgentRuntimeStore,
+  service: NorthStarService,
+  actor: AgentActor,
+  runId: string,
+  materialEvidence?: MaterialEvidenceRag,
+  modelProvider: AgentModelProvider = new DeterministicMockFormulaProvider(),
+) {
   const intelligence = new FormulaIntelligenceStore(store.database)
   const { config } = await intelligence.configForRun(actor, runId)
   const run = await beginRun(store, actor, runId)
@@ -1534,8 +1585,8 @@ export async function executeFormulaIntelligenceRun(store: AgentRuntimeStore, se
   try {
     requirePermission(service, 'formulas.viewSensitive')
     requirePermission(service, 'materials.view')
-    if (config.workflowKind === 'DESIGN_STUDIO') await runDesignStudio(store, service, actor, run, config, materialEvidence)
-    else await runOptimizer(store, service, actor, run, config, materialEvidence)
+    if (config.workflowKind === 'DESIGN_STUDIO') await runDesignStudio(store, service, actor, run, config, materialEvidence, modelProvider)
+    else await runOptimizer(store, service, actor, run, config, materialEvidence, modelProvider)
     await completeRun(store, run)
     await auditFormulaIntelligence(store.database, actor, `formula-intelligence.${config.workflowKind.toLowerCase()}.complete`, run.id)
   } catch (error) {
@@ -1553,6 +1604,7 @@ export async function createDesignProjectRun(
   actor: AgentActor,
   projectId: string,
   idempotencyKey: string,
+  provider: { provider: string; model: string } = { provider: 'mock', model: 'deterministic-v1' },
 ) {
   requirePermission(service, 'formulas.edit')
   requireFormulaIntelligenceFeature(service, 'designStudioCandidateGeneration')
@@ -1565,7 +1617,7 @@ export async function createDesignProjectRun(
   await intelligence.assertRunStartAllowed(actor, projectId)
   const store = new AgentRuntimeStore(db)
   const brief = generation.brief
-  const result = await store.create(actor, { brief: brief.creativeBrief }, { provider: 'mock', model: 'deterministic-v1' })
+  const result = await store.create(actor, { brief: brief.creativeBrief }, provider)
   const config = formulaIntelligenceRunConfigSchema.parse({
     workflowKind: 'DESIGN_STUDIO',
     projectId,
@@ -1591,6 +1643,7 @@ export async function createOptimizerRun(
   actor: AgentActor,
   requestInput: unknown,
   idempotencyKey: string,
+  provider: { provider: string; model: string } = { provider: 'mock', model: 'deterministic-v1' },
 ) {
   requirePermission(service, 'formulas.viewSensitive')
   requirePermission(service, 'materials.view')
@@ -1609,7 +1662,7 @@ export async function createOptimizerRun(
   const store = new AgentRuntimeStore(db)
   const intelligence = new FormulaIntelligenceStore(db)
   await intelligence.assertRunStartAllowed(actor)
-  const result = await store.create(actor, { brief: `Optimize ${versions.formula.name} ${request.baselineVersion}` }, { provider: 'mock', model: 'deterministic-v1' })
+  const result = await store.create(actor, { brief: `Optimize ${versions.formula.name} ${request.baselineVersion}` }, provider)
   const config = formulaIntelligenceRunConfigSchema.parse({ workflowKind: 'REFORMULATION_OPTIMIZER', request })
   await intelligence.createRunConfig(actor, result.data.run.id, config, idempotencyKey)
   await auditFormulaIntelligence(db, actor, 'formula-intelligence.reformulation.run.create', `${request.baselineFormulaId}:${request.baselineVersion}`)

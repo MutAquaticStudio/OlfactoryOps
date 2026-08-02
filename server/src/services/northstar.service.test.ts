@@ -3184,8 +3184,14 @@ describe('NorthStarService', () => {
       cloudflareSaasConfigured: false,
       betaHostnameConfigured: true,
       betaHostnameReachable: false,
+      workersAiConfigured: true,
+      vectorizeConfigured: true,
+      formulaAgentProvider: 'workers_ai',
     }).data
     expect(readiness.checks.find((check) => check.key === 'beta_hostname')?.status).toBe('blocked')
+    expect(readiness.checks.find((check) => check.key === 'workers_ai')?.status).toBe('ready')
+    expect(readiness.checks.find((check) => check.key === 'vectorize_rag')?.status).toBe('ready')
+    expect(readiness.checks.find((check) => check.key === 'formula_agent')?.status).toBe('ready')
     expect(JSON.stringify(readiness)).not.toContain('STRIPE_SECRET_KEY')
   })
 

@@ -1618,7 +1618,7 @@ export type BillingMode = 'managed_beta' | 'self_service'
 export type IntegrationReadinessStatus = 'ready' | 'not_configured' | 'blocked'
 
 export interface IntegrationReadinessCheck {
-  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname'
+  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname' | 'workers_ai' | 'vectorize_rag' | 'formula_agent'
   label: string
   status: IntegrationReadinessStatus
   detail: string
@@ -2216,7 +2216,7 @@ export const domains: DomainModule[] = [
     responsibility: 'Tenant-scoped research workflow that produces structured, reviewable formula proposals',
     status: 'active',
     health: 84,
-    risk: 'Mock mode is available by default; OpenAI mode remains unavailable until Worker secrets are configured',
+    risk: 'Workers AI may plan governed research; deterministic tools retain formula math, IFRA, inventory, costing, and save authority',
     owner: 'Perfumer Team',
     entities: ['AgentRun', 'WorkflowNode', 'ToolCall', 'Artifact', 'Confirmation'],
     features: ['Brief analysis', 'Material search', 'Inventory advisory', 'Cost and IFRA preview', 'Explicit draft confirmation'],
@@ -2234,7 +2234,7 @@ export const domains: DomainModule[] = [
     responsibility: 'Brand briefs, deterministic fragrance directions, perfumer sharing, and explicit draft save',
     status: 'active',
     health: 88,
-    risk: 'Deterministic mock mode is active; provider mode remains disabled until explicitly configured',
+    risk: 'Workers AI brief planning is bounded by schemas; generated directions still pass deterministic material, inventory, and compliance gates',
     owner: 'Perfumer Team',
     entities: ['DesignProject', 'CreativeBrief', 'Direction', 'BrandFeedback', 'AgentRun'],
     features: ['Structured brand brief', 'Availability-first ranking', 'Creative directions', 'Safe sharing', 'Feedback', 'Explicit draft confirmation'],
