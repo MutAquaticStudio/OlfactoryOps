@@ -664,6 +664,17 @@
   font-size: 0.73rem;
 }
 
+.formula-intelligence-material-basis {
+  gap: 8px;
+}
+
+.formula-intelligence-material-basis > strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .formula-intelligence-decision-grid strong {
   overflow-wrap: anywhere;
   font-size: 0.84rem;

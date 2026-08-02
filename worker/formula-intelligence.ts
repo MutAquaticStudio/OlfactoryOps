@@ -1267,11 +1267,17 @@ async function failRun(store: AgentRuntimeStore, run: AgentRunRow, error: unknow
 }
 
 export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
-  const catalog = service.materials().data
+  const workspaceMaterials = service.materials().data
+  const catalog = workspaceMaterials
     .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
     .map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
   const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
-  return { materials: approved, reviewedOnly: true as const }
+  return {
+    materials: approved,
+    reviewedOnly: true as const,
+    sourceReferenceCount: workspaceMaterials.filter((material) => material.catalogueSource?.status === 'SOURCE_ONLY').length,
+    workspaceMaterialCount: workspaceMaterials.length,
+  }
 }
 
 export function assertFormulaDesignBriefMaterialConstraints(

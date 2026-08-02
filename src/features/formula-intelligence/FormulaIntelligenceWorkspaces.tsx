@@ -69,7 +69,12 @@ type Direction = {
 
 type ShareRecipient = { userId: string; name: string; email: string }
 type Feedback = { id: string; directionId: string; userId: string; rating?: number | null; comment: string; selected: boolean; createdAt: string }
-type DesignMaterialCatalog = { materials: Material[]; reviewedOnly: true }
+type DesignMaterialCatalog = {
+  materials: Material[]
+  reviewedOnly: true
+  sourceReferenceCount: number
+  workspaceMaterialCount: number
+}
 type DesignMaterialCatalogState = 'loading' | 'ready' | 'unavailable'
 type BriefVersion = {
   id: string
@@ -512,6 +517,7 @@ function DirectionDetail({
   feedback,
   feedbackDraft,
   evidence,
+  materialCatalog,
   busy,
   onShare,
   onSave,
@@ -527,6 +533,7 @@ function DirectionDetail({
   feedback: Feedback[]
   feedbackDraft: { comment: string; rating: number }
   evidence?: EvidenceArtifact
+  materialCatalog: Pick<DesignMaterialCatalog, 'sourceReferenceCount' | 'workspaceMaterialCount'> & { formulaReadyCount: number }
   busy: boolean
   onShare: () => void
   onSave: () => void
@@ -537,6 +544,7 @@ function DirectionDetail({
 }) {
   const availability = direction.availability === 'UNKNOWN' ? 'Not evaluated' : direction.availability.toLowerCase()
   const evaluation = direction.evaluation
+  const legacyFourMaterialPalette = (direction.proposal?.ingredients.length ?? 0) <= 4
   return <aside className="panel glass formula-intelligence-detail" aria-label={`${direction.title} detail`}>
     <div className="formula-intelligence-detail-heading">
       <div><span className="formula-intelligence-eyebrow">Direction review</span><h3>{direction.title}</h3></div>
@@ -547,7 +555,10 @@ function DirectionDetail({
     {direction.historicalEvidence ? <section className="formula-intelligence-evidence"><span>Private trial evidence</span><p className="formula-intelligence-copy">{direction.historicalEvidence.explanation}</p><small>{direction.historicalEvidence.state === 'READY' ? `${direction.historicalEvidence.evidenceCount} completed scorecards, profile v${direction.historicalEvidence.profileVersion ?? 1}, bounded adjustment ${direction.historicalEvidence.adjustment > 0 ? '+' : ''}${direction.historicalEvidence.adjustment}.` : direction.historicalEvidence.state === 'NOT_ENOUGH_EVIDENCE' ? 'Not enough completed scorecards for a ranking adjustment.' : direction.historicalEvidence.state === 'DISABLED' ? 'Learning is disabled for this workspace.' : 'Evidence is not available to your role.'}</small></section> : null}
     {evaluation ? <section className="formula-intelligence-evidence"><span>Candidate evaluation</span><div className="formula-intelligence-decision-grid"><div><span>Priority</span><strong>#{evaluation.rank} of 3</strong></div><div><span>Composition</span><strong>{evaluation.composition.totalPercentage.toFixed(2)}% verified</strong></div><div><span>Constraints</span><strong>{evaluation.constraints.state.replaceAll('_', ' ').toLowerCase()}</strong></div><div><span>Cost</span><strong>{!capabilities.canViewCostEvidence || evaluation.cost.state === 'NOT_EVALUATED' ? 'Not evaluated' : evaluation.cost.totalCost?.toFixed(2) ?? 'Not evaluated'}</strong></div></div></section> : null}
     {direction.warnings.length ? <div className="formula-intelligence-action-note"><strong>Review before moving forward</strong><ul>{direction.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}
-    {capabilities.canViewSensitiveComposition && direction.proposal ? <section className="formula-intelligence-evidence"><span>Suggested materials and ratios</span><ProposalLines proposal={direction.proposal} materialNames={materialNames} /></section> : null}
+    {capabilities.canViewSensitiveComposition && direction.proposal ? <>
+      <section className="formula-intelligence-evidence formula-intelligence-material-basis"><span>Material selection basis</span>{legacyFourMaterialPalette ? <p className="formula-intelligence-copy">This immutable result was created under the earlier four-material selection policy. A newly reviewed brief uses the diversified palette selector.</p> : <p className="formula-intelligence-copy">This palette was selected from {materialCatalog.formulaReadyCount.toLocaleString()} reviewed, formula-ready workspace materials using brief relevance, note and family diversity, and eligible availability.</p>}<small>{materialCatalog.sourceReferenceCount.toLocaleString()} supplier catalogue references remain searchable in Materials but are excluded from ratios until their technical and compliance review is approved.</small><strong>100% concentrate composition / evaluated at {direction.proposal.finalProductConcentrationPercent.toFixed(2)}% in the final product</strong></section>
+      <section className="formula-intelligence-evidence"><span>Suggested concentrate composition</span><ProposalLines proposal={direction.proposal} materialNames={materialNames} /></section>
+    </> : null}
     {capabilities.canViewMaterialEvidence ? <EvidenceCitations evidence={evidence} /> : null}
     {capabilities.canSaveDraft ? <>
       <div className="formula-intelligence-actions">
@@ -648,6 +659,7 @@ function StructuredBriefReviewDialog({
   draft,
   materials,
   materialCatalogState,
+  sourceReferenceCount,
   busy,
   canReview,
   onDraftChange,
@@ -658,6 +670,7 @@ function StructuredBriefReviewDialog({
   draft: BriefReviewDraft
   materials: Material[]
   materialCatalogState: DesignMaterialCatalogState
+  sourceReferenceCount: number
   busy: boolean
   canReview: boolean
   onDraftChange: (next: BriefReviewDraft) => void
@@ -712,7 +725,7 @@ function StructuredBriefReviewDialog({
       </section>
       <section className="brief-review-section brief-review-materials-section">
         <div className="brief-review-section-heading"><div><h3>Materials</h3><p>Pin only the materials that must appear. The generator still evaluates the full eligible workspace catalog.</p></div></div>
-        <div className="brief-review-material-picker"><div className="brief-review-material-source"><strong>Reviewed workspace catalog</strong><p>{materialCatalogState === 'loading' ? 'Loading reviewed Materials from this workspace.' : materialCatalogState === 'unavailable' ? 'Reviewed Materials are unavailable right now. Save the brief and retry after Materials can be loaded.' : materials.length ? `${materials.length} reviewed Materials are eligible. Availability is evaluated during generation and never reserves stock.` : 'No reviewed Materials are ready. Complete material review in Materials before creating directions.'}</p></div><MaterialPicker label="Required materials" materials={materials} selected={draft.lockedMaterialIds} disabled={materialCatalogState !== 'ready'} emptyMessage={materialCatalogState === 'loading' ? 'Loading reviewed Materials...' : 'No reviewed Materials are available.'} onChange={(lockedMaterialIds) => onDraftChange({ ...draft, lockedMaterialIds })} /></div>
+        <div className="brief-review-material-picker"><div className="brief-review-material-source"><strong>Formula-ready workspace materials</strong><p>{materialCatalogState === 'loading' ? 'Loading reviewed Materials from this workspace.' : materialCatalogState === 'unavailable' ? 'Reviewed Materials are unavailable right now. Save the brief and retry after Materials can be loaded.' : materials.length ? `${materials.length.toLocaleString()} reviewed Materials can be used in ratios. ${sourceReferenceCount.toLocaleString()} supplier references remain visible in Materials but require technical and compliance approval first.` : `No reviewed Materials are ready. ${sourceReferenceCount.toLocaleString()} supplier references require review in Materials before direction generation.`}</p></div><MaterialPicker label="Required materials" materials={materials} selected={draft.lockedMaterialIds} disabled={materialCatalogState !== 'ready'} emptyMessage={materialCatalogState === 'loading' ? 'Loading reviewed Materials...' : 'No reviewed Materials are available.'} onChange={(lockedMaterialIds) => onDraftChange({ ...draft, lockedMaterialIds })} /></div>
       </section>
       {project.briefVersion?.unresolvedQuestions.length ? <FormulaIntelligenceNotice message={project.briefVersion.unresolvedQuestions.map((question) => question.reason).join(' ')} /> : null}
     </div>
@@ -735,6 +748,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   const [allowMaterialNames, setAllowMaterialNames] = useState(false)
   const [selectedDirectionId, setSelectedDirectionId] = useState<string | null>()
   const [designMaterials, setDesignMaterials] = useState<Material[]>([])
+  const [designMaterialCounts, setDesignMaterialCounts] = useState({ sourceReferenceCount: 0, workspaceMaterialCount: 0 })
   const [designMaterialCatalogState, setDesignMaterialCatalogState] = useState<DesignMaterialCatalogState>('loading')
   const compactDirectionDetail = useMediaQuery('(max-width: 1120px)')
   const [activeRunId, setActiveRunId] = usePersistedRunId('olfactoryops.formula-intelligence.design-run')
@@ -756,6 +770,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     let active = true
     if (!capabilities.canGenerateDirections) {
       setDesignMaterials([])
+      setDesignMaterialCounts({ sourceReferenceCount: 0, workspaceMaterialCount: 0 })
       setDesignMaterialCatalogState('unavailable')
       return () => { active = false }
     }
@@ -764,11 +779,13 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
       .then((catalog) => {
         if (!active) return
         setDesignMaterials(catalog.materials)
+        setDesignMaterialCounts({ sourceReferenceCount: catalog.sourceReferenceCount ?? 0, workspaceMaterialCount: catalog.workspaceMaterialCount ?? catalog.materials.length })
         setDesignMaterialCatalogState('ready')
       })
       .catch(() => {
         if (!active) return
         setDesignMaterials([])
+        setDesignMaterialCounts({ sourceReferenceCount: 0, workspaceMaterialCount: 0 })
         setDesignMaterialCatalogState('unavailable')
       })
     return () => { active = false }
@@ -929,6 +946,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     feedback={selectedDirectionContext.project.feedback.filter((item) => item.directionId === selectedDirectionContext.direction.directionId)}
     feedbackDraft={feedbackDrafts[selectedDirectionContext.direction.directionId] ?? { comment: '', rating: 0 }}
     evidence={activeRun?.run.id === selectedDirectionContext.direction.runId ? activeEvidence : undefined}
+    materialCatalog={{ ...designMaterialCounts, formulaReadyCount: designMaterials.length }}
     busy={busy}
     onShare={() => void openShare(selectedDirectionContext.project.id, selectedDirectionContext.direction)}
     onSave={() => void requestSave(selectedDirectionContext.project.id, selectedDirectionContext.direction)}
@@ -950,7 +968,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
       </AnimatedList>
       {selectedDirectionContext && compactDirectionDetail ? <AppWorkspaceDialog open title={`${selectedDirectionContext.direction.title} details`} onClose={() => setSelectedDirectionId(null)} showHeader={false} className="formula-intelligence-detail-dialog">{selectedDirectionDetail}</AppWorkspaceDialog> : selectedDirectionDetail}
     </div>
-    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
+    {reviewProject ? <StructuredBriefReviewDialog project={reviewProject} draft={reviewDraft} materials={designMaterials} materialCatalogState={designMaterialCatalogState} sourceReferenceCount={designMaterialCounts.sourceReferenceCount} busy={busy} canReview={capabilities.canReviewBrief} onDraftChange={setReviewDraft} onSave={() => void saveBriefReview()} onClose={() => setReviewProjectId(undefined)} /> : null}
     {shareTarget ? <FormulaIntelligenceDialog title="Share direction" onClose={() => setShareTarget(undefined)}><p className="formula-intelligence-copy">Only active members of this brand can receive this direction. Material names stay hidden unless you opt in.</p>{shareTarget.direction.shares?.length ? <div className="formula-intelligence-share-list">{shareTarget.direction.shares.map((share) => <div key={share.recipientUserId}><span>{shareRecipients.find((recipient) => recipient.userId === share.recipientUserId)?.name ?? 'Active recipient'}{share.allowMaterialNames ? ' / material names visible' : ''}</span><button className="ghost-button small" type="button" disabled={busy} onClick={() => void revokeShare(shareTarget.projectId, shareTarget.direction.directionId, share.recipientUserId)}>Revoke</button></div>)}</div> : null}<div className="formula-intelligence-recipient-list">{shareRecipients.map((recipient) => <label key={recipient.userId}><input type="checkbox" checked={selectedRecipientIds.includes(recipient.userId)} onChange={() => setSelectedRecipientIds((current) => current.includes(recipient.userId) ? current.filter((id) => id !== recipient.userId) : [...current, recipient.userId])} /><span><strong>{recipient.name}</strong><small>{recipient.email}</small></span></label>)}</div><label className="checkbox-row"><input type="checkbox" checked={allowMaterialNames} onChange={(event) => setAllowMaterialNames(event.target.checked)} /> Disclose material names</label><div className="formula-intelligence-actions"><button className="primary-button small" type="button" disabled={busy || selectedRecipientIds.length === 0} onClick={() => void share()}><Share2 size={14} /> Save sharing</button><button className="secondary-button small" type="button" disabled={busy} onClick={() => setShareTarget(undefined)}>Cancel</button></div></FormulaIntelligenceDialog> : null}
     {pending ? <FormulaIntelligenceDialog title="Confirm formula draft" onClose={() => setPending(undefined)}><p className="formula-intelligence-copy">{pending.label}</p><p className="formula-intelligence-copy">This creates one editable draft. It does not reserve or consume inventory.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={16} /> Confirm draft</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setPending(undefined)}>Not now</button></div></FormulaIntelligenceDialog> : null}
   </div>

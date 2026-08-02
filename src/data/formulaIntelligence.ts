@@ -3,14 +3,22 @@ import type { ApprovedMaterialSubstitutionRecord, Formula, FormulaPyramidNote, F
 
 type MaterialSeed = Pick<Material, 'id' | 'name' | 'family' | 'odor' | 'tier' | 'costPerGram' | 'ifraLimit'> & { availabilityRank?: number }
 
-const weightSets = [
-  [42, 25, 18, 15],
-  [34, 31, 21, 14],
-  [28, 27, 25, 20],
-]
+const directionProfiles = [
+  { label: 'Luminous opening', tierWeights: { Top: 1.8, Heart: 1.1, Base: 0.75 } },
+  { label: 'Textural heart', tierWeights: { Top: 0.9, Heart: 1.8, Base: 1.05 } },
+  { label: 'Enduring trail', tierWeights: { Top: 0.7, Heart: 1.05, Base: 1.9 } },
+] as const
 
 function noteForTier(tier: Material['tier']): FormulaPyramidNote {
   return tier === 'Heart' ? 'Middle' : tier
+}
+
+function isCarrier(material: MaterialSeed) {
+  return material.family.toLowerCase() === 'carrier' || /\b(ethanol|alcohol|solvent)\b/i.test(material.name)
+}
+
+function noteForMaterial(material: MaterialSeed): AgentFormulaProposal['ingredients'][number]['pyramidNote'] {
+  return isCarrier(material) ? 'Solvent' : noteForTier(material.tier)
 }
 
 function normalizedTerms(values: string[]) {
@@ -28,19 +36,28 @@ function rotate<T>(values: T[], by: number) {
   return values.map((_, index) => values[(index + by) % values.length]!)
 }
 
-function weights(length: number, pattern: number[]) {
-  if (length === 1) return [100]
-  if (length === 2) return [60, 40]
-  if (length === 3) return [45, 30, 25]
-  if (length === 4) return pattern.slice(0, 4).map((value, index, values) => index === values.length - 1 ? 100 - values.slice(0, -1).reduce((sum, item) => sum + item, 0) : value)
-  const denominator = (length * (length + 1)) / 2
-  return Array.from({ length }, (_, index) => index === length - 1
-    ? Number((100 - Array.from({ length: index }, (_, prior) => Number((((length - prior) / denominator) * 100).toFixed(4))).reduce((sum, value) => sum + value, 0)).toFixed(4))
-    : Number((((length - index) / denominator) * 100).toFixed(4)))
+function normalizedAllocation(total: number, scores: number[]) {
+  if (scores.length === 0) return []
+  const denominator = scores.reduce((sum, score) => sum + score, 0)
+  const values: number[] = []
+  for (let index = 0; index < scores.length; index += 1) {
+    const allocated = index === scores.length - 1
+      ? total - values.reduce((sum, value) => sum + value, 0)
+      : (scores[index]! / denominator) * total
+    values.push(Number(allocated.toFixed(4)))
+  }
+  return values
 }
 
-function proposalFromMaterials(name: string, brief: FormulaDesignBrief, materials: MaterialSeed[], pattern: number[]): AgentFormulaProposal {
-  const percentages = weights(materials.length, pattern)
+function proposalFromMaterials(
+  name: string,
+  brief: FormulaDesignBrief,
+  materials: MaterialSeed[],
+  tierWeights: Record<'Top' | 'Heart' | 'Base', number>,
+): AgentFormulaProposal {
+  const percentages = normalizedAllocation(100, materials.map((material, index) => (
+    Math.max(0.25, (materials.length - index) * tierWeights[material.tier])
+  )))
   return {
     name,
     formulaType: brief.formulaType,
@@ -52,9 +69,37 @@ function proposalFromMaterials(name: string, brief: FormulaDesignBrief, material
     ingredients: materials.map((material, index) => ({
       materialId: material.id,
       percentage: percentages[index] ?? 0,
-      pyramidNote: noteForTier(material.tier),
+      pyramidNote: noteForMaterial(material),
     })),
   }
+}
+
+function selectDirectionPalette(ranked: MaterialSeed[], locked: MaterialSeed[], directionIndex: number, formulaType: FormulaDesignBrief['formulaType']) {
+  const targetSize = Math.min(ranked.length, Math.min(24, Math.max(6, locked.length + 4)))
+  const selected = [...locked]
+  const selectedIds = new Set(selected.map((material) => material.id))
+  const add = (material: MaterialSeed | undefined) => {
+    if (!material || selectedIds.has(material.id) || selected.length >= targetSize) return
+    selected.push(material)
+    selectedIds.add(material.id)
+  }
+
+  const candidates = ranked.filter((material) => formulaType === 'ACCORD' || !isCarrier(material))
+  for (const tier of ['Top', 'Heart', 'Base'] as const) {
+    const tierCandidates = candidates.filter((material) => material.tier === tier && !selectedIds.has(material.id))
+    add(tierCandidates[directionIndex % Math.max(1, tierCandidates.length)])
+  }
+
+  const familyKeys = new Set(selected.map((material) => material.family.trim().toLowerCase()))
+  for (const material of rotate(candidates, directionIndex * 2)) {
+    const familyKey = material.family.trim().toLowerCase()
+    if (!familyKeys.has(familyKey)) {
+      add(material)
+      familyKeys.add(familyKey)
+    }
+  }
+  for (const material of rotate(candidates, directionIndex * 2)) add(material)
+  return selected
 }
 
 export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materials: MaterialSeed[]): Array<{ title: string; narrative: string; pyramidSummary: string; proposal: AgentFormulaProposal }> {
@@ -62,25 +107,23 @@ export function buildDesignDirectionProposals(brief: FormulaDesignBrief, materia
   const avoidedTerms = normalizedTerms(brief.avoidedNotes)
   const ranked = [...materials]
     .sort((left, right) => {
-      const availability = brief.availabilityFirst ? (right.availabilityRank ?? 0) - (left.availabilityRank ?? 0) : 0
-      return availability || materialScore(right, desiredTerms, avoidedTerms) - materialScore(left, desiredTerms, avoidedTerms) || left.name.localeCompare(right.name)
+      const leftAvailability = brief.availabilityFirst && (left.availabilityRank ?? 0) > 0 ? 3 : 0
+      const rightAvailability = brief.availabilityFirst && (right.availabilityRank ?? 0) > 0 ? 3 : 0
+      const score = (material: MaterialSeed, availability: number) => materialScore(material, desiredTerms, avoidedTerms) + availability
+      return score(right, rightAvailability) - score(left, leftAvailability) || left.name.localeCompare(right.name)
     })
   const locked = brief.lockedMaterialIds.map((id) => ranked.find((material) => material.id === id))
   if (locked.some((material) => !material)) throw new Error('A locked material is not eligible or is not visible in this workspace')
   const resolvedLocked = locked as MaterialSeed[]
-  const paletteSize = Math.max(4, resolvedLocked.length)
-  const palette = [...resolvedLocked, ...ranked.filter((material) => !resolvedLocked.some((item) => item.id === material.id))].slice(0, paletteSize)
-  if (palette.length === 0) throw new Error('No eligible workspace materials match this design brief')
-  const labels = ['Luminous opening', 'Textural heart', 'Enduring trail']
-  return labels.map((label, index) => {
-    const unlocked = palette.filter((material) => !resolvedLocked.some((item) => item.id === material.id))
-    const choice = [...resolvedLocked, ...rotate(unlocked, index)].slice(0, palette.length)
+  if (ranked.length === 0) throw new Error('No eligible workspace materials match this design brief')
+  return directionProfiles.map(({ label, tierWeights }, index) => {
+    const choice = selectDirectionPalette(ranked, resolvedLocked, index, brief.formulaType)
     const title = `${brief.name} - ${label}`
     return {
       title,
-      narrative: `${label} for ${brief.creativeBrief.slice(0, 180)}. This direction prioritizes eligible materials and identifies availability or compliance review before a draft is saved.`,
-      pyramidSummary: choice.map((material) => `${noteForTier(material.tier)}: ${material.name}`).join(' / '),
-      proposal: proposalFromMaterials(title, brief, choice, weightSets[index]!),
+      narrative: `${label} for ${brief.creativeBrief.slice(0, 180)}. The palette balances brief relevance, note structure, material-family diversity, and eligible availability before a draft is saved.`,
+      pyramidSummary: choice.filter((material) => !isCarrier(material)).map((material) => `${noteForTier(material.tier)}: ${material.name}`).join(' / '),
+      proposal: proposalFromMaterials(title, brief, choice, tierWeights),
     }
   })
 }

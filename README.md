@@ -62,6 +62,18 @@ khi tạo direction để xếp hạng tính khả dụng; bước này không r
 stock. Nếu chưa có Material nào được phê duyệt, Studio hiển thị trạng thái rõ
 ràng và yêu cầu hoàn tất review trong **Materials** trước khi generate.
 
+API và giao diện phân biệt rõ **formula-ready materials** với **supplier
+references**. 1.986 dòng Lluch là nguồn nhận dạng và truy xuất trong Materials,
+không phải 1.986 nguyên liệu đã có odor, strength, IFRA, cost và compliance được
+phê duyệt. Direction mới không còn cắt tập hợp hợp lệ xuống bốn dòng đầu hoặc
+để số gram tồn kho lấn át hoàn toàn độ phù hợp. Engine dùng brief relevance,
+availability có giới hạn, note tier và material-family diversity để chọn palette
+6-24 nguyên liệu tùy tập hợp đã review và các material bắt buộc. Ba direction có
+trọng tâm opening, heart và trail khác nhau. Tỷ lệ hiển thị là **100% concentrate
+composition**; `finalProductConcentrationPercent` tiếp tục là nồng độ dùng để
+đánh giá thành phẩm và IFRA. Direction cũ được giữ bất biến và được ghi rõ là
+kết quả của selection policy trước đây.
+
 ### Luồng generate trong Design Studio
 
 Mỗi Design Studio project luôn hiển thị workflow `Brief → Review → Generate → Draft`. Nút **Generate directions** không biến mất khi brief chưa sẵn sàng; nó ở trạng thái disabled và giải thích rõ cần review brief, tải Materials hay phê duyệt Material trước. Project đã có kết quả hiển thị **Directions generated** để tránh tạo trùng generation round.

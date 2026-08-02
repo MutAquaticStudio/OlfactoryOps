@@ -41,6 +41,16 @@ afterEach(async () => {
 })
 
 describe('AgentLocalRuntimeService', () => {
+  it('separates formula-ready materials from tenant supplier references', async () => {
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    const catalog = await runtime.designMaterialCatalog(service, service.me().data.session)
+
+    expect(catalog.data.sourceReferenceCount).toBe(1986)
+    expect(catalog.data.workspaceMaterialCount).toBeGreaterThan(catalog.data.materials.length)
+    expect(catalog.data.materials.every((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')).toBe(true)
+  })
+
   it('persists a deterministic run and creates exactly one non-consuming draft after confirmation', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
     directories.push(directory)

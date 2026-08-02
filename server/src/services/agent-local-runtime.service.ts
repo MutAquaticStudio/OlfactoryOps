@@ -230,7 +230,13 @@ export class AgentLocalRuntimeService {
     await this.ready()
     this.requireFormulaPermission(service, 'formulas.viewSensitive')
     this.requireFormulaPermission(service, 'materials.view')
-    return { data: { materials: this.approvedMaterials(service), reviewedOnly: true as const } }
+    const workspaceMaterials = service.materials().data
+    return { data: {
+      materials: this.approvedMaterials(service),
+      reviewedOnly: true as const,
+      sourceReferenceCount: workspaceMaterials.filter((material) => material.catalogueSource?.status === 'SOURCE_ONLY').length,
+      workspaceMaterialCount: workspaceMaterials.length,
+    } }
   }
 
   async saveDesignBriefVersion(service: NorthStarService, session: AuthSession, projectId: string, body: unknown) {

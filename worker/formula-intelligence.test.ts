@@ -131,7 +131,12 @@ describe('Formula Intelligence Worker persistence contract', () => {
       materialCompliance: () => ({ data: { status: 'APPROVED' } }),
     } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
-    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [reviewed], reviewedOnly: true })
+    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({
+      materials: [reviewed],
+      reviewedOnly: true,
+      sourceReferenceCount: 1,
+      workspaceMaterialCount: 2,
+    })
   })
 
   it('does not fall back to unreviewed material records for design directions', () => {
@@ -141,7 +146,12 @@ describe('Formula Intelligence Worker persistence contract', () => {
       materialCompliance: () => ({ data: undefined }),
     } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
-    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({ materials: [], reviewedOnly: true })
+    expect(formulaIntelligenceMaterialCatalog(service)).toEqual({
+      materials: [],
+      reviewedOnly: true,
+      sourceReferenceCount: 0,
+      workspaceMaterialCount: 1,
+    })
   })
 
   it('rejects a required material that is not approved in Materials', () => {

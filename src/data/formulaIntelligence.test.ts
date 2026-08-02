@@ -22,6 +22,41 @@ describe('Formula Intelligence deterministic proposals', () => {
     }
   })
 
+  it('uses a diverse reviewed palette instead of truncating every direction to four materials', () => {
+    const brief = formulaDesignBriefSchema.parse({
+      name: 'Citrus amber study',
+      creativeBrief: 'Luminous citrus opening, transparent floral heart, and dry amber woods',
+      desiredNotes: ['citrus', 'floral', 'amber', 'woody'],
+      availabilityFirst: true,
+      targetGrams: 100,
+    })
+    const directions = buildDesignDirectionProposals(brief, materials)
+    const palettes = directions.map((direction) => direction.proposal.ingredients.map((line) => line.materialId))
+
+    expect(palettes.every((palette) => palette.length >= 6)).toBe(true)
+    expect(new Set(palettes.map((palette) => [...palette].sort().join('|'))).size).toBeGreaterThan(1)
+    expect(directions.every((direction) => new Set(direction.proposal.ingredients.map((line) => materials.find((material) => material.id === line.materialId)?.tier)).size >= 2)).toBe(true)
+  })
+
+  it('keeps fine-fragrance proposals as concentrate compositions evaluated at the requested final concentration', () => {
+    const brief = formulaDesignBriefSchema.parse({
+      name: 'Twenty percent EDP',
+      creativeBrief: 'A balanced citrus woody eau de parfum',
+      formulaType: 'FINE_FRAGRANCE',
+      concentrationType: 'EDP',
+      finalProductConcentrationPercent: 20,
+      targetGrams: 100,
+    })
+    const directions = buildDesignDirectionProposals(brief, materials)
+
+    for (const direction of directions) {
+      const carrier = direction.proposal.ingredients.find((line) => materials.find((material) => material.id === line.materialId)?.family === 'Carrier')
+      expect(carrier).toBeUndefined()
+      expect(direction.proposal.finalProductConcentrationPercent).toBe(20)
+      expect(direction.proposal.ingredients.reduce((sum, line) => sum + line.percentage, 0)).toBeCloseTo(100, 4)
+    }
+  })
+
   it('preserves locked baseline composition while creating deterministic optimization alternatives', () => {
     const baseline = {
       name: 'Baseline', formulaType: 'FINE_FRAGRANCE' as const, targetGrams: 100, concentrationType: 'EDP' as const,
