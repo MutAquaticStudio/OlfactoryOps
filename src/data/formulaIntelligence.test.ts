@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { formulaDesignBriefSchema, formulaDirectionFeedbackSchema, formulaDirectionShareSchema, formulaOptimizationObjectivesSchema } from './agentRuntime'
-import { buildDesignDirectionProposals, buildOptimizerProposals, compareOptimizerCandidates, compositionChangePercent, optimizerParetoState, sensoryMemoryEvidenceForDirection } from './formulaIntelligence'
-import { materials } from './northStar'
+import { buildDesignDirectionProposals, buildOptimizerProposals, compareOptimizerCandidates, compositionChangePercent, optimizerBaselineLines, optimizerParetoState, sensoryMemoryEvidenceForDirection } from './formulaIntelligence'
+import { formulaVersions, materials } from './northStar'
 
 describe('Formula Intelligence deterministic proposals', () => {
   it('keeps locked approved materials in every design direction and normalizes composition', () => {
@@ -34,8 +34,39 @@ describe('Formula Intelligence deterministic proposals', () => {
     expect(candidates.length).toBeGreaterThan(0)
     for (const candidate of candidates) {
       expect(candidate.proposal.ingredients.find((line) => line.materialId === lockedId)?.percentage).toBe(50)
+      expect(candidate.proposal.ingredients.reduce((sum, line) => sum + line.percentage, 0)).toBeCloseTo(100, 4)
       expect(compositionChangePercent(baseline, candidate.proposal)).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  it('creates useful ratio candidates without introducing an unreviewed replacement material', () => {
+    const baseline = {
+      name: 'Ratio baseline', formulaType: 'ACCORD' as const, targetGrams: 100, concentrationType: 'OTHER' as const,
+      finalProductConcentrationPercent: 100, ifraCategory: '4', brief: 'baseline',
+      ingredients: [
+        { materialId: 'mat-bergamot', percentage: 35, pyramidNote: 'Top' as const },
+        { materialId: 'mat-hedione', percentage: 30, pyramidNote: 'Middle' as const },
+        { materialId: 'mat-iso', percentage: 20, pyramidNote: 'Base' as const },
+        { materialId: 'mat-roseoxide', percentage: 15, pyramidNote: 'Top' as const },
+      ],
+    }
+    const candidates = buildOptimizerProposals(baseline, materials, 'COMBINED', [], new Set(['mat-bergamot', 'mat-hedione', 'mat-iso']))
+
+    expect(candidates.some((candidate) => compositionChangePercent(baseline, candidate.proposal) > 0)).toBe(true)
+    for (const candidate of candidates) {
+      expect(new Set(candidate.proposal.ingredients.map((line) => line.materialId))).toEqual(new Set(baseline.ingredients.map((line) => line.materialId)))
+      expect(candidate.proposal.ingredients.reduce((sum, line) => sum + line.percentage, 0)).toBeCloseTo(100, 4)
+    }
+  })
+
+  it('resolves a nested immutable formula version to a material-only optimizer baseline', () => {
+    const nested = formulaVersions.find((version) => version.formulaId === 'frm-0421')!
+    const resolved = optimizerBaselineLines(nested)
+
+    expect(nested.lines.some((line) => Boolean(line.childFormulaId))).toBe(true)
+    expect(resolved.length).toBeGreaterThan(0)
+    expect(resolved.every((line) => Boolean(line.materialId) && !line.childFormulaId)).toBe(true)
+    expect(resolved.reduce((sum, line) => sum + line.grams, 0)).toBeCloseTo(nested.totalGrams, 4)
   })
 
   it('rejects a design brief that locks a material outside the approved catalog', () => {

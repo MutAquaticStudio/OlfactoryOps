@@ -146,6 +146,37 @@ describe('AgentLocalRuntimeService', () => {
     expect(detail.data.project.directions.every((direction) => direction.evaluation?.materialUniverse.hash)).toBe(true)
   })
 
+  it('optimizes a nested immutable formula through resolved raw-material leaves', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
+    directories.push(directory)
+    const service = authenticatedService()
+    const runtime = new AgentLocalRuntimeService()
+    Object.defineProperty(runtime, 'storagePath', { value: join(directory, 'agent-state.json') })
+    const session = service.me().data.session
+    for (const material of service.materials().data) {
+      service.upsertMaterialCompliance(material.id, { status: 'APPROVED', source: 'Local test', sourceVersion: 'v1' })
+    }
+
+    const started = await runtime.startOptimizer(service, session, {
+      baselineFormulaId: 'frm-0421', baselineVersion: 'v12', intent: 'COMBINED', lockedMaterialIds: [], requireEligibleInventory: false,
+      objectives: { maximizeInventoryCoverage: true, minimizeNewPurchases: true, maximizeEvidenceCoverage: true, preserveMaterialIds: [], prohibitedMaterialIds: [], complianceRequired: true, requireApprovedSubstitutions: true },
+    })
+    const detail = await runtime.detail(session, started.data.run.id)
+    const artifact = detail.data.artifacts.find((item) => item.type === 'optimizer_candidates')?.data as { data?: { candidates?: Array<{ candidateId: string; compositionChangePercent: number; proposal: { ingredients: Array<{ materialId: string; percentage: number }> } }> } } | undefined
+    const candidate = artifact?.data?.candidates?.find((item) => item.compositionChangePercent > 0)
+
+    expect(started.data.run.status).toBe('COMPLETED')
+    expect(candidate).toBeDefined()
+    expect(artifact?.data?.candidates?.every((candidate) => candidate.proposal.ingredients.every((line) => line.materialId.startsWith('mat-')))).toBe(true)
+    const beforeMovements = service.inventoryMovements().data.length
+    const pending = await runtime.requestOptimizerDraftSave(service, session, started.data.run.id, candidate!.candidateId)
+    const confirmed = await runtime.resolveConfirmation(service, session, started.data.run.id, pending.data.confirmationId, 'accept')
+    const repeated = await runtime.resolveConfirmation(service, session, started.data.run.id, pending.data.confirmationId, 'accept')
+    expect(confirmed.data.formula).toBeDefined()
+    expect(repeated.data).toMatchObject({ duplicate: true, formulaId: confirmed.data.formula?.id })
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
   it('plans one non-consuming trial from a saved, approved design direction', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'olfactoryops-agent-'))
     directories.push(directory)

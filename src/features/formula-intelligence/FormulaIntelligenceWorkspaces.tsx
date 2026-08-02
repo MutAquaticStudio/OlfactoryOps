@@ -7,7 +7,8 @@ import {
   type AgentRuntimeEvent,
   type FormulaOptimizerIntent,
 } from '../../data/agentRuntime'
-import type { Formula, Material, TrialComparableEvidence } from '../../data/northStar'
+import { optimizerBaselineLines } from '../../data/formulaIntelligence'
+import type { Formula, FormulaVersionRecord, Material, TrialComparableEvidence } from '../../data/northStar'
 import { TrialEvidenceSummary } from '../trials/TrialEvidenceSummary'
 import { WorkspaceDialog as AppWorkspaceDialog } from '../../ui/WorkspaceDialog'
 import { AnimatedContent, AnimatedList, AnimatedListItem, MotionCardButton, Stepper, type StepperStep } from '../../ui/motion/MotionPrimitives'
@@ -155,10 +156,17 @@ type EvidenceCitation = {
 
 type EvidenceArtifact = { state: 'READY' | 'NOT_INDEXED' | 'NOT_CONFIGURED' | 'NOT_EVALUATED'; citations: EvidenceCitation[] }
 
-type FormulaVersionResponse = { formula: Formula; versions: Array<{ version: string; createdAt: string; lines: Formula['lines'] }> }
+type FormulaVersionResponse = { formula: Formula; versions: Array<Pick<FormulaVersionRecord, 'version' | 'createdAt' | 'lines' | 'resolvedLeaves'>> }
 type FormulaTrialEvidenceResponse = { formulaId: string; formulaVersion: string; evidence: TrialComparableEvidence; invariant: string }
 type PendingConfirmation = { runId: string; confirmationId: string; label: string }
 type ConnectionState = 'idle' | 'restoring' | 'live' | 'reconnecting' | 'restored'
+
+function runArtifactPayload<T>(detail: RunDetail | undefined, type: string): T | undefined {
+  const stored = detail?.artifacts.find((item) => item.type === type)?.data
+  if (!stored || typeof stored !== 'object') return undefined
+  const envelope = stored as { type?: unknown; data?: unknown }
+  return (typeof envelope.type === 'string' && envelope.data && typeof envelope.data === 'object' ? envelope.data : stored) as T
+}
 
 const mutationStoragePrefix = 'olfactoryops.formula-intelligence.mutation.'
 
@@ -226,6 +234,21 @@ function formulaIntelligenceError(error: unknown, fallback: string) {
   }
   if (message.includes('FORMULA_INTELLIGENCE_QUOTA')) {
     return 'This research workspace has reached its current run limit. Please wait before starting another run.'
+  }
+  if (message.includes('material-only immutable baseline') || message.includes('material-only baseline')) {
+    return 'Choose a formula version resolved entirely to raw materials. Versions containing another formula cannot be optimized yet.'
+  }
+  if (message.includes('No optimizer candidate satisfies')) {
+    return 'No safe candidate meets every selected boundary. Remove one optional lock, cost target, inventory gate, or prohibited material and run the analysis again.'
+  }
+  if (message.includes('cost objectives require costing.view')) {
+    return 'Cost targets require Costing access. Run a compliance or inventory analysis, or ask a workspace administrator for access.'
+  }
+  if (message.includes('Eligible inventory gating requires inventory.view')) {
+    return 'The strict inventory gate requires Inventory access. Turn off the gate or ask a workspace administrator for access.'
+  }
+  if (message.includes('Candidate matches the immutable baseline')) {
+    return 'This result is the baseline reference and does not create a new draft. Choose a candidate with a composition change.'
   }
   if (/^[A-Z0-9_]+$/.test(message)) return fallback
   return message || fallback
@@ -404,8 +427,20 @@ function ProposalLines({ proposal, materialNames }: { proposal: AgentFormulaProp
   return <div className="formula-intelligence-lines">{proposal.ingredients.map((line) => <div key={line.materialId}><span>{materialNames.get(line.materialId) ?? 'Restricted material'}</span><strong>{line.percentage.toFixed(2)}%</strong></div>)}</div>
 }
 
+function ProposalComparison({ baseline, proposal, materialNames }: { baseline: Formula['lines']; proposal: AgentFormulaProposal; materialNames: Map<string, string> }) {
+  const baselineTotal = baseline.reduce((sum, line) => sum + line.grams, 0)
+  const baselineByMaterial = new Map(baseline.filter((line) => line.materialId).map((line) => [line.materialId!, (line.grams / Math.max(baselineTotal, 0.0001)) * 100]))
+  const proposalByMaterial = new Map(proposal.ingredients.map((line) => [line.materialId, line.percentage]))
+  const changes = Array.from(new Set([...baselineByMaterial.keys(), ...proposalByMaterial.keys()]))
+    .map((materialId) => ({ materialId, before: baselineByMaterial.get(materialId) ?? 0, after: proposalByMaterial.get(materialId) ?? 0 }))
+    .filter((item) => Math.abs(item.after - item.before) >= 0.005)
+    .sort((left, right) => Math.abs(right.after - right.before) - Math.abs(left.after - left.before))
+  if (changes.length === 0) return <p className="optimizer-baseline-note">This result matches the immutable baseline and is shown as a feasibility reference.</p>
+  return <div className="optimizer-comparison" aria-label="Composition changes"><div className="optimizer-comparison-heading"><span>Material</span><span>Baseline</span><span>Candidate</span><span>Delta</span></div>{changes.map((item) => <div key={item.materialId}><strong>{materialNames.get(item.materialId) ?? 'Restricted material'}</strong><span>{item.before.toFixed(2)}%</span><span>{item.after.toFixed(2)}%</span><span className={item.after - item.before > 0 ? 'is-positive' : 'is-negative'}>{item.after - item.before > 0 ? '+' : ''}{(item.after - item.before).toFixed(2)}%</span></div>)}</div>
+}
+
 function evidenceFromRun(detail?: RunDetail) {
-  const artifact = detail?.artifacts.find((item) => item.type === 'evidence_citations')?.data as EvidenceArtifact | undefined
+  const artifact = runArtifactPayload<EvidenceArtifact>(detail, 'evidence_citations')
   return artifact?.citations ? artifact : undefined
 }
 
@@ -418,14 +453,16 @@ function EvidenceCitations({ evidence }: { evidence?: EvidenceArtifact }) {
   return <section className="formula-intelligence-evidence formula-intelligence-citations"><span>Evidence</span>{evidence.citations.map((citation) => <article key={citation.citationId}><strong>{citation.title}</strong><small>{citation.sourceKind === 'document' ? 'Reviewed document' : 'Material profile'} / {citation.version}{citation.page ? ` / p. ${citation.page}` : ''}{citation.section ? ` / ${citation.section}` : ''}</small><p>{citation.excerpt}</p></article>)}</section>
 }
 
-function MaterialPicker({ label, materials, selected, onChange, disabled = false, emptyMessage = 'No materials are available.' }: { label: string; materials: Array<{ id: string; name: string }>; selected: string[]; onChange: (value: string[]) => void; disabled?: boolean; emptyMessage?: string }) {
+function MaterialPicker({ label, materials, selected, onChange, disabled = false, emptyMessage = 'No reviewed materials are available.' }: { label: string; materials: Array<{ id: string; name: string }>; selected: string[]; onChange: (value: string[]) => void; disabled?: boolean; emptyMessage?: string }) {
   const [filter, setFilter] = useState('')
   const visible = materials.filter((material) => material.name.toLowerCase().includes(filter.trim().toLowerCase()))
   const selectedMaterials = materials.filter((material) => selected.includes(material.id))
   const toggle = (id: string) => {
     if (!disabled) onChange(selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id])
   }
-  return <div className="formula-intelligence-picker"><label>{label}<input value={filter} disabled={disabled} onChange={(event) => setFilter(event.target.value)} placeholder="Search reviewed materials" /></label>{selectedMaterials.length ? <div className="formula-intelligence-picker-chips">{selectedMaterials.map((material) => <button type="button" key={material.id} disabled={disabled} onClick={() => toggle(material.id)}>{material.name}<X size={13} /></button>)}</div> : <small>{emptyMessage}</small>}<div className="formula-intelligence-picker-list">{visible.length ? visible.slice(0, 16).map((material) => <label key={material.id}><input type="checkbox" disabled={disabled} checked={selected.includes(material.id)} onChange={() => toggle(material.id)} /> <span>{material.name}</span></label>) : <small>{emptyMessage}</small>}</div></div>
+  const selectionCopy = selectedMaterials.length === 0 ? 'Optional. No materials selected.' : `${selectedMaterials.length} selected.`
+  const listCopy = materials.length === 0 ? emptyMessage : 'No reviewed materials match this search.'
+  return <div className="formula-intelligence-picker"><label>{label}<input value={filter} disabled={disabled || materials.length === 0} onChange={(event) => setFilter(event.target.value)} placeholder="Search reviewed materials" /></label>{selectedMaterials.length ? <div className="formula-intelligence-picker-chips">{selectedMaterials.map((material) => <button type="button" key={material.id} disabled={disabled} onClick={() => toggle(material.id)}>{material.name}<X size={13} /></button>)}</div> : <small>{selectionCopy}</small>}<div className="formula-intelligence-picker-list">{visible.length ? visible.slice(0, 16).map((material) => <label key={material.id}><input type="checkbox" disabled={disabled} checked={selected.includes(material.id)} onChange={() => toggle(material.id)} /> <span>{material.name}</span></label>) : <small>{listCopy}</small>}</div></div>
 }
 
 function FormulaIntelligenceDialog({ title, description, children, footer, onClose, className = '', confirmDiscard = false }: { title: string; description?: string; children: React.ReactNode; footer?: React.ReactNode; onClose: () => void; className?: string; confirmDiscard?: boolean }) {
@@ -436,13 +473,17 @@ function FormulaIntelligenceDialog({ title, description, children, footer, onClo
   )
 }
 
-function RunStatus({ detail, connectionState, busy, onCancel }: { detail?: RunDetail; connectionState: ConnectionState; busy: boolean; onCancel: () => void }) {
+function RunStatus({ detail, connectionState, busy, onCancel, workflow = 'design' }: { detail?: RunDetail; connectionState: ConnectionState; busy: boolean; onCancel: () => void; workflow?: 'design' | 'optimizer' }) {
   if (!detail) return null
   const nodes = detail.nodes ?? []
   const isFinished = detail.run.status === 'COMPLETED' || detail.run.status === 'WAITING_FOR_CONFIRMATION'
   const isBlocked = detail.run.status === 'FAILED' || detail.run.status === 'CANCELLED' || nodes.some((node) => node.status === 'FAILED')
   const isExploring = !isFinished && !isBlocked && (detail.run.status === 'RUNNING' || detail.run.status === 'QUEUED' || nodes.length > 0)
-  const steps: StepperStep[] = [
+  const steps: StepperStep[] = workflow === 'optimizer' ? [
+    { id: 'baseline', label: 'Baseline verified', status: nodes.length > 0 || isFinished || isBlocked ? 'complete' : 'active' },
+    { id: 'evidence', label: 'Evidence checked', status: isFinished ? 'complete' : isBlocked ? 'blocked' : isExploring ? 'active' : 'upcoming' },
+    { id: 'candidate', label: 'Candidates ranked', status: isFinished ? 'complete' : isBlocked ? 'blocked' : 'upcoming' },
+  ] : [
     { id: 'brief', label: 'Brief understood', status: nodes.length > 0 || isFinished || isBlocked ? 'complete' : 'active' },
     { id: 'materials', label: 'Materials explored', status: isFinished ? 'complete' : isBlocked ? 'blocked' : isExploring ? 'active' : 'upcoming' },
     { id: 'direction', label: 'Directions ready', status: isFinished ? 'complete' : isBlocked ? 'blocked' : 'upcoming' },
@@ -450,17 +491,17 @@ function RunStatus({ detail, connectionState, busy, onCancel }: { detail?: RunDe
   const statusCopy = detail.run.status === 'WAITING_FOR_CONFIRMATION'
     ? 'A draft is ready for your confirmation.'
     : detail.run.status === 'COMPLETED'
-      ? 'Directions are ready to review.'
+      ? workflow === 'optimizer' ? 'Ranked candidates are ready to compare.' : 'Directions are ready to review.'
       : detail.run.status === 'FAILED'
-        ? 'Generation stopped. You can retry this brief.'
+        ? workflow === 'optimizer' ? 'Analysis stopped. Adjust the boundaries and run it again.' : 'Generation stopped. You can retry this brief.'
         : detail.run.status === 'CANCELLED'
-          ? 'Research was cancelled before directions were created.'
+          ? workflow === 'optimizer' ? 'Analysis was cancelled before candidates were ranked.' : 'Research was cancelled before directions were created.'
           : connectionState === 'reconnecting'
             ? 'Reconnecting to the latest research progress.'
             : connectionState === 'restoring'
               ? 'Loading saved research progress.'
-              : 'Research is exploring the approved material set.'
-  return <AnimatedContent><section className="formula-intelligence-run-status" data-testid="formula-intelligence-run-status" aria-live="polite"><div className="formula-intelligence-run-heading"><div><span className="formula-intelligence-eyebrow">Research progress</span><strong>{statusCopy}</strong></div><span className={`formula-intelligence-run-percent ${isBlocked ? 'is-blocked' : ''}`}>{Math.round(detail.run.progress)}%</span></div><div className="agent-progress"><span style={{ width: `${detail.run.progress}%` }} /></div><Stepper steps={steps} label="Direction research progress" />{detail.run.status === 'RUNNING' || detail.run.status === 'QUEUED' ? <button className="ghost-button small" type="button" disabled={busy} onClick={onCancel}>Cancel research</button> : null}</section></AnimatedContent>
+              : workflow === 'optimizer' ? 'Analysis is checking the immutable baseline against governed evidence.' : 'Research is exploring the approved material set.'
+  return <AnimatedContent><section className="formula-intelligence-run-status" data-testid="formula-intelligence-run-status" aria-live="polite"><div className="formula-intelligence-run-heading"><div><span className="formula-intelligence-eyebrow">{workflow === 'optimizer' ? 'Analysis progress' : 'Research progress'}</span><strong>{statusCopy}</strong></div><span className={`formula-intelligence-run-percent ${isBlocked ? 'is-blocked' : ''}`}>{Math.round(detail.run.progress)}%</span></div><div className="agent-progress"><span style={{ width: `${detail.run.progress}%` }} /></div><Stepper steps={steps} label={workflow === 'optimizer' ? 'Reformulation analysis progress' : 'Direction research progress'} />{detail.run.status === 'RUNNING' || detail.run.status === 'QUEUED' ? <button className="ghost-button small" type="button" disabled={busy} onClick={onCancel}>{workflow === 'optimizer' ? 'Cancel analysis' : 'Cancel research'}</button> : null}</section></AnimatedContent>
 }
 
 function DirectionDetail({
@@ -940,8 +981,8 @@ export function ReformulationOptimizerWorkspace({ apiBaseUrl, requestApi, formul
   const { detail: activeRun, connectionState, loadRun } = useAgentRunMonitor(apiBaseUrl, requestApi, activeRunId)
   const materialNames = useMemo(() => new Map(materialRecords.map((material) => [material.id, material.name])), [materialRecords])
   const activeEvidence = useMemo(() => evidenceFromRun(activeRun), [activeRun])
-  useEffect(() => { setFormulaId((current) => formulaRecords.some((formula) => formula.id === current) ? current : (formulaRecords[0]?.id ?? '')) }, [formulaRecords])
-  useEffect(() => { if (!formulaId) { setVersions([]); setVersion(''); return } void requestApi<FormulaVersionResponse>(`/formulas/${encodeURIComponent(formulaId)}/versions`).then((data) => { setVersions(data.versions); setVersion((current) => data.versions.some((item) => item.version === current) ? current : (data.versions[0]?.version ?? '')) }).catch((error) => setNotice(error instanceof Error ? error.message : 'Unable to load immutable formula versions')) }, [formulaId, requestApi])
+  useEffect(() => { setFormulaId((current) => formulaRecords.some((formula) => formula.id === current) ? current : (formulaRecords.find((formula) => formula.formulaType === 'FINE_FRAGRANCE')?.id ?? formulaRecords[0]?.id ?? '')) }, [formulaRecords])
+  useEffect(() => { if (!formulaId) { setVersions([]); setVersion(''); return } void requestApi<FormulaVersionResponse>(`/formulas/${encodeURIComponent(formulaId)}/versions`).then((data) => { const resolvableVersions = data.versions.filter((item) => optimizerBaselineLines(item).length > 0); setVersions(data.versions); setVersion((current) => resolvableVersions.some((item) => item.version === current) ? current : (resolvableVersions[0]?.version ?? '')) }).catch((error) => setNotice(formulaIntelligenceError(error, 'Unable to load immutable formula versions.'))) }, [formulaId, requestApi])
   useEffect(() => {
     if (!formulaId || !version || !capabilities.canViewTrialEvidence) {
       setTrialEvidence(null); setTrialEvidenceUnavailable(undefined); setTrialEvidenceLoading(false)
@@ -955,16 +996,48 @@ export function ReformulationOptimizerWorkspace({ apiBaseUrl, requestApi, formul
       .finally(() => { if (active) setTrialEvidenceLoading(false) })
     return () => { active = false }
   }, [capabilities.canViewTrialEvidence, formulaId, requestApi, version])
-  useEffect(() => { if (!activeRun) return; const artifact = activeRun.artifacts.find((item) => item.type === 'optimizer_candidates')?.data as { candidates?: OptimizerCandidate[] } | undefined; if (artifact?.candidates) setCandidates(artifact.candidates); if (activeRun.confirmation?.status === 'PENDING') setPending({ runId: activeRun.run.id, confirmationId: activeRun.confirmation.id, label: activeRun.confirmation.summary }); if (activeRun.run.status === 'FAILED') setNotice(activeRun.run.error_summary ?? 'Optimization failed') }, [activeRun])
+  useEffect(() => {
+    if (!activeRun) return
+    const artifact = runArtifactPayload<{ baselineFormulaId?: string; baselineVersion?: string; candidates?: OptimizerCandidate[] }>(activeRun, 'optimizer_candidates')
+    if (artifact?.baselineFormulaId && formulaRecords.some((formula) => formula.id === artifact.baselineFormulaId)) setFormulaId(artifact.baselineFormulaId)
+    if (artifact?.baselineVersion) setVersion(artifact.baselineVersion)
+    if (artifact?.candidates) setCandidates(artifact.candidates)
+    if (activeRun.confirmation?.status === 'PENDING') setPending({ runId: activeRun.run.id, confirmationId: activeRun.confirmation.id, label: activeRun.confirmation.summary })
+    if (activeRun.run.status === 'FAILED') setNotice(formulaIntelligenceError(new Error(activeRun.run.error_summary ?? ''), 'Optimization stopped. Adjust the boundaries and run it again.'))
+  }, [activeRun, formulaRecords])
+
+  function resetOptimizerResult() {
+    setCandidates([])
+    setActiveRunId(undefined)
+    setPending(undefined)
+    setNotice(undefined)
+  }
+
+  function selectFormula(nextFormulaId: string) {
+    setFormulaId(nextFormulaId)
+    setVersion('')
+    setLockedMaterialIds([])
+    setPreservedMaterialIds([])
+    setProhibitedMaterialIds([])
+    resetOptimizerResult()
+  }
+
+  function selectVersion(nextVersion: string) {
+    setVersion(nextVersion)
+    setLockedMaterialIds([])
+    setPreservedMaterialIds([])
+    resetOptimizerResult()
+  }
 
   async function startOptimizer() {
     if (!formulaId || !version || !capabilities.canRunOptimizer) return
     const asOptionalNumber = (value: string) => value.trim() === '' ? undefined : Number(value)
+    const evaluatesCost = intent === 'COST' || intent === 'COMBINED'
     const objectives = {
-      targetCostReductionPercent: asOptionalNumber(targetCostReductionPercent),
-      maxTotalCost: asOptionalNumber(maxTotalCost),
-      maximizeInventoryCoverage,
-      minimizeNewPurchases,
+      targetCostReductionPercent: capabilities.canViewCostEvidence && evaluatesCost ? asOptionalNumber(targetCostReductionPercent) : undefined,
+      maxTotalCost: capabilities.canViewCostEvidence && evaluatesCost ? asOptionalNumber(maxTotalCost) : undefined,
+      maximizeInventoryCoverage: capabilities.canViewInventoryEvidence ? maximizeInventoryCoverage : false,
+      minimizeNewPurchases: capabilities.canViewInventoryEvidence ? minimizeNewPurchases : false,
       maximizeEvidenceCoverage,
       preserveMaterialIds: preservedMaterialIds,
       prohibitedMaterialIds,
@@ -976,56 +1049,68 @@ export function ReformulationOptimizerWorkspace({ apiBaseUrl, requestApi, formul
     try {
       const result = await requestApi<{ run: RunRow }>('/formula-intelligence/optimizer/runs', {
         method: 'POST', headers: mutationHeaders(scope),
-        body: JSON.stringify({ baselineFormulaId: formulaId, baselineVersion: version, intent, lockedMaterialIds, requireEligibleInventory, objectives }),
+        body: JSON.stringify({ baselineFormulaId: formulaId, baselineVersion: version, intent, lockedMaterialIds, requireEligibleInventory: capabilities.canViewInventoryEvidence && requireEligibleInventory, objectives }),
       })
       completeMutation(scope); setActiveRunId(result.run.id)
-    } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to optimize formula') } finally { setBusy(false) }
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to analyze this formula.')) } finally { setBusy(false) }
   }
-  async function cancelRun() { if (!activeRunId) return; const scope = `optimizer-cancel:${activeRunId}`; setBusy(true); try { await requestApi(`/agent/runs/${encodeURIComponent(activeRunId)}/cancel`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' }); completeMutation(scope); await loadRun(activeRunId) } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to cancel optimization') } finally { setBusy(false) } }
-  async function requestSave(candidate: OptimizerCandidate) { if (!activeRunId || !capabilities.canSaveDraft) return; const scope = `optimizer-save:${activeRunId}:${candidate.candidateId}`; setBusy(true); setNotice(undefined); try { const data = await requestApi<{ confirmationId: string }>(`/formula-intelligence/optimizer/runs/${encodeURIComponent(activeRunId)}/candidates/${encodeURIComponent(candidate.candidateId)}/save`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' }); completeMutation(scope); setPending({ runId: activeRunId, confirmationId: data.confirmationId, label: candidate.title }) } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to prepare candidate draft') } finally { setBusy(false) } }
-  async function confirmSave() { if (!pending) return; const scope = `optimizer-confirm:${pending.runId}:${pending.confirmationId}`; setBusy(true); setNotice(undefined); try { const result = await requestApi<{ formula?: Formula }>(`/agent/runs/${encodeURIComponent(pending.runId)}/confirmations/${encodeURIComponent(pending.confirmationId)}`, { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ decision: 'accept' }) }); completeMutation(scope); if (result.formula) onFormulaSaved(result.formula); setPending(undefined); setNotice('Editable reformulation draft created. No inventory reservation or consumption was made.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to save candidate draft') } finally { setBusy(false) } }
+  async function cancelRun() { if (!activeRunId) return; const scope = `optimizer-cancel:${activeRunId}`; setBusy(true); try { await requestApi(`/agent/runs/${encodeURIComponent(activeRunId)}/cancel`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' }); completeMutation(scope); await loadRun(activeRunId) } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to cancel this analysis.')) } finally { setBusy(false) } }
+  async function requestSave(candidate: OptimizerCandidate) { if (!activeRunId || !capabilities.canSaveDraft || candidate.compositionChangePercent < 0.005) return; const scope = `optimizer-save:${activeRunId}:${candidate.candidateId}`; setBusy(true); setNotice(undefined); try { const data = await requestApi<{ confirmationId: string }>(`/formula-intelligence/optimizer/runs/${encodeURIComponent(activeRunId)}/candidates/${encodeURIComponent(candidate.candidateId)}/save`, { method: 'POST', headers: mutationHeaders(scope), body: '{}' }); completeMutation(scope); setPending({ runId: activeRunId, confirmationId: data.confirmationId, label: candidate.title }) } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to prepare this candidate for confirmation.')) } finally { setBusy(false) } }
+  async function confirmSave() { if (!pending) return; const scope = `optimizer-confirm:${pending.runId}:${pending.confirmationId}`; setBusy(true); setNotice(undefined); try { const result = await requestApi<{ formula?: Formula }>(`/agent/runs/${encodeURIComponent(pending.runId)}/confirmations/${encodeURIComponent(pending.confirmationId)}`, { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ decision: 'accept' }) }); completeMutation(scope); if (result.formula) onFormulaSaved(result.formula); setPending(undefined); setNotice('Editable reformulation draft created. No inventory reservation or consumption was made.') } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to save this candidate draft.')) } finally { setBusy(false) } }
 
-  const baseline = formulaRecords.find((formula) => formula.id === formulaId)
-  const baselineLines = versions.find((item) => item.version === version)?.lines ?? baseline?.lines ?? []
+  const baselineVersion = versions.find((item) => item.version === version)
+  const baselineLines = baselineVersion ? optimizerBaselineLines(baselineVersion) : []
   const baselineMaterials = baselineLines.filter((line) => line.materialId).map((line) => ({ id: line.materialId!, name: materialNames.get(line.materialId!) ?? line.label }))
-  const objectiveControls = <>
-    <MaterialPicker label="Preserve materials" materials={baselineMaterials} selected={preservedMaterialIds} onChange={setPreservedMaterialIds} />
-    <MaterialPicker label="Do not use" materials={materialRecords} selected={prohibitedMaterialIds} onChange={setProhibitedMaterialIds} />
-    <div className="form-grid-two">
-      <label>Target cost reduction %<input type="number" min="0" max="100" step="0.1" value={targetCostReductionPercent} onChange={(event) => setTargetCostReductionPercent(event.target.value)} /></label>
-      <label>Maximum total cost<input type="number" min="0" step="0.01" value={maxTotalCost} onChange={(event) => setMaxTotalCost(event.target.value)} /></label>
-    </div>
-    <label className="checkbox-row"><input type="checkbox" checked={maximizeInventoryCoverage} disabled={!capabilities.canViewInventoryEvidence} onChange={(event) => setMaximizeInventoryCoverage(event.target.checked)} /> Prefer eligible inventory coverage</label>
-    <label className="checkbox-row"><input type="checkbox" checked={minimizeNewPurchases} disabled={!capabilities.canViewInventoryEvidence} onChange={(event) => setMinimizeNewPurchases(event.target.checked)} /> Minimize new purchasing</label>
-    <label className="checkbox-row"><input type="checkbox" checked={maximizeEvidenceCoverage} onChange={(event) => setMaximizeEvidenceCoverage(event.target.checked)} /> Prefer private trial evidence where available</label>
-    <small>Only reviewed substitutions are eligible. Any unavailable cost or inventory signal remains not evaluated.</small>
-  </>
+  const baselineIsMaterialOnly = Boolean(baselineVersion && baselineLines.length > 0)
+  const canAnalyze = capabilities.canRunOptimizer && Boolean(formulaId && version && baselineIsMaterialOnly)
+  const optimizerProgress: StepperStep[] = [
+    { id: 'baseline', label: 'Baseline', status: baselineIsMaterialOnly ? 'complete' : 'active' },
+    { id: 'objectives', label: 'Objectives', status: baselineIsMaterialOnly ? activeRunId || candidates.length ? 'complete' : 'active' : 'upcoming' },
+    { id: 'analyze', label: 'Analyze', status: candidates.length ? 'complete' : activeRun?.run.status === 'FAILED' ? 'blocked' : activeRunId ? 'active' : 'upcoming' },
+    { id: 'draft', label: 'Draft', status: pending ? 'active' : candidates.some((candidate) => candidate.compositionChangePercent >= 0.005) ? 'upcoming' : 'upcoming' },
+  ]
   return <div className="domain-page formula-intelligence-page">
     <section className="panel glass formula-intelligence-hero">
       <div><span className="formula-intelligence-eyebrow">Reformulation optimizer</span><h2>Compare feasible changes before you edit</h2><p>Every result uses an immutable formula version. Missing cost or inventory evidence is shown as not evaluated.</p></div>
-      <span className="status-chip blue"><SlidersHorizontal size={14} /> Deterministic analysis</span>
+      <span className="formula-intelligence-hero-note"><SlidersHorizontal size={14} /> Governed analysis</span>
     </section>
     <div className="formula-intelligence-grid optimizer-grid">
-      <section className="panel glass formula-intelligence-brief">
-        <div className="panel-title-row"><div><SlidersHorizontal size={18} /><h3>Set the boundaries</h3></div><span>Immutable baseline</span></div>
-        <label>Formula<select value={formulaId} onChange={(event) => setFormulaId(event.target.value)}>{formulaRecords.map((formula) => <option value={formula.id} key={formula.id}>{formula.code} / {formula.name}</option>)}</select></label>
-        <label>Baseline version<select value={version} onChange={(event) => setVersion(event.target.value)}>{versions.map((item) => <option value={item.version} key={item.version}>{item.version} / {new Date(item.createdAt).toLocaleDateString()}</option>)}</select></label>
-        <label>Intent<select value={intent} onChange={(event) => setIntent(event.target.value as FormulaOptimizerIntent)}><option value="COMBINED">Balance compliance, stock, and cost</option><option value="COMPLIANCE">Resolve compliance</option><option value="INVENTORY">Recover stock feasibility</option><option value="COST">Reduce cost</option></select></label>
-        <MaterialPicker label="Keep unchanged" materials={baselineMaterials} selected={lockedMaterialIds} onChange={setLockedMaterialIds} />
-        {objectiveControls}
-        <label className="checkbox-row"><input type="checkbox" checked={requireEligibleInventory} disabled={!capabilities.canViewInventoryEvidence} onChange={(event) => setRequireEligibleInventory(event.target.checked)} /> Require eligible inventory evidence</label>
-        {!capabilities.canViewInventoryEvidence ? <small>Inventory evidence is not available to your role.</small> : null}
-        <button className="primary-button" data-testid="formula-optimizer-primary-action" type="button" disabled={busy || !capabilities.canRunOptimizer || !formulaId || !version} onClick={() => void startOptimizer()}><Play size={16} /> Run optimization</button>
+      <section className="panel glass formula-intelligence-brief optimizer-controls" data-testid="formula-optimizer-controls">
+        <div className="panel-title-row"><div><SlidersHorizontal size={18} /><h3>Prepare analysis</h3></div><span>Immutable baseline</span></div>
+        <Stepper steps={optimizerProgress} label="Reformulation workflow" />
+        <section className="optimizer-control-group">
+          <div className="optimizer-control-heading"><span>1</span><div><h4>Select the baseline</h4><p>The analysis never edits this approved snapshot.</p></div></div>
+          <label>Formula<select value={formulaId} onChange={(event) => selectFormula(event.target.value)}>{formulaRecords.map((formula) => <option value={formula.id} key={formula.id}>{formula.code} / {formula.name}</option>)}</select></label>
+          <label>Immutable version<select value={version} onChange={(event) => selectVersion(event.target.value)}><option value="" disabled>Select an eligible version</option>{versions.map((item) => { const eligible = optimizerBaselineLines(item).length > 0; return <option value={item.version} key={item.version} disabled={!eligible}>{item.version} / {new Date(item.createdAt).toLocaleDateString()}{eligible ? '' : ' / no resolved materials'}</option> })}</select></label>
+          {!version && versions.length > 0 ? <small className="optimizer-guidance is-warning">This formula has no immutable version that resolves to raw materials.</small> : null}
+        </section>
+        <section className="optimizer-control-group">
+          <div className="optimizer-control-heading"><span>2</span><div><h4>Choose the outcome</h4><p>Hard compliance gates are always checked before ranking.</p></div></div>
+          <label>Optimization goal<select value={intent} onChange={(event) => { setIntent(event.target.value as FormulaOptimizerIntent); resetOptimizerResult() }}><option value="COMBINED">Balance compliance, stock, and cost</option><option value="COMPLIANCE">Resolve compliance</option><option value="INVENTORY" disabled={!capabilities.canViewInventoryEvidence}>Recover stock feasibility</option><option value="COST" disabled={!capabilities.canViewCostEvidence}>Reduce cost</option></select></label>
+          {(intent === 'COST' || intent === 'COMBINED') && capabilities.canViewCostEvidence ? <div className="form-grid-two"><label>Target reduction %<input type="number" min="0" max="100" step="0.1" value={targetCostReductionPercent} onChange={(event) => setTargetCostReductionPercent(event.target.value)} placeholder="Optional" /></label><label>Maximum formula cost<input type="number" min="0" step="0.01" value={maxTotalCost} onChange={(event) => setMaxTotalCost(event.target.value)} placeholder="Optional" /></label></div> : null}
+          {(intent === 'COST' || intent === 'COMBINED') && !capabilities.canViewCostEvidence ? <small className="optimizer-guidance">Cost evidence is not available to this role and will remain Not evaluated.</small> : null}
+          {capabilities.canViewInventoryEvidence ? <div className="optimizer-checks"><label className="checkbox-row"><input type="checkbox" checked={maximizeInventoryCoverage} onChange={(event) => setMaximizeInventoryCoverage(event.target.checked)} /> Prefer eligible inventory coverage</label><label className="checkbox-row"><input type="checkbox" checked={minimizeNewPurchases} onChange={(event) => setMinimizeNewPurchases(event.target.checked)} /> Minimize new purchasing</label><label className="checkbox-row"><input type="checkbox" checked={requireEligibleInventory} onChange={(event) => setRequireEligibleInventory(event.target.checked)} /> Require every material to have eligible stock</label></div> : <small className="optimizer-guidance">Inventory evidence is not available to this role and will remain Not evaluated.</small>}
+          <label className="checkbox-row"><input type="checkbox" checked={maximizeEvidenceCoverage} onChange={(event) => setMaximizeEvidenceCoverage(event.target.checked)} /> Prefer completed private trial evidence</label>
+        </section>
+        <section className="optimizer-control-group">
+          <div className="optimizer-control-heading"><span>3</span><div><h4>Set material guardrails</h4><p>Ratio changes stay inside the baseline. New materials require an approved substitution record.</p></div></div>
+          <div className="optimizer-material-rules">
+            <details><summary><span><strong>Lock exact percentages</strong><small>Selected baseline materials cannot move.</small></span><b>{lockedMaterialIds.length}</b></summary><MaterialPicker label="Find baseline materials" materials={baselineMaterials} selected={lockedMaterialIds} onChange={setLockedMaterialIds} /></details>
+            <details><summary><span><strong>Preserve materials</strong><small>Materials remain present, but their ratios may change.</small></span><b>{preservedMaterialIds.length}</b></summary><MaterialPicker label="Find baseline materials" materials={baselineMaterials} selected={preservedMaterialIds} onChange={setPreservedMaterialIds} /></details>
+            <details><summary><span><strong>Exclude materials</strong><small>Only approved replacements can remove a baseline material.</small></span><b>{prohibitedMaterialIds.length}</b></summary><MaterialPicker label="Find reviewed materials" materials={materialRecords} selected={prohibitedMaterialIds} onChange={setProhibitedMaterialIds} /></details>
+          </div>
+        </section>
+        <div className="optimizer-action-bar"><div><strong>Ready for governed analysis</strong><small>No stock is reserved or consumed.</small></div><button className="primary-button" data-testid="formula-optimizer-primary-action" type="button" disabled={busy || !canAnalyze} onClick={() => void startOptimizer()}><Play size={16} /> Analyze formula</button></div>
         {!capabilities.canRunOptimizer ? <small>Optimization is unavailable for this role or has been paused by your workspace.</small> : null}
-        {notice ? <div className="agent-notice"><AlertCircle size={15} /> {notice}</div> : null}
-        <RunStatus detail={activeRun} connectionState={connectionState} busy={busy} onCancel={() => void cancelRun()} />
+        {notice ? <FormulaIntelligenceNotice message={notice} /> : null}
+        <RunStatus detail={activeRun} connectionState={connectionState} busy={busy} onCancel={() => void cancelRun()} workflow="optimizer" />
       </section>
-      <section className="formula-intelligence-projects">
-        {capabilities.canViewTrialEvidence ? <TrialEvidenceSummary evidence={trialEvidence} formulaVersion={version} loading={trialEvidenceLoading} unavailableMessage={trialEvidenceUnavailable} /> : null}
-        {candidates.length === 0 ? <section className="panel glass"><p className="empty-state">Choose the boundaries, then run an analysis to compare safe, reviewable candidates.</p></section> : <section className="panel glass">
-          <div className="panel-title-row"><div><FlaskConical size={18} /><h3>Candidate trade-offs</h3></div><span>{candidates.length} candidates</span></div>
-          <div className="formula-intelligence-direction-grid">{candidates.map((candidate) => <article className="formula-intelligence-direction" key={candidate.candidateId}>
-            <div><h4>{candidate.title}</h4><strong className="formula-intelligence-score">{candidate.score.toFixed(1)}</strong></div>
+      <section className="formula-intelligence-projects optimizer-results" data-testid="formula-optimizer-results">
+        {candidates.length === 0 ? <section className="panel glass optimizer-empty"><FlaskConical size={22} /><div><h3>No analysis yet</h3><p>Choose an immutable baseline and the boundaries that matter. The results will compare composition, compliance, inventory and visible cost evidence here.</p></div></section> : <section className="panel glass">
+          <div className="panel-title-row"><div><FlaskConical size={18} /><h3>Ranked candidates</h3></div><span>{candidates.length} result{candidates.length === 1 ? '' : 's'}</span></div>
+          <p className="formula-intelligence-copy optimizer-results-copy">Candidates are ordered by compliance, eligible stock when visible, cost when visible, then minimum change from the baseline.</p>
+          <AnimatedList className="optimizer-candidate-list">{candidates.map((candidate, index) => { const isReference = candidate.compositionChangePercent < 0.005; return <AnimatedListItem key={candidate.candidateId}><article className={`formula-intelligence-direction optimizer-candidate ${isReference ? 'is-reference' : ''}`}>
+            <div className="optimizer-candidate-heading"><div><span className="formula-intelligence-eyebrow">{isReference ? 'Baseline reference' : index === 0 ? 'Recommended candidate' : `Candidate ${index + 1}`}</span><h4>{candidate.title}</h4></div><strong className="formula-intelligence-score">Fit {candidate.score.toFixed(0)}</strong></div>
             <div className="formula-intelligence-project-meta">
               <span className={`status-chip ${statusTone(candidate.complianceStatus)}`}>{candidate.complianceStatus}</span>
               <span>Availability: {candidate.availability === 'UNKNOWN' ? 'Not evaluated' : candidate.availability}</span>
@@ -1033,13 +1118,14 @@ export function ReformulationOptimizerWorkspace({ apiBaseUrl, requestApi, formul
               {candidate.pareto ? <span>Pareto: {candidate.pareto.state === 'NOT_EVALUATED' ? 'Not evaluated' : candidate.pareto.state.toLowerCase()}</span> : null}
               {candidate.costDelta === undefined || !capabilities.canViewCostEvidence ? <span>Cost: Not evaluated</span> : <span>Cost delta: {candidate.costDelta.toFixed(2)}</span>}
             </div>
-            {capabilities.canViewSensitiveComposition ? <ProposalLines proposal={candidate.proposal} materialNames={materialNames} /> : null}
-            <ul>{candidate.summary.map((line) => <li key={line}>{line}</li>)}</ul>
+            {capabilities.canViewSensitiveComposition ? <ProposalComparison baseline={baselineLines} proposal={candidate.proposal} materialNames={materialNames} /> : null}
+            <ul className="optimizer-summary">{candidate.summary.map((line) => <li key={line}>{line}</li>)}</ul>
             {candidate.pareto ? <small>{candidate.pareto.tradeoff}</small> : null}
-            {capabilities.canSaveDraft ? <button className="primary-button small" type="button" disabled={busy} onClick={() => void requestSave(candidate)}><Save size={14} /> Save accepted candidate</button> : null}
-          </article>)}</div>
+            {capabilities.canSaveDraft && !isReference ? <button className="primary-button small" type="button" disabled={busy} onClick={() => void requestSave(candidate)}><Save size={14} /> Save as editable draft</button> : null}
+          </article></AnimatedListItem> })}</AnimatedList>
           {capabilities.canViewMaterialEvidence ? <EvidenceCitations evidence={activeEvidence} /> : null}
         </section>}
+        {capabilities.canViewTrialEvidence ? <TrialEvidenceSummary evidence={trialEvidence} formulaVersion={version} loading={trialEvidenceLoading} unavailableMessage={trialEvidenceUnavailable} /> : null}
       </section>
     </div>
     {pending ? <FormulaIntelligenceDialog title="Confirm reformulation draft" onClose={() => setPending(undefined)}><p className="formula-intelligence-copy">{pending.label}</p><p className="formula-intelligence-copy">Confirmation creates one normal draft. Stock remains unchanged.</p><div className="formula-intelligence-actions"><button className="primary-button" type="button" disabled={busy} onClick={() => void confirmSave()}><CheckCircle2 size={16} /> Confirm draft</button><button className="secondary-button" type="button" disabled={busy} onClick={() => setPending(undefined)}>Not now</button></div></FormulaIntelligenceDialog> : null}

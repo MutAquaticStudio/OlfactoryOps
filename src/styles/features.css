@@ -748,6 +748,284 @@
   color: var(--danger);
 }
 
+/* Optimizer keeps the baseline controls compact and gives comparison evidence the primary reading order. */
+.optimizer-grid {
+  grid-template-columns: minmax(380px, 0.82fr) minmax(0, 1.18fr);
+  gap: 20px;
+}
+
+.optimizer-controls {
+  align-content: start;
+}
+
+.optimizer-control-group {
+  display: grid;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.optimizer-control-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.optimizer-control-heading > span {
+  display: inline-grid;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid rgb(var(--accent-rgb) / 0.42);
+  border-radius: 999px;
+  color: var(--accent);
+  font: 0.72rem/1 var(--mono-font);
+}
+
+.optimizer-control-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.optimizer-control-heading h4,
+.optimizer-control-heading p,
+.optimizer-empty h3,
+.optimizer-empty p,
+.optimizer-results-copy {
+  margin: 0;
+}
+
+.optimizer-control-heading h4 {
+  font-size: 0.9rem;
+}
+
+.optimizer-control-heading p,
+.optimizer-guidance,
+.optimizer-action-bar small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.optimizer-guidance.is-warning {
+  color: var(--warning);
+}
+
+.optimizer-checks {
+  display: grid;
+  gap: 9px;
+}
+
+.optimizer-material-rules {
+  display: grid;
+  gap: 8px;
+}
+
+.optimizer-material-rules details {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-subtle);
+}
+
+.optimizer-material-rules summary {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.optimizer-material-rules summary::-webkit-details-marker {
+  display: none;
+}
+
+.optimizer-material-rules summary > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.optimizer-material-rules summary strong {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.optimizer-material-rules summary small {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.optimizer-material-rules summary b {
+  display: inline-grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--text-2);
+  font: 0.72rem/1 var(--mono-font);
+}
+
+.optimizer-material-rules details[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.optimizer-material-rules .formula-intelligence-picker {
+  padding: 12px;
+}
+
+.optimizer-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.optimizer-action-bar > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.optimizer-action-bar strong {
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.optimizer-action-bar .primary-button {
+  flex: 0 0 auto;
+}
+
+.optimizer-results,
+.optimizer-candidate-list {
+  display: grid;
+  gap: 16px;
+}
+
+.optimizer-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  min-height: 150px;
+  padding: 24px;
+}
+
+.optimizer-empty > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.optimizer-empty > div {
+  display: grid;
+  gap: 6px;
+}
+
+.optimizer-empty p,
+.optimizer-results-copy {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.optimizer-results-copy {
+  margin: 8px 0 16px;
+}
+
+.optimizer-candidate {
+  gap: 14px;
+  padding: 16px;
+}
+
+.optimizer-candidate.is-reference {
+  border-style: dashed;
+}
+
+.optimizer-candidate-heading,
+.optimizer-candidate-heading > div {
+  min-width: 0;
+}
+
+.optimizer-candidate-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.optimizer-candidate-heading h4 {
+  overflow-wrap: anywhere;
+  font-size: 0.94rem;
+}
+
+.optimizer-comparison {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.optimizer-comparison > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) repeat(3, minmax(62px, auto));
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.74rem;
+}
+
+.optimizer-comparison > div:first-child {
+  border-top: 0;
+}
+
+.optimizer-comparison-heading {
+  background: rgb(var(--accent-rgb) / 0.055);
+  color: var(--muted);
+  font-size: 0.68rem !important;
+  text-transform: uppercase;
+}
+
+.optimizer-comparison strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+
+.optimizer-comparison span:not(:first-child) {
+  text-align: right;
+  font-family: var(--mono-font);
+}
+
+.optimizer-comparison .is-positive {
+  color: var(--success);
+}
+
+.optimizer-comparison .is-negative {
+  color: var(--warning);
+}
+
+.optimizer-baseline-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.optimizer-summary {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 20px !important;
+}
+
 @media (max-width: 1380px) {
   .design-studio-grid.has-selected-direction {
     grid-template-columns: minmax(294px, 0.68fr) minmax(0, 1.32fr);
@@ -778,6 +1056,10 @@
   .formula-intelligence-detail {
     order: 3;
   }
+
+  .optimizer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 640px) {
@@ -800,6 +1082,26 @@
   .formula-intelligence-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .optimizer-action-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .optimizer-action-bar .primary-button {
+    width: 100%;
+  }
+
+  .optimizer-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .optimizer-comparison > div {
+    grid-template-columns: minmax(92px, 1fr) repeat(3, minmax(49px, auto));
+    gap: 6px;
+    padding: 8px;
+    font-size: 0.68rem;
   }
 
   .formula-intelligence-project-stage,

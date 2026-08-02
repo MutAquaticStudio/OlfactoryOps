@@ -23,6 +23,7 @@ import {
   buildOptimizerProposals,
   compareOptimizerCandidates,
   compositionChangePercent,
+  optimizerBaselineLines,
   optimizerParetoState,
   proposalFromFormulaVersion,
   sensoryMemoryEvidenceForDirection,
@@ -1181,13 +1182,26 @@ function assertCandidateSaveEligibility(service: NorthStarService, proposal: Ret
   if (preview.compliance.status !== 'APPROVED' || preview.ifra.blockerCount > 0) {
     throw new UnprocessableEntityException('Only a compliance-passing candidate can be saved as a formula draft')
   }
-  const baseline = service.formulaVersions(request.baselineFormulaId).data.versions.find((version) => version.version === request.baselineVersion)
-  const formula = service.formulaVersions(request.baselineFormulaId).data.formula
+  const versions = service.formulaVersions(request.baselineFormulaId).data
+  const baseline = versions.versions.find((version) => version.version === request.baselineVersion)
+  const formula = versions.formula
+  if (!baseline) throw new UnprocessableEntityException('The immutable optimizer baseline is no longer available')
+  const baselineLines = optimizerBaselineLines(baseline)
+  if (baselineLines.length === 0) throw new UnprocessableEntityException('Optimizer baseline cannot be resolved to raw materials')
+  const baselineProposal = proposalFromFormulaVersion(formula, baselineLines)
+  if (compositionChangePercent(baselineProposal, proposal) < 0.005) {
+    throw new UnprocessableEntityException('Candidate matches the immutable baseline and cannot create a duplicate draft')
+  }
+  const baselinePercentages = new Map(baselineProposal.ingredients.map((ingredient) => [ingredient.materialId, ingredient.percentage]))
+  const candidatePercentages = new Map(proposal.ingredients.map((ingredient) => [ingredient.materialId, ingredient.percentage]))
+  if (request.lockedMaterialIds.some((materialId) => Math.abs((candidatePercentages.get(materialId) ?? -1) - (baselinePercentages.get(materialId) ?? -2)) > 0.005)) {
+    throw new UnprocessableEntityException('Candidate changes a material percentage that was locked by the optimizer request')
+  }
   if ((request.objectives?.targetCostReductionPercent !== undefined || request.objectives?.maxTotalCost !== undefined) && (!preview.cost || !baseline)) {
     throw new UnprocessableEntityException('Cost evidence is required before this constrained candidate can be saved')
   }
   if (preview.cost && baseline) {
-    const baselinePreview = service.previewFormulaIntelligence(proposalFromFormulaVersion(formula, baseline.lines)).data
+    const baselinePreview = service.previewFormulaIntelligence(baselineProposal).data
     const baselineCost = baselinePreview.cost?.totalCost
     if ((request.objectives?.targetCostReductionPercent ?? 0) > 0 && (!baselineCost || ((baselineCost - preview.cost.totalCost) / baselineCost) * 100 + 0.0001 < request.objectives!.targetCostReductionPercent!)) {
       throw new UnprocessableEntityException('Candidate does not meet the requested cost reduction target')
@@ -1392,11 +1406,10 @@ async function runOptimizer(store: AgentRuntimeStore, service: NorthStarService,
   const analyzeId = await store.createNode(run, 'analyze_brief', { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion })
   await store.startNode(run, analyzeId, 'analyze_brief')
   await store.completeNode(run, analyzeId, 'analyze_brief', { intent: request.intent, lockedMaterialIds: request.lockedMaterialIds }, 12)
-  const materialIdSet = new Set(baseline.lines.map((line) => line.materialId).filter((id): id is string => Boolean(id)))
-  if (materialIdSet.size !== baseline.lines.filter((line) => Boolean(line.materialId)).length || baseline.lines.some((line) => line.childFormulaId)) {
-    throw new UnprocessableEntityException('Optimizer currently requires a resolved material-only baseline version')
-  }
-  const baselineProposal = proposalFromFormulaVersion(versions.formula, baseline.lines)
+  const baselineLines = optimizerBaselineLines(baseline)
+  if (baselineLines.length === 0) throw new UnprocessableEntityException('Optimizer requires an immutable baseline version that resolves to raw materials')
+  const materialIdSet = new Set(baselineLines.map((line) => line.materialId).filter((id): id is string => Boolean(id)))
+  const baselineProposal = proposalFromFormulaVersion(versions.formula, baselineLines)
   if (!baselineProposal.ingredients.length) throw new UnprocessableEntityException('Baseline version has no material composition to optimize')
   const searchId = await store.createNode(run, 'search_materials', { baselineFormulaId: request.baselineFormulaId })
   await store.startNode(run, searchId, 'search_materials')

@@ -1,5 +1,5 @@
 import type { AgentFormulaProposal, FormulaDesignBrief, FormulaOptimizationObjectives, FormulaOptimizerIntent } from './agentRuntime.js'
-import type { ApprovedMaterialSubstitutionRecord, Formula, FormulaPyramidNote, Material, WorkspacePreferenceProfile } from './northStar.js'
+import type { ApprovedMaterialSubstitutionRecord, Formula, FormulaPyramidNote, FormulaVersionRecord, Material, WorkspacePreferenceProfile } from './northStar.js'
 
 type MaterialSeed = Pick<Material, 'id' | 'name' | 'family' | 'odor' | 'tier' | 'costPerGram' | 'ifraLimit'> & { availabilityRank?: number }
 
@@ -147,11 +147,42 @@ export function proposalFromFormulaVersion(formula: Formula, versionLines: Formu
   }
 }
 
+export function optimizerBaselineLines(version: Pick<FormulaVersionRecord, 'lines' | 'resolvedLeaves'>): Formula['lines'] {
+  const materialOnlyLines = version.lines.filter((line) => Boolean(line.materialId) && line.grams > 0)
+  if (materialOnlyLines.length === version.lines.length && materialOnlyLines.length > 0) return materialOnlyLines
+  return version.resolvedLeaves
+    .filter((leaf) => leaf.grams > 0)
+    .map((leaf) => ({
+      id: `optimizer-${leaf.materialId}`,
+      label: leaf.materialName,
+      materialId: leaf.materialId,
+      grams: leaf.grams,
+      pyramidNote: noteForTier(leaf.tier),
+    }))
+}
+
 function replaceIngredient(proposal: AgentFormulaProposal, sourceId: string, replacement: MaterialSeed) {
   if (proposal.ingredients.some((ingredient) => ingredient.materialId === replacement.id)) return proposal
   return {
     ...proposal,
     ingredients: proposal.ingredients.map((ingredient) => ingredient.materialId === sourceId ? { ...ingredient, materialId: replacement.id, pyramidNote: noteForTier(replacement.tier) } : ingredient),
+  }
+}
+
+function rebalanceIngredientPercentages(proposal: AgentFormulaProposal, sourceId: string, targetId: string, maximumShift = 5) {
+  if (sourceId === targetId) return proposal
+  const source = proposal.ingredients.find((ingredient) => ingredient.materialId === sourceId)
+  const target = proposal.ingredients.find((ingredient) => ingredient.materialId === targetId)
+  if (!source || !target) return proposal
+  const shift = Number(Math.min(maximumShift, Math.max(0, source.percentage * 0.2)).toFixed(4))
+  if (shift < 0.01 || source.percentage - shift <= 0) return proposal
+  return {
+    ...proposal,
+    ingredients: proposal.ingredients.map((ingredient) => {
+      if (ingredient.materialId === sourceId) return { ...ingredient, percentage: Number((ingredient.percentage - shift).toFixed(4)) }
+      if (ingredient.materialId === targetId) return { ...ingredient, percentage: Number((ingredient.percentage + shift).toFixed(4)) }
+      return ingredient
+    }),
   }
 }
 
@@ -165,10 +196,18 @@ export function buildOptimizerProposals(
   approvedSubstitutions: ApprovedMaterialSubstitutionRecord[] = [],
 ) {
   const current = new Map(materials.map((material) => [material.id, material]))
-  const locked = new Set([...lockedMaterialIds, ...(objectives?.preserveMaterialIds ?? [])])
+  const locked = new Set(lockedMaterialIds)
+  const preserved = new Set(objectives?.preserveMaterialIds ?? [])
+  const protectedMaterials = new Set([...locked, ...preserved])
   const prohibited = new Set(objectives?.prohibitedMaterialIds ?? [])
-  const unlocked = baseline.ingredients.filter((ingredient) => !locked.has(ingredient.materialId))
-  const variants: Array<{ title: string; proposal: AgentFormulaProposal }> = prohibited.size === 0 ? [{ title: `${baseline.name} - Baseline`, proposal: baseline }] : []
+  const substitutionSources = baseline.ingredients.filter((ingredient) => !protectedMaterials.has(ingredient.materialId))
+  const adjustable = baseline.ingredients.filter((ingredient) => !locked.has(ingredient.materialId) && !prohibited.has(ingredient.materialId))
+  const variants: Array<{ title: string; proposal: AgentFormulaProposal }> = []
+  const addRebalancedVariant = (title: string, sourceId: string | undefined, targetId: string | undefined) => {
+    if (!sourceId || !targetId) return
+    const proposal = rebalanceIngredientPercentages(baseline, sourceId, targetId)
+    if (proposal !== baseline) variants.push({ title, proposal })
+  }
   const replacementFor = (sourceId: string, predicate: (material: MaterialSeed) => boolean) => {
     const approvedIds = new Set(approvedSubstitutions
       .filter((substitution) => substitution.status === 'APPROVED' && substitution.sourceMaterialId === sourceId && Math.abs(substitution.strengthFactor - 1) < 0.0001)
@@ -186,25 +225,50 @@ export function buildOptimizerProposals(
     }
     return replacementFor(sourceId, predicate)
   }
-  const costSource = [...unlocked]
+  const costSource = [...substitutionSources]
     .sort((left, right) => (current.get(right.materialId)?.costPerGram ?? 0) - (current.get(left.materialId)?.costPerGram ?? 0))[0]
   if (costSource && (intent === 'COST' || intent === 'COMBINED' || objectives?.targetCostReductionPercent !== undefined || objectives?.maxTotalCost !== undefined)) {
     const source = current.get(costSource.materialId)
     const replacement = substitution(costSource.materialId, (material) => material.id !== source?.id && material.tier === source?.tier)
     if (replacement) variants.push({ title: `${baseline.name} - Cost recovery`, proposal: replaceIngredient(baseline, costSource.materialId, replacement) })
   }
-  const inventorySource = [...unlocked].find((ingredient) => !availableMaterialIds.has(ingredient.materialId))
+  if (intent === 'COST' || intent === 'COMBINED' || objectives?.targetCostReductionPercent !== undefined || objectives?.maxTotalCost !== undefined) {
+    const ratioSource = [...adjustable].sort((left, right) => (current.get(right.materialId)?.costPerGram ?? 0) - (current.get(left.materialId)?.costPerGram ?? 0))[0]
+    const ratioTarget = [...adjustable]
+      .filter((ingredient) => ingredient.materialId !== ratioSource?.materialId)
+      .sort((left, right) => (current.get(left.materialId)?.costPerGram ?? Number.POSITIVE_INFINITY) - (current.get(right.materialId)?.costPerGram ?? Number.POSITIVE_INFINITY))[0]
+    if ((current.get(ratioSource?.materialId ?? '')?.costPerGram ?? 0) > (current.get(ratioTarget?.materialId ?? '')?.costPerGram ?? Number.POSITIVE_INFINITY)) {
+      addRebalancedVariant(`${baseline.name} - Cost balance`, ratioSource?.materialId, ratioTarget?.materialId)
+    }
+  }
+  const inventorySource = [...substitutionSources].find((ingredient) => !availableMaterialIds.has(ingredient.materialId))
   if (inventorySource && (intent === 'INVENTORY' || intent === 'COMBINED' || objectives?.maximizeInventoryCoverage || objectives?.minimizeNewPurchases)) {
     const source = current.get(inventorySource.materialId)
     const replacement = substitution(inventorySource.materialId, (material) => availableMaterialIds.has(material.id) && material.tier === source?.tier)
     if (replacement) variants.push({ title: `${baseline.name} - Stock recovery`, proposal: replaceIngredient(baseline, inventorySource.materialId, replacement) })
   }
-  const complianceSource = [...unlocked]
+  if (intent === 'INVENTORY' || intent === 'COMBINED' || objectives?.maximizeInventoryCoverage || objectives?.minimizeNewPurchases) {
+    const ratioSource = [...adjustable].find((ingredient) => !availableMaterialIds.has(ingredient.materialId))
+    const sourceTier = current.get(ratioSource?.materialId ?? '')?.tier
+    const availableTargets = adjustable.filter((ingredient) => ingredient.materialId !== ratioSource?.materialId && availableMaterialIds.has(ingredient.materialId))
+    const ratioTarget = availableTargets.find((ingredient) => current.get(ingredient.materialId)?.tier === sourceTier) ?? availableTargets[0]
+    addRebalancedVariant(`${baseline.name} - Stock balance`, ratioSource?.materialId, ratioTarget?.materialId)
+  }
+  const complianceSource = [...substitutionSources]
     .sort((left, right) => (current.get(left.materialId)?.ifraLimit ?? 100) - (current.get(right.materialId)?.ifraLimit ?? 100))[0]
   if (complianceSource && (intent === 'COMPLIANCE' || intent === 'COMBINED' || objectives?.complianceRequired)) {
     const source = current.get(complianceSource.materialId)
     const replacement = substitution(complianceSource.materialId, (material) => material.id !== source?.id && material.tier === source?.tier && material.ifraLimit > (source?.ifraLimit ?? 0))
     if (replacement) variants.push({ title: `${baseline.name} - Compliance recovery`, proposal: replaceIngredient(baseline, complianceSource.materialId, replacement) })
+  }
+  if (intent === 'COMPLIANCE' || intent === 'COMBINED' || objectives?.complianceRequired) {
+    const ratioSource = [...adjustable].sort((left, right) => (current.get(left.materialId)?.ifraLimit ?? 100) - (current.get(right.materialId)?.ifraLimit ?? 100))[0]
+    const ratioTarget = [...adjustable]
+      .filter((ingredient) => ingredient.materialId !== ratioSource?.materialId)
+      .sort((left, right) => (current.get(right.materialId)?.ifraLimit ?? 0) - (current.get(left.materialId)?.ifraLimit ?? 0))[0]
+    if ((current.get(ratioTarget?.materialId ?? '')?.ifraLimit ?? 0) > (current.get(ratioSource?.materialId ?? '')?.ifraLimit ?? 100)) {
+      addRebalancedVariant(`${baseline.name} - Compliance balance`, ratioSource?.materialId, ratioTarget?.materialId)
+    }
   }
   for (const prohibitedId of prohibited) {
     const source = current.get(prohibitedId)
@@ -214,11 +278,14 @@ export function buildOptimizerProposals(
   }
   const distinct = new Map<string, { title: string; proposal: AgentFormulaProposal }>()
   for (const variant of variants) {
-    const signature = variant.proposal.ingredients.map((ingredient) => ingredient.materialId).join('|')
+    const signature = variant.proposal.ingredients.map((ingredient) => `${ingredient.materialId}:${ingredient.percentage.toFixed(4)}`).join('|')
     const materialIds = new Set(variant.proposal.ingredients.map((ingredient) => ingredient.materialId))
-    if (!distinct.has(signature) && [...locked].every((materialId) => materialIds.has(materialId)) && [...prohibited].every((materialId) => !materialIds.has(materialId))) {
+    if (!distinct.has(signature) && [...protectedMaterials].every((materialId) => materialIds.has(materialId)) && [...prohibited].every((materialId) => !materialIds.has(materialId))) {
       distinct.set(signature, variant)
     }
+  }
+  if (distinct.size === 0 && prohibited.size === 0) {
+    distinct.set(baseline.ingredients.map((ingredient) => `${ingredient.materialId}:${ingredient.percentage.toFixed(4)}`).join('|'), { title: `${baseline.name} - Baseline feasibility`, proposal: baseline })
   }
   return Array.from(distinct.values()).slice(0, 3)
 }

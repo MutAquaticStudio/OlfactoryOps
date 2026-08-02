@@ -102,6 +102,32 @@ test('Design Studio restores its route and keeps key actions usable', async ({ p
   }
 })
 
+test('Reformulation Optimizer resolves a baseline and renders governed candidates', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated optimizer flow runs once, then checks the restored mobile layout.')
+  await signIn(page)
+  await page.goto('/ai/reformulation-optimizer')
+  await expect(page).toHaveURL(/\/ai\/reformulation-optimizer$/)
+  await expect(page.getByRole('heading', { name: 'Reformulation Optimizer' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+
+  await page.getByLabel('Formula').selectOption('frm-0421')
+  const version = page.getByLabel('Immutable version')
+  await expect(version).toHaveValue('v12')
+  await expect(page.getByText('No materials are available.')).toHaveCount(0)
+
+  const analyze = page.getByTestId('formula-optimizer-primary-action')
+  await expect(analyze).toBeEnabled()
+  await analyze.click()
+  await expect(page.getByRole('heading', { name: 'Ranked candidates' })).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.optimizer-comparison')).toBeVisible()
+  await expectNoSeriousAccessibilityViolations(page)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await expect(page.getByTestId('formula-optimizer-controls')).toBeVisible()
+  await expect(page.getByTestId('formula-optimizer-results')).toBeVisible()
+})
+
 test('Orders exposes responsive detail history and domestic shipping choices', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated role flow runs once and checks desktop and mobile in the same session.')
   await signIn(page)

@@ -117,6 +117,25 @@ Cost objectives require `costing.view`; an eligible-inventory hard gate requires
 `inventory.view`, and any candidate that fails an explicit gate is not offered
 for draft confirmation.
 
+### Luồng Reformulation Optimizer
+
+Optimizer dùng workflow `Baseline → Objectives → Analyze → Draft`. Người dùng
+chọn một immutable formula version; version có nested accord được phân giải về
+raw-material leaves trước khi phân tích, không chỉnh sửa snapshot gốc. Khi chưa
+có substitution đã được reviewer phê duyệt, engine vẫn có thể đề xuất thay đổi
+tỷ lệ giữa các material sẵn có trong baseline nhưng không tự đưa material mới
+vào công thức.
+
+Ba guardrail material được tách rõ: **Lock exact percentages** giữ nguyên tỷ lệ,
+**Preserve materials** giữ material nhưng cho phép đổi tỷ lệ, và **Exclude
+materials** chỉ được giải quyết bằng substitution đã duyệt. Kết quả hiển thị
+baseline/candidate/delta theo từng material, compliance, inventory, cost và
+Pareto evidence theo quyền. Artifact từ Worker/D1 hoặc local API được khôi phục
+qua cùng một envelope; đổi formula/version sẽ xóa candidate cũ để không hiển thị
+kết quả sai baseline. Candidate không thay đổi thành phần bị coi là reference và
+backend từ chối tạo draft trùng. Mọi run và draft vẫn không reserve hoặc consume
+inventory.
+
 The tenant feature flags `designStudioCandidateGeneration`,
 `designStudioOptimizer`, `designStudioSensoryMemory`, and
 `formulaIntelligenceRag` are server-side kill switches. They change runtime

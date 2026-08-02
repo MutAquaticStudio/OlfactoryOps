@@ -35,6 +35,7 @@ import {
   buildOptimizerProposals,
   compareOptimizerCandidates,
   compositionChangePercent,
+  optimizerBaselineLines,
   optimizerParetoState,
   proposalFromFormulaVersion,
   sensoryMemoryEvidenceForDirection,
@@ -470,6 +471,18 @@ export class AgentLocalRuntimeService {
     const preserved = [...new Set([...request.lockedMaterialIds, ...(request.objectives?.preserveMaterialIds ?? [])])]
     if (preserved.some((materialId) => !candidateMaterialIds.has(materialId))) throw new UnprocessableEntityException('Candidate does not preserve all locked materials')
     if ((request.objectives?.prohibitedMaterialIds ?? []).some((materialId) => candidateMaterialIds.has(materialId))) throw new UnprocessableEntityException('Candidate contains a prohibited material')
+    const versions = service.formulaVersions(request.baselineFormulaId).data
+    const baseline = versions.versions.find((version) => version.version === request.baselineVersion)
+    if (!baseline) throw new UnprocessableEntityException('The immutable optimizer baseline is no longer available')
+    const baselineLines = optimizerBaselineLines(baseline)
+    if (baselineLines.length === 0) throw new UnprocessableEntityException('Optimizer baseline cannot be resolved to raw materials')
+    const baselineProposal = proposalFromFormulaVersion(versions.formula, baselineLines)
+    if (compositionChangePercent(baselineProposal, candidate.proposal) < 0.005) throw new UnprocessableEntityException('Candidate matches the immutable baseline and cannot create a duplicate draft')
+    const baselinePercentages = new Map(baselineProposal.ingredients.map((ingredient) => [ingredient.materialId, ingredient.percentage]))
+    const candidatePercentages = new Map(candidate.proposal.ingredients.map((ingredient) => [ingredient.materialId, ingredient.percentage]))
+    if (request.lockedMaterialIds.some((materialId) => Math.abs((candidatePercentages.get(materialId) ?? -1) - (baselinePercentages.get(materialId) ?? -2)) > 0.005)) {
+      throw new UnprocessableEntityException('Candidate changes a material percentage that was locked by the optimizer request')
+    }
     const preview = service.previewFormulaIntelligence(candidate.proposal).data
     if (preview.compliance.status !== 'APPROVED' || preview.ifra.blockerCount > 0) throw new UnprocessableEntityException('Only a compliance-passing candidate can be saved as a formula draft')
     this.assertOptimizerCostObjectives(service, request, preview.cost)
@@ -988,8 +1001,9 @@ export class AgentLocalRuntimeService {
     if (!request) throw new UnprocessableEntityException('Optimizer request is missing')
     const versions = service.formulaVersions(request.baselineFormulaId).data
     const baseline = versions.versions.find((version) => version.version === request.baselineVersion)
-    if (!baseline || baseline.lines.some((line) => line.childFormulaId)) throw new UnprocessableEntityException('Optimizer requires a material-only immutable baseline version')
-    const baselineProposal = proposalFromFormulaVersion(versions.formula, baseline.lines)
+    const baselineLines = baseline ? optimizerBaselineLines(baseline) : []
+    if (!baseline || baselineLines.length === 0) throw new UnprocessableEntityException('Optimizer requires an immutable baseline version that resolves to raw materials')
+    const baselineProposal = proposalFromFormulaVersion(versions.formula, baselineLines)
     this.addNode(run, 'analyze_brief', 12, { baselineFormulaId: request.baselineFormulaId, baselineVersion: request.baselineVersion })
     const materials = this.approvedMaterials(service)
     this.addNode(run, 'search_materials', 28, { materialCount: materials.length })
