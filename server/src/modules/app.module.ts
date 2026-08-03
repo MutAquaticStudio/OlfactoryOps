@@ -14,6 +14,7 @@ import { seededAdminCredentialsForEnv } from './auth-credentials.js'
       useFactory: () => new NorthStarService({
         authCredentials: seededAdminCredentialsForEnv(process.env.SEEDED_ADMIN_PASSWORD_HASH),
         mfaEncryptionKey: process.env.MFA_ENCRYPTION_KEY,
+        workspaceBaseDomain: process.env.SYSTEM_WORKSPACE_DOMAIN,
       }),
     },
   ],

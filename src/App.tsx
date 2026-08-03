@@ -475,7 +475,14 @@ type LoginResponse = {
   revokedForLimit: AuthSession[]
   newDeviceAlert: boolean
   securityPolicy: TenantSecurityPolicy
+  workspace: WorkspaceAccess
   invariant: string
+}
+
+type WorkspaceAccess = {
+  systemHostname: string
+  workspaceUrl: string
+  externalDomain?: string
 }
 
 type SignupResponse = {
@@ -488,6 +495,8 @@ type SignupResponse = {
   csrfToken: string
   permissions: string[]
   audit: AuditEvent
+  systemHostname: string
+  workspaceUrl: string
   customDomain: {
     status: 'NOT_REQUESTED'
     nextAction: string
@@ -501,6 +510,7 @@ type MeResponse = {
   permissions: string[]
   securityPolicy: TenantSecurityPolicy
   userSettings: UserSettingsRecord
+  workspace: WorkspaceAccess
 }
 type SaasConsoleResponse = BillingConsoleResponse
 type SaasHealthStatus = BillingConsoleResponse['readiness'][number]['status']
@@ -1401,6 +1411,40 @@ async function digestImportRows(rows: Array<Record<string, unknown>>) {
 
 let csrfToken: string | null = null
 
+function workspaceRedirectUrl(workspaceUrl: string | undefined, localPath: string) {
+  const localWorkspaceHostsEnabled = import.meta.env.DEV && import.meta.env.VITE_LOCAL_WORKSPACE_HOSTS === 'true'
+  if ((import.meta.env.DEV && !localWorkspaceHostsEnabled) || !workspaceUrl) return undefined
+  try {
+    const workspace = new URL(workspaceUrl)
+    const current = new URL(localPath, window.location.origin)
+    if (localWorkspaceHostsEnabled) {
+      const slug = workspace.hostname.split('.')[0]
+      if (!slug || window.location.hostname === `${slug}.localhost`) return undefined
+      const localWorkspace = new URL(window.location.origin)
+      localWorkspace.protocol = 'http:'
+      localWorkspace.hostname = `${slug}.localhost`
+      localWorkspace.pathname = current.pathname
+      localWorkspace.search = current.search
+      localWorkspace.hash = current.hash
+      return localWorkspace.toString()
+    }
+    if (
+      workspace.protocol !== 'https:' ||
+      workspace.port ||
+      !workspace.hostname.endsWith('.labofscents.org') ||
+      workspace.hostname === window.location.hostname
+    ) {
+      return undefined
+    }
+    workspace.pathname = current.pathname
+    workspace.search = current.search
+    workspace.hash = current.hash
+    return workspace.toString()
+  } catch {
+    return undefined
+  }
+}
+
 function idempotencyHeaders(headers?: HeadersInit) {
   const next = new Headers(headers)
   next.set('Idempotency-Key', crypto.randomUUID())
@@ -1425,9 +1469,18 @@ async function requestApi<T>(path: string, init?: RequestInit) {
     const retryAfterHeader = response.headers.get('Retry-After')
     let retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN
     try {
-      const payload = (await response.json()) as { message?: unknown; retryAfterSeconds?: unknown }
+      const payload = (await response.json()) as { message?: unknown; retryAfterSeconds?: unknown; code?: unknown; workspaceUrl?: unknown }
       if (typeof payload.message === 'string') {
         message = payload.message
+      }
+      if (response.status === 403 && payload.code === 'WORKSPACE_HOST_MISMATCH' && typeof payload.workspaceUrl === 'string') {
+        const redirect = workspaceRedirectUrl(
+          payload.workspaceUrl,
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        )
+        if (redirect) {
+          window.location.replace(redirect)
+        }
       }
       if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
         retryAfterSeconds = Number(payload.retryAfterSeconds)
@@ -1940,6 +1993,7 @@ function App() {
   const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
   const [publicRoute, setPublicRoute] = useState<PublicRoute | null>(() => publicRouteForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccess | null>(null)
   const [authRestoring, setAuthRestoring] = useState(() => hasStoredAuthMarker())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
@@ -2215,6 +2269,7 @@ function App() {
       setResumePath((current) => current ?? safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`) ?? pathForDomainKey(activeKey))
       setAuthNotice('Your session expired or was revoked. Sign in again to continue where you left off.')
       setCurrentSession(null)
+      setWorkspaceAccess(null)
       applyUserSettings(null)
       setSidebarCollapsed(false)
     }
@@ -2248,9 +2303,18 @@ function App() {
       try {
         const payload = await requestApi<MeResponse>('/me')
         if (active) {
+          const redirect = workspaceRedirectUrl(
+            payload.workspace?.workspaceUrl,
+            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+          )
+          if (redirect) {
+            window.location.replace(redirect)
+            return
+          }
           acceptCsrfToken(payload.csrfToken)
           const session = withSessionPermissions(payload.session, payload.permissions)
           setCurrentSession(session)
+          setWorkspaceAccess(payload.workspace)
           const settings = payload.userSettings ?? userSettingsForSession(payload.session)
           applyUserSettings(settings)
           const requestedLanding = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
@@ -2260,6 +2324,7 @@ function App() {
         if (active) {
           acceptCsrfToken()
           setCurrentSession(null)
+          setWorkspaceAccess(null)
           applyUserSettings(null)
           setSidebarCollapsed(false)
         }
@@ -2893,12 +2958,18 @@ function App() {
     const resumeTarget = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
     const target = safeLandingForSession(resumeTarget, session)
     const destination = resumePath ?? pathForDomainKey(target)
+    const redirect = workspaceRedirectUrl(payload.workspace?.workspaceUrl, destination)
+    if (redirect) {
+      window.location.assign(redirect)
+      return payload
+    }
     setActiveKey(target)
     window.history.replaceState({}, document.title, destination)
     setPublicRoute(publicRouteForPath(new URL(destination, window.location.origin).pathname))
     setResumePath(null)
     setAuthNotice(null)
     setCurrentSession(session)
+    setWorkspaceAccess(payload.workspace)
     return payload
   }
 
@@ -2921,10 +2992,16 @@ function App() {
       }),
     })
     const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
+    const redirect = workspaceRedirectUrl(payload.workspaceUrl, '/')
+    if (redirect) {
+      window.location.assign(redirect)
+      return payload
+    }
     setCurrentSession(session)
+    setWorkspaceAccess({ systemHostname: payload.systemHostname, workspaceUrl: payload.workspaceUrl })
     setResumePath(null)
     setAuthNotice(null)
-    rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain)
+    rememberTenantDomain(payload.session.organizationId, payload.systemHostname)
     void syncUserSettings(session)
     setBillingOnboarding(true)
     return payload
@@ -2953,6 +3030,7 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
+      setWorkspaceAccess(null)
       applyUserSettings(null)
       setSidebarCollapsed(false)
       setBillingOnboarding(false)
@@ -3011,6 +3089,7 @@ function App() {
     return (
       <PostSignupWorkspaceReady
         session={currentSession}
+        workspaceAccess={workspaceAccess}
         onComplete={closeBillingGate}
         onConnectDomain={() => closeBillingGate('saas')}
       />
@@ -3169,6 +3248,7 @@ function App() {
         <DomainWorkspace
           domain={selectedDomain}
           session={currentSession}
+          workspaceAccess={workspaceAccess}
           lots={lots}
                   movements={movements}
                   storageLocations={storageLocationRecords}
@@ -4346,10 +4426,12 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
 
 function PostSignupWorkspaceReady({
   session,
+  workspaceAccess,
   onComplete,
   onConnectDomain,
 }: {
   session: AuthSession
+  workspaceAccess: WorkspaceAccess | null
   onComplete: () => void
   onConnectDomain: () => void
 }) {
@@ -4370,12 +4452,13 @@ function PostSignupWorkspaceReady({
             </div>
             <h1>Your workspace is ready.</h1>
             <p className="lead">
-              Your tenant, owner account, and workspace policies are active. A customer domain is not connected yet; connect one only when you are ready to complete DNS validation.
+              Your tenant, owner account, and workspace policies are active. Your system address is ready now; connect a customer-owned domain only when you are ready to complete DNS validation.
             </p>
             <div className="tag-row">
               <DataTag icon={ShieldCheck} label="Workspace" value="Ready" tone="green" />
               <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
               <DataTag icon={Globe2} label="Custom domain" value="Not connected" tone="amber" />
+              {workspaceAccess ? <DataTag icon={Globe2} label="System address" value={workspaceAccess.systemHostname} tone="green" /> : null}
             </div>
           </div>
           <div className="action-row">
@@ -4900,6 +4983,7 @@ function OwnerUserOverview({
 const DomainWorkspace = memo(function DomainWorkspace({
   domain,
   session,
+  workspaceAccess,
   lots,
   movements,
   storageLocations,
@@ -4961,6 +5045,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
 }: {
   domain: DomainModule
   session: AuthSession
+  workspaceAccess: WorkspaceAccess | null
   lots: InventoryLot[]
   movements: InventoryMovement[]
   storageLocations: StorageLocation[]
@@ -5128,7 +5213,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
       {domain.key === 'orders' && <OrdersWorkspace stock={stock} />}
       {domain.key === 'costing' && <CostingWorkspace />}
       {domain.key === 'analytics' && <AnalyticsWorkspace />}
-      {domain.key === 'saas' && <SaasWorkspace session={session} />}
+      {domain.key === 'saas' && <SaasWorkspace session={session} workspaceAccess={workspaceAccess} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
       {domain.key === 'customization' && <CustomizationWorkspace onBrandingSaved={onWorkspaceBrandingChange} />}
       {![
@@ -15112,7 +15197,7 @@ function AnalyticsWorkspace() {
   )
 }
 
-function SaasWorkspace({ session }: { session: AuthSession }) {
+function SaasWorkspace({ session, workspaceAccess }: { session: AuthSession; workspaceAccess: WorkspaceAccess | null }) {
   const internalAdminView = isInternalAdminSession(session)
   const syncedMessage = 'Workspace access refreshed'
   const loadingMessage = 'Loading workspace readiness controls'
@@ -15735,6 +15820,29 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           </div>
         </Panel>
       ) : null}
+
+      <Panel title="Workspace addresses" icon={Globe2}>
+        <div className="document-list compact-list">
+          <div className="document-row">
+            <div>
+              <strong>System address</strong>
+              {workspaceAccess?.workspaceUrl ? (
+                <a href={workspaceAccess.workspaceUrl}>{workspaceAccess.systemHostname}</a>
+              ) : (
+                <span>Loading your workspace address</span>
+              )}
+            </div>
+            <StatusBadge status="stable" label="ACTIVE" />
+          </div>
+          <div className="document-row">
+            <div>
+              <strong>External domain</strong>
+              <span>{workspaceAccess?.externalDomain ?? 'Not connected'}</span>
+            </div>
+            <StatusBadge status={workspaceAccess?.externalDomain ? 'stable' : 'review'} label={workspaceAccess?.externalDomain ? 'ACTIVE' : 'OPTIONAL'} />
+          </div>
+        </div>
+      </Panel>
 
       {canProvisionCustomDomain ? (
         <Panel title="Custom Domain" icon={Globe2}>

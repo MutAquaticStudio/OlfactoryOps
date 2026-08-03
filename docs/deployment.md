@@ -166,6 +166,43 @@ Optional custom API hostname:
 - The Worker custom domain is configured as `api.labofscents.org`.
 - Use `https://api.labofscents.org/api/v1` as the frontend API base.
 
+### Tenant system hostnames
+
+System workspace addresses use `https://<workspace-slug>.labofscents.org`.
+They are not Cloudflare for SaaS hostnames and do not require DCV. Apply the
+hostname migration, deploy the API and deploy the dedicated router:
+
+```bash
+npm run d1:migrate:remote
+npm run deploy:worker
+npm run deploy:tenant-router
+```
+
+In the Cloudflare dashboard for `labofscents.org`:
+
+1. Add proxied wildcard DNS `CNAME * -> labofscents.pages.dev` (or the current Pages origin).
+2. Attach `*.labofscents.org/*` to Worker `olfactoryops-tenant-router`.
+3. Add more-specific **no Worker** routes for `api.labofscents.org/*`,
+   `beta.labofscents.org/*`, `www.labofscents.org/*`,
+   `customers.labofscents.org/*`, `saas-origin.labofscents.org/*`, and
+   `saas-origin-beta.labofscents.org/*`. Cloudflare uses the most specific
+   matching route, so these exclusions preserve the API, beta Pages and SaaS
+   fallback paths.
+4. Confirm an existing controlled tenant's hostname returns Pages with
+   `X-OlfactoryOps-Workspace-Router: active`; an unknown hostname must return
+   `404`. Do not create QA tenants in production.
+
+The API dynamically grants credentialed CORS only after an exact active entry
+in `workspace_hostnames`. The session cookie remains host-only at
+  `api.labofscents.org`; it is never copied to tenant subdomains.
+
+For local parity, keep the default single-host development flow unless testing
+tenant-host behavior explicitly. Set `LOCAL_WORKSPACE_HOSTS=true` for the Nest
+API and `VITE_LOCAL_WORKSPACE_HOSTS=true` for Vite; a workspace then resolves
+to `http://<slug>.localhost:5173`. Modern browsers map `*.localhost` to
+loopback, so no DNS record is required. The local API accepts only eligible
+single-label localhost origins and returns the same host-mismatch envelope.
+
 ## 4. Deploy Frontend On Cloudflare Pages
 
 Create a Pages project connected to the GitHub repo.

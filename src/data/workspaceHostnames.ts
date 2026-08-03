@@ -1,0 +1,82 @@
+export const defaultWorkspaceBaseDomain = 'labofscents.org'
+
+/** These names have first-party routing or Cloudflare-for-SaaS responsibilities. */
+export const reservedWorkspaceSlugs = new Set([
+  'api',
+  'app',
+  'auth',
+  'beta',
+  'customers',
+  'login',
+  'signup',
+  'saas-origin',
+  'saas-origin-beta',
+  'status',
+  'test',
+  'www',
+])
+
+const workspaceSlugPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const hostnamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+
+export type WorkspaceHostnameKind = 'SYSTEM' | 'CUSTOM'
+export type WorkspaceHostnameStatus = 'ACTIVE' | 'PENDING_VALIDATION' | 'FAILED' | 'ARCHIVED'
+
+export function normalizeWorkspaceBaseDomain(value: string | undefined) {
+  const domain = value?.trim().toLowerCase().replace(/\.$/, '') || defaultWorkspaceBaseDomain
+  return hostnamePattern.test(domain) ? domain : defaultWorkspaceBaseDomain
+}
+
+export function normalizeWorkspaceHostname(value: string | undefined) {
+  const hostname = value?.trim().toLowerCase().replace(/\.$/, '') || ''
+  return hostnamePattern.test(hostname) ? hostname : undefined
+}
+
+export function isReservedWorkspaceSlug(slug: string) {
+  return reservedWorkspaceSlugs.has(slug.trim().toLowerCase())
+}
+
+export function isWorkspaceSlugEligibleForHostname(slug: string) {
+  const normalized = slug.trim().toLowerCase()
+  return workspaceSlugPattern.test(normalized) && !isReservedWorkspaceSlug(normalized)
+}
+
+export function systemWorkspaceHostname(slug: string, baseDomain = defaultWorkspaceBaseDomain) {
+  const normalizedSlug = slug.trim().toLowerCase()
+  if (!isWorkspaceSlugEligibleForHostname(normalizedSlug)) {
+    return undefined
+  }
+  return `${normalizedSlug}.${normalizeWorkspaceBaseDomain(baseDomain)}`
+}
+
+export function workspaceUrlForHostname(hostname: string | undefined) {
+  const normalized = normalizeWorkspaceHostname(hostname)
+  return normalized ? `https://${normalized}` : undefined
+}
+
+export function isSystemWorkspaceHostname(hostname: string | undefined, baseDomain = defaultWorkspaceBaseDomain) {
+  const normalizedHostname = normalizeWorkspaceHostname(hostname)
+  const normalizedBaseDomain = normalizeWorkspaceBaseDomain(baseDomain)
+  if (!normalizedHostname || !normalizedHostname.endsWith(`.${normalizedBaseDomain}`)) {
+    return false
+  }
+  const slug = normalizedHostname.slice(0, -(normalizedBaseDomain.length + 1))
+  return !slug.includes('.') && isWorkspaceSlugEligibleForHostname(slug)
+}
+
+export function isExactHttpsOriginForHostname(origin: string | null, hostname: string) {
+  if (!origin) return false
+  try {
+    const parsed = new URL(origin)
+    return (
+      parsed.protocol === 'https:' &&
+      parsed.origin === origin &&
+      !parsed.username &&
+      !parsed.password &&
+      parsed.port === '' &&
+      parsed.hostname === hostname
+    )
+  } catch {
+    return false
+  }
+}

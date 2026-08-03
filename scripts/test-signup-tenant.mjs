@@ -6,8 +6,11 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const reportRoot = path.join(repoRoot, 'reports')
 
-const apiBaseUrl = stripTrailingSlash(process.env.SIGNUP_TEST_API_URL ?? process.env.FUNCTIONAL_API_URL ?? 'https://api.labofscents.org/api/v1')
-const appUrl = stripTrailingSlash(process.env.SIGNUP_TEST_APP_URL ?? process.env.FUNCTIONAL_APP_URL ?? 'https://labofscents.pages.dev')
+const apiBaseUrl = stripTrailingSlash(process.env.SIGNUP_TEST_API_URL ?? process.env.FUNCTIONAL_API_URL ?? '')
+const appUrl = stripTrailingSlash(process.env.SIGNUP_TEST_APP_URL ?? process.env.FUNCTIONAL_APP_URL ?? '')
+if (process.env.ALLOW_SIGNUP_TENANT_TEST !== 'true' || !apiBaseUrl || !appUrl) {
+  throw new Error('Refusing signup mutation. Set ALLOW_SIGNUP_TENANT_TEST=true plus SIGNUP_TEST_API_URL and SIGNUP_TEST_APP_URL for an isolated test environment.')
+}
 const runStartedAt = new Date()
 const runStamp = stampForFile(runStartedAt)
 const workspaceSlug = slugify(process.env.SIGNUP_TEST_WORKSPACE_SLUG ?? `signup-${runStamp.toLowerCase()}`)
@@ -18,7 +21,8 @@ const password =
   process.env.SIGNUP_TEST_PASSWORD ?? `SignupQa2026!${randomBytes(18).toString('base64url')}`
 const expectedOrganizationId = `org-${workspaceSlug}`
 const expectedBrandId = `brand-${workspaceSlug}`
-const expectedDomain = `${workspaceSlug}.labofscents.org`
+const expectedSystemHostname = `${workspaceSlug}.labofscents.org`
+const expectedWorkspaceUrl = `https://${expectedSystemHostname}`
 const reportPath = path.join(reportRoot, `signup-tenant-test-${runStamp}.md`)
 const cookieJar = new Map()
 let csrfToken = null
@@ -46,7 +50,10 @@ try {
   const signupData = signup.json?.data
   assert(signupData?.organization?.id === expectedOrganizationId, 'signup should return the expected organization id')
   assert(signupData.organization.slug === workspaceSlug, 'signup should return the requested workspace slug')
-  assert(signupData.organization.customDomain === expectedDomain, 'signup should auto-create the workspace domain')
+  assert(signupData.organization.customDomain == null, 'signup must not activate a customer-owned domain')
+  assert(signupData.organization.systemHostname === expectedSystemHostname, 'signup should allocate the system hostname')
+  assert(signupData.systemHostname === expectedSystemHostname, 'signup should return the system hostname')
+  assert(signupData.workspaceUrl === expectedWorkspaceUrl, 'signup should return the canonical workspace URL')
   assert(signupData.organization.primaryContact === email, 'organization primary contact should be the signup email')
   assert(signupData?.brand?.id === expectedBrandId, 'signup should create the expected default brand')
   assert(signupData.brand.organizationId === expectedOrganizationId, 'default brand should be scoped to the new organization')
@@ -59,11 +66,10 @@ try {
   assert(signupData.session.brandId === expectedBrandId, 'signup session should use the default brand')
   assert(signupData.session.email === email, 'signup session email should match signup email')
   assert(signupData.subscription.organizationId === expectedOrganizationId, 'signup should create a tenant-scoped subscription')
-  assert(signupData.subscription.planId === 'PLAN-APPRENTICE', 'signup should start on the Free Apprentice plan')
-  assert(signupData.subscription.status === 'active', 'signup Free subscription should be active')
+  assert(signupData.subscription.planId === 'BETA_ACCESS', 'signup should project managed beta access')
+  assert(signupData.subscription.status === 'active', 'signup beta access should be active')
   assert(signupData.sso.organizationId === expectedOrganizationId, 'signup should create a tenant SSO config')
-  assert(signupData.sso.domain === expectedDomain, 'signup SSO config should use the auto-created workspace domain')
-  assert(signupData.sso.status === 'verified', 'signup workspace domain should be verified for the tenant')
+  assert(signupData.sso.domain === '', 'signup SSO stays unconfigured until an owner enables it')
   csrfToken = signupData.csrfToken ?? null
   assert(csrfToken?.startsWith('csrf_'), 'signup should return a session-bound CSRF token')
 
@@ -79,7 +85,7 @@ try {
   }
 
   evidence.push(`Signup organization: ${signupData.organization.id} / ${signupData.organization.slug}`)
-  evidence.push(`Signup domain: ${signupData.organization.customDomain}`)
+  evidence.push(`Signup system hostname: ${signupData.systemHostname}`)
   evidence.push(`Signup brand: ${signupData.brand.id}`)
   evidence.push(`Signup membership: ${signupData.membership.id} / ${signupData.membership.email}`)
   evidence.push(`Signup session: ${signupData.session.id}`)
@@ -103,23 +109,17 @@ try {
   assertStatus(billing, 200, 'billing console should load for the signup tenant')
   const billingData = billing.json?.data
   assert(billingData.subscription.organizationId === expectedOrganizationId, 'billing subscription should be scoped to the new tenant')
-  assert(billingData.subscription.planId === 'PLAN-APPRENTICE', 'billing console should start on Apprentice')
-  assert(billingData.plan.id === 'PLAN-APPRENTICE', 'billing console should expose the active Free plan')
-  assert(billingData.sso.domain === expectedDomain, 'billing console should expose the signup workspace domain')
-  assert(billingData.sso.status === 'verified', 'billing SSO should start verified for the signup workspace domain')
-  assert(
-    ['PLAN-APPRENTICE', 'PLAN-ARTISAN', 'PLAN-ATELIER', 'PLAN-MAISON'].every((planId) =>
-      billingData.plans.some((plan) => plan.id === planId),
-    ),
-    'billing console should expose the full plan catalog',
-  )
-  evidence.push(`Billing plan catalog: ${billingData.plans.map((plan) => plan.id).join(', ')}`)
+  assert(billingData.subscription.planId === 'BETA_ACCESS', 'billing console should project beta access')
+  assert(billingData.plan.id === 'BETA_ACCESS', 'billing console should hide the commercial plan')
+  assert(billingData.sso.domain === '', 'billing console should not imply SSO is configured')
+  assert(billingData.billingMode === 'managed_beta', 'beta must keep self-service billing disabled')
+  evidence.push('Billing mode: managed_beta')
 
   const firstFormula = await apiFetch('/formulas', {
     method: 'POST',
     body: JSON.stringify({ name: 'First Signup Workspace Formula', targetGrams: 100 }),
   })
-  assertStatus(firstFormula, [200, 201], 'a new Free workspace should be able to create its first formula')
+  assertStatus(firstFormula, [200, 201], 'a new beta workspace should be able to create its first formula')
   assert(
     firstFormula.json?.data?.formula?.organizationId === expectedOrganizationId,
     'first formula should be scoped to the signup tenant',
@@ -133,21 +133,6 @@ try {
   )
   evidence.push(`First Formula: ${firstFormula.json.data.formula.code}`)
   evidence.push(`Tenant formula usage: ${billingAfterFirstFormula.json.data.usage.formulas}`)
-
-  const selectedPlan = await apiFetch('/billing/subscription/select-plan', {
-    method: 'POST',
-    body: JSON.stringify({ planId: 'PLAN-ARTISAN', billingCycle: 'monthly' }),
-  })
-  assertStatus(selectedPlan, [200, 201], 'plan selection should start the Artisan trial')
-  assert(selectedPlan.json?.data?.mode === 'plan_selected', 'plan selection should return a plan_selected billing action')
-
-  const billingAfterSelection = await apiFetch('/billing/console')
-  assertStatus(billingAfterSelection, 200, 'billing console should reload after plan selection')
-  assert(billingAfterSelection.json?.data?.subscription?.organizationId === expectedOrganizationId, 'selected plan should stay inside the new tenant')
-  assert(billingAfterSelection.json.data.subscription.planId === 'PLAN-ARTISAN', 'selected subscription should use Artisan')
-  assert(billingAfterSelection.json.data.subscription.status === 'trialing', 'paid plan selection should start a no-card trial')
-  assert(billingAfterSelection.json.data.plan.id === 'PLAN-ARTISAN', 'active billing plan should be Artisan after selection')
-  evidence.push(`Selected billing plan: ${billingAfterSelection.json.data.plan.id} / ${billingAfterSelection.json.data.subscription.status}`)
 
   const crossTenant = await apiFetch('/security/tenant-probe?organizationId=org-nxl')
   assertStatus(crossTenant, 403, 'new signup tenant should not access org-nxl')
@@ -266,13 +251,12 @@ Signup email: ${email}
 
 ## Assertions
 
-- POST /auth/signup creates organization, brand, active owner membership, owner session, and CSRF token.
+- POST /auth/signup atomically creates organization, system hostname, brand, active owner membership, owner session, and CSRF token.
 - Worker signup cookie is HttpOnly, Secure, SameSite=None when the edge wrapper emits Set-Cookie.
 - GET /me hydrates the signup session from the persisted Worker state.
 - GET /security/tenant-console remains hidden behind the internal security permission for customer owners.
-- GET /billing/console returns the new tenant's Free subscription and full plan catalog.
-- A new Free workspace can create its first Formula and its usage is tenant-scoped.
-- POST /billing/subscription/select-plan starts a tenant-scoped paid trial.
+- GET /billing/console returns the new tenant's managed-beta state without enabling checkout or plan changes.
+- A new beta workspace can create its first Formula and its usage is tenant-scoped.
 - Cross-tenant probe to org-nxl is blocked.
 
 ## Evidence

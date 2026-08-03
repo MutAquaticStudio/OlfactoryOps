@@ -7,6 +7,7 @@ describe('local API configuration', () => {
       host: '127.0.0.1',
       port: 4000,
       corsOrigins: ['http://127.0.0.1:5173', 'http://localhost:5173'],
+      workspaceHostnamesEnabled: false,
     })
   })
 
@@ -19,5 +20,12 @@ describe('local API configuration', () => {
     expect(() => resolveLocalApiConfig({ CORS_ORIGINS: 'https://*.labofscents.pages.dev' })).toThrow(
       'must contain exact origins without wildcards',
     )
+  })
+
+  it('allows an explicit local workspace hostname mapper without broadening configured origins', () => {
+    expect(resolveLocalApiConfig({ LOCAL_WORKSPACE_HOSTS: 'true' })).toMatchObject({
+      workspaceHostnamesEnabled: true,
+      corsOrigins: ['http://127.0.0.1:5173', 'http://localhost:5173'],
+    })
   })
 })

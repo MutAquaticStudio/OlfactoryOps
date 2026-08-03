@@ -12,6 +12,7 @@ crons = ["* * * * *"]
 CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.pages.dev,https://test.labofscents.pages.dev,https://olfactoryops-beta.pages.dev,https://beta.labofscents.org"
 BILLING_MODE = "managed_beta"
 BETA_APP_ORIGIN = "https://beta.labofscents.org"
+SYSTEM_WORKSPACE_DOMAIN = "labofscents.org"
 AGENT_PROVIDER = "workers_ai"
 WORKERS_AI_FORMULA_AGENT_MODEL = "@cf/openai/gpt-oss-120b"
 

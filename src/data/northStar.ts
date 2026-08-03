@@ -719,6 +719,8 @@ export interface OrganizationRecord {
   id: string
   name: string
   slug: string
+  /** Deterministic, read-only system address derived from the workspace slug. */
+  systemHostname?: string
   customDomain?: string
   plan: 'Free' | 'Pro' | 'Team' | 'Enterprise'
   status: 'ACTIVE' | 'FROZEN' | 'SUSPENDED'

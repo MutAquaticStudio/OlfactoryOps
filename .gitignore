@@ -11,6 +11,7 @@ node_modules
 dist
 dist-api
 dist-worker
+dist-tenant-router
 dist-worker-test
 dist-ssr
 .wrangler

@@ -6,6 +6,7 @@ export type LocalApiConfig = {
   host: string
   port: number
   corsOrigins: string[]
+  workspaceHostnamesEnabled: boolean
 }
 
 export function parseCsvEnv(value: string | undefined) {
@@ -37,7 +38,12 @@ export function resolveLocalApiConfig(env: NodeJS.ProcessEnv = process.env): Loc
     throw new Error('CORS_ORIGINS for the local API must contain exact origins without wildcards.')
   }
 
-  return { host, port, corsOrigins: effectiveCorsOrigins }
+  return {
+    host,
+    port,
+    corsOrigins: effectiveCorsOrigins,
+    workspaceHostnamesEnabled: env.LOCAL_WORKSPACE_HOSTS?.trim().toLowerCase() === 'true',
+  }
 }
 
 function isExactCorsOrigin(value: string) {

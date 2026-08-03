@@ -1,0 +1,19 @@
+name = "olfactoryops-tenant-router"
+main = "worker/tenant-app-router.ts"
+compatibility_date = "2026-07-10"
+compatibility_flags = ["nodejs_compat"]
+minify = true
+workers_dev = true
+
+[vars]
+PAGES_ORIGIN = "https://labofscents.pages.dev"
+SYSTEM_WORKSPACE_DOMAIN = "labofscents.org"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "olfactoryops-production"
+database_id = "d70bc633-a4d8-4898-8149-d795032cf497"
+migrations_dir = "migrations"
+
+# The wildcard route is deliberately configured in Cloudflare after the DNS
+# wildcard and no-script exclusions are present. See docs/deployment.md.

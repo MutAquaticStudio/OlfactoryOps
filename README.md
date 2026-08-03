@@ -382,13 +382,22 @@ Authentication không cấp quyền cross-tenant. Owner/Admin vẫn bị giới 
 
 ### Signup multi-tenant và Cloudflare for SaaS
 
-`POST /api/v1/auth/signup` chỉ tạo tenant D1, brand mặc định, Owner, role policy,
-credential hash, opaque session và audit evidence. Nó **không** gán trước một
-custom domain hoặc báo hostname là active. Điều này tránh một tenant đăng ký
-chiếm hostname của người khác khi DCV/SSL chưa hoàn tất.
+`POST /api/v1/auth/signup` tạo atomically tenant D1, brand mặc định, Owner,
+credential hash, policy tối thiểu và system hostname `slug.labofscents.org`.
+`workspace_hostnames` là registry duy nhất cho hostname: slug reserved/collision
+bị từ chối trước khi ghi. Response trả `systemHostname` và `workspaceUrl`; UI
+chỉ redirect đến HTTPS hostname hợp lệ dưới `labofscents.org`.
+
+System hostname không dùng Cloudflare for SaaS, không cần DCV và không được
+khai báo lại như customer domain. `tenant-app-router` Worker nhận wildcard
+system hostname, kiểm tra mapping `SYSTEM/ACTIVE` cùng tenant active trong D1
+rồi proxy Pages. Hostname unknown, archived hoặc không hợp lệ trả `404` không
+cache. CORS credentialed chỉ được cấp cho exact HTTPS origin có mapping active;
+session tenant mở trên hostname tenant khác bị Worker từ chối an toàn và client
+redirect về workspace đúng.
 
 Sau signup, Owner chọn **Connect a domain** trong `Workspace access`, nhập
-hostname mà họ sở hữu, và Worker mới gọi Cloudflare Custom Hostnames. Trạng thái
+hostname mà họ sở hữu ngoài `labofscents.org`, và Worker mới gọi Cloudflare Custom Hostnames. Trạng thái
 được giữ tenant-scoped: `pending_validation -> active | failed`. UI hiển thị
 TXT/DCV Cloudflare trả về; chỉ khi provider **và** SSL đều `active` thì
 `tenant_organizations.custom_domain` mới được cập nhật. Retry/Refresh là
@@ -409,6 +418,17 @@ là **hostname origin** của Pages/app (ví dụ `test.labofscents.pages.dev`),
 phải URL có `https://` và không phải hostname khách hàng. Integration
 Readiness sẽ báo `Not configured` đến khi đủ secret; đây là trạng thái an toàn,
 không phải kết quả provision giả.
+
+Triển khai system hostname production cần migration `0043_workspace_hostnames.sql`,
+deploy `olfactoryops-tenant-router`, DNS wildcard proxied `*.labofscents.org`
+và route `*.labofscents.org/*`. Các route `api`, `beta`, `www`, `customers`,
+`saas-origin` và `saas-origin-beta` phải có no-worker exclusion cụ thể để
+không bị wildcard router bắt. Chi tiết thao tác ở `docs/deployment.md`.
+
+Smoke signup có mutation bị chặn mặc định để không sinh tenant QA trên production.
+Chỉ chạy trong D1 test với `ALLOW_SIGNUP_TENANT_TEST=true`,
+`SIGNUP_TEST_API_URL` và `SIGNUP_TEST_APP_URL`; smoke xác minh
+`systemHostname/workspaceUrl` và managed beta, không provision customer domain.
 
 Pages PWA dùng cache shell có version. Mỗi checkpoint thay đổi cache revision và
 Worker mới gọi `skipWaiting`/`clients.claim`; chỉ tab đang được service worker cũ
@@ -600,6 +620,7 @@ Production checklist, security requirement, custom domain guidance và live test
 - <code>0035_lluch_supplier_catalogue.sql</code> nhập Lluch Essence Product List 1.986 dòng vào supplier-catalogue table theo tenant trong D1. Áp migration trước Worker; scheduled run đầu tiên hoặc authorized **Sync catalogue** sẽ nhập idempotent cho từng workspace.
 - <code>0038_sales_order_details.sql</code> bổ sung contact, địa chỉ giao hàng snapshot, customer reference, delivery instruction và bằng chứng hủy đơn cho Sales Order. Áp migration này trước khi deploy route update/cancel Orders.
 - <code>0039_global_material_library.sql</code> bổ sung <code>library_scope</code> và <code>organization_id</code> cho material master. Migration backfill bản ghi cũ có ownership trong JSON thành <code>TENANT</code>; các seed/catalogue record không có owner trở thành <code>GLOBAL</code>. Worker luôn ghi hai cột này cùng JSON và từ chối tenant sửa metadata global.
+- <code>0043_workspace_hostnames.sql</code> thêm hostname registry tenant-scoped. System hostname có dạng <code>&lt;slug&gt;.labofscents.org</code>, active ngay sau signup; custom hostname chỉ active sau Cloudflare provider và SSL xác nhận. Áp migration này trước API/router deploy.
 - Production batch chỉ tạo finished-good lot khi formula input approved, raw-material consumption đầy đủ, QC pass và release. Formula SKU reserve released finished-good lot bằng FEFO và chỉ ghi COGS khi fulfilled.
 - <code>GET /api/v1/audit/chain/verify</code> và <code>GET /api/v1/audit/chain/evidence</code> là evidence endpoint chỉ dành cho Owner/Admin và không bao giờ trả provider secret.
 - Beta integration luôn trung thực: Integration Readiness trả <code>Not configured</code> cho đến khi Worker secret và phụ thuộc DNS/HTTPS thật sự active. <code>managed_beta</code> tiếp tục từ chối toàn bộ Stripe customer-payment mutation ở server.

@@ -120,6 +120,11 @@ import {
   lluchCatalogue2026Source,
   lluchCatalogueGlobalMasterMaterials,
 } from '../src/data/lluch-catalogue-2026.js'
+import {
+  isExactHttpsOriginForHostname,
+  normalizeWorkspaceHostname,
+  systemWorkspaceHostname,
+} from '../src/data/workspaceHostnames.js'
 
 type Env = {
   DB: D1Database
@@ -142,6 +147,7 @@ type Env = {
   CLOUDFLARE_API_TOKEN?: string
   CLOUDFLARE_SAAS_ZONE_ID?: string
   CLOUDFLARE_SAAS_ORIGIN?: string
+  SYSTEM_WORKSPACE_DOMAIN?: string
   AGENT_PROVIDER?: 'mock' | 'openai' | 'workers_ai'
   OPENAI_API_KEY?: string
   OPENAI_FORMULA_AGENT_MODEL?: string
@@ -1465,7 +1471,8 @@ export default {
     const startedAt = Date.now()
     let routeLabel = 'unmatched'
     const origin = request.headers.get('Origin')
-    const corsHeaders = buildCorsHeaders(origin, env.CORS_ORIGINS)
+    const workspaceOrigin = await resolveWorkspaceCorsHeaders(env.DB, origin, env.CORS_ORIGINS)
+    const corsHeaders = workspaceOrigin.headers
     let service: NorthStarService | undefined
     let skipSecurityPersistence = false
     let mfaVerificationRequest = false
@@ -1510,6 +1517,7 @@ export default {
         await loadRequestBody()
       }
       const isLoginRoute = match.route.pattern === '/auth/login'
+      const isSignupRoute = match.route.pattern === '/auth/signup'
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -1525,6 +1533,7 @@ export default {
         authCredentials: seededAdminCredentialsForEnv(env),
         mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
         billingMode: billingModeFromEnv(env),
+        workspaceBaseDomain: env.SYSTEM_WORKSPACE_DOMAIN,
       })
       if (match.route.hydrateState !== false) {
         if (isLoginRoute) {
@@ -1544,6 +1553,19 @@ export default {
           throw new UnauthorizedException('Authentication required')
         }
         service.authenticateSession(credential.sessionId)
+        const authenticatedSession = (service as unknown as ServiceState).sessions.find((session) => session.id === credential.sessionId)
+        if (workspaceOrigin.organizationId && authenticatedSession && workspaceOrigin.organizationId !== authenticatedSession.organizationId) {
+          // A request made on tenant B's hostname while holding a tenant A
+          // session must resolve back to A. Redirecting to the requested host
+          // would create a mismatch loop and could expose B's address as the
+          // suggested destination.
+          const workspace = service.workspaceAccessForOrganization(authenticatedSession.organizationId)
+          throw new ForbiddenException({
+            code: 'WORKSPACE_HOST_MISMATCH',
+            message: 'This session belongs to a different workspace address',
+            workspaceUrl: workspace.workspaceUrl,
+          })
+        }
         await hydrateWorkspaceBranding(env.DB, service, credential.sessionId)
       }
       if (match.route.mutates && !match.route.public && credential.source === 'cookie') {
@@ -1597,6 +1619,9 @@ export default {
         request,
         ctx,
       })
+      if (isSignupRoute && !(result instanceof Response)) {
+        await persistSignupWorkspaceBoundary(env.DB, service, result)
+      }
       if (match.route.mutates) {
         await deliverNotificationOutbox(service, env)
       }
@@ -4152,6 +4177,7 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistUserSettings(db, serviceState.userSettingsRecords, updatedAt)
   await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
   await persistEnterpriseGovernanceState(db, serviceState, updatedAt)
+  await persistWorkspaceHostnameRegistry(db, serviceState, updatedAt)
   await persistMaterialState(db, serviceState, updatedAt)
   await persistOperationalP1State(db, serviceState, updatedAt)
   await persistFormulaState(db, serviceState, updatedAt)
@@ -4170,6 +4196,201 @@ async function persistNormalizedState(db: D1Database, serviceState: ServiceState
   await persistLabUsageRecords(db, serviceState.usageHistory, updatedAt)
   await persistFragranceOperatingMemoryState(db, serviceState, updatedAt)
   serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
+}
+
+async function persistSignupWorkspaceBoundary(db: D1Database, service: NorthStarService, result: unknown) {
+  const data = isRecord(result) && isRecord(result.data) ? result.data : undefined
+  const organizationData = data && isRecord(data.organization) ? data.organization : undefined
+  const organizationId = typeof organizationData?.id === 'string' ? organizationData.id : undefined
+  const systemHostname = typeof data?.systemHostname === 'string' ? normalizeWorkspaceHostname(data.systemHostname) : undefined
+  const serviceState = service as unknown as ServiceState
+  const organization = organizationId
+    ? serviceState.organizationRecords.find((candidate) => candidate.id === organizationId)
+    : undefined
+  if (!organization || !systemHostname) {
+    throw new UnprocessableEntityException('Signup workspace address could not be allocated')
+  }
+  const brand = serviceState.brandRecords.find((candidate) => candidate.organizationId === organization.id)
+  const owner = serviceState.membershipRecords.find(
+    (candidate) => candidate.organizationId === organization.id && candidate.role === 'Owner' && candidate.status === 'ACTIVE',
+  )
+  const credential = owner
+    ? serviceState.authCredentialRecords.find((candidate) => String(candidate.email ?? '').toLowerCase() === owner.email.toLowerCase())
+    : undefined
+  const settings = serviceState.tenantSettingsRecords.find((candidate) => candidate.organizationId === organization.id)
+  const policies = serviceState.rolePolicyRecords.filter(
+    (candidate) => candidate.scope === 'organization' && candidate.organizationId === organization.id,
+  )
+  if (!brand || !owner || !credential || !settings || policies.length === 0) {
+    throw new UnprocessableEntityException('Signup workspace core records could not be allocated')
+  }
+  try {
+    // D1 batch is atomic. A new active hostname is never visible without its
+    // tenant, Owner, credential, and minimal workspace policy boundary.
+    const statements = [
+      db.prepare(
+        `INSERT INTO tenant_organizations (
+          id, name, slug, custom_domain, plan, status, primary_contact, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8)`,
+      ).bind(
+        organization.id,
+        organization.name,
+        organization.slug,
+        organization.plan,
+        organization.status,
+        organization.primaryContact,
+        organization.createdAt,
+        organization.createdAt,
+      ),
+      db.prepare(
+        `INSERT INTO workspace_hostnames (
+          id, hostname, organization_id, kind, status, created_at, updated_at, activated_at
+        ) VALUES (?1, ?2, ?3, 'SYSTEM', 'ACTIVE', ?4, ?5, ?6)`,
+      ).bind(
+        `SYS-${organization.id}`,
+        systemHostname,
+        organization.id,
+        organization.createdAt,
+        organization.createdAt,
+        organization.createdAt,
+      ),
+      db.prepare(
+        `INSERT INTO tenant_brands (id, organization_id, name, status, default_currency, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      ).bind(brand.id, brand.organizationId, brand.name, brand.status, brand.defaultCurrency, organization.createdAt),
+      db.prepare(
+        `INSERT INTO tenant_memberships (
+          id, user_id, email, name, organization_id, brand_ids_json, role, status,
+          mfa_enabled, last_active_at, invited_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+      ).bind(
+        owner.id,
+        owner.userId,
+        owner.email,
+        owner.name,
+        owner.organizationId,
+        JSON.stringify(owner.brandIds),
+        owner.role,
+        owner.status,
+        owner.mfaEnabled ? 1 : 0,
+        owner.lastActiveAt,
+        owner.invitedAt ?? null,
+        organization.createdAt,
+      ),
+      db.prepare(
+        `INSERT INTO auth_credentials (email, password_hash, password_set_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4)`,
+      ).bind(
+        requiredStringRecordField(credential, 'email').toLowerCase(),
+        requiredStringRecordField(credential, 'passwordHash'),
+        requiredStringRecordField(credential, 'passwordSetAt'),
+        organization.createdAt,
+      ),
+      db.prepare(
+        `INSERT INTO tenant_settings (
+          organization_id, locale, timezone, currency, default_unit, default_dilution_percent, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      ).bind(
+        settings.organizationId,
+        settings.locale,
+        settings.timezone,
+        settings.currency,
+        settings.defaultUnit,
+        settings.defaultDilutionPercent,
+        organization.createdAt,
+      ),
+      ...policies.map((policy) =>
+        db.prepare(
+          `INSERT INTO tenant_role_policies (organization_id, role, mfa_required, permissions_json, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5)`,
+        ).bind(
+          policy.organizationId,
+          policy.role,
+          policy.mfaRequired ? 1 : 0,
+          JSON.stringify(policy.permissions),
+          organization.createdAt,
+        ),
+      ),
+    ]
+    await db.batch(statements)
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : ''
+    if (message.includes('unique') || message.includes('constraint')) {
+      throw new ConflictException('Workspace slug is already taken')
+    }
+    throw error
+  }
+}
+
+async function persistWorkspaceHostnameRegistry(db: D1Database, serviceState: ServiceState, updatedAt: string) {
+  const systemRecords = serviceState.organizationRecords.flatMap((organization) => {
+    const hostname = normalizeWorkspaceHostname(organization.systemHostname ?? systemWorkspaceHostname(organization.slug))
+    if (!hostname) return []
+    return [{
+      id: `SYS-${organization.id}`,
+      hostname,
+      organizationId: organization.id,
+      kind: 'SYSTEM' as const,
+      status: organization.status === 'ACTIVE' ? 'ACTIVE' as const : 'ARCHIVED' as const,
+      createdAt: organization.createdAt,
+      activatedAt: organization.status === 'ACTIVE' ? organization.createdAt : undefined,
+    }]
+  })
+  const customRecords = serviceState.customDomainRecords.flatMap((domain) => {
+    const hostname = normalizeWorkspaceHostname(domain.hostname)
+    if (!hostname) return []
+    const status = domain.status === 'active'
+      ? 'ACTIVE' as const
+      : domain.status === 'failed'
+        ? 'FAILED' as const
+        : 'PENDING_VALIDATION' as const
+    return [{
+      id: `CUS-${domain.id}`,
+      hostname,
+      organizationId: domain.organizationId,
+      kind: 'CUSTOM' as const,
+      status,
+      createdAt: domain.createdAt,
+      activatedAt: status === 'ACTIVE' ? domain.activatedAt ?? updatedAt : undefined,
+    }]
+  })
+  const records = [...systemRecords, ...customRecords]
+  for (const record of records) {
+    const owner = await db
+      .prepare('SELECT organization_id, kind FROM workspace_hostnames WHERE hostname = ?1 LIMIT 1')
+      .bind(record.hostname)
+      .first<{ organization_id: string; kind: string }>()
+    if (owner && (owner.organization_id !== record.organizationId || owner.kind !== record.kind)) {
+      throw new ConflictException('Workspace hostname is already assigned to another workspace')
+    }
+  }
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO workspace_hostnames (
+          id, hostname, organization_id, kind, status, created_at, updated_at, activated_at, archived_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(hostname) DO UPDATE SET
+          status = excluded.status,
+          updated_at = excluded.updated_at,
+          activated_at = CASE WHEN excluded.status = 'ACTIVE' THEN COALESCE(workspace_hostnames.activated_at, excluded.activated_at) ELSE workspace_hostnames.activated_at END,
+          archived_at = CASE WHEN excluded.status = 'ARCHIVED' THEN excluded.updated_at ELSE NULL END
+        WHERE workspace_hostnames.organization_id = excluded.organization_id
+          AND workspace_hostnames.kind = excluded.kind`,
+      ).bind(
+        record.id,
+        record.hostname,
+        record.organizationId,
+        record.kind,
+        record.status,
+        record.createdAt,
+        updatedAt,
+        record.activatedAt ?? null,
+        record.status === 'ARCHIVED' ? updatedAt : null,
+      ),
+    ),
+  )
 }
 
 function scopedJsonRecords(rows: JsonStateRow[]) {
@@ -7792,6 +8013,7 @@ function organizationFromRow(row: OrganizationRow): OrganizationRecord {
     id: row.id,
     name: row.name,
     slug: row.slug,
+    systemHostname: systemWorkspaceHostname(row.slug),
     customDomain: row.custom_domain ?? undefined,
     plan: readOrganizationPlan(row.plan),
     status: readOrganizationStatus(row.status),
@@ -9056,6 +9278,51 @@ export function buildCorsHeaders(origin: string | null, configuredOrigins: strin
   if (!origin || !isAllowedCorsOrigin(origin, effectiveOrigins)) {
     return headers
   }
+  return credentialedCorsHeaders(origin)
+}
+
+export async function resolveWorkspaceCorsHeaders(
+  db: D1Database,
+  origin: string | null,
+  configuredOrigins: string | undefined,
+) {
+  const staticHeaders = buildCorsHeaders(origin, configuredOrigins)
+  if (staticHeaders['Access-Control-Allow-Origin'] || !origin) {
+    return { headers: staticHeaders, organizationId: undefined as string | undefined }
+  }
+  let hostname: string | undefined
+  try {
+    hostname = normalizeWorkspaceHostname(new URL(origin).hostname)
+  } catch {
+    return { headers: staticHeaders, organizationId: undefined as string | undefined }
+  }
+  if (!hostname || !isExactHttpsOriginForHostname(origin, hostname)) {
+    return { headers: staticHeaders, organizationId: undefined as string | undefined }
+  }
+  try {
+    const row = await db
+      .prepare(
+        `SELECT h.organization_id
+         FROM workspace_hostnames h
+         INNER JOIN tenant_organizations o ON o.id = h.organization_id
+         WHERE h.hostname = ?1 AND h.status = 'ACTIVE' AND o.status = 'ACTIVE'
+         LIMIT 1`,
+      )
+      .bind(hostname)
+      .first<{ organization_id: string }>()
+    if (!row?.organization_id) {
+      return { headers: staticHeaders, organizationId: undefined as string | undefined }
+    }
+    return { headers: credentialedCorsHeaders(origin), organizationId: row.organization_id }
+  } catch {
+    // During migration or a transient D1 failure, fail closed for dynamic
+    // origins while preserving explicitly configured first-party origins.
+    return { headers: staticHeaders, organizationId: undefined as string | undefined }
+  }
+}
+
+function credentialedCorsHeaders(origin: string) {
+  const headers: Record<string, string> = { Vary: 'Origin' }
   headers['Access-Control-Allow-Origin'] = origin
   headers['Access-Control-Allow-Methods'] = 'GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS'
   headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-CSRF-Token, Idempotency-Key'

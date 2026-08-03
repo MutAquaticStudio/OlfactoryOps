@@ -1081,6 +1081,7 @@ describe('NorthStarService', () => {
     }).data
 
     expect(result.organization.slug).toBe('atelier-smoke')
+    expect(result.organization.systemHostname).toBe('atelier-smoke.labofscents.org')
     expect(result.organization.customDomain).toBeUndefined()
     expect(result.organization.plan).toBe('Free')
     expect(result.brand.organizationId).toBe(result.organization.id)
@@ -1098,6 +1099,8 @@ describe('NorthStarService', () => {
     expect(result.sso.domain).toBe('')
     expect(result.sso.status).toBe('draft')
     expect(result.customDomain).toMatchObject({ status: 'NOT_REQUESTED' })
+    expect(result.systemHostname).toBe('atelier-smoke.labofscents.org')
+    expect(result.workspaceUrl).toBe('https://atelier-smoke.labofscents.org')
     expect(result.audit.action).toBe('auth.signup')
     expect(credentialForEmail(service, 'owner@atelier-smoke.test')?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
     expect(service.me().data.userSettings).toMatchObject({
@@ -1149,7 +1152,7 @@ describe('NorthStarService', () => {
     expect(() => service.tenantProbe('org-weak-signup-lab')).toThrow(ForbiddenException)
   })
 
-  it('does not assign a customer hostname during public signup', () => {
+  it('allocates a system hostname but does not assign a customer hostname during public signup', () => {
     const service = createAuthenticatedService()
 
     const legacyClient = service.signup({
@@ -1162,6 +1165,7 @@ describe('NorthStarService', () => {
     }).data
 
     expect(legacyClient.organization.customDomain).toBeUndefined()
+    expect(legacyClient.systemHostname).toBe('legacy-signup-lab.labofscents.org')
     expect(legacyClient.customDomain.status).toBe('NOT_REQUESTED')
     expect(service.customDomains().data.domains).toEqual([])
 
@@ -1174,6 +1178,19 @@ describe('NorthStarService', () => {
       name: 'Unsafe Owner',
       password: 'UnsafeOwner2026',
     })).toThrow('Connect a custom domain after workspace creation')
+  })
+
+  it('rejects reserved workspace slugs before any tenant record is created', () => {
+    const service = createAuthenticatedService()
+
+    expect(() => service.signup({
+      organizationName: 'API Workspace',
+      workspaceSlug: 'api',
+      email: 'owner@reserved-slug.test',
+      name: 'Reserved Owner',
+      password: 'ReservedOwner2026',
+    })).toThrow('Workspace slug is reserved')
+    expect(() => service.tenantProbe('org-api')).toThrow(ForbiddenException)
   })
 
   it('does not require MFA for formula approval when role is allowed', () => {

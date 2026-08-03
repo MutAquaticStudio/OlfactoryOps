@@ -12,6 +12,7 @@ import {
   canonicalAuditChainPayload,
   canonicalOperationPayload,
   buildCorsHeaders,
+  resolveWorkspaceCorsHeaders,
   createSessionCredential,
   hashSessionCredential,
   isOpaqueSessionCredential,
@@ -227,6 +228,32 @@ describe('credentialed CORS', () => {
     )
     expect(wildcard['Access-Control-Allow-Origin']).toBeUndefined()
     expect(wildcard['Access-Control-Allow-Credentials']).toBeUndefined()
+  })
+
+  it('permits an active workspace host only after an exact D1 lookup', async () => {
+    const first = vi.fn().mockResolvedValue({ organization_id: 'org-atelier' })
+    const bind = vi.fn().mockReturnValue({ first })
+    const prepare = vi.fn().mockReturnValue({ bind })
+    const db = { prepare } as unknown as D1Database
+
+    await expect(
+      resolveWorkspaceCorsHeaders(db, 'https://atelier.labofscents.org', 'https://labofscents.org'),
+    ).resolves.toMatchObject({
+      organizationId: 'org-atelier',
+      headers: { 'Access-Control-Allow-Origin': 'https://atelier.labofscents.org' },
+    })
+    expect(bind).toHaveBeenCalledWith('atelier.labofscents.org')
+  })
+
+  it('fails closed when a hostname is absent or the registry is unavailable', async () => {
+    const db = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(null) }),
+      }),
+    } as unknown as D1Database
+    const result = await resolveWorkspaceCorsHeaders(db, 'https://unknown.labofscents.org', undefined)
+    expect(result.organizationId).toBeUndefined()
+    expect(result.headers['Access-Control-Allow-Origin']).toBeUndefined()
   })
 })
 

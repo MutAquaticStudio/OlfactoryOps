@@ -202,6 +202,12 @@ import {
   type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
 import { agentFormulaProposalSchema, type AgentFormulaProposal } from '../../../src/data/agentRuntime.js'
+import {
+  isWorkspaceSlugEligibleForHostname,
+  normalizeWorkspaceBaseDomain,
+  systemWorkspaceHostname,
+  workspaceUrlForHostname,
+} from '../../../src/data/workspaceHostnames.js'
 
 const seededAdminEmail = 'm.thuanwork@gmail.com'
 const materialLibraryCuratorOrganizationId = 'org-nxl'
@@ -429,6 +435,7 @@ type NorthStarServiceOptions = {
   authCredentials?: AuthCredentialRecord[]
   mfaEncryptionKey?: string
   billingMode?: BillingMode
+  workspaceBaseDomain?: string
 }
 
 export type IntegrationReadinessConfig = {
@@ -966,9 +973,11 @@ export class NorthStarService {
   private activeSessionId: string | null = null
   private securityStateDirty = false
   private readonly billingMode: BillingMode
+  private readonly workspaceBaseDomain: string
 
   constructor(options: NorthStarServiceOptions = {}) {
     this.billingMode = options.billingMode === 'self_service' ? 'self_service' : 'managed_beta'
+    this.workspaceBaseDomain = normalizeWorkspaceBaseDomain(options.workspaceBaseDomain)
     this.documentRecords = this.documentRecords.map((document) => ({
       ...document,
       organizationId: document.organizationId || 'org-nxl',
@@ -3691,6 +3700,7 @@ export class NorthStarService {
         revokedForLimit: this.exposeSessions(revokedForLimit),
         newDeviceAlert: Boolean(newDeviceAudit),
         securityPolicy: this.publicSecurityPolicyForSession(session),
+        workspace: this.workspaceAccessForOrganization(session.organizationId),
         invariant: 'login creates bounded idle and absolute session windows',
       },
     }
@@ -3724,17 +3734,20 @@ export class NorthStarService {
       throw new UnprocessableEntityException('A valid signup email is required')
     }
     this.assertSignupPassword(password)
+    if (!isWorkspaceSlugEligibleForHostname(workspaceSlug)) {
+      throw new UnprocessableEntityException('Workspace slug is reserved or cannot be used in a workspace address')
+    }
     if (this.membershipRecords.some((membership) => membership.email.toLowerCase() === email)) {
       throw new UnprocessableEntityException('A member with this email already exists')
     }
     if (this.organizationRecords.some((organization) => organization.slug === workspaceSlug)) {
       throw new UnprocessableEntityException('Workspace slug is already taken')
     }
-    // Earlier web clients sent a generated <slug>.labofscents.org value during
-    // signup. Accept that one legacy value for a rolling deployment, but never
-    // assign it as an active customer hostname. Cloudflare must own the later
-    // provision -> DCV -> SSL activation lifecycle.
-    const legacyWorkspaceDomain = this.defaultTenantDomain(workspaceSlug)
+    const systemHostname = this.defaultTenantDomain(workspaceSlug)
+    // Earlier clients posted the deterministic system address as customDomain.
+    // Continue accepting that legacy payload while rejecting customer-owned
+    // hostnames until the post-signup Cloudflare DCV flow begins.
+    const legacyWorkspaceDomain = systemHostname
     if (typeof body.customDomain === 'string' && body.customDomain.trim()) {
       const requestedDomain = this.normalizeDomain(body.customDomain, '')
       if (requestedDomain !== legacyWorkspaceDomain) {
@@ -3750,6 +3763,7 @@ export class NorthStarService {
       id: organizationId,
       name: organizationName,
       slug: workspaceSlug,
+      systemHostname,
       plan: 'Free',
       status: 'ACTIVE',
       primaryContact: email,
@@ -3803,11 +3817,13 @@ export class NorthStarService {
         csrfToken: loginResult.csrfToken,
         permissions: loginResult.permissions,
         audit,
+        systemHostname,
+        workspaceUrl: workspaceUrlForHostname(systemHostname),
         customDomain: {
           status: 'NOT_REQUESTED',
-          nextAction: 'An Owner or Admin can connect a customer-owned hostname after signup. Cloudflare activation requires DNS validation and active SSL.',
+          nextAction: 'Your system workspace address is active immediately. An Owner or Admin can connect a customer-owned hostname later; Cloudflare activation requires DNS validation and active SSL.',
         },
-        invariant: 'signup provisions a password-protected tenant and owner session before app access; custom domains are provisioned separately after owner authorization',
+        invariant: 'signup provisions a password-protected tenant, owner session, and deterministic system workspace address before app access; customer-owned domains remain a separate Cloudflare authorization flow',
       },
     }
   }
@@ -3976,6 +3992,7 @@ export class NorthStarService {
         permissions: this.permissionsForRole(session.role),
         securityPolicy: this.publicSecurityPolicyForSession(session),
         userSettings: this.settingsForSession(session),
+        workspace: this.workspaceAccessForOrganization(session.organizationId),
       },
     }
   }
@@ -9612,6 +9629,10 @@ export class NorthStarService {
     if (!hostname) {
       throw new UnprocessableEntityException('Custom domain hostname is required')
     }
+    const internalSuffix = `.${this.workspaceBaseDomain}`
+    if (hostname.endsWith(internalSuffix) || hostname === this.workspaceBaseDomain) {
+      throw new UnprocessableEntityException('Choose a customer-owned domain outside the system workspace domain')
+    }
     const collision = this.organizationRecords.find(
       (organization) => organization.customDomain?.toLowerCase() === hostname && organization.id !== session.organizationId,
     ) || this.customDomainRecords.find(
@@ -11355,7 +11376,24 @@ export class NorthStarService {
   }
 
   private defaultTenantDomain(slug: string) {
-    return `${slug}.labofscents.org`
+    const hostname = systemWorkspaceHostname(slug, this.workspaceBaseDomain)
+    if (!hostname) {
+      throw new UnprocessableEntityException('Workspace slug cannot be used in a workspace address')
+    }
+    return hostname
+  }
+
+  workspaceAccessForOrganization(organizationId: string) {
+    const organization = this.organizationRecords.find((candidate) => candidate.id === organizationId)
+    if (!organization) {
+      throw new NotFoundException('Workspace organization was not found')
+    }
+    const systemHostname = organization.systemHostname ?? this.defaultTenantDomain(organization.slug)
+    return {
+      systemHostname,
+      workspaceUrl: workspaceUrlForHostname(systemHostname),
+      externalDomain: organization.customDomain,
+    }
   }
 
   private assertSignupPassword(password: string) {
