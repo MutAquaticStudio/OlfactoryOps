@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
-import { lluchCatalogueGlobalMasterMaterialById, lluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
+import { isLluchCatalogueMasterMaterial, lluchCatalogueGlobalMasterMaterialById, lluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { DocumentRecord, Material } from '../src/data/northStar.js'
 import type { AgentActor } from './agent-runtime.js'
 import { auditFormulaIntelligence } from './formula-intelligence.js'
@@ -205,10 +205,11 @@ export function isCurrentEvidenceDocument(
 }
 
 export function materialEvidenceSourceVersion(material: Material) {
-  if (material.catalogueSource?.status === 'SOURCE_ONLY') {
+  const catalogueSource = material.catalogueSource
+  if (catalogueSource?.status === 'MASTER_APPROVED' && isLluchCatalogueMasterMaterial(material)) {
     return [
       'catalogue-master',
-      material.catalogueSource.catalogueVersion,
+      catalogueSource.catalogueVersion,
       material.olfactiveProfile?.version ?? 'supplier-declared',
     ].join(':')
   }
@@ -708,7 +709,7 @@ export class MaterialEvidenceRag {
       if (!chunk.material_id) return false
       const master = lluchCatalogueGlobalMasterMaterialById(chunk.material_id)
       if (master && evidenceOrganizationId === GLOBAL_LIBRARY_ORGANIZATION_ID) {
-        return master.libraryScope === 'GLOBAL' && master.catalogueSource?.status === 'SOURCE_ONLY'
+        return isLluchCatalogueMasterMaterial(master)
       }
       const material = await this.env.DB.prepare(
         `SELECT library_scope, organization_id FROM material_records

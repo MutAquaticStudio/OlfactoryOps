@@ -93,13 +93,13 @@ describe('formula agent provider boundary', () => {
     expect(selectedMaterials(service, 'citrus fine fragrance').map((material) => material.id)).toEqual(['mat-reviewed'])
   })
 
-  it('allows the agent research step to search global master references without promoting them into formula candidates', () => {
+  it('uses globally approved master materials as deterministic formula candidates', () => {
     const reviewed = { id: 'mat-reviewed', name: 'Bergamot FCF', family: 'citrus', odor: ['citrus'] } as unknown as Material
     const service = { materials: () => ({ data: [...lluchCatalogueGlobalMasterMaterials(), reviewed] }) } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
     const references = selectedGlobalMasterReferences(service, 'clean musky amber', 4)
     expect(references).toHaveLength(4)
-    expect(references.every((material) => material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
-    expect(selectedMaterials(service, 'clean musky amber').map((material) => material.id)).toEqual(['mat-reviewed'])
+    expect(references.every((material) => material.catalogueSource?.status === 'MASTER_APPROVED')).toBe(true)
+    expect(selectedMaterials(service, 'clean musky amber').every((material) => material.id.startsWith('mat-lluch-2026-'))).toBe(true)
   })
 })

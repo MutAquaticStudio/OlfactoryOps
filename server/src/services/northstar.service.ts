@@ -9,6 +9,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, r
 import { internalPhases } from '../data/internal-phases.js'
 import {
   enrichMaterialFromLluchCatalogue,
+  isLluchCatalogueMasterMaterial,
   lluchCatalogue2026Source,
   lluchCatalogueMaterialDirectoryForOrganization,
   searchLluchCatalogue2026,
@@ -160,6 +161,7 @@ import {
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
+  type ResolvedLeaf,
   type MaterialComplianceProfile,
   type MaterialComplianceStatus,
   type MaterialIngestionRecord,
@@ -1045,7 +1047,14 @@ export class NorthStarService {
     if (!cas || !/^[0-9-]+$/.test(cas)) {
       throw new UnprocessableEntityException('CAS must contain digits and hyphens')
     }
-    if (this.materialCatalogForSession(session).some((material) => material.cas.toLowerCase() === cas.toLowerCase())) {
+    const duplicateInScope = this.materialRecords.some((material) => {
+      const sameCas = material.cas.toLowerCase() === cas.toLowerCase()
+      if (!sameCas) return false
+      return libraryScope === 'GLOBAL'
+        ? !material.organizationId
+        : material.organizationId === session.organizationId
+    })
+    if (duplicateInScope) {
       throw new UnprocessableEntityException('Material CAS already exists')
     }
 
@@ -2618,6 +2627,7 @@ export class NorthStarService {
         blockers: evidence.ifra.rows.filter((row) => row.status === 'BLOCKER'),
       })
     }
+    this.assertGlobalMasterApprovalEvidence(evidence.leaves, session)
     const rawVersion = this.formulaVersionRecords.find(
       (item) =>
         item.formulaId === id &&
@@ -3539,6 +3549,7 @@ export class NorthStarService {
       throw new NotFoundException('No material is available in this workspace')
     }
     const material = this.materialForSession(materialId, session)
+    this.assertMaterialCanEnterOperations(material, 'received into inventory')
 
     const quantityGrams = Number(body.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
@@ -12756,6 +12767,7 @@ export class NorthStarService {
   }
 
   private assertMaterialCanBePurchased(materialId: string, session: AuthSession) {
+    this.assertMaterialCanEnterOperations(this.materialForSession(materialId, session), 'purchased')
     const compliance = this.materialComplianceForSession(materialId, session)
     if (compliance?.status === 'BLOCKED') {
       throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be purchased`)
@@ -12763,9 +12775,31 @@ export class NorthStarService {
   }
 
   private assertMaterialCanBeConsumed(materialId: string, session: AuthSession) {
+    this.assertMaterialCanEnterOperations(this.materialForSession(materialId, session), 'consumed')
     const compliance = this.materialComplianceForSession(materialId, session)
     if (compliance?.status === 'BLOCKED') {
       throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be consumed`)
+    }
+  }
+
+  private assertMaterialCanEnterOperations(material: Material, action: string) {
+    if (isLluchCatalogueMasterMaterial(material)) {
+      throw new UnprocessableEntityException(
+        `Global Master Material ${material.name} is R&D-ready only and cannot be ${action}. Create a tenant-private operational material with approved supplier, compliance, and lot evidence first`,
+      )
+    }
+  }
+
+  private assertGlobalMasterApprovalEvidence(leaves: ResolvedLeaf[], session: AuthSession) {
+    const materialById = new Map(this.materialCatalogForSession(session).map((material) => [material.id, material]))
+    const missingEvidence = leaves
+      .map((leaf) => materialById.get(leaf.materialId))
+      .filter((material): material is Material => Boolean(material && isLluchCatalogueMasterMaterial(material)))
+      .find((material) => this.materialComplianceForSession(material.id, session)?.status !== 'APPROVED')
+    if (missingEvidence) {
+      throw new UnprocessableEntityException(
+        `Global Master Material ${missingEvidence.name} needs tenant-specific approved compliance evidence before formula approval`,
+      )
     }
   }
 

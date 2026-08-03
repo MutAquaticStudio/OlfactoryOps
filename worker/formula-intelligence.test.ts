@@ -165,8 +165,8 @@ function constraintSnapshotD1() {
 }
 
 describe('Formula Intelligence Worker persistence contract', () => {
-  it('excludes source-only catalogue rows even when a stale profile appears approved', () => {
-    const sourceOnly = { id: 'mat-lluch-2026-0104', name: 'ASTROLIDE PURE', catalogueSource: { status: 'SOURCE_ONLY' } } as unknown as Material
+  it('includes globally approved Lluch masters without requiring a tenant compliance duplicate', () => {
+    const sourceOnly = { id: 'mat-lluch-2026-0104', name: 'ASTROLIDE PURE', libraryScope: 'GLOBAL', catalogueSource: { supplier: 'Lluch Essence', catalogueVersion: '2026-07-16', status: 'MASTER_APPROVED' } } as unknown as Material
     const reviewed = { id: 'mat-reviewed', name: 'Bergamot FCF' } as unknown as Material
     const service = {
       materials: () => ({ data: [sourceOnly, reviewed] }),
@@ -174,10 +174,10 @@ describe('Formula Intelligence Worker persistence contract', () => {
     } as unknown as import('../server/src/services/northstar.service.js').NorthStarService
 
     expect(formulaIntelligenceMaterialCatalog(service)).toEqual({
-      materials: [reviewed],
-      researchMaterials: [sourceOnly],
+      materials: [sourceOnly, reviewed],
+      researchMaterials: [],
       reviewedOnly: true,
-      sourceReferenceCount: 1,
+      sourceReferenceCount: 0,
       workspaceMaterialCount: 2,
     })
   })

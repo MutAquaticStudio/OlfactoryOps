@@ -40,6 +40,7 @@ import {
   proposalFromFormulaVersion,
   sensoryMemoryEvidenceForDirection,
 } from '../../../src/data/formulaIntelligence.js'
+import { isLluchCatalogueMasterMaterial } from '../../../src/data/lluch-catalogue-2026.js'
 import type { AuthSession, FormulaIntelligenceTrialSource } from '../../../src/data/northStar.js'
 import { NorthStarService } from './northstar.service.js'
 
@@ -981,7 +982,7 @@ export class AgentLocalRuntimeService {
   private approvedMaterials(service: NorthStarService) {
     return service.materials().data.filter((material) => (
       material.catalogueSource?.status !== 'SOURCE_ONLY' &&
-      service.materialCompliance(material.id).data?.status === 'APPROVED'
+      (isLluchCatalogueMasterMaterial(material) || service.materialCompliance(material.id).data?.status === 'APPROVED')
     ))
   }
 

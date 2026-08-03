@@ -115,7 +115,11 @@ import {
   type LegalAcceptanceRecord,
   type PrivacyRequestRecord,
 } from '../src/data/northStar.js'
-import { enrichMaterialFromLluchCatalogue, lluchCatalogue2026Source } from '../src/data/lluch-catalogue-2026.js'
+import {
+  enrichMaterialFromLluchCatalogue,
+  lluchCatalogue2026Source,
+  lluchCatalogueGlobalMasterMaterials,
+} from '../src/data/lluch-catalogue-2026.js'
 
 type Env = {
   DB: D1Database
@@ -4949,6 +4953,7 @@ async function hydrateMaterialState(db: D1Database, serviceState: ServiceState) 
   } else if (Array.isArray(serviceState.materialRecords) && serviceState.materialRecords.length > 0) {
     await persistMaterials(db, serviceState.materialRecords, new Date().toISOString())
   }
+  await ensurePublishedLluchMasterMaterials(db, serviceState)
 
   const moleculeRows = await db
     .prepare('SELECT id, record_json FROM molecule_components ORDER BY material_id ASC, name ASC')
@@ -4992,6 +4997,100 @@ async function persistMaterialState(db: D1Database, serviceState: ServiceState, 
   await persistMolecules(db, serviceState.moleculeRecords, updatedAt)
   await persistStorageLocations(db, serviceState.locationRecords, updatedAt)
   await persistStockTakes(db, serviceState.stockTakeRecords, updatedAt)
+}
+
+const LLUCH_GLOBAL_PUBLICATION_KEY = `lluch:${lluchCatalogue2026Source.catalogueVersion}`
+
+function isLluchMasterId(id: string) {
+  return id.startsWith('mat-lluch-2026-')
+}
+
+function mergeMasterProvenance(existing: Material['provenance'], canonical: Material['provenance']) {
+  const seen = new Set<string>()
+  return [...canonical, ...existing].filter((entry) => {
+    const key = `${entry.field}|${entry.source}|${entry.version}|${entry.date}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/** Persist the source-controlled global library once, never as tenant data. */
+async function ensurePublishedLluchMasterMaterials(db: D1Database, serviceState: ServiceState) {
+  const masters = lluchCatalogueGlobalMasterMaterials()
+  const currentMasters = serviceState.materialRecords.filter((material) => isLluchMasterId(material.id))
+  const publication = await db
+    .prepare(
+      `SELECT content_hash, material_count, status
+       FROM global_material_publications WHERE publication_key = ?1`,
+    )
+    .bind(LLUCH_GLOBAL_PUBLICATION_KEY)
+    .first<{ content_hash: string; material_count: number; status: string }>()
+  const isCurrent = publication?.status === 'PUBLISHED'
+    && publication.content_hash === lluchCatalogue2026Source.contentHash
+    && publication.material_count === masters.length
+    && currentMasters.length === masters.length
+  if (isCurrent) return
+
+  const byId = new Map(currentMasters.map((material) => [material.id, material]))
+  const published = masters.map((canonical) => {
+    const existing = byId.get(canonical.id)
+    return {
+      ...canonical,
+      ...existing,
+      libraryScope: 'GLOBAL' as const,
+      organizationId: undefined,
+      catalogueSource: { ...canonical.catalogueSource!, status: 'MASTER_APPROVED' as const },
+      catalogueEvidence: canonical.catalogueEvidence,
+      supplierCatalogueReferences: canonical.supplierCatalogueReferences,
+      provenance: mergeMasterProvenance(existing?.provenance ?? [], canonical.provenance),
+    }
+  })
+  serviceState.materialRecords = [
+    ...serviceState.materialRecords.filter((material) => !isLluchMasterId(material.id)),
+    ...published,
+  ]
+  const updatedAt = new Date().toISOString()
+  const auditReference = `material.global.publish:${LLUCH_GLOBAL_PUBLICATION_KEY}:${lluchCatalogue2026Source.contentHash.slice(0, 12)}`
+  await persistMaterials(db, published, updatedAt)
+  await db.batch([
+    db.prepare(
+      `INSERT INTO global_material_publications (
+        publication_key, supplier, catalogue, catalogue_version, content_hash,
+        material_count, status, published_at, published_by, audit_reference, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'PUBLISHED', ?7, 'system:global-material-curator', ?8, ?7)
+      ON CONFLICT(publication_key) DO UPDATE SET
+        supplier = excluded.supplier,
+        catalogue = excluded.catalogue,
+        catalogue_version = excluded.catalogue_version,
+        content_hash = excluded.content_hash,
+        material_count = excluded.material_count,
+        status = 'PUBLISHED',
+        published_at = excluded.published_at,
+        published_by = excluded.published_by,
+        audit_reference = excluded.audit_reference,
+        updated_at = excluded.updated_at`,
+    ).bind(
+      LLUCH_GLOBAL_PUBLICATION_KEY,
+      lluchCatalogue2026Source.supplier,
+      lluchCatalogue2026Source.catalogue,
+      lluchCatalogue2026Source.catalogueVersion,
+      lluchCatalogue2026Source.contentHash,
+      published.length,
+      updatedAt,
+      auditReference,
+    ),
+    db.prepare(
+      `INSERT OR IGNORE INTO platform_audit_events (
+        id, at, actor, action, entity, request_id, outcome, updated_at
+      ) VALUES (?1, ?2, 'system:global-material-curator', 'material.global.publish', ?3, ?4, 'allowed', ?2)`,
+    ).bind(
+      `AUD-GLM-${lluchCatalogue2026Source.contentHash.slice(0, 18)}`,
+      updatedAt,
+      LLUCH_GLOBAL_PUBLICATION_KEY,
+      auditReference,
+    ),
+  ])
 }
 
 async function hydrateOperationalP1State(db: D1Database, serviceState: ServiceState) {

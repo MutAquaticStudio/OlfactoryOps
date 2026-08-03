@@ -1,5 +1,25 @@
 # OlfactoryOps
 
+## Thu vien Global Master Lluch
+
+Catalogue Lluch Essence 2026 gom **1.986 Global Master Materials** da duoc
+publish trong D1. Tat ca tenant co the tim kiem va su dung chung trong
+Materials, Formula Design Studio, Reformulation Optimizer, RAG va formula draft.
+
+- Master Material la read-only va co provenance, catalogue version/checksum,
+  odour supplier-declared va technical evidence khi catalogue cung cap.
+- `MASTER_APPROVED` chi co nghia **R&D-ready**: phu hop cho research va draft;
+  khong phai ket luan IFRA, regulatory, supplier hay quality approval.
+- Master Material khong the tao PO, goods receipt, inventory lot, reservation,
+  lab consumption hay production release. Tenant phai tao material operational
+  rieng, supplier/compliance evidence va lot rieng truoc cac buoc nay.
+- Material do tenant tao van private. Neu trung CAS voi Master, ca hai ban ghi
+  duoc giu rieng; ban ghi tenant duoc uu tien cho lot, cost va operational flow.
+
+Worker tu dong reconcile catalogue theo source checksum va ghi audit
+`material.global.publish`. Migration `0041_lluch_global_master_materials.sql`
+phai duoc ap dung truoc khi deploy Worker.
+
 ## Hoàn thiện Worker API
 
 Cloudflare Worker tại `worker/index.ts` là API production duy nhất dưới

@@ -132,7 +132,12 @@ export interface MaterialCatalogueSource {
   catalogueVersion: string
   category: MaterialSupplierCatalogueReference['category']
   page: number
-  status: 'SOURCE_ONLY' | 'REVIEW_REQUIRED'
+  /**
+   * MASTER_APPROVED means the platform curator has approved this supplier
+   * record for research and formula drafting only. It is not an operational
+   * compliance, procurement, or inventory approval.
+   */
+  status: 'SOURCE_ONLY' | 'REVIEW_REQUIRED' | 'MASTER_APPROVED'
 }
 
 export interface MaterialCatalogueEvidenceRange {
@@ -5384,7 +5389,13 @@ export function isLotEligibleForInventory(lot: InventoryLot, asOfDate = inventor
 
 export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
   return materialCatalog
-    .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY' || lots.some((lot) => lot.materialId === material.id))
+    .filter((material) => {
+      const globalResearchMaster = material.libraryScope === 'GLOBAL'
+        && material.catalogueSource?.status === 'MASTER_APPROVED'
+        && material.catalogueSource.supplier === 'Lluch Essence'
+      return (!globalResearchMaster && material.catalogueSource?.status !== 'SOURCE_ONLY')
+        || lots.some((lot) => lot.materialId === material.id)
+    })
     .map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)

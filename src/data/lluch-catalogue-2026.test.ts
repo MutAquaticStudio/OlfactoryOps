@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { materials } from './northStar'
 import {
   enrichMaterialFromLluchCatalogue,
+  isLluchCatalogueMasterMaterial,
   isLluchCatalogueSourceMaterial,
   lluchCatalogue2026Source,
   lluchCatalogueGlobalMasterMaterialById,
@@ -45,10 +46,11 @@ describe('Lluch catalogue 2026 import source', () => {
     expect(astrolide?.libraryScope).toBe('GLOBAL')
     expect(astrolide?.organizationId).toBeUndefined()
     expect(astrolide?.cas).toBe('1222-05-5')
-    expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(astrolide?.catalogueSource?.status).toBe('MASTER_APPROVED')
     expect(astrolide?.supplierCatalogueReferences?.[0]?.sourceProductId).toBe('lluch-2026-0104')
     expect(astrolide?.costPerGram).toBe(0)
-    expect(isLluchCatalogueSourceMaterial(astrolide!)).toBe(true)
+    expect(isLluchCatalogueSourceMaterial(astrolide!)).toBe(false)
+    expect(isLluchCatalogueMasterMaterial(astrolide!)).toBe(true)
   })
 
   it('projects supplier-declared odour and physical ranges for every imported catalogue product without fabricating compliance data', () => {
@@ -60,7 +62,7 @@ describe('Lluch catalogue 2026 import source', () => {
     expect(evidenceBacked).toHaveLength(1986)
     expect(evidenceBacked.every((material) => material.catalogueEvidence!.declaredOdour.length > 0)).toBe(true)
     expect(densityBacked).toHaveLength(1646)
-    expect(evidenceBacked.every((material) => material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
+    expect(evidenceBacked.every((material) => material.catalogueSource?.status === 'MASTER_APPROVED')).toBe(true)
     expect(evidenceBacked.every((material) => material.ifraLimit === 0 && material.costPerGram === 0)).toBe(true)
   })
 
@@ -75,17 +77,17 @@ describe('Lluch catalogue 2026 import source', () => {
       tenacity: 'Very long',
       volatility: 'Low',
     })
-    expect(cashmeran?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(cashmeran?.catalogueSource?.status).toBe('MASTER_APPROVED')
     expect(cashmeran?.ifraLimit).toBe(0)
   })
 
-  it('exposes every Lluch source row as a global master reference for governed research while retaining its source-only gate', () => {
+  it('exposes every Lluch row as a globally shared, R&D-ready master material', () => {
     const masters = lluchCatalogueGlobalMasterMaterials()
     const astrolide = lluchCatalogueGlobalMasterMaterialById('mat-lluch-2026-0104')
     const citrusResearch = rankLluchCatalogueGlobalMasterMaterials('fresh citric citrus', 8)
 
     expect(masters).toHaveLength(1986)
-    expect(masters.every((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'SOURCE_ONLY')).toBe(true)
+    expect(masters.every((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'MASTER_APPROVED')).toBe(true)
     expect(astrolide?.name).toBe('ASTROLIDE PURE')
     expect(citrusResearch).toHaveLength(8)
     expect(citrusResearch.some((material) => material.odor.some((descriptor) => /citric|citrus/i.test(descriptor)))).toBe(true)

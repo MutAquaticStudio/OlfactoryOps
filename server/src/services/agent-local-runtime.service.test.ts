@@ -46,9 +46,9 @@ describe('AgentLocalRuntimeService', () => {
     const runtime = new AgentLocalRuntimeService()
     const catalog = await runtime.designMaterialCatalog(service, service.me().data.session)
 
-    expect(catalog.data.sourceReferenceCount).toBe(1986)
+    expect(catalog.data.sourceReferenceCount).toBe(0)
     expect(catalog.data.workspaceMaterialCount).toBeGreaterThan(catalog.data.materials.length)
-    expect(catalog.data.materials.every((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')).toBe(true)
+    expect(catalog.data.materials.some((material) => material.catalogueSource?.status === 'MASTER_APPROVED')).toBe(true)
   })
 
   it('persists a deterministic run and creates exactly one non-consuming draft after confirmation', async () => {
@@ -63,7 +63,7 @@ describe('AgentLocalRuntimeService', () => {
     expect(created.data.run.status).toBe('WAITING_FOR_CONFIRMATION')
     expect(created.data.artifacts.map((artifact) => artifact.type)).toContain('formula_table')
     const proposal = created.data.confirmation?.proposal
-    expect(proposal?.ingredients.some((ingredient) => ingredient.materialId.startsWith('mat-lluch-2026-'))).toBe(false)
+    expect(proposal?.ingredients.some((ingredient) => ingredient.materialId.startsWith('mat-lluch-2026-'))).toBe(true)
     const confirmation = created.data.confirmation
     expect(confirmation?.status).toBe('PENDING')
     const confirmed = await runtime.resolveConfirmation(service, session, created.data.run.id, confirmation!.id, 'accept')

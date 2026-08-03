@@ -59,7 +59,8 @@ function supplierReferenceForProduct(product: LluchCatalogueProduct): MaterialSu
  * Produces a directory entry from the supplier's published product identity.
  * Supplier-declared odour, appearance, density range, and technical identity
  * are projected when available. Missing commercial and compliance values stay
- * guarded placeholders and the row remains SOURCE_ONLY.
+ * guarded placeholders. The platform has approved the catalogue record for
+ * research and formula drafting, never as operational compliance evidence.
  */
 export function lluchCatalogueMaterialForOrganization(product: LluchCatalogueProduct, _organizationId: string): Material {
   const reference = supplierReferenceForProduct(product)
@@ -84,7 +85,7 @@ export function lluchCatalogueMaterialForOrganization(product: LluchCataloguePro
     catalogueVersion: reference.catalogueVersion,
     category: reference.category,
     page: reference.page,
-    status: 'SOURCE_ONLY',
+    status: 'MASTER_APPROVED',
   }
   return {
     id: `mat-${product.id}`,
@@ -132,9 +133,8 @@ let catalogueMaterialDirectoryCache: Material[] | undefined
 
 /**
  * The supplier catalogue is the global master-reference directory. It remains
- * virtual until a platform curator reviews a source material, so every tenant
- * and governed research workflow reads the same evidence without duplicating
- * thousands of operational material records.
+ * published as read-only R&D master materials. Worker persistence mirrors the
+ * same records into D1 so every tenant receives a stable shared library.
  */
 export function lluchCatalogueGlobalMasterMaterials() {
   if (catalogueMaterialDirectoryCache) return catalogueMaterialDirectoryCache
@@ -186,6 +186,13 @@ export function isLluchCatalogueSourceMaterial(material: Material) {
   return material.catalogueSource?.supplier === lluchCatalogue2026Source.supplier
     && material.catalogueSource.catalogueVersion === lluchCatalogue2026Source.catalogueVersion
     && material.catalogueSource.status === 'SOURCE_ONLY'
+}
+
+export function isLluchCatalogueMasterMaterial(material: Material) {
+  return material.libraryScope === 'GLOBAL'
+    && material.catalogueSource?.supplier === lluchCatalogue2026Source.supplier
+    && material.catalogueSource.catalogueVersion === lluchCatalogue2026Source.catalogueVersion
+    && material.catalogueSource.status === 'MASTER_APPROVED'
 }
 
 const casPattern = /\b\d{2,7}-\d{2}-\d\b/g

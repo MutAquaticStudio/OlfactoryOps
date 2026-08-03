@@ -28,7 +28,7 @@ import {
   proposalFromFormulaVersion,
   sensoryMemoryEvidenceForDirection,
 } from '../src/data/formulaIntelligence.js'
-import { rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
+import { isLluchCatalogueMasterMaterial, rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { FormulaIntelligenceTrialSource, Material } from '../src/data/northStar.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
@@ -1432,7 +1432,9 @@ export function formulaIntelligenceMaterialCatalog(service: NorthStarService) {
   const catalog = workspaceMaterials
     .filter((material) => material.catalogueSource?.status !== 'SOURCE_ONLY')
     .map((material) => ({ material, profile: service.materialCompliance(material.id).data }))
-  const approved = catalog.filter(({ profile }) => profile?.status === 'APPROVED').map(({ material }) => material)
+  const approved = catalog
+    .filter(({ material, profile }) => isLluchCatalogueMasterMaterial(material) || profile?.status === 'APPROVED')
+    .map(({ material }) => material)
   return {
     materials: approved,
     researchMaterials,

@@ -1530,7 +1530,7 @@ describe('NorthStarService', () => {
     expect(result.products.some((product) => product.productName.includes('BERGAMOT'))).toBe(true)
   })
 
-  it('includes Lluch products in the material directory while keeping unreviewed source rows out of inventory', () => {
+  it('includes R&D-ready Lluch masters in the directory while keeping them out of inventory', () => {
     const service = createAuthenticatedService()
     const directory = service.materials().data
     const astrolide = directory.find((material) => material.name === 'ASTROLIDE PURE')
@@ -1539,12 +1539,52 @@ describe('NorthStarService', () => {
     expect(directory).toHaveLength(1986 + materials.length)
     expect(astrolide?.libraryScope).toBe('GLOBAL')
     expect(astrolide?.organizationId).toBeUndefined()
-    expect(astrolide?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(astrolide?.catalogueSource?.status).toBe('MASTER_APPROVED')
     expect(astrolide?.supplierCatalogueReferences?.[0]?.supplier).toBe('Lluch Essence')
     expect(inventory.some((summary) => summary.material.id === astrolide?.id)).toBe(false)
   })
 
-  it('persists a reviewed workspace edit for a Lluch source material without creating stock', () => {
+  it('keeps a global Lluch master out of inventory operations', () => {
+    const service = createAuthenticatedService()
+
+    expect(() => service.receiveInventoryReceipt({
+      materialId: 'mat-lluch-2026-0104',
+      quantityGrams: 25,
+      lotNumber: 'L-MASTER-001',
+    })).toThrow('R&D-ready only')
+  })
+
+  it('allows a Global Master in an R&D draft but blocks approval until operational evidence exists', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({
+      name: 'Global Master R&D draft',
+      targetGrams: 100,
+      finalProductConcentrationPercent: 20,
+      targetMarkets: ['EU'],
+      assignedReviewer: adminEmail,
+    }).data.formula
+
+    service.addFormulaLine(draft.id, { materialId: 'mat-lluch-2026-0104', grams: 100 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail })
+
+    expect(() => service.approveFormula(draft.id)).toThrow('needs tenant-specific approved compliance evidence')
+  })
+
+  it('allows a tenant-private operational material to share a CAS with a Global Master', () => {
+    const service = createAuthenticatedService()
+    const created = service.createMaterial({
+      name: 'ASTROLIDE PURE - tenant approved grade',
+      cas: '1222-05-5',
+      family: 'Musk',
+      libraryScope: 'TENANT',
+    }).data.material
+
+    expect(created.libraryScope).toBe('TENANT')
+    expect(created.organizationId).toBeTruthy()
+    expect(service.materials().data.filter((material) => material.cas === '1222-05-5')).toHaveLength(2)
+  })
+
+  it('allows a curator to enrich a global Lluch master without creating stock', () => {
     const service = createAuthenticatedService()
     const beforeInventoryRows = service.inventorySummary().data.length
     const updated = service.updateMaterial('mat-lluch-2026-0104', {
@@ -1554,9 +1594,9 @@ describe('NorthStarService', () => {
       version: 'review-1',
     }).data.material
 
-    expect(updated.catalogueSource?.status).toBe('REVIEW_REQUIRED')
+    expect(updated.catalogueSource?.status).toBe('MASTER_APPROVED')
     expect(service.material('mat-lluch-2026-0104').data.family).toBe('Musk')
-    expect(service.inventorySummary().data.length).toBe(beforeInventoryRows + 1)
+    expect(service.inventorySummary().data.length).toBe(beforeInventoryRows)
   })
 
   it('allows Manager role to update material metadata', () => {

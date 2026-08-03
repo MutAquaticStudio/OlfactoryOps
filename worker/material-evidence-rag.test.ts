@@ -96,6 +96,6 @@ describe('controlled material evidence RAG', () => {
     expect(materialEvidenceText(master!)).toContain('Supplier-declared chemical identity:')
     expect(materialEvidenceText(master!)).not.toContain('IFRA limit:')
     expect(master?.ifraLimit).toBe(0)
-    expect(master?.catalogueSource?.status).toBe('SOURCE_ONLY')
+    expect(master?.catalogueSource?.status).toBe('MASTER_APPROVED')
   })
 })

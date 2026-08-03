@@ -77,7 +77,7 @@ import { OperationalLineageSummary } from './features/trials/OperationalLineageS
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
 import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
-import { isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
+import { isLluchCatalogueMasterMaterial, isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
 import { MotionProvider } from './ui/motion/MotionProvider'
@@ -5082,6 +5082,7 @@ function MaterialWorkspace({
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
   const selectedIsSourceOnly = isLluchCatalogueSourceMaterial(selected)
+  const selectedIsGlobalMaster = isLluchCatalogueMasterMaterial(selected)
   const selectedIsShared = (selected.libraryScope ?? (selected.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL'
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
@@ -5786,12 +5787,13 @@ function MaterialWorkspace({
             <DataTag label="Materials" value={materialRecords.length.toLocaleString()} tone="blue" />
             <DataTag label="Showing" value={`${visibleMaterialRecords.length} / ${filteredMaterialRecords.length.toLocaleString()}`} />
           </div>
-          <p className="helper-copy">The Lluch supplier range is included in this directory. Source-only entries need technical and compliance review before they can pass formula approval or enter stock operations.</p>
+          <p className="helper-copy">The Lluch range is published as read-only Global Master Materials for research and formula drafting. Tenant-owned material, supplier, compliance, and lot evidence are still required before procurement or stock operations.</p>
         </section>
         <div className="material-list">
           {visibleMaterialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)
             const sourceOnly = isLluchCatalogueSourceMaterial(material)
+            const globalMaster = isLluchCatalogueMasterMaterial(material)
             return (
               <button
                 key={material.id}
@@ -5801,12 +5803,12 @@ function MaterialWorkspace({
               >
                 <div>
                   <strong>{material.name}</strong>
-                  <span>{sourceOnly ? `${material.catalogueSource?.supplier} / ${material.catalogueSource?.category}` : material.family}</span>
+                  <span>{sourceOnly || globalMaster ? `${material.catalogueSource?.supplier} / ${material.catalogueSource?.category}` : material.family}</span>
                 </div>
                 <DataTag
-                  label={sourceOnly ? 'Review' : (material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
-                  value={sourceOnly ? 'Source only' : material.cas}
-                  tone={sourceOnly ? 'amber' : 'blue'}
+                  label={sourceOnly ? 'Review' : globalMaster ? 'Library' : (material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
+                  value={sourceOnly ? 'Source only' : globalMaster ? 'R&D-ready' : material.cas}
+                  tone={sourceOnly ? 'amber' : globalMaster ? 'green' : 'blue'}
                 />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
@@ -5825,7 +5827,7 @@ function MaterialWorkspace({
           <DataTag label="Library" value={selectedIsShared ? 'Shared' : 'Workspace private'} tone={selectedIsShared ? 'blue' : 'green'} />
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
-          {selectedIsSourceOnly ? <DataTag label="Status" value="Needs review" tone="amber" /> : <DataTag label="Molecules" value={String(moleculeRows.length)} />}
+          {selectedIsSourceOnly ? <DataTag label="Status" value="Needs review" tone="amber" /> : selectedIsGlobalMaster ? <DataTag label="Status" value="R&D-ready" tone="green" /> : <DataTag label="Molecules" value={String(moleculeRows.length)} />}
         </div>
         {selectedIsSourceOnly ? (
           <section className="material-source-notice" aria-label="Supplier source status">
@@ -5859,6 +5861,23 @@ function MaterialWorkspace({
                 ) : null}
                 <small>{selected.catalogueEvidence.source} / {selected.catalogueEvidence.version}</small>
               </section>
+            ) : null}
+          </section>
+        ) : selectedIsGlobalMaster ? (
+          <section className="material-source-notice" aria-label="Global Master Material status">
+            <strong>Global Master Material</strong>
+            <p>This Lluch catalogue material is available to every workspace for research, Formula Intelligence, and non-consuming formula drafts. It is read-only and cannot be purchased, received into stock, reserved, consumed, or released until the workspace creates its own operational material evidence.</p>
+            <div className="tag-row">
+              <DataTag label="Category" value={selected.catalogueSource?.category ?? selected.family} tone="blue" />
+              <DataTag label="Catalogue page" value={`p. ${selected.catalogueSource?.page ?? 'n/a'}`} />
+            </div>
+            {selected.catalogueEvidence ? (
+              <dl className="olfactive-profile-signals" aria-label="Global Master technical evidence">
+                <div><dt>Identity</dt><dd>{selected.catalogueEvidence.chemicalIdentification ?? 'Not documented'}</dd></div>
+                <div><dt>Declared use</dt><dd>{selected.catalogueEvidence.declaredUse ?? 'Not documented'}</dd></div>
+                <div><dt>Density</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.density)}</dd></div>
+                <div><dt>Vapor pressure</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.vaporPressure)}</dd></div>
+              </dl>
             ) : null}
           </section>
         ) : (

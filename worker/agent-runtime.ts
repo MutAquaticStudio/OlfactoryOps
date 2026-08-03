@@ -18,7 +18,7 @@ import {
   type AgentRuntimeEvent,
   type AgentRunStatus,
 } from '../src/data/agentRuntime.js'
-import { rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
+import { isLluchCatalogueMasterMaterial, rankLluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { NorthStarService } from '../server/src/services/northstar.service.js'
 import { ConflictException, ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
 import type { MaterialEvidenceRag } from './material-evidence-rag.js'
@@ -897,7 +897,7 @@ export function selectedMaterials(service: NorthStarService, brief: string) {
 
 export function selectedGlobalMasterReferences(service: NorthStarService, brief: string, limit = 8) {
   const visibleSourceIds = new Set(service.materials().data
-    .filter((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'SOURCE_ONLY')
+    .filter((material) => isLluchCatalogueMasterMaterial(material))
     .map((material) => material.id))
   return rankLluchCatalogueGlobalMasterMaterials(brief, limit)
     .filter((material) => visibleSourceIds.has(material.id))
