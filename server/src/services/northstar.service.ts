@@ -4027,6 +4027,88 @@ export class NorthStarService {
     }
   }
 
+  updateAccountCredentials(body: { currentPassword?: string; email?: string; newPassword?: string } = {}) {
+    const session = this.currentSession()
+    const currentPassword = typeof body.currentPassword === 'string' ? body.currentPassword : ''
+    const currentCredential = this.authCredentialRecords.find((credential) => credential.email === session.email.toLowerCase())
+    if (!currentCredential || !this.verifyPasswordCredential(currentCredential, session.email, currentPassword).valid) {
+      this.recordAudit('auth.account.update', session.userId, session.userId, 'blocked')
+      throw new ForbiddenException('Current password is invalid')
+    }
+
+    const requestedEmail = typeof body.email === 'string' ? body.email.trim().toLowerCase() : session.email.toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail) || requestedEmail.length > 254) {
+      throw new UnprocessableEntityException('Email must be a valid address')
+    }
+    const nextPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
+    const emailChanged = requestedEmail !== session.email.toLowerCase()
+    const passwordChanged = nextPassword.length > 0
+    if (!emailChanged && !passwordChanged) {
+      throw new UnprocessableEntityException('Enter a new email or password to update this account')
+    }
+    if (passwordChanged) {
+      this.assertSignupPassword(nextPassword)
+    }
+    const duplicateMembership = this.membershipRecords.some(
+      (membership) => membership.userId !== session.userId && membership.email.toLowerCase() === requestedEmail,
+    )
+    const duplicateCredential = this.authCredentialRecords.some(
+      (credential) => credential.email !== session.email.toLowerCase() && credential.email === requestedEmail,
+    )
+    if (duplicateMembership || duplicateCredential) {
+      throw new UnprocessableEntityException('That email is already in use')
+    }
+
+    const updatedAt = new Date().toISOString()
+    const effectivePassword = passwordChanged ? nextPassword : currentPassword
+    this.authCredentialRecords = this.authCredentialRecords.map((credential) =>
+      credential.email === session.email.toLowerCase()
+        ? { email: requestedEmail, passwordHash: this.passwordHashForEmail(requestedEmail, effectivePassword), passwordSetAt: updatedAt }
+        : credential,
+    )
+    this.membershipRecords = this.membershipRecords.map((membership) =>
+      membership.userId === session.userId && membership.organizationId === session.organizationId
+        ? { ...membership, email: requestedEmail }
+        : membership,
+    )
+    this.userSettingsRecords = this.userSettingsRecords.map((settings) =>
+      settings.userId === session.userId && settings.organizationId === session.organizationId
+        ? { ...settings, email: requestedEmail, updatedAt }
+        : settings,
+    )
+    this.organizationRecords = this.organizationRecords.map((organization) =>
+      organization.id === session.organizationId && organization.primaryContact.toLowerCase() === session.email.toLowerCase()
+        ? { ...organization, primaryContact: requestedEmail }
+        : organization,
+    )
+    this.passwordResetRecords = this.passwordResetRecords.map((record) =>
+      record.email === session.email.toLowerCase() && !record.usedAt ? { ...record, usedAt: updatedAt } : record,
+    )
+    this.sessions = this.sessions.map((candidate) =>
+      candidate.email.toLowerCase() === session.email.toLowerCase() && candidate.status === 'ACTIVE'
+        ? { ...candidate, status: 'REVOKED', revokedAt: updatedAt, revokedReason: 'account credentials updated' }
+        : candidate,
+    )
+    this.queueNotification(
+      session.organizationId,
+      requestedEmail,
+      'security',
+      'Account credentials updated',
+      'Your email address or password was changed. All active sessions were signed out.',
+      '/login',
+      false,
+    )
+    const audit = this.recordAudit('auth.account.update', session.userId, session.userId, 'allowed')
+    return {
+      data: {
+        email: requestedEmail,
+        requiresReauthentication: true,
+        audit,
+        invariant: 'credential changes verify the current password, invalidate password reset tokens, and revoke all active sessions',
+      },
+    }
+  }
+
   assertValidCsrfToken(token: string | null | undefined) {
     const session = this.currentSession()
     const expected = this.requireSessionCsrfToken(session)

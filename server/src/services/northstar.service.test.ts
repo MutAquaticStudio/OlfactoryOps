@@ -161,6 +161,28 @@ describe('NorthStarService', () => {
     expect(() => service.completePasswordReset({ token: requested.delivery?.token, password: 'AnotherPassword2026!' })).toThrow(ForbiddenException)
   })
 
+  it('updates account credentials only after current-password verification and revokes every active session', () => {
+    const service = createAuthenticatedService()
+    const currentSession = service.me().data.session
+
+    expect(() => service.updateAccountCredentials({
+      currentPassword: 'wrong-password',
+      email: 'owner.updated@example.test',
+    })).toThrow(ForbiddenException)
+
+    const updated = service.updateAccountCredentials({
+      currentPassword: adminPassword,
+      email: 'owner.updated@example.test',
+      newPassword: 'UpdatedOwnerPassword2026!',
+    }).data
+
+    expect(updated.email).toBe('owner.updated@example.test')
+    expect(updated.requiresReauthentication).toBe(true)
+    expect(() => service.authenticateSession(currentSession.id)).toThrow(UnauthorizedException)
+    expect(() => service.login(adminEmail, adminPassword)).toThrow(ForbiddenException)
+    expect(service.login('owner.updated@example.test', 'UpdatedOwnerPassword2026!').data.session.email).toBe('owner.updated@example.test')
+  })
+
   it('blocks active memberships that have not completed password setup', () => {
     const service = createTestService()
 

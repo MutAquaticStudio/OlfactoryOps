@@ -1465,6 +1465,7 @@ function shouldRequestOperationApproval(path: string) {
     !path.startsWith('/approval-requests') &&
     !path.startsWith('/inventory/approval-requests') &&
     !path.startsWith('/user/settings') &&
+    !path.startsWith('/user/account-credentials') &&
     !/^\/formulas\/[^/]+\/approve$/.test(path)
   )
 }
@@ -3921,6 +3922,11 @@ function UserSettingsForm({
   const [draft, setDraft] = useState<UserSettingsRecord>(settings)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Changes apply to your account only.')
+  const [accountEmail, setAccountEmail] = useState(session.email)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountStatus, setAccountStatus] = useState('Changing sign-in details signs out every active session.')
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
   const hasApprovedDraftAccentColor = normalizedDraftAccentColor !== null && controlledAccentColors.has(normalizedDraftAccentColor)
   const safeDraftAccentColor = controlledAccentColor(draft.accentColor)
@@ -3931,6 +3937,10 @@ function UserSettingsForm({
   useEffect(() => {
     setDraft({ ...settings, preferredLanding: safeLandingForSession(settings.preferredLanding, session) })
     setStatus('Changes apply to your account only.')
+    setAccountEmail(session.email)
+    setCurrentPassword('')
+    setNewPassword('')
+    setAccountStatus('Changing sign-in details signs out every active session.')
   }, [settings, session])
 
   async function saveSettings() {
@@ -3957,6 +3967,24 @@ function UserSettingsForm({
       setStatus(error instanceof Error ? error.message : 'Could not save user settings')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function saveAccountCredentials() {
+    setAccountBusy(true)
+    setAccountStatus('Verifying current password...')
+    try {
+      const payload = await requestApi<{ email: string; requiresReauthentication: boolean }>('/user/account-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, email: accountEmail, newPassword }),
+      })
+      setAccountStatus(`Sign-in details updated for ${payload.email}. Redirecting to sign in...`)
+      window.setTimeout(() => window.location.assign('/login'), 700)
+    } catch (error) {
+      setAccountStatus(error instanceof Error ? error.message : 'Could not update sign-in details')
+    } finally {
+      setAccountBusy(false)
     }
   }
 
@@ -3988,8 +4016,60 @@ function UserSettingsForm({
           </label>
           <label className="field-row">
             <span>Email</span>
-            <input aria-label="User email" readOnly value={session.email} />
+            <input aria-label="Current user email" readOnly value={session.email} />
           </label>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Profile & sign-in</strong>
+          <span>Change your email address or password after confirming your current password.</span>
+        </div>
+        <div className="settings-form-grid">
+          <label className="field-row">
+            <span>New email address</span>
+            <input
+              aria-label="New email address"
+              autoComplete="email"
+              inputMode="email"
+              value={accountEmail}
+              onChange={(event) => setAccountEmail(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Current password</span>
+            <input
+              aria-label="Current password"
+              autoComplete="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>New password</span>
+            <input
+              aria-label="New password"
+              autoComplete="new-password"
+              minLength={12}
+              placeholder="Leave empty to keep your password"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="settings-save-row">
+          <span aria-live="polite" className="mono-small">{accountStatus}</span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void saveAccountCredentials()}
+            disabled={accountBusy || !currentPassword || (accountEmail.trim().toLowerCase() === session.email.toLowerCase() && !newPassword)}
+          >
+            {accountBusy ? 'Updating sign-in...' : 'Update sign-in details'}
+          </button>
         </div>
       </section>
 

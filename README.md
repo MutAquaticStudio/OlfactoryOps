@@ -31,6 +31,14 @@ hydrate truoc khi xac minh password. Session, membership activity, notification
 outbox va audit-chain van duoc persist trong cung mutation; fast-path khong bo
 qua tenant scope hay permission policy.
 
+### Profile va sign-in
+
+Trong **User settings**, moi thanh vien co the doi email va/hoac mat khau bang
+cach xac minh mat khau hien tai. API server-side kiem tra email trung, rehash
+credential theo email moi, huy reset token dang mo, revoke tat ca active session
+va ghi audit event. Nguoi dung duoc dua ve Login sau khi cap nhat; email va mat
+khau khong bao gio duoc luu hoac xac minh o frontend.
+
 ## Hoàn thiện Worker API
 
 Cloudflare Worker tại `worker/index.ts` là API production duy nhất dưới

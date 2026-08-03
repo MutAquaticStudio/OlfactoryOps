@@ -763,6 +763,7 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/privacy/requests/:id/export', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.exportPrivacyData(params.id) },
   { method: 'GET', pattern: '/user/settings', handler: ({ service }) => service.userSettings() },
   { method: 'PATCH', pattern: '/user/settings', mutates: true, writeGate: false, persistScope: 'userSettings', handler: ({ service, body }) => service.updateUserSettings(body) },
+  { method: 'POST', pattern: '/user/account-credentials', mutates: true, writeGate: false, sessionCookie: 'clear', rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.updateAccountCredentials({ currentPassword: typeof body.currentPassword === 'string' ? body.currentPassword : undefined, email: typeof body.email === 'string' ? body.email : undefined, newPassword: typeof body.newPassword === 'string' ? body.newPassword : undefined }) },
   { method: 'GET', pattern: '/audit-logs', handler: ({ service }) => service.auditLogs() },
   { method: 'GET', pattern: '/audit/chain/verify', handler: async ({ service, env }) => verifyAuditChain(service, env.DB) },
   { method: 'GET', pattern: '/audit/chain/evidence', handler: async ({ service, env }) => auditChainEvidence(service, env.DB) },
@@ -4778,10 +4779,8 @@ async function ensureSeededAdminBootstrap(
 
   if (seedOrganization) {
     const existingOrganization = serviceState.organizationRecords.find((organization) => organization.id === seedOrganization.id)
-    const nextOrganization = existingOrganization
-      ? { ...existingOrganization, primaryContact: seedOrganization.primaryContact }
-      : seedOrganization
-    if (!existingOrganization || existingOrganization.primaryContact !== nextOrganization.primaryContact) {
+    const nextOrganization = existingOrganization ?? seedOrganization
+    if (!existingOrganization) {
       serviceState.organizationRecords = [
         nextOrganization,
         ...serviceState.organizationRecords.filter((organization) => organization.id !== nextOrganization.id),
@@ -4794,11 +4793,7 @@ async function ensureSeededAdminBootstrap(
     const existingMembership = serviceState.membershipRecords.find(
       (membership) => membership.id === seedMembership.id || configuredAdminEmails.has(membership.email.toLowerCase()),
     )
-    const nextMembership = {
-      ...seedMembership,
-      role: SEEDED_ADMIN_ROLE,
-      lastActiveAt: existingMembership?.lastActiveAt ?? seedMembership.lastActiveAt,
-    }
+    const nextMembership = existingMembership ?? { ...seedMembership, role: SEEDED_ADMIN_ROLE }
     if (!existingMembership || JSON.stringify(existingMembership) !== JSON.stringify(nextMembership)) {
       serviceState.membershipRecords = [
         nextMembership,
@@ -4814,10 +4809,8 @@ async function ensureSeededAdminBootstrap(
     const existingUserSetting = serviceState.userSettingsRecords.find(
       (settings) => settings.userId === seedUserSetting.userId && settings.organizationId === seedUserSetting.organizationId,
     )
-    const nextUserSetting = existingUserSetting
-      ? { ...existingUserSetting, email: seedUserSetting.email, displayName: seedUserSetting.displayName }
-      : seedUserSetting
-    if (!existingUserSetting || JSON.stringify(existingUserSetting) !== JSON.stringify(nextUserSetting)) {
+    const nextUserSetting = existingUserSetting ?? seedUserSetting
+    if (!existingUserSetting) {
       serviceState.userSettingsRecords = [
         nextUserSetting,
         ...serviceState.userSettingsRecords.filter((settings) => !(settings.userId === nextUserSetting.userId && settings.organizationId === nextUserSetting.organizationId)),
@@ -4848,7 +4841,12 @@ async function ensureSeededAdminBootstrap(
 
   const seededAdminPasswordHash = readConfiguredSeededAdminPasswordHash(configuredAdminPasswordHash)
   const credentialState = resolveSeededAdminCredentialState(serviceState.authCredentialRecords, seededAdminPasswordHash)
-  if (seededAdminPasswordHash && (credentialState.needsCanonicalUpsert || credentialState.legacyCredentialEmails.length > 0)) {
+  const canBootstrapCanonicalCredential = Boolean(
+    credentialState.canonicalCredential ||
+    serviceState.authCredentialRecords.length === 0 ||
+    credentialState.legacyCredentialEmails.length > 0,
+  )
+  if (seededAdminPasswordHash && canBootstrapCanonicalCredential && (credentialState.needsCanonicalUpsert || credentialState.legacyCredentialEmails.length > 0)) {
     const credentialWasRotated = credentialState.needsCanonicalUpsert && Boolean(
       credentialState.canonicalCredential || credentialState.legacyCredentialEmails.length > 0,
     )

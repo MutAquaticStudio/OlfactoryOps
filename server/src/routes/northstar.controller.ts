@@ -957,6 +957,11 @@ export class NorthStarController {
     return this.northStar.updateUserSettings(body)
   }
 
+  @Post('user/account-credentials')
+  updateAccountCredentials(@Body() body: { currentPassword?: string; email?: string; newPassword?: string }) {
+    return this.northStar.updateAccountCredentials(body)
+  }
+
   @Get('audit-logs')
   auditLogs() {
     return this.northStar.auditLogs()
