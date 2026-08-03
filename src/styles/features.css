@@ -478,10 +478,8 @@
 }
 
 .design-studio-grid .formula-intelligence-brief {
-  position: sticky;
-  top: 92px;
-  max-height: calc(100dvh - 112px);
-  overflow: auto;
+  align-self: start;
+  min-width: 0;
 }
 
 .design-studio-brief {
