@@ -4807,6 +4807,20 @@ function TaskShortcuts({
   )
 }
 
+function compactIntegrationDetail(check: IntegrationReadinessResponse['checks'][number]) {
+  const detail: Record<IntegrationReadinessResponse['checks'][number]['key'], string> = {
+    billing: check.status === 'ready' ? 'Available' : 'Managed during beta',
+    documents: check.status === 'ready' ? 'Storage connected' : 'Connect storage to enable uploads',
+    email: check.status === 'ready' ? 'Email delivery connected' : 'Connect Resend when ready',
+    cloudflare_saas: check.status === 'ready' ? 'Provisioning available' : 'Add Cloudflare credentials',
+    beta_hostname: check.status === 'ready' ? 'DNS and HTTPS active' : 'Finish DNS and HTTPS setup',
+    workers_ai: check.status === 'ready' ? 'Available' : 'Not available',
+    vectorize_rag: check.status === 'ready' ? 'Evidence index available' : 'Index requires setup',
+    formula_agent: check.status === 'ready' ? 'Research agent available' : 'Agent requires setup',
+  }
+  return detail[check.key]
+}
+
 function OwnerUserOverview({
   session,
   onNavigate,
@@ -15487,12 +15501,12 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     <div className="workspace-grid saas-grid">
       {canProvisionCustomDomain && integrationReadiness ? (
         <Panel className="wide" title="Integration Readiness" icon={Gauge}>
-          <div className="document-list compact-list">
+          <div className="integration-summary-grid">
             {integrationReadiness.checks.map((check) => (
-              <div className="document-row" key={check.key}>
+              <div className="integration-summary-row" key={check.key}>
                 <div>
                   <strong>{check.label}</strong>
-                  <span>{check.detail}</span>
+                  <span>{compactIntegrationDetail(check)}</span>
                 </div>
                 <StatusBadge
                   status={check.status === 'ready' ? 'stable' : check.status === 'blocked' ? 'alert' : 'review'}
