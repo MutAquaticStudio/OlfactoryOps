@@ -706,6 +706,8 @@ Design Studio dùng bố cục quyết định theo luồng **brief → directio
 
 Direction Review hiển thị **Olfactive note review** theo Opening, Heart và Drydown. Mỗi material chỉ dùng mô tả sensory đã được curate trong Material Intelligence hoặc catalogue evidence; trường thiếu dữ liệu được nêu rõ, không sinh mô tả suy đoán.
 
+Sau khi lưu direction thành draft, Direction Review hiển thị trạng thái Formula và hành động tiếp theo: **Submit for approval** ở Draft/Changes requested, rồi **Approve formula** khi đã In review và người dùng có quyền approver. Các action gọi workflow Formula hiện có trên server; material/compliance evidence chưa đạt hoặc Accord chưa có final-product context sẽ bị chặn với lý do rõ ràng.
+
 Dialog **Review & approve brief** là review sheet có header/footer cố định, brief gốc, trạng thái gate rõ ràng, product setup, creative direction và material constraints thành các section riêng. Trên màn hình hẹp, các trường chuyển thành một cột và action chính luôn nằm ở footer để không bị lẫn trong danh sách material.
 
 Tài liệu kiến trúc, protocol event, mô hình bảo mật công cụ và báo cáo checkpoint nằm tại [docs/agent-platform](docs/agent-platform/). Khi triển khai checkpoint Agent Platform, chạy tối thiểu:

@@ -3082,9 +3082,11 @@ function App() {
                 <FormulaDesignStudioWorkspace
                   apiBaseUrl={apiBaseUrl}
                   requestApi={requestApi}
+                  formulaRecords={scopedFormulaRecords}
                   materialRecords={materialRecords}
                   capabilities={{
                     currentUserId: currentSession.userId,
+                    currentUserEmail: currentSession.email,
                     canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
                     canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
@@ -3096,6 +3098,8 @@ function App() {
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
                     canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canSubmitFormulaReview: sessionHasPermission(currentSession, 'formulas.edit'),
+                    canApproveFormula: isFormulaApproverRole(currentSession.role) && sessionHasPermission(currentSession, 'formulas.approve'),
                     canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
                     canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
                   }}
@@ -3115,6 +3119,7 @@ function App() {
                   materialRecords={materialRecords}
                   capabilities={{
                     currentUserId: currentSession.userId,
+                    currentUserEmail: currentSession.email,
                     canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
                     canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
                     canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
@@ -3126,6 +3131,8 @@ function App() {
                     canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
                     canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
                     canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
+                    canSubmitFormulaReview: sessionHasPermission(currentSession, 'formulas.edit'),
+                    canApproveFormula: isFormulaApproverRole(currentSession.role) && sessionHasPermission(currentSession, 'formulas.approve'),
                     canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
                     canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
                   }}

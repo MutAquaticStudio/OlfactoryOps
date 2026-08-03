@@ -18,6 +18,7 @@ type ApiRequest = <T>(path: string, init?: RequestInit) => Promise<T>
 
 export type FormulaIntelligenceCapabilities = {
   currentUserId: string
+  currentUserEmail: string
   canArchiveAnyDesignProject: boolean
   canCreateBrief: boolean
   canReviewBrief: boolean
@@ -29,6 +30,8 @@ export type FormulaIntelligenceCapabilities = {
   canViewInventoryEvidence: boolean
   canViewMaterialEvidence: boolean
   canSaveDraft: boolean
+  canSubmitFormulaReview: boolean
+  canApproveFormula: boolean
   canPlanTrial: boolean
   canViewTrialEvidence: boolean
 }
@@ -604,6 +607,7 @@ function DirectionDetail({
   capabilities,
   materialNames,
   materials,
+  savedFormula,
   feedback,
   feedbackDraft,
   evidence,
@@ -612,6 +616,8 @@ function DirectionDetail({
   onShare,
   onSave,
   onPlanTrial,
+  onSubmitFormulaReview,
+  onApproveFormula,
   onFeedbackDraftChange,
   onSubmitFeedback,
   onClose,
@@ -621,6 +627,7 @@ function DirectionDetail({
   capabilities: FormulaIntelligenceCapabilities
   materialNames: Map<string, string>
   materials: Map<string, Material>
+  savedFormula?: Formula
   feedback: Feedback[]
   feedbackDraft: { comment: string; rating: number }
   evidence?: EvidenceArtifact
@@ -629,6 +636,8 @@ function DirectionDetail({
   onShare: () => void
   onSave: () => void
   onPlanTrial: () => void
+  onSubmitFormulaReview: () => void
+  onApproveFormula: () => void
   onFeedbackDraftChange: (draft: { comment: string; rating: number }) => void
   onSubmitFeedback: (selected?: boolean) => void
   onClose: () => void
@@ -636,6 +645,11 @@ function DirectionDetail({
   const availability = direction.availability === 'UNKNOWN' ? 'Not evaluated' : direction.availability.toLowerCase()
   const evaluation = direction.evaluation
   const legacyFourMaterialPalette = (direction.proposal?.ingredients.length ?? 0) <= 4
+  const approvalBlocker = direction.proposal?.requiresFinalProductContext
+    ? 'Add final-product concentration and IFRA context in Formulas before submitting this Accord.'
+    : direction.complianceStatus !== 'PASS'
+      ? 'Approval is unavailable until each selected material has approved compliance evidence.'
+      : undefined
   return <aside className="panel glass formula-intelligence-detail" aria-label={`${direction.title} detail`}>
     <div className="formula-intelligence-detail-heading">
       <div><span className="formula-intelligence-eyebrow">Direction review</span><h3>{direction.title}</h3></div>
@@ -656,8 +670,12 @@ function DirectionDetail({
       <div className="formula-intelligence-actions">
         <button className="secondary-button small" type="button" disabled={busy} onClick={onShare}><Share2 size={14} /> {direction.shares?.length ? `Sharing (${direction.shares.length})` : 'Share for review'}</button>
         <button className="primary-button small" type="button" disabled={busy || Boolean(direction.savedFormulaId) || !direction.proposal} onClick={onSave}><Save size={14} /> {direction.savedFormulaId ? 'Draft saved' : direction.proposal?.formulaType === 'ACCORD' ? 'Save Accord draft' : 'Save as draft'}</button>
+        {savedFormula?.workflowStatus === 'DRAFT' || savedFormula?.workflowStatus === 'CHANGES_REQUESTED' ? <button className="secondary-button small" type="button" disabled={busy || !capabilities.canSubmitFormulaReview || Boolean(approvalBlocker)} onClick={onSubmitFormulaReview}><CheckCircle2 size={14} /> Submit for approval</button> : null}
+        {savedFormula?.workflowStatus === 'IN_REVIEW' ? <button className="primary-button small" type="button" disabled={busy || !capabilities.canApproveFormula || Boolean(approvalBlocker)} onClick={onApproveFormula}><CheckCircle2 size={14} /> Approve formula</button> : null}
         {capabilities.canPlanTrial && direction.savedFormulaId ? <button className="secondary-button small" type="button" disabled={busy || Boolean(direction.trialId)} onClick={onPlanTrial}><FlaskConical size={14} /> {direction.trialId ? 'Trial planned' : 'Plan trial'}</button> : null}
       </div>
+      {savedFormula ? <small className="formula-intelligence-action-hint">Formula status: {savedFormula.workflowStatus.replaceAll('_', ' ').toLowerCase()}.</small> : null}
+      {approvalBlocker && savedFormula ? <small className="formula-intelligence-action-hint is-warning">{approvalBlocker}</small> : null}
       {direction.savedFormulaId && !direction.trialId ? <small className="formula-intelligence-action-hint">An approved immutable formula version is required before this draft can be planned as a trial.</small> : null}
     </> : <section className="formula-intelligence-feedback"><label>Rating<select value={feedbackDraft.rating} onChange={(event) => onFeedbackDraftChange({ ...feedbackDraft, rating: Number(event.target.value) })}><option value="0">Optional</option>{[1, 2, 3, 4, 5].map((rating) => <option value={rating} key={rating}>{rating}</option>)}</select></label><textarea value={feedbackDraft.comment} maxLength={1200} placeholder="Feedback for the perfumer" onChange={(event) => onFeedbackDraftChange({ ...feedbackDraft, comment: event.target.value })} /><div className="formula-intelligence-actions"><button className="secondary-button small" type="button" disabled={busy} onClick={() => onSubmitFeedback()}><MessageSquare size={14} /> Send feedback</button><button className="primary-button small" type="button" disabled={busy} onClick={() => onSubmitFeedback(true)}><CheckCircle2 size={14} /> Select direction</button></div></section>}
     {feedback.length ? <small className="formula-intelligence-feedback-count">{feedback.length} feedback item{feedback.length === 1 ? '' : 's'}</small> : null}
@@ -921,7 +939,7 @@ function StructuredBriefReviewDialog({
   </FormulaIntelligenceDialog>
 }
 
-export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialRecords, capabilities, onFormulaSaved, onTrialPlanned }: { apiBaseUrl: string; requestApi: ApiRequest; materialRecords: Material[]; capabilities: FormulaIntelligenceCapabilities; onFormulaSaved: (formula: Formula) => void; onTrialPlanned?: () => void }) {
+export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, formulaRecords, materialRecords, capabilities, onFormulaSaved, onTrialPlanned }: { apiBaseUrl: string; requestApi: ApiRequest; formulaRecords: Formula[]; materialRecords: Material[]; capabilities: FormulaIntelligenceCapabilities; onFormulaSaved: (formula: Formula) => void; onTrialPlanned?: () => void }) {
   const [projects, setProjects] = useState<DesignProject[]>([])
   const [name, setName] = useState('New fragrance brief')
   const [creativeBrief, setCreativeBrief] = useState('')
@@ -1178,6 +1196,28 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to plan a trial for this direction.')) } finally { setBusy(false) }
   }
 
+  async function submitFormulaReview(direction: Direction) {
+    const formula = direction.savedFormulaId ? formulaRecords.find((item) => item.id === direction.savedFormulaId) : undefined
+    if (!formula) return
+    const scope = `design-formula-review:${formula.id}:${formula.draftRevision}`
+    setBusy(true); setNotice(undefined)
+    try {
+      const result = await requestApi<{ formula: Formula }>(`/formulas/${encodeURIComponent(formula.id)}/review`, { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ reviewer: formula.assignedReviewer || capabilities.currentUserEmail, comment: 'Submitted from Formula Design Studio.' }) })
+      completeMutation(scope); onFormulaSaved(result.formula); await refresh(); setNotice('Formula submitted for approval. An immutable review version was created.')
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to submit the formula for approval.')) } finally { setBusy(false) }
+  }
+
+  async function approveFormula(direction: Direction) {
+    const formula = direction.savedFormulaId ? formulaRecords.find((item) => item.id === direction.savedFormulaId) : undefined
+    if (!formula) return
+    const scope = `design-formula-approve:${formula.id}:${formula.version}`
+    setBusy(true); setNotice(undefined)
+    try {
+      const result = await requestApi<{ formula: Formula }>(`/formulas/${encodeURIComponent(formula.id)}/approve`, { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ comment: 'Approved from Formula Design Studio.' }) })
+      completeMutation(scope); onFormulaSaved(result.formula); await refresh(); setNotice('Formula approved and locked. Inventory remains unchanged until a governed usage or production action.')
+    } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to approve the formula.')) } finally { setBusy(false) }
+  }
+
   async function confirmSave() {
     if (!pending) return
     const scope = `design-confirm:${pending.runId}:${pending.confirmationId}`
@@ -1191,6 +1231,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     capabilities={capabilities}
     materialNames={materialNames}
     materials={materialDetails}
+    savedFormula={selectedDirectionContext.direction.savedFormulaId ? formulaRecords.find((formula) => formula.id === selectedDirectionContext.direction.savedFormulaId) : undefined}
     feedback={selectedDirectionContext.project.feedback.filter((item) => item.directionId === selectedDirectionContext.direction.directionId)}
     feedbackDraft={feedbackDrafts[selectedDirectionContext.direction.directionId] ?? { comment: '', rating: 0 }}
     evidence={activeRun?.run.id === selectedDirectionContext.direction.runId ? activeEvidence : undefined}
@@ -1199,6 +1240,8 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     onShare={() => void openShare(selectedDirectionContext.project.id, selectedDirectionContext.direction)}
     onSave={() => void requestSave(selectedDirectionContext.project.id, selectedDirectionContext.direction)}
     onPlanTrial={() => void planTrial(selectedDirectionContext.project.id, selectedDirectionContext.direction)}
+    onSubmitFormulaReview={() => void submitFormulaReview(selectedDirectionContext.direction)}
+    onApproveFormula={() => void approveFormula(selectedDirectionContext.direction)}
     onFeedbackDraftChange={(draft) => setFeedbackDrafts((current) => ({ ...current, [selectedDirectionContext.direction.directionId]: draft }))}
     onSubmitFeedback={(selected) => void submitFeedback(selectedDirectionContext.project.id, selectedDirectionContext.direction.directionId, selected)}
     onClose={() => setSelectedDirectionId(null)}

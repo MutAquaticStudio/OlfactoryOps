@@ -896,6 +896,16 @@
   line-height: 1.45;
 }
 
+.formula-intelligence-action-hint {
+  color: var(--text-3);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.formula-intelligence-action-hint.is-warning {
+  color: var(--warning);
+}
+
 .formula-intelligence-actions > * {
   min-width: 0;
 }
