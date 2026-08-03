@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 type WorkspacePanelProps = {
+  id?: string
   title: string
   icon: LucideIcon
   right?: ReactNode
@@ -11,6 +12,7 @@ type WorkspacePanelProps = {
 
 /** A stable, task-oriented surface shared by workspace modules. */
 export function WorkspacePanel({
+  id,
   title,
   icon: Icon,
   right,
@@ -18,7 +20,7 @@ export function WorkspacePanel({
   className = '',
 }: WorkspacePanelProps) {
   return (
-    <section className={`panel workspace-panel ${className}`.trim()}>
+    <section id={id} className={`panel workspace-panel ${className}`.trim()}>
       <div className="panel-header">
         <div className="panel-title-row">
           <span className="icon-chip" aria-hidden="true">

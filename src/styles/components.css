@@ -525,6 +525,15 @@ small,
   line-height: 1.35;
 }
 
+.production-list .production-row.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-muted));
+}
+
+.production-list .production-row.is-selected .primary-button {
+  cursor: default;
+}
+
 .workspace-dialog-backdrop {
   position: fixed;
   z-index: 110;

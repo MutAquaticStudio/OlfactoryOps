@@ -11310,6 +11310,23 @@ function ProductionWorkspace({
   const canRecordProductionQc = sessionHasPermission(session, 'production.qc')
   const canApproveProductionQc = session.role === 'Owner' || session.role === 'Admin' || session.role === 'Lab Manager' || session.role === 'Manager'
   const activeQcTemplate = qcTemplates.find((template) => template.id === activeBatch?.qcTemplateId)
+  const activeQcReadyForApproval = Boolean(
+    activeQcTemplate &&
+      activeBatch?.status === 'QC' &&
+      !qcResults.some((result) => result.status === 'FAILED') &&
+      activeQcTemplate.checks.every(
+        (check) =>
+          !check.required ||
+          qcResults.some(
+            (result) => result.templateCheckId === check.id && (result.status === 'PASSED' || result.status === 'NOT_APPLICABLE'),
+          ),
+      ),
+  )
+  const qcApprovalHint = !canApproveProductionQc
+    ? 'An Admin or Manager must approve structured QC'
+    : !activeQcReadyForApproval
+      ? 'Record passing results for every required QC check before approval'
+      : 'Approve completed QC checks and move the batch to bottling'
   const selectedFormulaHasQcTemplate = qcTemplates.some((template) => template.status === 'ACTIVE' && template.formulaId === selectedFormulaId)
 
   const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
@@ -11572,6 +11589,14 @@ function ProductionWorkspace({
     }
   }
 
+  function openBatchLifecycle(batchId: string) {
+    setActiveBatchId(batchId)
+    setStatusMessage(`${batchId} is selected. Continue from its next lifecycle action.`)
+    window.requestAnimationFrame(() => {
+      document.getElementById('production-lifecycle-gate')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
   return (
     <div className="workspace-grid production-grid">
       <Panel title="Create Production Batch" icon={PackageCheck}>
@@ -11627,7 +11652,7 @@ function ProductionWorkspace({
         </ul>
       </Panel>
 
-      <Panel title="Lifecycle Gate" icon={ClipboardCheck}>
+      <Panel id="production-lifecycle-gate" title="Lifecycle Gate" icon={ClipboardCheck}>
         {activeBatch ? (
           <>
             <div className="production-gate-picker">
@@ -11764,8 +11789,8 @@ function ProductionWorkspace({
                       className="primary-button small"
                       type="button"
                       onClick={() => void approveStructuredQc(activeBatch.id)}
-                      disabled={busyId === activeBatch.id || !canApproveProductionQc}
-                      title={canApproveProductionQc ? undefined : 'An Admin or Manager must approve structured QC'}
+                      disabled={busyId === activeBatch.id || !canApproveProductionQc || !activeQcReadyForApproval}
+                      title={qcApprovalHint}
                     >
                       Approve structured QC
                     </button>
@@ -11918,7 +11943,25 @@ function ProductionWorkspace({
         ) : <div className="empty-state compact">Yield, loss, labor, and overhead become available after raw materials are issued.</div>}
       </Panel>
 
-      <Panel title="Work Order & QC Protocol" icon={ClipboardCheck}>
+      <Panel
+        title="Work Order & QC Protocol"
+        icon={ClipboardCheck}
+        right={
+          activeBatch?.status === 'QC' && activeQcTemplate ? (
+            <button
+              className="primary-button small"
+              type="button"
+              onClick={() => void approveStructuredQc(activeBatch.id)}
+              disabled={busyId === activeBatch.id || !canApproveProductionQc || !activeQcReadyForApproval}
+              title={qcApprovalHint}
+            >
+              Approve QC
+            </button>
+          ) : activeBatch?.qcApprovedAt ? (
+            <StatusBadge status="stable" label="QA APPROVED" />
+          ) : null
+        }
+      >
         {activeBatch ? (
           <div className="document-list compact-list">
             <div className="document-row">
@@ -11964,7 +12007,7 @@ function ProductionWorkspace({
       <Panel className="wide" title="Batch Board" icon={Activity}>
         <div className="document-list compact-list production-list">
           {batches.map((batch) => (
-            <div className="document-row production-row" key={batch.id}>
+            <div className={`document-row production-row ${activeBatch?.id === batch.id ? 'is-selected' : ''}`} key={batch.id}>
               <div>
                 <strong>{batch.id} / {batch.formulaCode}</strong>
                 <span>{formatGrams(batch.targetGrams)} target / {formatGrams(batch.consumedGrams)} consumed / {batch.owner}</span>
@@ -11978,10 +12021,10 @@ function ProductionWorkspace({
                 <button
                   className="primary-button small"
                   type="button"
-                  onClick={() => setActiveBatchId(batch.id)}
+                  onClick={() => openBatchLifecycle(batch.id)}
                   aria-pressed={activeBatch?.id === batch.id}
                 >
-                  {activeBatch?.id === batch.id ? 'Viewing lifecycle' : 'Open lifecycle'}
+                  {activeBatch?.id === batch.id ? 'Lifecycle open' : 'Open lifecycle'}
                 </button>
               </div>
             </div>
