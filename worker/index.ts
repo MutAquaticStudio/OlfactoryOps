@@ -543,7 +543,7 @@ const D1_NORMALIZED_CUTOVER_KEY = 'd1-normalized-state-v1'
 const SEEDED_ADMIN_EMAIL = 'm.thuanwork@gmail.com'
 const LEGACY_SEEDED_ADMIN_EMAILS = ['admin@labofscents.org']
 const SEEDED_ADMIN_ORGANIZATION_ID = 'org-nxl'
-const SEEDED_ADMIN_ROLE = 'Admin'
+const SEEDED_ADMIN_ROLE = 'Owner'
 const SEEDED_ADMIN_PASSWORD_SET_AT = '2026-07-16T00:00:00.000Z'
 const NORMALIZED_TABLES = [
   'auth_sessions',
@@ -4714,6 +4714,7 @@ async function ensureSeededAdminBootstrap(
     )
     const nextMembership = {
       ...seedMembership,
+      role: SEEDED_ADMIN_ROLE,
       lastActiveAt: existingMembership?.lastActiveAt ?? seedMembership.lastActiveAt,
     }
     if (!existingMembership || JSON.stringify(existingMembership) !== JSON.stringify(nextMembership)) {
