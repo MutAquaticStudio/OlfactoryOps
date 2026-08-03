@@ -88,6 +88,7 @@ describe('Lluch catalogue 2026 import source', () => {
 
     expect(masters).toHaveLength(1986)
     expect(masters.every((material) => material.libraryScope === 'GLOBAL' && material.catalogueSource?.status === 'MASTER_APPROVED')).toBe(true)
+    expect(masters.filter((material) => material.cas === '100-06-1')).toHaveLength(2)
     expect(astrolide?.name).toBe('ASTROLIDE PURE')
     expect(citrusResearch).toHaveLength(8)
     expect(citrusResearch.some((material) => material.odor.some((descriptor) => /citric|citrus/i.test(descriptor)))).toBe(true)

@@ -17,8 +17,10 @@ Materials, Formula Design Studio, Reformulation Optimizer, RAG va formula draft.
   duoc giu rieng; ban ghi tenant duoc uu tien cho lot, cost va operational flow.
 
 Worker tu dong reconcile catalogue theo source checksum va ghi audit
-`material.global.publish`. Migration `0041_lluch_global_master_materials.sql`
-phai duoc ap dung truoc khi deploy Worker.
+`material.global.publish`. Migrations `0041_lluch_global_master_materials.sql`
+va `0042_lluch_master_cas_variants.sql` phai duoc ap dung truoc khi deploy
+Worker. Migration 0042 giu cac supplier-grade Lluch rieng biet khi chung CAS,
+nhung van giu CAS duy nhat cho Global curated materials ngoai catalogue.
 
 ## Hoàn thiện Worker API
 
