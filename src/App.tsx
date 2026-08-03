@@ -15091,12 +15091,14 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   const [customDomainDraft, setCustomDomainDraft] = useState('')
   const [customDomainProvisioning, setCustomDomainProvisioning] = useState<SaasCustomDomainRecord | null>(null)
   const [customDomains, setCustomDomains] = useState<SaasCustomDomainRecord[]>([])
+  const [workspaceMembers, setWorkspaceMembers] = useState<MembershipRecord[] | null>(null)
   const activeSeats = saasData?.usage.activeSeats ?? 0
   const storageUsedGb = saasData?.usage.storageGb ?? 0
   const apiUsage = saasData?.usage.apiCalls ?? 0
   const saasHealth = useMemo(() => saasData ? buildSaasHealthSummary(saasData) : null, [saasData])
   const saasHealthSource = saasData ? 'Live API' : 'Unavailable'
   const canProvisionCustomDomain = session.role === 'Owner' || session.role === 'Admin'
+  const canManageMembers = sessionHasPermission(session, 'security.manageUsers')
   const betaAccess = saasData?.billingMode === 'managed_beta'
 
   function syncSsoDraft(next: SsoConfigRecord) {
@@ -15129,6 +15131,14 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
         setSaasData(payload)
         syncSsoDraft(payload.sso)
+        if (canManageMembers) {
+          try {
+            const tenant = await requestApi<TenantConsoleResponse>('/security/tenant-console', { signal: controller.signal })
+            if (!controller.signal.aborted) setWorkspaceMembers(tenant.memberships)
+          } catch {
+            if (!controller.signal.aborted) setWorkspaceMembers(null)
+          }
+        }
         await loadCustomDomains(controller.signal)
         if (canProvisionCustomDomain) {
           try {
@@ -15151,12 +15161,20 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     void loadSaasConsole()
 
     return () => controller.abort()
-  }, [canProvisionCustomDomain, fallbackMessage, loadCustomDomains, syncedMessage])
+  }, [canManageMembers, canProvisionCustomDomain, fallbackMessage, loadCustomDomains, syncedMessage])
 
   async function refreshSaasConsole(status?: string) {
     const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
     setSaasData(consolePayload)
     syncSsoDraft(consolePayload.sso)
+    if (canManageMembers) {
+      try {
+        const tenant = await requestApi<TenantConsoleResponse>('/security/tenant-console')
+        setWorkspaceMembers(tenant.memberships)
+      } catch {
+        setWorkspaceMembers(null)
+      }
+    }
     await loadCustomDomains()
     if (canProvisionCustomDomain) {
       try {
@@ -15598,6 +15616,35 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         ) : null}
       </Panel>
 
+      {canManageMembers ? (
+        <Panel title="Workspace members" icon={UsersRound}>
+          <div className="member-access-summary">
+            <div>
+              <span>Membership</span>
+              <strong>{betaAccess ? 'Managed beta access' : saasData.plan.name}</strong>
+              <small>{betaAccess ? 'Commercial plans are hidden while beta access is managed directly.' : 'Workspace capacity is enforced server-side.'}</small>
+            </div>
+            <DataTag label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} tone="green" />
+          </div>
+          {workspaceMembers ? (
+            <div className="workspace-member-list" aria-label="Workspace members">
+              {workspaceMembers.map((member) => (
+                <div className="workspace-member-row" key={member.id}>
+                  <div>
+                    <strong>{member.name}</strong>
+                    <span>{member.email}</span>
+                  </div>
+                  <span className="workspace-member-role">{member.role}</span>
+                  <StatusBadge status={memberStatus(member.status)} label={member.status.toLowerCase()} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact-empty-state">Member records are unavailable. Refresh workspace access to try again.</div>
+          )}
+        </Panel>
+      ) : null}
+
       <Panel title={betaAccess ? 'Beta capacity' : 'Usage Enforcement'} icon={Gauge}>
         <div className="document-list compact-list">
           {saasData.limitChecks.map((check) => (
@@ -15760,13 +15807,13 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             {trustBusyAction === 'scim' ? 'Rotating' : 'Rotate SCIM token'}
           </button>
         </div>
-        <div className="record-grid compact-record-grid">
+        <div className="scim-role-mapping-list">
           {Object.entries(saasData.sso.roleMapping).map(([group, role]) => (
-            <div className="record-card" key={group}>
+            <div className="scim-role-mapping" key={group}>
               <div>
                 <span className="mono-small">{group}</span>
                 <strong>{role}</strong>
-                <span>{saasData.sso.scim.deprovisionAction.replace('_', ' ')}</span>
+                <span>On deprovision: {saasData.sso.scim.deprovisionAction.replace('_', ' ')}</span>
               </div>
             </div>
           ))}
