@@ -612,7 +612,7 @@ npm run deploy:worker -- --config wrangler.test.toml
 npm run deploy:pages:test
 ~~~
 
-Không deploy Worker khi remote D1 migration chưa thành công. <code>beta.labofscents.org</code> vẫn là external DNS/Pages custom-domain gate; Pages preview thành công không chứng minh hostname đã resolve hoặc có HTTPS certificate hợp lệ.
+Không deploy Worker khi remote D1 migration chưa thành công. <code>beta.labofscents.org</code> được cấu hình làm hostname health-check của Worker production. Nó vẫn là external DNS/Pages custom-domain gate: Pages preview thành công không chứng minh hostname đã resolve hoặc có HTTPS certificate hợp lệ. Integration Readiness sẽ báo <code>Blocked</code> cho đến khi Cloudflare Pages xác nhận custom domain và HTTPS thực sự hoạt động.
 
 ### Operational P1 workflow
 
