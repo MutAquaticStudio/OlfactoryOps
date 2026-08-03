@@ -1508,6 +1508,7 @@ export default {
       if (match.route.public) {
         await loadRequestBody()
       }
+      const isLoginRoute = match.route.pattern === '/auth/login'
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -1525,7 +1526,11 @@ export default {
         billingMode: billingModeFromEnv(env),
       })
       if (match.route.hydrateState !== false) {
-        await hydrateSnapshots(env.DB, service, env)
+        if (isLoginRoute) {
+          await hydrateLoginState(env.DB, service, typeof body.email === 'string' ? body.email : undefined)
+        } else {
+          await hydrateSnapshots(env.DB, service, env)
+        }
         // Trial transitions may be followed immediately by a request served
         // from another isolate. Read this narrow durable state directly so a
         // trial can never disappear during create -> release -> lab usage.
@@ -1597,9 +1602,11 @@ export default {
       let refreshSnapshotCache = false
 
       if ((match.route.mutates && match.route.persistState !== false) || service.hasSecurityStateChanges()) {
-        if (match.route.persistScope === 'userSettings') {
+        if (isLoginRoute) {
+          await persistLoginState(env.DB, service)
+        } else if (match.route.persistScope === 'userSettings') {
           await persistUserSettingsMutation(env.DB, service)
-          refreshSnapshotCache = true
+        refreshSnapshotCache = !isLoginRoute
         } else if (match.route.persistScope === 'mfaVerification' && previousMfaEnrollments) {
           try {
             await persistMfaVerificationMutation(env.DB, service, previousMfaEnrollments, credential.sessionId, result)
@@ -3027,6 +3034,81 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: 
     ;(serviceState as Record<SnapshotKey, ServiceState[SnapshotKey]>)[key] = structuredClone(cachedValue)
   }
   return
+}
+
+// Login needs identity data, not the entire operational graph. In particular,
+// avoid hydrating the shared Master Material library before password verification.
+async function hydrateLoginState(db: D1Database, service: NorthStarService, email: string | undefined) {
+  const normalizedEmail = email?.trim().toLowerCase() ?? ''
+  const serviceState = service as unknown as ServiceState
+  const [credential, membership, sessionRows, tenantAuditRows, platformAuditRows] = await Promise.all([
+    db.prepare('SELECT email, password_hash, password_set_at FROM auth_credentials WHERE lower(email) = ?1').bind(normalizedEmail).first<AuthCredentialRow>(),
+    db.prepare(
+      `SELECT id, user_id, email, name, organization_id, brand_ids_json, role, status,
+        mfa_enabled, last_active_at, invited_at
+       FROM tenant_memberships
+       WHERE lower(email) = ?1`,
+    ).bind(normalizedEmail).first<MembershipRow>(),
+    db.prepare(
+      `SELECT id, user_id, email, organization_id, brand_id, role, issued_at, last_seen_at,
+        idle_expires_at, expires_at, status, mfa_verified, ip_address, user_agent, device_id,
+        location, csrf_token, revoked_at, revoked_reason
+       FROM auth_sessions
+       WHERE lower(email) = ?1
+       ORDER BY issued_at DESC`,
+    ).bind(normalizedEmail).all<AuthSessionRow>(),
+    db.prepare(
+      `SELECT organization_id, id, at, actor, action, entity, request_id, outcome
+       FROM tenant_audit_events
+       ORDER BY at DESC, id DESC
+       LIMIT 500`,
+    ).all<AuditEventRow>(),
+    db.prepare(
+      `SELECT id, at, actor, action, entity, request_id, outcome
+       FROM platform_audit_events
+       ORDER BY at DESC, id DESC
+       LIMIT 100`,
+    ).all<AuditEventRow>(),
+  ])
+
+  serviceState.authCredentialRecords = credential
+    ? [{ email: credential.email.toLowerCase(), passwordHash: credential.password_hash, passwordSetAt: credential.password_set_at }]
+    : []
+  serviceState.membershipRecords = membership ? [membershipFromRow(membership)] : []
+  serviceState.sessions = (sessionRows.results ?? []).map(authSessionFromRow)
+  serviceState.auditEvents = [
+    ...(tenantAuditRows.results ?? []).map((row) => auditEventFromRow(row, 'tenant')),
+    ...(platformAuditRows.results ?? []).map((row) => auditEventFromRow(row, 'platform')),
+  ].sort((left, right) => right.at.localeCompare(left.at) || right.id.localeCompare(left.id))
+  serviceState.auditCounter = maxAuditCounter(serviceState.auditEvents)
+  serviceState.notificationRecords = []
+
+  if (!membership) {
+    return
+  }
+  const policyRows = await db.prepare(
+    `SELECT organization_id, role, 'organization' AS scope, mfa_required, permissions_json
+     FROM tenant_role_policies
+     WHERE organization_id = ?1
+     ORDER BY role ASC`,
+  ).bind(membership.organization_id).all<RolePolicyRow>()
+  serviceState.rolePolicyRecords = [
+    ...serviceState.rolePolicyRecords.filter((policy) => policy.scope === 'platform'),
+    ...(policyRows.results ?? []).map(rolePolicyFromRow),
+  ]
+}
+
+async function persistLoginState(db: D1Database, service: NorthStarService) {
+  const serviceState = service as unknown as ServiceState
+  const updatedAt = new Date().toISOString()
+  await Promise.all([
+    persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt),
+    persistAuthSessions(db, serviceState.sessions, updatedAt),
+    persistMemberships(db, serviceState.membershipRecords, updatedAt),
+    persistNotificationOutbox(db, serviceState.notificationRecords, updatedAt),
+  ])
+  await persistAuditEvents(db, serviceState.auditEvents, updatedAt, serviceState)
+  serviceState.auditCounter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents))
 }
 
 function requiresFreshTrialMemory(path: string, mutates: boolean) {
