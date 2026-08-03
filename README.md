@@ -22,6 +22,15 @@ va `0042_lluch_master_cas_variants.sql` phai duoc ap dung truoc khi deploy
 Worker. Migration 0042 giu cac supplier-grade Lluch rieng biet khi chung CAS,
 nhung van giu CAS duy nhat cho Global curated materials ngoai catalogue.
 
+### Hieu nang dang nhap
+
+Route dang nhap Worker dung identity fast-path: chi nap credential, membership,
+tenant role policy, session cua nguoi dang nhap va audit can thiet. Toan bo
+operational graph, bao gom thu vien 1.986 Global Master Materials, khong duoc
+hydrate truoc khi xac minh password. Session, membership activity, notification
+outbox va audit-chain van duoc persist trong cung mutation; fast-path khong bo
+qua tenant scope hay permission policy.
+
 ## Hoàn thiện Worker API
 
 Cloudflare Worker tại `worker/index.ts` là API production duy nhất dưới
