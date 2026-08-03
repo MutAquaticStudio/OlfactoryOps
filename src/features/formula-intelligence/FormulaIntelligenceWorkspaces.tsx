@@ -217,13 +217,15 @@ function emptyBriefReviewDraft(): BriefReviewDraft {
   }
 }
 
-function reviewDraftFromVersion(version?: BriefVersion, formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE'): BriefReviewDraft {
+function reviewDraftFromVersion(version?: BriefVersion, formulaTypeHint?: 'ACCORD' | 'FINE_FRAGRANCE', rawBrief?: string): BriefReviewDraft {
   const structured = version?.structuredBrief
   if (!structured) {
     return {
       ...emptyBriefReviewDraft(),
       formulaType: formulaTypeHint ?? '',
       productType: formulaTypeHint === 'FINE_FRAGRANCE' ? 'FINE_FRAGRANCE' : formulaTypeHint === 'ACCORD' ? 'OTHER' : '',
+      descriptors: rawBrief?.trim().slice(0, 120) ?? '',
+      emotionalIntent: rawBrief?.trim().slice(0, 600) ?? '',
     }
   }
   return {
@@ -683,7 +685,7 @@ function DesignProjectCard({
     : hasDirections
     ? undefined
     : !briefIsReviewed
-      ? 'Review and approve the product, concentration, IFRA, and material constraints before generating directions.'
+      ? 'Open Complete brief, then confirm the product, concentration, IFRA category, target markets, and creative direction.'
       : project.status !== 'BRIEFED'
         ? 'Direction generation is already in progress. Follow the research status above.'
         : materialCatalogState === 'loading'
@@ -711,7 +713,7 @@ function DesignProjectCard({
     <Stepper steps={projectProgress(project)} label={`${project.name} progress`} />
     <div className="design-project-card-actions">
       {isArchived ? (canArchive ? <button className="secondary-button small" type="button" disabled={busy} onClick={onRestore}><RotateCcw size={15} /> Restore brief</button> : null) : <>
-      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit approved brief' : capabilities.canApproveBrief ? 'Review & approve brief' : 'Review brief'}</button> : null}
+      {capabilities.canReviewBrief && project.status === 'BRIEFED' ? <button className={`${!briefIsReviewed ? 'primary-button' : 'secondary-button'} small`} type="button" disabled={busy} onClick={onReview}><SlidersHorizontal size={15} /> {briefIsReviewed ? 'Edit approved brief' : 'Complete brief'}</button> : null}
       {capabilities.canGenerateDirections ? <button
         className={hasDirections || !briefIsReviewed ? 'secondary-button small' : 'primary-button small'}
         data-testid={`design-generate-${project.id}`}
@@ -841,7 +843,7 @@ function StructuredBriefReviewDialog({
     onClose()
   }
   const footer = <div className="formula-intelligence-actions brief-review-footer-actions">
-    <button className="primary-button" type="button" disabled={busy || !canReview} onClick={onSave}><CheckCircle2 size={16} /> {readyToApprove ? canApprove ? 'Approve brief & unlock directions' : 'Mark brief reviewed' : 'Save review requirements'}</button>
+    <button className="primary-button" type="button" disabled={busy || !canReview} onClick={onSave}><CheckCircle2 size={16} /> {readyToApprove ? canApprove ? 'Approve brief & unlock directions' : 'Mark brief reviewed' : 'Save for later'}</button>
     <button className="secondary-button" type="button" disabled={busy} onClick={requestClose}>Cancel</button>
   </div>
 
@@ -931,7 +933,11 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   }, [projects, selectedDirectionId])
   const reviewProject = useMemo(() => projects.find((project) => project.id === reviewProjectId), [projects, reviewProjectId])
 
-  const refresh = useCallback(async () => setProjects(await requestApi<DesignProject[]>(`/formula-intelligence/design-projects${showArchived ? '?includeArchived=true' : ''}`)), [requestApi, showArchived])
+  const refresh = useCallback(async () => {
+    const nextProjects = await requestApi<DesignProject[]>(`/formula-intelligence/design-projects${showArchived ? '?includeArchived=true' : ''}`)
+    setProjects(nextProjects)
+    return nextProjects
+  }, [requestApi, showArchived])
   useEffect(() => { void refresh().catch((error) => setNotice(formulaIntelligenceError(error, 'Unable to load saved briefs. Please refresh and try again.'))) }, [refresh])
   useEffect(() => {
     let active = true
@@ -979,16 +985,17 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     try {
       const payload = await requestApi<{ project: DesignProject }>('/formula-intelligence/design-projects', { method: 'POST', headers: mutationHeaders(scope), body: JSON.stringify({ name, rawBrief: creativeBrief, formulaType }) })
       completeMutation(scope)
-      await refresh()
+      const nextProjects = await refresh()
       setReviewProjectId(payload.project.id)
-      setReviewDraft(reviewDraftFromVersion(undefined, formulaType))
-      setNotice('Raw brief saved. Complete the structured review before generating directions.')
+      const savedProject = nextProjects.find((project) => project.id === payload.project.id)
+      setReviewDraft(reviewDraftFromVersion(undefined, formulaType, savedProject?.briefVersion?.rawBrief ?? creativeBrief))
+      setNotice('Brief saved. Complete the review now to unlock direction generation.')
     } catch (error) { setNotice(formulaIntelligenceError(error, 'Unable to save this research brief.')) } finally { setBusy(false) }
   }
 
   function openBriefReview(project: DesignProject) {
     setReviewProjectId(project.id)
-    setReviewDraft(reviewDraftFromVersion(project.briefVersion, project.formulaTypeHint))
+    setReviewDraft(reviewDraftFromVersion(project.briefVersion, project.formulaTypeHint, project.briefVersion?.rawBrief ?? project.brief?.creativeBrief))
   }
 
   async function saveBriefReview() {

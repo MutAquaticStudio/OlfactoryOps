@@ -39,6 +39,15 @@ credential theo email moi, huy reset token dang mo, revoke tat ca active session
 va ghi audit event. Nguoi dung duoc dua ve Login sau khi cap nhat; email va mat
 khau khong bao gio duoc luu hoac xac minh o frontend.
 
+### Flow Formula Design Studio
+
+Tao brief luu creative request truoc, sau do mo ngay **Complete brief** de xac
+nhan formula type, concentration, IFRA category, thi truong va creative
+direction. Chi structured brief da duoc review moi mo khoa **Generate directions**.
+UI hien blocker cu the va prefill raw creative request trong review form; logic
+server-side van giu gate nay de khong tao direction tu brief thieu compliance
+context.
+
 ## Hoàn thiện Worker API
 
 Cloudflare Worker tại `worker/index.ts` là API production duy nhất dưới
