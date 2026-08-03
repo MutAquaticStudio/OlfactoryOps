@@ -704,6 +704,8 @@ pinning và refresh không reserve hoặc consume inventory. Fine formula legacy
 
 Design Studio dùng bố cục quyết định theo luồng **brief → directions → draft**. Brief và hướng sáng tạo được tách rõ; mỗi direction chỉ hiển thị phần tóm tắt để so sánh, còn pyramid, bằng chứng, thành phần riêng tư, chia sẻ và lưu draft nằm trong khu vực review khi người dùng chọn direction. Composer tạo brief nằm trong luồng trang thay vì sticky, nên cuộn trang không che directions hoặc detail ở phía dưới. Tiến độ nghiên cứu dùng motion nhẹ từ các component nguồn cục bộ lấy cảm hứng từ React Bits, tôn trọng reduced-motion và không làm thay đổi workflow, quyền hay dữ liệu công thức. Ở màn hình dưới 1380px, review chuyển xuống dưới danh sách directions trước khi các cột bị ép hẹp.
 
+Direction Review hiển thị **Olfactive note review** theo Opening, Heart và Drydown. Mỗi material chỉ dùng mô tả sensory đã được curate trong Material Intelligence hoặc catalogue evidence; trường thiếu dữ liệu được nêu rõ, không sinh mô tả suy đoán.
+
 Dialog **Review & approve brief** là review sheet có header/footer cố định, brief gốc, trạng thái gate rõ ràng, product setup, creative direction và material constraints thành các section riêng. Trên màn hình hẹp, các trường chuyển thành một cột và action chính luôn nằm ở footer để không bị lẫn trong danh sách material.
 
 Tài liệu kiến trúc, protocol event, mô hình bảo mật công cụ và báo cáo checkpoint nằm tại [docs/agent-platform](docs/agent-platform/). Khi triển khai checkpoint Agent Platform, chạy tối thiểu:

@@ -500,6 +500,27 @@ function ProposalLines({ proposal, materialNames }: { proposal: AgentFormulaProp
   return <div className="formula-intelligence-lines">{proposal.ingredients.map((line) => <div key={line.materialId}><span>{materialNames.get(line.materialId) ?? 'Restricted material'}</span><strong>{line.percentage.toFixed(2)}%</strong></div>)}</div>
 }
 
+function materialScentDescription(material?: Material) {
+  if (!material) return 'This material is no longer available in the current workspace view.'
+  if (material.olfactiveProfile?.description) return material.olfactiveProfile.description
+  if (material.catalogueEvidence?.declaredOdour.length) return `Catalogue odour: ${material.catalogueEvidence.declaredOdour.join(', ')}.`
+  if (material.odor.length) return `Curated descriptors: ${material.odor.join(', ')}.`
+  return 'No sensory description is available in the reviewed material record.'
+}
+
+function DirectionNoteReview({ proposal, materials }: { proposal: AgentFormulaProposal; materials: Map<string, Material> }) {
+  const stages: Array<{ tier: Material['tier']; title: string; detail: string }> = [
+    { tier: 'Top', title: 'Opening', detail: 'First impression and lift.' },
+    { tier: 'Heart', title: 'Heart', detail: 'The central character of the accord.' },
+    { tier: 'Base', title: 'Drydown', detail: 'Lasting body and trail.' },
+  ]
+  const notes = proposal.ingredients.map((line) => ({ line, material: materials.get(line.materialId) }))
+  return <section className="formula-intelligence-evidence direction-note-review"><span>Olfactive note review</span><p className="formula-intelligence-copy">Review how each selected material contributes across the fragrance development.</p><div className="direction-note-review-grid">{stages.map((stage) => {
+    const stageNotes = notes.filter(({ material }) => material?.tier === stage.tier)
+    return <article key={stage.tier}><header><div><strong>{stage.title}</strong><small>{stage.detail}</small></div><span>{stageNotes.length} material{stageNotes.length === 1 ? '' : 's'}</span></header>{stageNotes.length ? <div className="direction-note-list">{stageNotes.map(({ line, material }) => <div key={line.materialId} className="direction-note-item"><div><strong>{material?.name ?? 'Restricted material'}</strong><p>{materialScentDescription(material)}</p>{material?.olfactiveProfile?.descriptors.length ? <small>{material.olfactiveProfile.descriptors.slice(0, 5).join(' · ')}</small> : null}</div><span>{line.percentage.toFixed(2)}%</span></div>)}</div> : <p className="direction-note-empty">No selected material is assigned to this stage.</p>}</article>
+  })}</div></section>
+}
+
 function ProposalComparison({ baseline, proposal, materialNames }: { baseline: Formula['lines']; proposal: AgentFormulaProposal; materialNames: Map<string, string> }) {
   const baselineTotal = baseline.reduce((sum, line) => sum + line.grams, 0)
   const baselineByMaterial = new Map(baseline.filter((line) => line.materialId).map((line) => [line.materialId!, (line.grams / Math.max(baselineTotal, 0.0001)) * 100]))
@@ -582,6 +603,7 @@ function DirectionDetail({
   project,
   capabilities,
   materialNames,
+  materials,
   feedback,
   feedbackDraft,
   evidence,
@@ -598,6 +620,7 @@ function DirectionDetail({
   project: DesignProject
   capabilities: FormulaIntelligenceCapabilities
   materialNames: Map<string, string>
+  materials: Map<string, Material>
   feedback: Feedback[]
   feedbackDraft: { comment: string; rating: number }
   evidence?: EvidenceArtifact
@@ -625,6 +648,7 @@ function DirectionDetail({
     {direction.warnings.length ? <div className="formula-intelligence-action-note"><strong>Review before moving forward</strong><ul>{direction.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div> : null}
     {capabilities.canViewSensitiveComposition && direction.proposal ? <>
       <section className="formula-intelligence-evidence formula-intelligence-material-basis"><span>Material selection basis</span>{legacyFourMaterialPalette ? <p className="formula-intelligence-copy">This immutable result was created under the earlier four-material selection policy. A newly reviewed brief uses the diversified palette selector.</p> : <p className="formula-intelligence-copy">This palette was selected from {materialCatalog.formulaReadyCount.toLocaleString()} reviewed, formula-ready workspace materials using brief relevance, note and family diversity, and eligible availability.</p>}<small>{materialCatalog.sourceReferenceCount.toLocaleString()} supplier catalogue references remain searchable in Materials but are excluded from ratios until their technical and compliance review is approved.</small><strong>100% concentrate composition / evaluated at {direction.proposal.finalProductConcentrationPercent.toFixed(2)}% in the final product</strong></section>
+      <DirectionNoteReview proposal={direction.proposal} materials={materials} />
       <section className="formula-intelligence-evidence"><span>Suggested concentrate composition</span><ProposalLines proposal={direction.proposal} materialNames={materialNames} /></section>
     </> : null}
     {capabilities.canViewMaterialEvidence ? <EvidenceCitations evidence={evidence} /> : null}
@@ -923,6 +947,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
   const [activeRunId, setActiveRunId] = usePersistedRunId('olfactoryops.formula-intelligence.design-run')
   const { detail: activeRun, connectionState, loadRun } = useAgentRunMonitor(apiBaseUrl, requestApi, activeRunId)
   const materialNames = useMemo(() => new Map([...materialRecords, ...designMaterials].map((material) => [material.id, material.name])), [designMaterials, materialRecords])
+  const materialDetails = useMemo(() => new Map([...materialRecords, ...designMaterials].map((material) => [material.id, material])), [designMaterials, materialRecords])
   const activeEvidence = useMemo(() => evidenceFromRun(activeRun), [activeRun])
   const selectedDirectionContext = useMemo(() => {
     for (const project of projects) {
@@ -1165,6 +1190,7 @@ export function FormulaDesignStudioWorkspace({ apiBaseUrl, requestApi, materialR
     project={selectedDirectionContext.project}
     capabilities={capabilities}
     materialNames={materialNames}
+    materials={materialDetails}
     feedback={selectedDirectionContext.project.feedback.filter((item) => item.directionId === selectedDirectionContext.direction.directionId)}
     feedbackDraft={feedbackDrafts[selectedDirectionContext.direction.directionId] ?? { comment: '', rating: 0 }}
     evidence={activeRun?.run.id === selectedDirectionContext.direction.runId ? activeEvidence : undefined}
