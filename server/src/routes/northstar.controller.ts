@@ -922,6 +922,21 @@ export class NorthStarController {
     return this.northStar.signup(body)
   }
 
+  @Get('auth/email-verification/status')
+  emailVerificationStatus() {
+    return this.northStar.emailVerificationStatus()
+  }
+
+  @Post('auth/email-verification/resend')
+  beginEmailVerification() {
+    return this.northStar.beginEmailVerification()
+  }
+
+  @Post('auth/email-verification/confirm')
+  completeEmailVerification(@Body() body: { token?: string }) {
+    return this.northStar.completeEmailVerification(body.token)
+  }
+
   @Get('auth/mfa/status')
   mfaStatus() {
     return this.northStar.mfaStatus()

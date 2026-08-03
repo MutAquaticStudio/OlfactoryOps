@@ -421,6 +421,25 @@ export type PasswordResetRecord = {
   usedAt?: string
 }
 
+export type EmailVerificationRecord = {
+  id: string
+  organizationId: string
+  userId: string
+  email: string
+  tokenHash: string
+  createdAt: string
+  expiresAt: string
+  verifiedAt?: string
+  revokedAt?: string
+}
+
+type EmailVerificationDelivery = {
+  recipientEmail: string
+  token: string
+  organizationId: string
+  userId: string
+}
+
 export type MfaEnrollmentRecord = {
   userId: string
   organizationId: string
@@ -925,6 +944,8 @@ export class NorthStarService {
   private membershipRecords: MembershipRecord[] = structuredClone(memberships)
   private authCredentialRecords: AuthCredentialRecord[] = []
   private passwordResetRecords: PasswordResetRecord[] = []
+  private emailVerificationRecords: EmailVerificationRecord[] = []
+  private pendingEmailVerificationDelivery: EmailVerificationDelivery | null = null
   private mfaEnrollmentRecords: MfaEnrollmentRecord[] = []
   private readonly mfaEncryptionKey?: Buffer
   private sessions: AuthSession[] = structuredClone(authSessions)
@@ -3797,6 +3818,7 @@ export class NorthStarService {
       { email, passwordHash: this.passwordHashForEmail(email, password), passwordSetAt: createdAt },
       ...this.authCredentialRecords.filter((credential) => credential.email !== email),
     ]
+    const emailVerification = this.issueEmailVerification(membership, createdAt)
     this.ensureTenantScopedDefaults(organizationId)
     this.upsertUserSettings(this.defaultUserSettingsForMembership(membership, createdAt))
     const subscription = this.createSubscriptionRecord(organization.id, 'PLAN-APPRENTICE', createdAt)
@@ -3817,13 +3839,14 @@ export class NorthStarService {
         csrfToken: loginResult.csrfToken,
         permissions: loginResult.permissions,
         audit,
+        emailVerification: this.publicEmailVerification(emailVerification),
         systemHostname,
         workspaceUrl: workspaceUrlForHostname(systemHostname),
         customDomain: {
           status: 'NOT_REQUESTED',
           nextAction: 'Your system workspace address is active immediately. An Owner or Admin can connect a customer-owned hostname later; Cloudflare activation requires DNS validation and active SSL.',
         },
-        invariant: 'signup provisions a password-protected tenant, owner session, and deterministic system workspace address before app access; customer-owned domains remain a separate Cloudflare authorization flow',
+        invariant: 'signup provisions a password-protected tenant, owner session, and deterministic system workspace address before app access; email verification uses a single-use 24-hour token and customer-owned domains remain a separate Cloudflare authorization flow',
       },
     }
   }
@@ -3993,8 +4016,77 @@ export class NorthStarService {
         securityPolicy: this.publicSecurityPolicyForSession(session),
         userSettings: this.settingsForSession(session),
         workspace: this.workspaceAccessForOrganization(session.organizationId),
+        emailVerification: this.emailVerificationForSession(session),
       },
     }
+  }
+
+  emailVerificationStatus() {
+    return { data: this.emailVerificationForSession(this.currentSession()) }
+  }
+
+  beginEmailVerification() {
+    const session = this.currentSession()
+    const membership = this.membershipRecords.find(
+      (item) => item.userId === session.userId && item.organizationId === session.organizationId && item.status === 'ACTIVE',
+    )
+    if (!membership) {
+      throw new ForbiddenException('Active workspace membership is required to verify this email')
+    }
+    const record = this.issueEmailVerification(membership)
+    const audit = this.recordAudit('auth.emailVerification.request', session.userId, session.userId, 'allowed')
+    return {
+      data: {
+        accepted: true,
+        emailVerification: this.publicEmailVerification(record),
+        audit,
+      },
+    }
+  }
+
+  completeEmailVerification(token?: string) {
+    const normalizedToken = typeof token === 'string' ? token.trim() : ''
+    const tokenHash = this.hashSecret(`email-verification:${normalizedToken}`)
+    const record = this.emailVerificationRecords.find((item) => item.tokenHash === tokenHash)
+    if (!normalizedToken || !record || record.revokedAt) {
+      throw new ForbiddenException('Email verification link is invalid or expired')
+    }
+    if (record.verifiedAt) {
+      return {
+        data: {
+          accepted: true,
+          alreadyVerified: true,
+          emailVerification: this.publicEmailVerification(record),
+          invariant: 'email verification is idempotent for the original one-time link',
+        },
+      }
+    }
+    const now = new Date().toISOString()
+    if (record.expiresAt <= now) {
+      this.emailVerificationRecords = this.emailVerificationRecords.map((item) =>
+        item.id === record.id ? { ...item, revokedAt: now } : item,
+      )
+      this.recordAudit('auth.emailVerification.expired', record.userId, 'api:auth', 'blocked', { organizationId: record.organizationId })
+      throw new ForbiddenException('Email verification link is invalid or expired')
+    }
+    const verified = { ...record, verifiedAt: now }
+    this.emailVerificationRecords = this.emailVerificationRecords.map((item) => item.id === record.id ? verified : item)
+    const audit = this.recordAudit('auth.emailVerification.complete', record.userId, 'api:auth', 'allowed', { organizationId: record.organizationId })
+    return {
+      data: {
+        accepted: true,
+        alreadyVerified: false,
+        emailVerification: this.publicEmailVerification(verified),
+        audit,
+        invariant: 'email verification tokens are stored as hashes, expire after 24 hours, and can confirm the same address only once',
+      },
+    }
+  }
+
+  takeEmailVerificationDelivery() {
+    const delivery = this.pendingEmailVerificationDelivery
+    this.pendingEmailVerificationDelivery = null
+    return delivery
   }
 
   userSettings() {
@@ -4101,6 +4193,11 @@ export class NorthStarService {
     this.passwordResetRecords = this.passwordResetRecords.map((record) =>
       record.email === session.email.toLowerCase() && !record.usedAt ? { ...record, usedAt: updatedAt } : record,
     )
+    this.emailVerificationRecords = this.emailVerificationRecords.map((record) =>
+      record.userId === session.userId && record.organizationId === session.organizationId && !record.verifiedAt && !record.revokedAt
+        ? { ...record, revokedAt: updatedAt }
+        : record,
+    )
     this.sessions = this.sessions.map((candidate) =>
       candidate.email.toLowerCase() === session.email.toLowerCase() && candidate.status === 'ACTIVE'
         ? { ...candidate, status: 'REVOKED', revokedAt: updatedAt, revokedReason: 'account credentials updated' }
@@ -4121,7 +4218,7 @@ export class NorthStarService {
         email: requestedEmail,
         requiresReauthentication: true,
         audit,
-        invariant: 'credential changes verify the current password, invalidate password reset tokens, and revoke all active sessions',
+        invariant: 'credential changes verify the current password, revoke outstanding email verification and password reset tokens, and revoke all active sessions',
       },
     }
   }
@@ -4386,6 +4483,79 @@ export class NorthStarService {
         audit,
         invariant: 'password reset token is single-use, expires after 30 minutes, and revokes active sessions for the account',
       },
+    }
+  }
+
+  private issueEmailVerification(membership: MembershipRecord, issuedAt = new Date().toISOString()) {
+    const token = randomBytes(32).toString('base64url')
+    const record: EmailVerificationRecord = {
+      id: `EMAIL-${this.shortId()}`,
+      organizationId: membership.organizationId,
+      userId: membership.userId,
+      email: membership.email.trim().toLowerCase(),
+      tokenHash: this.hashSecret(`email-verification:${token}`),
+      createdAt: issuedAt,
+      expiresAt: new Date(new Date(issuedAt).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    }
+    this.emailVerificationRecords = [
+      record,
+      ...this.emailVerificationRecords.map((item) =>
+        item.userId === record.userId && item.organizationId === record.organizationId && !item.verifiedAt && !item.revokedAt
+          ? { ...item, revokedAt: issuedAt }
+          : item,
+      ),
+    ].slice(0, 1_000)
+    this.pendingEmailVerificationDelivery = {
+      recipientEmail: record.email,
+      token,
+      organizationId: record.organizationId,
+      userId: record.userId,
+    }
+    return record
+  }
+
+  private emailVerificationForSession(session: AuthSession) {
+    const current = this.emailVerificationRecords.find(
+      (item) => item.userId === session.userId && item.organizationId === session.organizationId && item.email === session.email.toLowerCase() && !item.revokedAt,
+    )
+    if (!current) {
+      return {
+        status: 'UNVERIFIED' as const,
+        email: session.email,
+        canResend: true,
+      }
+    }
+    if (current.verifiedAt) {
+      return {
+        status: 'VERIFIED' as const,
+        email: current.email,
+        verifiedAt: current.verifiedAt,
+        canResend: false,
+      }
+    }
+    if (current.expiresAt <= new Date().toISOString()) {
+      return {
+        status: 'EXPIRED' as const,
+        email: current.email,
+        expiresAt: current.expiresAt,
+        canResend: true,
+      }
+    }
+    return {
+      status: 'PENDING' as const,
+      email: current.email,
+      expiresAt: current.expiresAt,
+      canResend: true,
+    }
+  }
+
+  private publicEmailVerification(record: EmailVerificationRecord) {
+    return {
+      status: record.verifiedAt ? 'VERIFIED' as const : record.expiresAt <= new Date().toISOString() ? 'EXPIRED' as const : 'PENDING' as const,
+      email: record.email,
+      expiresAt: record.expiresAt,
+      verifiedAt: record.verifiedAt,
+      canResend: !record.verifiedAt,
     }
   }
 

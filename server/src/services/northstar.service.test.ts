@@ -161,6 +161,36 @@ describe('NorthStarService', () => {
     expect(() => service.completePasswordReset({ token: requested.delivery?.token, password: 'AnotherPassword2026!' })).toThrow(ForbiddenException)
   })
 
+  it('creates a hashed, single-use email verification link without exposing it in signup data', () => {
+    const service = createAuthenticatedService()
+    const signup = service.signup({
+      organizationName: 'Verified Atelier',
+      workspaceSlug: 'verified-atelier',
+      email: 'owner@verified-atelier.test',
+      name: 'Verified Owner',
+      password: 'VerifiedAtelier2026!',
+    }).data
+    const delivery = service.takeEmailVerificationDelivery()
+
+    expect(signup.emailVerification).toMatchObject({ status: 'PENDING', email: 'owner@verified-atelier.test' })
+    expect(JSON.stringify(signup)).not.toContain(delivery?.token ?? '')
+    expect(delivery?.token).toHaveLength(43)
+    const records = (service as unknown as { emailVerificationRecords: Array<{ tokenHash: string }> }).emailVerificationRecords
+    expect(records[0]?.tokenHash).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(records[0]?.tokenHash).not.toBe(delivery?.token)
+
+    const completed = service.completeEmailVerification(delivery?.token).data
+    expect(completed).toMatchObject({ accepted: true, alreadyVerified: false, emailVerification: { status: 'VERIFIED' } })
+    expect(service.emailVerificationStatus().data).toMatchObject({ status: 'VERIFIED', canResend: false })
+    expect(service.completeEmailVerification(delivery?.token).data).toMatchObject({ accepted: true, alreadyVerified: true })
+
+    const replacement = service.beginEmailVerification().data
+    const replacementDelivery = service.takeEmailVerificationDelivery()
+    expect(replacement.emailVerification.status).toBe('PENDING')
+    expect(replacementDelivery?.token).toHaveLength(43)
+    expect(replacementDelivery?.token).not.toBe(delivery?.token)
+  })
+
   it('updates account credentials only after current-password verification and revokes every active session', () => {
     const service = createAuthenticatedService()
     const currentSession = service.me().data.session

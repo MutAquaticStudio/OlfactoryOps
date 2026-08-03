@@ -1,4 +1,4 @@
-import { NorthStarService, type MfaEnrollmentRecord, type PasswordResetRecord } from '../server/src/services/northstar.service.js'
+import { NorthStarService, type EmailVerificationRecord, type MfaEnrollmentRecord, type PasswordResetRecord } from '../server/src/services/northstar.service.js'
 import {
   cloudflareValidation as providerCloudflareValidation,
   cloudflareVerificationErrors as providerCloudflareVerificationErrors,
@@ -205,7 +205,7 @@ export type AuthCredential = {
 }
 
 type RateLimitPolicy = {
-  key: 'auth-login' | 'auth-signup' | 'auth-reset' | 'authenticated-mutation' | 'sensitive-mutation' | 'public-trial-feedback'
+  key: 'auth-login' | 'auth-signup' | 'auth-reset' | 'auth-email-verification' | 'authenticated-mutation' | 'sensitive-mutation' | 'public-trial-feedback'
   scope: 'client-email' | 'client' | 'session'
   limit: number
   windowSeconds: number
@@ -251,6 +251,7 @@ type SnapshotKey =
   | 'membershipRecords'
   | 'authCredentialRecords'
   | 'passwordResetRecords'
+  | 'emailVerificationRecords'
   | 'mfaEnrollmentRecords'
   | 'sessions'
   | 'userSettingsRecords'
@@ -305,6 +306,7 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   membershipRecords: MembershipRecord[]
   authCredentialRecords: Array<Record<string, unknown>>
   passwordResetRecords: PasswordResetRecord[]
+  emailVerificationRecords: EmailVerificationRecord[]
   mfaEnrollmentRecords: MfaEnrollmentRecord[]
   rolePolicyRecords: RolePolicy[]
   materialRecords: Material[]
@@ -455,6 +457,7 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'notificationRecords',
   'authCredentialRecords',
   'passwordResetRecords',
+  'emailVerificationRecords',
   'importJobRecords',
   'legalAcceptanceRecords',
   'privacyRequestRecords',
@@ -498,6 +501,7 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'membershipRecords',
   'authCredentialRecords',
   'passwordResetRecords',
+  'emailVerificationRecords',
   'mfaEnrollmentRecords',
   'sessions',
   'userSettingsRecords',
@@ -752,6 +756,9 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/auth/password-reset/request', public: true, mutates: true, writeGate: false, rateLimit: { key: 'auth-reset', scope: 'client-email', limit: 5, windowSeconds: 60 * 60, message: 'Password reset rate limit exceeded' }, handler: ({ service, body, env, request }) => startPasswordReset(service, body, env, request) },
   { method: 'POST', pattern: '/auth/password-reset/confirm', public: true, mutates: true, writeGate: false, rateLimit: { key: 'auth-reset', scope: 'client', limit: 8, windowSeconds: 60 * 60, message: 'Password reset rate limit exceeded' }, handler: ({ service, body }) => service.completePasswordReset({ token: typeof body.token === 'string' ? body.token : undefined, password: typeof body.password === 'string' ? body.password : undefined }) },
   { method: 'POST', pattern: '/auth/signup', public: true, sessionCookie: 'set', mutates: true, writeGate: false, rateLimit: { key: 'auth-signup', scope: 'client', limit: 4, windowSeconds: 60 * 60, message: 'Signup rate limit exceeded' }, handler: ({ service, body }) => service.signup(body) },
+  { method: 'GET', pattern: '/auth/email-verification/status', writeGate: false, handler: ({ service }) => service.emailVerificationStatus() },
+  { method: 'POST', pattern: '/auth/email-verification/resend', mutates: true, writeGate: false, rateLimit: { key: 'auth-email-verification', scope: 'session', limit: 3, windowSeconds: 60 * 60, message: 'Email verification resend rate limit exceeded' }, handler: ({ service }) => service.beginEmailVerification() },
+  { method: 'POST', pattern: '/auth/email-verification/confirm', public: true, mutates: true, writeGate: false, rateLimit: { key: 'auth-email-verification', scope: 'client', limit: 8, windowSeconds: 60 * 60, message: 'Email verification rate limit exceeded' }, handler: ({ service, body }) => service.completeEmailVerification(typeof body.token === 'string' ? body.token : undefined) },
   { method: 'GET', pattern: '/auth/mfa/status', writeGate: false, handler: ({ service }) => service.mfaStatus() },
   { method: 'POST', pattern: '/auth/mfa/enroll', mutates: true, writeGate: false, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.beginMfaEnrollment(body) },
   { method: 'POST', pattern: '/auth/mfa/verify', mutates: true, writeGate: false, persistScope: 'mfaVerification', rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.verifyMfa(body) },
@@ -1518,6 +1525,7 @@ export default {
       }
       const isLoginRoute = match.route.pattern === '/auth/login'
       const isSignupRoute = match.route.pattern === '/auth/signup'
+      const isEmailVerificationDeliveryRoute = isSignupRoute || match.route.pattern === '/auth/email-verification/resend'
       if (match.route.hydrateState !== false) {
         await assertPersistenceReady(env.DB)
       }
@@ -1646,6 +1654,14 @@ export default {
           refreshSnapshotCache = true
         }
         mutationPersisted = true
+      }
+      if (isEmailVerificationDeliveryRoute && !(result instanceof Response)) {
+        const delivery = await deliverEmailVerification(service, env, request)
+        const data = isRecord(result) && isRecord(result.data) ? result.data : undefined
+        if (data) {
+          const verification = isRecord(data.emailVerification) ? data.emailVerification : {}
+          data.emailVerification = { ...verification, delivery: delivery.status }
+        }
       }
       if (idempotencyClaim && !(result instanceof Response)) {
         await completeOperationIdempotency(env.DB, idempotencyClaim, result)
@@ -2047,6 +2063,23 @@ async function startPasswordReset(
     service.recordNotificationEmailAttempt(prepared.delivery.notificationId ?? '', result)
   }
   return { data: prepared.data }
+}
+
+async function deliverEmailVerification(service: NorthStarService, env: Env, request: Request) {
+  const delivery = service.takeEmailVerificationDelivery()
+  if (!delivery) return { status: 'not_requested' as const }
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return { status: 'not_configured' as const }
+
+  const verificationUrl = new URL('/login', billingReturnOrigin(request, env))
+  verificationUrl.searchParams.set('verify', delivery.token)
+  const result = await sendResendEmail(fetch, {
+    apiKey: env.RESEND_API_KEY,
+    from: env.EMAIL_FROM,
+    to: delivery.recipientEmail,
+    subject: 'Verify your OlfactoryOps email address',
+    text: `Verify the email address for your OlfactoryOps workspace. This link expires in 24 hours and can be used once:\n\n${verificationUrl.toString()}`,
+  })
+  return { status: result.delivered ? 'sent' as const : 'failed' as const }
 }
 
 async function startStripePortal(service: NorthStarService, env: Env, request: Request) {
@@ -3487,6 +3520,18 @@ type PasswordResetRow = {
   used_at: string | null
 }
 
+type EmailVerificationRow = {
+  id: string
+  organization_id: string
+  user_id: string
+  email: string
+  token_hash: string
+  created_at: string
+  expires_at: string
+  verified_at: string | null
+  revoked_at: string | null
+}
+
 type JsonStateRow = {
   id: string
   organization_id: string
@@ -4217,11 +4262,16 @@ async function persistSignupWorkspaceBoundary(db: D1Database, service: NorthStar
   const credential = owner
     ? serviceState.authCredentialRecords.find((candidate) => String(candidate.email ?? '').toLowerCase() === owner.email.toLowerCase())
     : undefined
+  const emailVerification = owner
+    ? serviceState.emailVerificationRecords.find((candidate) =>
+      candidate.organizationId === organization.id && candidate.userId === owner.userId && candidate.email === owner.email.toLowerCase() && !candidate.revokedAt,
+    )
+    : undefined
   const settings = serviceState.tenantSettingsRecords.find((candidate) => candidate.organizationId === organization.id)
   const policies = serviceState.rolePolicyRecords.filter(
     (candidate) => candidate.scope === 'organization' && candidate.organizationId === organization.id,
   )
-  if (!brand || !owner || !credential || !settings || policies.length === 0) {
+  if (!brand || !owner || !credential || !emailVerification || !settings || policies.length === 0) {
     throw new UnprocessableEntityException('Signup workspace core records could not be allocated')
   }
   try {
@@ -4284,6 +4334,20 @@ async function persistSignupWorkspaceBoundary(db: D1Database, service: NorthStar
         requiredStringRecordField(credential, 'email').toLowerCase(),
         requiredStringRecordField(credential, 'passwordHash'),
         requiredStringRecordField(credential, 'passwordSetAt'),
+        organization.createdAt,
+      ),
+      db.prepare(
+        `INSERT INTO email_verification_records (
+          id, organization_id, user_id, email, token_hash, created_at, expires_at, verified_at, revoked_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, ?8)`,
+      ).bind(
+        emailVerification.id,
+        emailVerification.organizationId,
+        emailVerification.userId,
+        emailVerification.email,
+        emailVerification.tokenHash,
+        emailVerification.createdAt,
+        emailVerification.expiresAt,
         organization.createdAt,
       ),
       db.prepare(
@@ -4412,9 +4476,10 @@ function requiredStringRecordField(record: Record<string, unknown>, field: strin
 }
 
 async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: ServiceState) {
-  const [credentialRows, resetRows, importRows, legalRows, privacyRows, domainRows, inventoryApprovalRows, operationApprovalRows] = await Promise.all([
+  const [credentialRows, resetRows, verificationRows, importRows, legalRows, privacyRows, domainRows, inventoryApprovalRows, operationApprovalRows] = await Promise.all([
     db.prepare('SELECT email, password_hash, password_set_at FROM auth_credentials ORDER BY email ASC').all<AuthCredentialRow>(),
     db.prepare('SELECT id, email, token_hash, created_at, expires_at, used_at FROM password_reset_records ORDER BY created_at DESC').all<PasswordResetRow>(),
+    db.prepare('SELECT id, organization_id, user_id, email, token_hash, created_at, expires_at, verified_at, revoked_at FROM email_verification_records ORDER BY created_at DESC').all<EmailVerificationRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM import_jobs ORDER BY created_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM legal_acceptance_records ORDER BY accepted_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM privacy_requests ORDER BY created_at DESC').all<JsonStateRow>(),
@@ -4444,6 +4509,21 @@ async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: Se
   } else if (serviceState.passwordResetRecords.length > 0) {
     await persistPasswordResetRecords(db, serviceState.passwordResetRecords, updatedAt)
   }
+  if ((verificationRows.results ?? []).length > 0) {
+    serviceState.emailVerificationRecords = (verificationRows.results ?? []).map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      userId: row.user_id,
+      email: row.email,
+      tokenHash: row.token_hash,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      verifiedAt: row.verified_at ?? undefined,
+      revokedAt: row.revoked_at ?? undefined,
+    }))
+  } else if (serviceState.emailVerificationRecords.length > 0) {
+    await persistEmailVerificationRecords(db, serviceState.emailVerificationRecords, updatedAt)
+  }
   const hydratedImports = scopedJsonRecords(importRows.results ?? [])
   if (hydratedImports.length > 0) serviceState.importJobRecords = hydratedImports as DataImportJobRecord[]
   else if (serviceState.importJobRecords.length > 0) await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
@@ -4467,6 +4547,7 @@ async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: Se
 async function persistEnterpriseGovernanceState(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
   await persistPasswordResetRecords(db, serviceState.passwordResetRecords, updatedAt)
+  await persistEmailVerificationRecords(db, serviceState.emailVerificationRecords, updatedAt)
   await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
   await persistLegalAcceptances(db, serviceState.legalAcceptanceRecords)
   await persistPrivacyRequests(db, serviceState.privacyRequestRecords, updatedAt)
@@ -4515,6 +4596,35 @@ async function persistPasswordResetRecords(db: D1Database, resets: PasswordReset
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE SET used_at = excluded.used_at, updated_at = excluded.updated_at`,
       ).bind(reset.id, reset.email, reset.tokenHash, reset.createdAt, reset.expiresAt, reset.usedAt ?? null, updatedAt),
+    ),
+  )
+}
+
+async function persistEmailVerificationRecords(db: D1Database, records: EmailVerificationRecord[], updatedAt: string) {
+  if (records.length === 0) return
+  await runStatementBatches(
+    db,
+    records.map((record) =>
+      db.prepare(
+        `INSERT INTO email_verification_records (
+          id, organization_id, user_id, email, token_hash, created_at, expires_at, verified_at, revoked_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        ON CONFLICT(id) DO UPDATE SET
+          verified_at = excluded.verified_at,
+          revoked_at = excluded.revoked_at,
+          updated_at = excluded.updated_at`,
+      ).bind(
+        record.id,
+        record.organizationId,
+        record.userId,
+        record.email,
+        record.tokenHash,
+        record.createdAt,
+        record.expiresAt,
+        record.verifiedAt ?? null,
+        record.revokedAt ?? null,
+        updatedAt,
+      ),
     ),
   )
 }

@@ -39,6 +39,38 @@ credential theo email moi, huy reset token dang mo, revoke tat ca active session
 va ghi audit event. Nguoi dung duoc dua ve Login sau khi cap nhat; email va mat
 khau khong bao gio duoc luu hoac xac minh o frontend.
 
+### Xac minh email
+
+Signup tao Workspace, Owner va system hostname nhu truoc, dong thoi tao mot
+email-verification record tenant-scoped. Token co 32 byte ngau nhien, chi luu
+hash trong D1, het han sau 24 gio va khong bao gio di vao audit event, outbox,
+frontend response hay Git. Link co dang `https://<web-host>/login?verify=...`;
+nguoi dung nhan **Verify email** de hoan tat. Lap lai cung link tra ket qua an
+toan nhu nhau, con link cu se bi revoke khi resend hoac khi email tai khoan doi.
+Migration `0044_email_verification.sql` phai duoc ap dung truoc khi deploy Worker.
+
+API:
+
+- `GET /api/v1/auth/email-verification/status`: trang thai cua session hien tai.
+- `POST /api/v1/auth/email-verification/resend`: cap token moi cho dung member
+  dang dang nhap, co CSRF, idempotency va rate limit 3 lan/gio/session.
+- `POST /api/v1/auth/email-verification/confirm`: public token confirmation,
+  co rate limit 8 lan/gio/client va khong can session.
+
+Worker chi gui mail sau khi D1 persist thanh cong. Can dat hai Worker secret
+truoc khi delivery duoc bat:
+
+~~~powershell
+npx.cmd wrangler secret put RESEND_API_KEY
+npx.cmd wrangler secret put EMAIL_FROM
+~~~
+
+`EMAIL_FROM` phai la sender da duoc xac minh trong Resend, vi du
+`OlfactoryOps <notifications@labofscents.org>`. Neu mot trong hai secret chua
+co, API/UI tra `not_configured`; signup van hoat dong va khong gia lap rang
+email da duoc gui. Xac minh email hien la security signal va recovery control;
+no chua chan login cua member cu trong khi rollout beta dang dien ra.
+
 ### Flow Formula Design Studio
 
 Tao brief luu creative request truoc, sau do mo ngay **Complete brief** de xac

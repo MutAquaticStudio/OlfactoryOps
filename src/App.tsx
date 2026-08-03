@@ -497,11 +497,20 @@ type SignupResponse = {
   audit: AuditEvent
   systemHostname: string
   workspaceUrl: string
+  emailVerification: EmailVerificationStatus & { delivery?: 'sent' | 'failed' | 'not_configured' | 'not_requested' }
   customDomain: {
     status: 'NOT_REQUESTED'
     nextAction: string
   }
   invariant: string
+}
+
+type EmailVerificationStatus = {
+  status: 'UNVERIFIED' | 'PENDING' | 'VERIFIED' | 'EXPIRED'
+  email: string
+  expiresAt?: string
+  verifiedAt?: string
+  canResend: boolean
 }
 
 type MeResponse = {
@@ -511,6 +520,7 @@ type MeResponse = {
   securityPolicy: TenantSecurityPolicy
   userSettings: UserSettingsRecord
   workspace: WorkspaceAccess
+  emailVerification?: EmailVerificationStatus
 }
 type SaasConsoleResponse = BillingConsoleResponse
 type SaasHealthStatus = BillingConsoleResponse['readiness'][number]['status']
@@ -3023,6 +3033,14 @@ function App() {
     })
   }
 
+  async function completeEmailVerification(token: string) {
+    await requestApi<{ accepted: boolean; alreadyVerified: boolean }>('/auth/email-verification/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+  }
+
   async function logoutWorkspace() {
     try {
       await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
@@ -3080,6 +3098,7 @@ function App() {
         onSignup={signupWorkspace}
         onRequestPasswordReset={requestPasswordReset}
         onCompletePasswordReset={completePasswordReset}
+        onCompleteEmailVerification={completeEmailVerification}
         onNavigate={navigatePublic}
       />
     )
@@ -4014,6 +4033,9 @@ function UserSettingsForm({
   const [newPassword, setNewPassword] = useState('')
   const [accountBusy, setAccountBusy] = useState(false)
   const [accountStatus, setAccountStatus] = useState('Changing sign-in details signs out every active session.')
+  const [emailVerification, setEmailVerification] = useState<EmailVerificationStatus | null>(null)
+  const [verificationBusy, setVerificationBusy] = useState(false)
+  const [verificationStatus, setVerificationStatus] = useState('Checking email verification status...')
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
   const hasApprovedDraftAccentColor = normalizedDraftAccentColor !== null && controlledAccentColors.has(normalizedDraftAccentColor)
   const safeDraftAccentColor = controlledAccentColor(draft.accentColor)
@@ -4028,6 +4050,18 @@ function UserSettingsForm({
     setCurrentPassword('')
     setNewPassword('')
     setAccountStatus('Changing sign-in details signs out every active session.')
+    setEmailVerification(null)
+    setVerificationStatus('Checking email verification status...')
+    void requestApi<EmailVerificationStatus>('/auth/email-verification/status')
+      .then((payload) => {
+        setEmailVerification(payload)
+        setVerificationStatus(
+          payload.status === 'VERIFIED'
+            ? 'This email address is verified.'
+            : 'Verify this email address to complete workspace account setup.',
+        )
+      })
+      .catch(() => setVerificationStatus('Email verification status is temporarily unavailable.'))
   }, [settings, session])
 
   async function saveSettings() {
@@ -4072,6 +4106,26 @@ function UserSettingsForm({
       setAccountStatus(error instanceof Error ? error.message : 'Could not update sign-in details')
     } finally {
       setAccountBusy(false)
+    }
+  }
+
+  async function resendEmailVerification() {
+    setVerificationBusy(true)
+    setVerificationStatus('Preparing a new verification link...')
+    try {
+      const payload = await requestApi<{ emailVerification: EmailVerificationStatus & { delivery?: string } }>('/auth/email-verification/resend', {
+        method: 'POST',
+      })
+      setEmailVerification(payload.emailVerification)
+      setVerificationStatus(
+        payload.emailVerification.delivery === 'not_configured'
+          ? 'Email delivery is not configured for this environment yet.'
+          : 'A new verification link was sent. Check your inbox.',
+      )
+    } catch (error) {
+      setVerificationStatus(error instanceof Error ? error.message : 'Could not send a verification link')
+    } finally {
+      setVerificationBusy(false)
     }
   }
 
@@ -4157,6 +4211,23 @@ function UserSettingsForm({
           >
             {accountBusy ? 'Updating sign-in...' : 'Update sign-in details'}
           </button>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Email verification</strong>
+          <span>Use a verified address for account recovery and workspace security notices.</span>
+        </div>
+        <div className="settings-save-row">
+          <span aria-live="polite" className="mono-small">
+            {emailVerification?.status === 'VERIFIED' ? 'Verified' : emailVerification?.status === 'EXPIRED' ? 'Link expired' : 'Verification pending'} - {verificationStatus}
+          </span>
+          {emailVerification?.canResend !== false ? (
+            <button className="secondary-button" type="button" onClick={() => void resendEmailVerification()} disabled={verificationBusy}>
+              {verificationBusy ? 'Sending...' : 'Resend verification'}
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -4482,6 +4553,7 @@ function AuthGateway({
   onSignup,
   onRequestPasswordReset,
   onCompletePasswordReset,
+  onCompleteEmailVerification,
   onNavigate,
 }: {
   initialMode: 'login' | 'signup'
@@ -4496,11 +4568,13 @@ function AuthGateway({
   }) => Promise<SignupResponse>
   onRequestPasswordReset: (email: string) => Promise<void>
   onCompletePasswordReset: (token: string, password: string) => Promise<void>
+  onCompleteEmailVerification: (token: string) => Promise<void>
   onNavigate: (path: '/login' | '/signup', replace?: boolean) => void
 }) {
   const resetToken = new URLSearchParams(window.location.search).get('reset')?.trim() ?? ''
-  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm'>(
-    resetToken ? 'reset-confirm' : initialMode,
+  const verificationToken = new URLSearchParams(window.location.search).get('verify')?.trim() ?? ''
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm' | 'verify-confirm'>(
+    verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode,
   )
   const [email, setEmail] = useState('')
   const [name, setName] = useState('')
@@ -4524,8 +4598,8 @@ function AuthGateway({
   )
 
   useEffect(() => {
-    setMode(resetToken ? 'reset-confirm' : initialMode)
-  }, [initialMode, resetToken])
+    setMode(verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode)
+  }, [initialMode, resetToken, verificationToken])
 
   async function submitAuth() {
     setBusy(true)
@@ -4536,7 +4610,9 @@ function AuthGateway({
           ? 'Creating your lab workspace'
           : mode === 'reset-request'
             ? 'Requesting password reset'
-            : 'Resetting password',
+            : mode === 'reset-confirm'
+              ? 'Resetting password'
+              : 'Verifying email address',
     )
     try {
       if (mode === 'login') {
@@ -4552,12 +4628,16 @@ function AuthGateway({
           return
         }
         const result = await onSignup({ organizationName, workspaceSlug, email, name, password })
-        setStatus(`${result.organization.name} is ready. ${result.customDomain.nextAction}`)
+        setStatus(
+          result.emailVerification.delivery === 'not_configured'
+            ? `${result.organization.name} is ready. Email delivery is not configured yet; ask your workspace administrator to enable verification delivery.`
+            : `${result.organization.name} is ready. Check ${result.emailVerification.email} to verify your email address.`,
+        )
       } else if (mode === 'reset-request') {
         await onRequestPasswordReset(email)
         setStatus('If the account exists, a one-time reset link has been sent. Check your inbox.')
         setMode('login')
-      } else {
+      } else if (mode === 'reset-confirm') {
         if (!signupPasswordReady || password !== confirmPassword) {
           setStatus('Use a matching password with at least 12 characters, letters, and numbers.')
           return
@@ -4568,6 +4648,11 @@ function AuthGateway({
         setConfirmPassword('')
         setMode('login')
         setStatus('Password reset complete. Sign in with your new password.')
+      } else {
+        await onCompleteEmailVerification(verificationToken)
+        onNavigate('/login', true)
+        setMode('login')
+        setStatus('Email verified. Sign in to continue.')
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Authentication failed')
@@ -4632,7 +4717,9 @@ function AuthGateway({
                   ? 'Create your lab workspace'
                   : mode === 'reset-request'
                     ? 'Reset your password'
-                    : 'Choose a new password')}
+                    : mode === 'reset-confirm'
+                      ? 'Choose a new password'
+                      : 'Verify your email')}
             </h1>
             <p className="lead">
               Secure access for your workspace. We confirm your account, role, and workspace settings before you begin.
@@ -4654,6 +4741,12 @@ function AuthGateway({
           </div>
 
           <div className="auth-form">
+            {mode === 'verify-confirm' ? (
+              <div className="auth-status" aria-live="polite">
+                <ShieldCheck size={16} />
+                <span>Confirm this secure, single-use link to verify your email address. It expires after 24 hours.</span>
+              </div>
+            ) : null}
             {mode === 'signup' && (
               <>
                 <label className="field-row">
@@ -4685,7 +4778,7 @@ function AuthGateway({
                 </label>
               </>
             )}
-            {mode !== 'reset-confirm' ? (
+            {mode === 'login' || mode === 'signup' || mode === 'reset-request' ? (
               <label className="field-row">
                 <span>Email</span>
                 <input
@@ -4696,7 +4789,7 @@ function AuthGateway({
                 />
               </label>
             ) : null}
-            {mode !== 'reset-request' ? (
+            {mode === 'login' || mode === 'signup' || mode === 'reset-confirm' ? (
               <label className="field-row">
               <span>{mode === 'reset-confirm' ? 'New password' : 'Password'}</span>
               <input
@@ -4732,7 +4825,9 @@ function AuthGateway({
               onClick={() => void submitAuth()}
               disabled={
                 busy ||
-                (mode === 'reset-confirm'
+                (mode === 'verify-confirm'
+                  ? !verificationToken
+                  : mode === 'reset-confirm'
                   ? !resetToken || !signupPasswordReady || password !== confirmPassword
                   : !email.trim() || (mode === 'signup' && !signupReady))
               }
@@ -4745,7 +4840,9 @@ function AuthGateway({
                     ? 'Create workspace'
                     : mode === 'reset-request'
                       ? uiText('Send reset link')
-                      : uiText('Reset password')}
+                      : mode === 'reset-confirm'
+                        ? uiText('Reset password')
+                        : uiText('Verify email')}
             </button>
             {mode === 'login' ? (
               <button className="ghost-button small" type="button" onClick={() => setMode('reset-request')}>
