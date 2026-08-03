@@ -626,7 +626,9 @@ const NORMALIZED_TABLES = [
 
 const routes: Route[] = [
   { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
-  { method: 'GET', pattern: '/status', public: true, hydrateState: false, handler: ({ env }) => publicStatus(env) },
+  // Status doubles as a safe, idempotent warm-up so a new deployment publishes
+  // the source-controlled global material library without waiting for cron.
+  { method: 'GET', pattern: '/status', public: true, handler: ({ env }) => publicStatus(env) },
   { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
   { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-normalized', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'legacy-northstar_snapshots-cutover-only', normalizedTables: NORMALIZED_TABLES }) },
   { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
