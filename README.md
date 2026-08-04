@@ -788,3 +788,7 @@ Từ system hostname như `workspace-slug.labofscents.org`, nút `Sign in` và
 xác thực, API trả `workspaceUrl` của membership và client chỉ redirect sang
 hostname HTTPS của workspace đó. Vì vậy một user không bị "đăng nhập vào"
 workspace của hostname mà họ đã truy cập ban đầu.
+
+Khi session cũ còn hợp lệ, việc mở `/login?next=/workspace/...` trên cổng
+trung tâm được khôi phục thẳng về route đích tại hostname workspace. Ứng dụng
+không redirect qua `/login` của tenant lần thứ hai.

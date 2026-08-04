@@ -76,7 +76,7 @@ import { TrialEvidenceSummary } from './features/trials/TrialEvidenceSummary'
 import { OperationalLineageSummary } from './features/trials/OperationalLineageSummary'
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
-import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
+import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { isLluchCatalogueMasterMaterial, isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
 import { publicAuthUrlForWorkspaceOrigin } from './data/workspaceHostnames'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
@@ -2009,7 +2009,9 @@ function App() {
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
   const [authNotice, setAuthNotice] = useState<string | null>(null)
-  const [resumePath, setResumePath] = useState<string | null>(() => safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`))
+  const [resumePath, setResumePath] = useState<string | null>(() =>
+    resumePathForLocation(window.location.pathname, window.location.search, window.location.hash),
+  )
   const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
   const [workspaceBranding, setWorkspaceBranding] = useState<BrandingConfig>(() => workspaceBrandingFallback())
   const [tenantDomains, setTenantDomains] = useState<Record<string, string>>({})
@@ -2254,7 +2256,7 @@ function App() {
     const handlePopState = () => {
       setActiveKey(domainKeyForPath(window.location.pathname))
       setPublicRoute(publicRouteForPath(window.location.pathname))
-      setResumePath(safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`))
+      setResumePath(resumePathForLocation(window.location.pathname, window.location.search, window.location.hash))
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -2319,21 +2321,24 @@ function App() {
       try {
         const payload = await requestApi<MeResponse>('/me')
         if (active) {
+          const session = withSessionPermissions(payload.session, payload.permissions)
+          const settings = payload.userSettings ?? userSettingsForSession(payload.session)
+          const requestedLanding = resumePath
+            ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname)
+            : settings.preferredLanding
+          const destination = resumePath ?? pathForDomainKey(safeLandingForSession(requestedLanding, session))
           const redirect = workspaceRedirectUrl(
             payload.workspace?.workspaceUrl,
-            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+            destination,
           )
           if (redirect) {
             window.location.replace(redirect)
             return
           }
           acceptCsrfToken(payload.csrfToken)
-          const session = withSessionPermissions(payload.session, payload.permissions)
           setCurrentSession(session)
           setWorkspaceAccess(payload.workspace)
-          const settings = payload.userSettings ?? userSettingsForSession(payload.session)
           applyUserSettings(settings)
-          const requestedLanding = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
           setActiveKey(safeLandingForSession(requestedLanding, session))
         }
       } catch {

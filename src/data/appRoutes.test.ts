@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext } from './appRoutes'
+import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext } from './appRoutes'
 
 describe('public and protected application routes', () => {
   it('maps public entry points explicitly', () => {
@@ -21,5 +21,11 @@ describe('public and protected application routes', () => {
     expect(loginPathForProtectedPath('/ai/reformulation-optimizer')).toBe('/login?next=%2Fai%2Freformulation-optimizer')
     expect(loginPathForProtectedPath('/')).toBe('/login')
     expect(isProtectedApplicationPath('/ai/formula-agent')).toBe(true)
+  })
+
+  it('restores a validated return path from the public login query', () => {
+    expect(resumePathForLocation('/login', '?next=%2Fworkspace%2Finventory')).toBe('/workspace/inventory')
+    expect(resumePathForLocation('/ai/formula-design-studio')).toBe('/ai/formula-design-studio')
+    expect(resumePathForLocation('/login', '?next=https%3A%2F%2Fexample.com')).toBeNull()
   })
 })

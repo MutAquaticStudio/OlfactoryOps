@@ -32,6 +32,17 @@ export function safeInternalNext(value: string | null | undefined) {
   }
 }
 
+export function resumePathForLocation(pathname: string, search = '', hash = '') {
+  const directPath = safeInternalNext(`${pathname}${search}${hash}`)
+  if (directPath) return directPath
+
+  try {
+    return safeInternalNext(new URLSearchParams(search).get('next'))
+  } catch {
+    return null
+  }
+}
+
 export function loginPathForProtectedPath(pathname: string, search = '', hash = '') {
   if (!isProtectedApplicationPath(pathname)) return '/login'
   const next = `${pathname}${search}${hash}`
