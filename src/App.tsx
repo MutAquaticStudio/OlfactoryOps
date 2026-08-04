@@ -1242,6 +1242,7 @@ const apiBaseUrl =
 const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
 const authExpiredEvent = 'olfactoryops.auth.expired'
+const sessionRestoreTimeoutMs = 8_000
 const operationApprovalRequestedEvent = 'olfactoryops.operation.approval.requested'
 const internalAdminEmails = new Set(['m.thuanwork@gmail.com', 'admin@labofscents.com'])
 const internalOnlyDomainKeys = new Set<DomainKey>(['platform', 'identity', 'customization'])
@@ -2316,10 +2317,12 @@ function App() {
     }
 
     let active = true
+    const restoreController = new AbortController()
+    const restoreTimeout = window.setTimeout(() => restoreController.abort(), sessionRestoreTimeoutMs)
 
     async function restoreSession() {
       try {
-        const payload = await requestApi<MeResponse>('/me')
+        const payload = await requestApi<MeResponse>('/me', { signal: restoreController.signal })
         if (active) {
           const session = withSessionPermissions(payload.session, payload.permissions)
           const settings = payload.userSettings ?? userSettingsForSession(payload.session)
@@ -2343,13 +2346,19 @@ function App() {
         }
       } catch {
         if (active) {
+          const sessionWasAlreadyCleared = !hasStoredAuthMarker()
+          writeStoredAuthSession(null)
           acceptCsrfToken()
           setCurrentSession(null)
           setWorkspaceAccess(null)
           applyUserSettings(null)
           setSidebarCollapsed(false)
+          if (!sessionWasAlreadyCleared) {
+            setAuthNotice('We could not restore your previous session. Sign in again to continue.')
+          }
         }
       } finally {
+        window.clearTimeout(restoreTimeout)
         if (active) setAuthRestoring(false)
       }
     }
@@ -2358,6 +2367,8 @@ function App() {
 
     return () => {
       active = false
+      window.clearTimeout(restoreTimeout)
+      restoreController.abort()
     }
   }, [applyUserSettings, resumePath])
 

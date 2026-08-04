@@ -792,3 +792,8 @@ workspace của hostname mà họ đã truy cập ban đầu.
 Khi session cũ còn hợp lệ, việc mở `/login?next=/workspace/...` trên cổng
 trung tâm được khôi phục thẳng về route đích tại hostname workspace. Ứng dụng
 không redirect qua `/login` của tenant lần thứ hai.
+
+Kiểm tra session ở cổng trung tâm có giới hạn 8 giây. Nếu API không phản hồi
+hoặc cookie không còn hợp lệ, ứng dụng xóa marker phiên cũ và hiển thị form
+đăng nhập kèm thông báo rõ ràng, thay vì giữ màn hình `Restoring your workspace`
+vô thời hạn.
