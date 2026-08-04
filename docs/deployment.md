@@ -182,11 +182,13 @@ In the Cloudflare dashboard for `labofscents.org`:
 
 1. Add proxied wildcard DNS `CNAME * -> labofscents.pages.dev` (or the current Pages origin).
 2. Attach `*.labofscents.org/*` to Worker `olfactoryops-tenant-router`.
-3. Keep the existing exact `api.labofscents.org` custom-domain mapping on
-   `olfactoryops-api`; it is the API's more-specific exclusion from the
-   wildcard router. Do **not** create a no-Worker route for `api`, because
-   that would disconnect the API. Add more-specific **no Worker** routes for
-   `beta.labofscents.org/*`, `www.labofscents.org/*`,
+3. Create the explicit more-specific Worker route
+   `api.labofscents.org/* -> olfactoryops-api` and keep the existing
+   `api.labofscents.org` custom-domain mapping. A wildcard Worker route runs
+   before a Custom Domain, so the explicit API Worker route is required to
+   prevent the tenant router from returning `404` for API requests. Add
+   more-specific **no Worker** routes for `beta.labofscents.org/*`,
+   `www.labofscents.org/*`,
    `customers.labofscents.org/*`, `saas-origin.labofscents.org/*`, and
    `saas-origin-beta.labofscents.org/*`. Cloudflare uses the most specific
    matching route, so these exclusions preserve beta Pages and SaaS fallback

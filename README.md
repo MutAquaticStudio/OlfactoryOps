@@ -453,11 +453,12 @@ không phải kết quả provision giả.
 
 Triển khai system hostname production cần migration `0043_workspace_hostnames.sql`,
 deploy `olfactoryops-tenant-router`, DNS wildcard proxied `*.labofscents.org`
-và route `*.labofscents.org/*`. `api.labofscents.org` phải giữ mapping exact
-đến `olfactoryops-api` (không thêm no-worker route cho API); các hostname
-`beta`, `www`, `customers`, `saas-origin` và `saas-origin-beta` phải có
-no-worker exclusion cụ thể để không bị wildcard router bắt. Chi tiết thao tác
-ở `docs/deployment.md`.
+và route `*.labofscents.org/*`. API cần route cụ thể
+`api.labofscents.org/* -> olfactoryops-api` đồng thời giữ custom-domain exact;
+route Worker wildcard chạy trước Custom Domain nên đây là lớp loại trừ bắt buộc.
+Các hostname `beta`, `www`, `customers`, `saas-origin` và `saas-origin-beta`
+phải có no-worker exclusion cụ thể để không bị wildcard router bắt. Chi tiết
+thao tác ở `docs/deployment.md`.
 
 Smoke signup có mutation bị chặn mặc định để không sinh tenant QA trên production.
 Chỉ chạy trong D1 test với `ALLOW_SIGNUP_TENANT_TEST=true`,

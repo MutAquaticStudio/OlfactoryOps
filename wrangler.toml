@@ -18,6 +18,10 @@ BETA_APP_ORIGIN = "https://beta.labofscents.org"
 SYSTEM_WORKSPACE_DOMAIN = "labofscents.org"
 
 [[routes]]
+pattern = "api.labofscents.org/*"
+zone_name = "labofscents.org"
+
+[[routes]]
 pattern = "api.labofscents.org"
 custom_domain = true
 
