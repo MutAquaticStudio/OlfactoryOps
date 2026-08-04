@@ -54,6 +54,27 @@ export function workspaceUrlForHostname(hostname: string | undefined) {
   return normalized ? `https://${normalized}` : undefined
 }
 
+/**
+ * Keeps account discovery on the public site. The authenticated API response
+ * remains the authority for the workspace hostname after a successful login.
+ */
+export function publicAuthUrlForWorkspaceOrigin(
+  path: '/login' | '/signup',
+  currentOrigin: string,
+  baseDomain = defaultWorkspaceBaseDomain,
+) {
+  try {
+    const current = new URL(currentOrigin)
+    const normalizedBaseDomain = normalizeWorkspaceBaseDomain(baseDomain)
+    if (current.protocol !== 'https:' || !isSystemWorkspaceHostname(current.hostname, normalizedBaseDomain)) {
+      return undefined
+    }
+    return new URL(path, `https://${normalizedBaseDomain}`).toString()
+  } catch {
+    return undefined
+  }
+}
+
 export function isSystemWorkspaceHostname(hostname: string | undefined, baseDomain = defaultWorkspaceBaseDomain) {
   const normalizedHostname = normalizeWorkspaceHostname(hostname)
   const normalizedBaseDomain = normalizeWorkspaceBaseDomain(baseDomain)

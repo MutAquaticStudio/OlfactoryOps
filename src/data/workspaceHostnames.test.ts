@@ -4,6 +4,7 @@ import {
   isReservedWorkspaceSlug,
   isSystemWorkspaceHostname,
   isWorkspaceSlugEligibleForHostname,
+  publicAuthUrlForWorkspaceOrigin,
   systemWorkspaceHostname,
   workspaceUrlForHostname,
 } from './workspaceHostnames'
@@ -31,5 +32,12 @@ describe('workspace hostname allocation', () => {
     expect(isExactHttpsOriginForHostname('https://other.labofscents.org', 'atelier-nox.labofscents.org')).toBe(false)
     expect(isExactHttpsOriginForHostname('http://atelier-nox.labofscents.org', 'atelier-nox.labofscents.org')).toBe(false)
     expect(isExactHttpsOriginForHostname('https://atelier-nox.labofscents.org:8443', 'atelier-nox.labofscents.org')).toBe(false)
+  })
+
+  it('uses the public sign-in entry from a system workspace hostname', () => {
+    expect(publicAuthUrlForWorkspaceOrigin('/login', 'https://atelier-nox.labofscents.org')).toBe('https://labofscents.org/login')
+    expect(publicAuthUrlForWorkspaceOrigin('/signup', 'https://atelier-nox.labofscents.org')).toBe('https://labofscents.org/signup')
+    expect(publicAuthUrlForWorkspaceOrigin('/login', 'https://labofscents.org')).toBeUndefined()
+    expect(publicAuthUrlForWorkspaceOrigin('/login', 'http://atelier-nox.localhost:5173')).toBeUndefined()
   })
 })

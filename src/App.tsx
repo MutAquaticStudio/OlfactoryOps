@@ -78,6 +78,7 @@ import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
 import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { isLluchCatalogueMasterMaterial, isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
+import { publicAuthUrlForWorkspaceOrigin } from './data/workspaceHostnames'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
 import { MotionProvider } from './ui/motion/MotionProvider'
@@ -2186,6 +2187,11 @@ function App() {
     [currentSession],
   )
   const navigatePublic = useCallback((path: '/login' | '/signup', replace = false) => {
+    const publicAuthUrl = publicAuthUrlForWorkspaceOrigin(path, window.location.origin)
+    if (publicAuthUrl) {
+      window.location.assign(publicAuthUrl)
+      return
+    }
     const nextRoute = publicRouteForPath(path)
     if (replace) window.history.replaceState({}, document.title, path)
     else if (window.location.pathname !== path) window.history.pushState({}, document.title, path)

@@ -780,3 +780,11 @@ npm run lint
 ~~~
 
 Với Cloudflare release, chạy <code>npm run deploy:check</code> sau khi D1 migration và Worker secret đã sẵn sàng.
+
+### Đăng nhập theo workspace
+
+Từ system hostname như `workspace-slug.labofscents.org`, nút `Sign in` và
+`Create workspace` luôn mở cổng trung tâm `https://labofscents.org`. Sau khi
+xác thực, API trả `workspaceUrl` của membership và client chỉ redirect sang
+hostname HTTPS của workspace đó. Vì vậy một user không bị "đăng nhập vào"
+workspace của hostname mà họ đã truy cập ban đầu.
