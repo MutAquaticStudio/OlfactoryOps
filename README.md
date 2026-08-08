@@ -63,6 +63,15 @@ va can it nhat ba analysis hop le; neu thieu bang chung he thong tra
 quan. Khong co NLP/LLM provider, cross-tenant learning hay tu dong sua cong thuc.
 Xem [`docs/v2/phase-5b`](docs/v2/phase-5b/).
 
+## Trang thai V2 Phase 6
+
+Phase 6 Formula/Design Studio dang `IN_PROGRESS`. Da co schema PostgreSQL
+tenant-scoped cho Formula Project, Draft, immutable Version, Review, Design
+Project, Brief Version va material-universe snapshot; migration va RLS da pass
+tren PostgreSQL disposable. Service/API/UI, formula math, approval workflow,
+candidate sharing va LLM gateway chua duoc bat. Xem
+[`docs/v2/phase-6/EXECUTION_STATE.md`](docs/v2/phase-6/EXECUTION_STATE.md).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

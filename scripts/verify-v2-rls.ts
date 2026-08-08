@@ -61,6 +61,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0006_phase5_olfactory_intelligence.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0007_phase5b_consumer_intelligence.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0008_phase6_formula_design_studio.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)

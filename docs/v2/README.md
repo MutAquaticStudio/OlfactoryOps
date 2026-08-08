@@ -69,3 +69,10 @@ only consent-aware feedback hashes/private references and bounded derived
 signals, separates aggregate from raw-content access, and invalidates dependent
 evidence when a source is withdrawn. No NLP provider, cross-tenant learning,
 or automatic Formula change is active. See `phase-5b/`.
+
+## Phase 6 status
+
+Phase 6 Formula/Design Studio is in progress. Its tenant-scoped PostgreSQL
+persistence and RLS foundation are verified locally, but Formula service/API,
+deterministic composition validation, review/approval, candidate sharing and
+the disabled LLM gateway have not yet been implemented. See `phase-6/`.
