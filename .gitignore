@@ -28,6 +28,8 @@ reports/v2-role-playwright/
 reports/releases/
 reports/bundle-analysis-latest.json
 .qa/
+.scientific-runtime/
+__pycache__/
 test-results/
 .qa-isolated-worker-*/
 .d1-migration-audit/

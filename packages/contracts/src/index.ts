@@ -111,3 +111,4 @@ export type RagCitationReference = z.infer<typeof ragCitationReferenceSchema>
 
 export * from './platform.js'
 export * from './lab-operations.js'
+export * from './scientific.js'

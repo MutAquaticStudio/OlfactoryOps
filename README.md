@@ -17,6 +17,17 @@ Read the source pack in [`docs/v2/README.md`](docs/v2/README.md), then [`docs/v2
 
 Phase 2 Lab Operations da `PASS` tren branch `codex/v2-phase2-lab-operations` voi PostgreSQL disposable. PostgreSQL la source of truth cho Material tenant-private, Supplier Profile/Offer, document reference, price history, lot inventory, immutable ledger, FEFO, Lab Weighing, reservation, procurement request/PO/shipment, quarantine, inspection, return va landed cost. V2 khong import Lluch, Global Master Materials hay legacy Formula R&D. Tai lieu va evidence nam trong [`docs/v2/phase-2`](docs/v2/phase-2/). Production deploy va remote migration van `NOT_APPLICABLE` cho checkpoint local nay.
 
+## Trang thai V2 Phase 3
+
+Phase 3 Scientific Structure / Features da `PASS` tren branch
+`codex/v2-phase3-scientific-features`. Phase nay them scientific job/artifact
+tenant-scoped, RDKit canonical structure/ECFP va provenance pin chinh xac cho
+BCFP, MolFTP, Osmordred. BCFP/MolFTP chay trong runtime RDKit 2026; Osmordred
+chay trong runtime RDKit 2023.09.3 tach biet va chi duoc ket hop khi
+structure hash trung khop. PostgreSQL/RLS, native compatibility, 12-role E2E,
+public UX va static gate deu `PASS` tren ha tang disposable local. Xem bao cao
+tai [`docs/v2/phase-3/PHASE_3_IMPLEMENTATION_REPORT.md`](docs/v2/phase-3/PHASE_3_IMPLEMENTATION_REPORT.md).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

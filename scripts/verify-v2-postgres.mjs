@@ -1,15 +1,28 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { PrismaClient } from '@prisma/client'
 
 const schema = 'infra/postgres/prisma/schema.prisma'
 const migrations = [
   'infra/postgres/migrations/0001_platform_security_core.sql',
   'infra/postgres/migrations/0002_phase1_members_notifications.sql',
   'infra/postgres/migrations/0003_phase2_lab_operations.sql',
+  'infra/postgres/migrations/0004_phase3_scientific_features.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`).join(',')}}`
+  return JSON.stringify(value)
+}
+
+function componentHash(component) {
+  return createHash('sha256').update(stableJson(component)).digest('hex')
+}
 
 function isLoopbackDatabase(url) {
   try {
@@ -46,6 +59,20 @@ if (!databaseUrl) {
 
 try {
   for (const migration of migrations) execFileSync(process.execPath, [prismaCli, 'db', 'execute', '--schema', schema, '--file', migration], { stdio: 'inherit', env })
+  const pins = JSON.parse(readFileSync('services/scientific/runtime/component-pins.json', 'utf8')).components
+  const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
+  try {
+    const rows = await client.$queryRawUnsafe('SELECT component_key, repository, license, upstream_ref, upstream_commit, adapter_version, runtime_version, patch_status, compatibility_test, manifest_hash FROM v2_scientific_component_pins')
+    if (rows.length !== Object.keys(pins).length) throw new Error('Scientific component registry row count mismatch')
+    for (const row of rows) {
+      const pin = pins[row.component_key]
+      if (!pin || row.repository !== pin.repository || row.license !== pin.license || row.upstream_ref !== pin.upstreamRef || row.upstream_commit !== pin.upstreamCommit || row.adapter_version !== pin.adapterVersion || row.runtime_version !== pin.runtimeVersion || row.patch_status !== pin.patchStatus || row.compatibility_test !== pin.compatibilityTest || row.manifest_hash !== componentHash(pin)) {
+        throw new Error(`Scientific component registry diverged for ${row.component_key}`)
+      }
+    }
+  } finally {
+    await client.$disconnect()
+  }
   console.log('V2_POSTGRES=PASS migration executed against configured database')
 } catch {
   console.error('V2_POSTGRES=FAIL migration execution')

@@ -4,6 +4,28 @@ import path from 'node:path'
 import { PrismaPlatformRepository } from '../services/platform/src/prisma-repository.js'
 import { PlatformService } from '../services/platform/src/service.js'
 import { LabOperationsService } from '../services/lab-ops/src/service.js'
+import { ScientificFeatureService, type ScientificRuntime } from '../services/scientific/src/service.js'
+
+class RlsScientificRuntime implements ScientificRuntime {
+  private structure(smiles: string) {
+    const canonicalSmiles = smiles === 'OCC' ? 'CCO' : smiles
+    const structureHash = 'a'.repeat(64)
+    const inputHash = 'b'.repeat(64)
+    const outputHash = 'c'.repeat(64)
+    return { canonicalSmiles, inchi: null, inchiKey: null, structureHash, inputHash, outputHash, molecularGraph: { atoms: [{ index: 0, symbol: 'C', atomicNumber: 6 }], bonds: [] }, rdkitVersion: 'fixture-rdkit', standardizationVersion: 'fixture-standardization' }
+  }
+  async normalize(input: { smiles: string }) { return { runtimeVersion: 'rls-science-fixture/1', structure: this.structure(input.smiles), artifacts: [] } }
+  async generateFeatures(input: { canonicalSmiles: string; featureKinds: Array<'ECFP' | 'BCFP' | 'MOLFTP' | 'OSMORDRED'> }) {
+    const structure = this.structure(input.canonicalSmiles)
+    return {
+      runtimeVersion: 'rls-science-fixture/1', structure,
+      artifacts: input.featureKinds.map((kind) => ({
+        kind, status: kind === 'MOLFTP' ? 'NOT_EVALUATED' as const : 'VERIFIED' as const, schemaVersion: `${kind.toLowerCase()}/fixture`, componentKey: kind === 'ECFP' ? 'RDKIT' : kind, componentVersion: 'fixture/1', inputHash: structure.outputHash, contentHash: kind === 'ECFP' ? 'd'.repeat(64) : 'e'.repeat(64),
+        payload: kind === 'MOLFTP' ? { reason: 'No target dataset is registered.' } : { bits: [1, 5, 9] }, provenance: [{ kind: 'component', id: kind === 'ECFP' ? 'RDKIT' : kind, version: 'fixture/1' }],
+      })),
+    }
+  }
+}
 
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const databaseUrl = process.env.V2_QA_DATABASE_URL || process.env.V2_DATABASE_URL || process.env.DATABASE_URL || (process.env.V2_QA_ENVIRONMENT === 'test' ? localTestDatabaseUrl : undefined)
@@ -32,6 +54,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0001_platform_security_core.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0002_phase1_members_notifications.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0003_phase2_lab_operations.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0004_phase3_scientific_features.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -98,6 +121,7 @@ try {
   const repository = new PrismaPlatformRepository(appClient)
   const service = new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'rls-session', passwordPepper: 'rls-password' })
   const lab = new LabOperationsService(appClient, service)
+  const scientific = new ScientificFeatureService(appClient, service, new RlsScientificRuntime())
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -130,6 +154,10 @@ try {
   const material = await lab.createMaterial(context.context, { name: 'RLS test material', internalCode: `RLS-${suffix}`, sensoryMetadata: { source: 'test' }, identifiers: [] }, `rls-material-${suffix}`)
   const duplicateMaterial = await lab.createMaterial(context.context, { name: 'RLS test material', internalCode: `RLS-${suffix}`, sensoryMetadata: { source: 'test' }, identifiers: [] }, `rls-material-${suffix}`)
   await lab.changeMaterialStatus(context.context, material.id, 'ACTIVE', `rls-material-status-${suffix}`)
+  const structureJob = await scientific.normalizeMaterial(context.context, material.id, { smiles: 'OCC' }, `rls-science-structure-${suffix}`)
+  const duplicateStructureJob = await scientific.normalizeMaterial(context.context, material.id, { smiles: 'OCC' }, `rls-science-structure-${suffix}`)
+  const featureJob = await scientific.generateFeatures(context.context, material.id, { featureKinds: ['ECFP', 'MOLFTP'] }, `rls-science-features-${suffix}`)
+  const scienceArtifacts = await scientific.materialArtifacts(context.context, material.id)
   const materialDocument = await lab.addMaterialDocument(context.context, material.id, { kind: 'SDS', objectRef: `test://material/${suffix}`, contentHash: `hash-${suffix}` }, `rls-material-document-${suffix}`)
   const supplier = await lab.createSupplier(context.context, { legalName: `RLS Supplier ${suffix}`, currency: 'USD', paymentTerms: {} }, `rls-supplier-${suffix}`)
   await lab.changeSupplierStatus(context.context, supplier.id, 'ACTIVE', `rls-supplier-status-${suffix}`)
@@ -217,6 +245,7 @@ try {
   const crossTenantShipmentDenied = await deniedCode(() => lab.changeShipmentStatus(secondContext.context, shipment.id, 'CANCELLED', undefined, `rls-cross-shipment-${suffix}`), 'SHIPMENT_NOT_FOUND')
   const crossTenantWeighingDenied = await deniedCode(() => lab.confirmWeighing(secondContext.context, weighing.id, [], `rls-cross-weigh-${suffix}`), 'WEIGHING_NOT_FOUND')
   const crossTenantSupplierDenied = await deniedCode(() => lab.createPurchaseOrder(secondContext.context, { supplierId: supplier.id, currency: 'USD', lines: [{ materialId: material.id, orderedGrams: 1 }] }, `rls-cross-order-${suffix}`), 'SUPPLIER_NOT_FOUND')
+  const crossTenantScientificDenied = await deniedCode(() => scientific.materialArtifacts(secondContext.context, material.id), 'MATERIAL_NOT_FOUND')
 
   restrictedUserId = `usr_restricted_${suffix.replace(/[^a-z0-9]/gi, '')}`
   await adminClient!.$transaction(async (tx) => {
@@ -227,6 +256,7 @@ try {
   try {
     await lab.receiveGoods({ ...context.context, userId: restrictedUserId, role: 'Perfumer', sessionId: `ses_${restrictedUserId}` }, { freightCost: 0, dutyCost: 0, insuranceCost: 0, currency: 'USD', lines: [{ materialId: material.id, quantity: 1, unit: 'G', location: 'denied' }] }, `rls-denied-${suffix}`)
   } catch (error) { permissionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED' }
+  const scientificPermissionDenied = await deniedCode(() => scientific.materialArtifacts({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_science_${restrictedUserId}` }, material.id), 'TENANT_ACCESS_DENIED')
 
   const projection = firstLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
   const reservedProjection = reservedLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
@@ -269,9 +299,17 @@ try {
     && crossTenantWeighingDenied
     && crossTenantSupplierDenied
     && permissionDenied
+  const phase3Pass = structureJob.status === 'SUCCEEDED'
+    && duplicateStructureJob.id === structureJob.id
+    && featureJob.status === 'SUCCEEDED'
+    && scienceArtifacts.some((artifact) => artifact.artifactKind === 'STRUCTURE' && artifact.evidenceStatus === 'VERIFIED')
+    && scienceArtifacts.some((artifact) => artifact.artifactKind === 'ECFP' && artifact.evidenceStatus === 'VERIFIED')
+    && scienceArtifacts.some((artifact) => artifact.artifactKind === 'MOLFTP' && artifact.evidenceStatus === 'NOT_EVALUATED')
+    && crossTenantScientificDenied
+    && scientificPermissionDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied } })}`)
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass) {
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied } })}`)
   }
 
   console.log(JSON.stringify({
@@ -321,6 +359,14 @@ try {
       crossTenantWeighingDenied,
       crossTenantSupplierDenied,
       permissionDenied,
+    },
+    phase3: {
+      structure: structureJob.status,
+      duplicateStructure: duplicateStructureJob.id === structureJob.id,
+      featureJob: featureJob.status,
+      artifacts: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`),
+      crossTenantScientificDenied,
+      scientificPermissionDenied,
     },
   }))
 } finally {

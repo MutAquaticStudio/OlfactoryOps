@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "1.0.0",
+  "components": {
+    "RDKIT": {
+      "repository": "https://github.com/rdkit/rdkit",
+      "license": "BSD-3-Clause",
+      "upstreamRef": "Release_2026_03_5",
+      "upstreamCommit": "de8add1e32ff6d3c4e4e406f64b703b662dff1d6",
+      "adapterVersion": "structure-adapter/1.0.0",
+      "runtimeVersion": "rdkit=2026.3.5",
+      "patchStatus": "NONE",
+      "compatibilityTest": "scientific_runtime.tests.test_rdkit"
+    },
+    "RDKIT_PYPI": {
+      "repository": "https://github.com/osmoai/rdkit-pypi",
+      "license": "BSD-3-Clause",
+      "upstreamRef": "commit:7893ac5053c9db20761767d02085a13594778eee",
+      "upstreamCommit": "7893ac5053c9db20761767d02085a13594778eee",
+      "adapterVersion": "wheel-reference/1.0.0",
+      "runtimeVersion": "rdkit=2026.3.5",
+      "patchStatus": "NONE",
+      "compatibilityTest": "scientific_runtime.tests.test_rdkit"
+    },
+    "BCFP": {
+      "repository": "https://github.com/osmoai/bcfp",
+      "license": "BSD-3-Clause",
+      "upstreamRef": "commit:4753262e2ae6eb231be318c40623c8ab166d8ec5",
+      "upstreamCommit": "4753262e2ae6eb231be318c40623c8ab166d8ec5",
+      "adapterVersion": "bcfp-adapter/1.0.0",
+      "runtimeVersion": "conda-forge rdkit=2026.03",
+      "patchStatus": "NONE",
+      "compatibilityTest": "scientific_runtime.tests.test_bcfp"
+    },
+    "MOLFTP": {
+      "repository": "https://github.com/osmoai/molftp",
+      "license": "BSD-3-Clause",
+      "upstreamRef": "commit:98ffcb67ccfae9a0407f85f20cc76da49c784568",
+      "upstreamCommit": "98ffcb67ccfae9a0407f85f20cc76da49c784568",
+      "adapterVersion": "molftp-adapter/1.0.0",
+      "runtimeVersion": "conda-forge rdkit=2026.03",
+      "patchStatus": "NONE",
+      "compatibilityTest": "scientific_runtime.tests.test_molftp"
+    },
+    "OSMORDRED": {
+      "repository": "https://github.com/osmoai/osmordred",
+      "license": "BSD-3-Clause",
+      "upstreamRef": "commit:07b8d22f570712c6ab3527dde195aad42fef4679",
+      "upstreamCommit": "07b8d22f570712c6ab3527dde195aad42fef4679",
+      "adapterVersion": "osmordred-adapter/1.0.0",
+      "runtimeVersion": "isolated rdkit=2023.09.3",
+      "patchStatus": "PACKAGING_README_COPY_ONLY; ISOLATED_RDKIT_2023_09_3_RUNTIME",
+      "compatibilityTest": "scientific_runtime.tests.test_osmordred"
+    }
+  }
+}

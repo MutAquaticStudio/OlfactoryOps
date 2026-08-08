@@ -80,3 +80,15 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | Tenant isolation/RBAC/idempotency | Disposable PostgreSQL `v2_app` RLS harness and 12-role Playwright matrix | PASS |
 | Legacy global catalogue and V1 material paths | Not introduced into V2 Phase 2 | PASS |
 | Production deployment, remote migration, external suppliers/documents | No release is authorized for this local phase checkpoint | NOT_APPLICABLE |
+
+## Phase 3 evidence (2026-08-08)
+
+| Requirement family | Phase 3 evidence | Status |
+|---|---|---|
+| FR-MAT-003 / FR-SCI-001 | Tenant-scoped molecular identity, canonical SMILES, graph, hash, version and provenance records | PASS |
+| FR-SCI-002 | RDKit ECFP artifact persistence and exact component pins | PASS |
+| FR-SCI-003 | MolFTP is gated by registered target/data context; missing data returns `NOT_EVALUATED` | PASS |
+| FR-SCI-004 | Osmordred descriptor adapter records an artifact boundary, not Material columns | PASS |
+| FR-SCI-005 | Versioned job/artifact provenance, pin registry, audit and hash evidence | PASS |
+| Native BCFP/MolFTP/Osmordred compatibility image | Exact BCFP/MolFTP primary and isolated Osmordred images built; both native test suites passed and cross-runtime structure hashes matched | PASS |
+| Model training, datasets, odor prediction, embeddings, similarity and external LLM | Later phases only | NOT_APPLICABLE |

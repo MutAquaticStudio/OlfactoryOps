@@ -1,14 +1,20 @@
-# Osmo Component Registry (Phase 0)
+# Osmo Component Registry
 
-The registry below is derived from `docs/v2/manifests/osmo-components.yaml`. Components are used only through OlfactoryOps Scientific API adapters. No vendor code is copied into the domain or UI layers.
+Phase 3 is the only active scientific integration checkpoint. All components
+are accessed through the private Scientific Runtime; React, Workers, and
+business-domain services do not import upstream code directly.
 
-| Component | Repository | License | Planned role | Integration mode | Pin status | Adapter | Runtime | Future test |
-|---|---|---|---|---|---|---|---|---|
-| `osmoai/chem` | `https://github.com/osmoai/chem` | MIT | chemical structure normalization/validation | scientific API adapter | REQUIRES_REVIEW | `OsmoChemAdapter` | Python service | golden structures, invalid input, provenance |
-| `osmoai/odordiff` | `https://github.com/osmoai/odordiff` | MIT | odor similarity and descriptor features | scientific API adapter | REQUIRES_REVIEW | `OsmoOdorDiffAdapter` | Python service | deterministic fixture, score bounds, model ref |
-| `osmoai/odor-prediction` | `https://github.com/osmoai/odor-prediction` | MIT | prediction adapter boundary | scientific API adapter | REQUIRES_REVIEW | `OsmoOdorPredictionAdapter` | Python service | versioned artifact, uncertainty, no authority |
-| `osmoai/odor-molecules` | `https://github.com/osmoai/odor-molecules` | MIT | curated molecule metadata adapter | scientific API adapter | REQUIRES_REVIEW | `OsmoMoleculeAdapter` | Python service | source checksum, license, tenant projection |
-| `osmoai/odor-map` | `https://github.com/osmoai/odor-map` | MIT | odor map feature adapter | scientific API adapter | REQUIRES_REVIEW | `OsmoOdorMapAdapter` | Python service | embedding version and citation |
-| `osmoai/odor-examples` | `https://github.com/osmoai/odor-examples` | MIT | test/example fixtures only | CI fixture import | UNPINNED | `OsmoExampleFixtureAdapter` | test data | license and fixture isolation |
+| Key | Repository | License | Immutable source | Adapter | Runtime | Patch status | Compatibility state |
+|---|---|---|---|---|---|---|---|
+| `RDKIT` | `rdkit/rdkit` | BSD-3-Clause | `Release_2026_03_5` / `de8add1e32ff6d3c4e4e406f64b703b662dff1d6` | `structure-adapter/1.0.0` | `rdkit=2026.3.5` | None | PASS locally |
+| `RDKIT_PYPI` | `osmoai/rdkit-pypi` | BSD-3-Clause upstream | `7893ac5053c9db20761767d02085a13594778eee` | `wheel-reference/1.0.0` | `rdkit=2026.3.5` | None | PASS locally |
+| `BCFP` | `osmoai/bcfp` | BSD-3-Clause | `4753262e2ae6eb231be318c40623c8ab166d8ec5` | `bcfp-adapter/1.0.0` | primary conda-forge RDKit 2026.03 | None | PASS native build and adapter test |
+| `MOLFTP` | `osmoai/molftp` | BSD-3-Clause | `98ffcb67ccfae9a0407f85f20cc76da49c784568` | `molftp-adapter/1.0.0` | primary conda-forge RDKit 2026.03 | None | PASS native build and guarded artifact test |
+| `OSMORDRED` | `osmoai/osmordred` | BSD-3-Clause | `07b8d22f570712c6ab3527dde195aad42fef4679` | `osmordred-adapter/1.0.0` | isolated RDKit 2023.09.3 | README copy only for upstream packaging | PASS isolated native build and descriptor test |
 
-`osmoai/taxonomy` is explicitly excluded. No ODbL data or taxonomy implementation is included in this phase. Pinning, license confirmation, SBOM, and reproducible adapter tests are mandatory before activation.
+`osmoai/taxonomy` is explicitly excluded. No ODbL taxonomy data is used.
+
+The runtime record is [`services/scientific/runtime/component-pins.json`](../../services/scientific/runtime/component-pins.json). The PostgreSQL migration persists the same pin data in `v2_scientific_component_pins`; source ref, commit SHA, adapter version, runtime version, patch status, and test identity must be updated together.
+
+No Phase 4+ model, dataset, embedding, odor prediction, similarity index, or
+external LLM is activated by this registry.

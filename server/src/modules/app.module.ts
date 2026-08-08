@@ -6,9 +6,10 @@ import { MutationIdempotencyService } from '../services/mutation-idempotency.ser
 import { seededAdminCredentialsForEnv } from './auth-credentials.js'
 import { V2PlatformModule } from './v2-platform.module.js'
 import { V2LabOperationsModule } from './v2-lab-ops.module.js'
+import { V2ScientificModule } from './v2-scientific.module.js'
 
 @Module({
-  imports: [V2PlatformModule, V2LabOperationsModule],
+  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule],
   controllers: [HealthController, NorthStarController],
   providers: [
     MutationIdempotencyService,

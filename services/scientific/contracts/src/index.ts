@@ -1,5 +1,14 @@
 import { z } from 'zod'
 import { evidenceStatusSchema, jobStatusSchema, provenanceReferenceSchema, scientificArtifactMetadataSchema, type EvidenceStatus, type JobStatus } from '../../../../packages/contracts/src/index.js'
+export {
+  molecularStructureSchema,
+  scientificFeatureKindSchema,
+  scientificFeatureRequestSchema,
+  scientificJobProjectionSchema,
+  scientificRuntimeArtifactSchema,
+  scientificRuntimeResponseSchema,
+  structureNormalizeRequestSchema,
+} from '../../../../packages/contracts/src/scientific.js'
 
 export const scientificOperationSchema = z.enum([
   'structure.normalize', 'structure.validate', 'features.generate', 'model.predict', 'embedding.generate', 'similarity.search', 'explainability.generate',
@@ -23,7 +32,7 @@ export const scientificArtifactSchema = z.object({
 })
 export type ScientificArtifact = z.infer<typeof scientificArtifactSchema>
 
-export const featureKindSchema = z.enum(['BCFP', 'MOLFTP', 'OSMORDRED', 'GNN', 'TRANSFORMER', 'FUSED_EMBEDDING', 'ODOR_EMBEDDING'])
+export const featureKindSchema = z.enum(['ECFP', 'BCFP', 'MOLFTP', 'OSMORDRED', 'GNN', 'TRANSFORMER', 'FUSED_EMBEDDING', 'ODOR_EMBEDDING'])
 export type FeatureKind = z.infer<typeof featureKindSchema>
 
 export const featureSetSchema = z.object({

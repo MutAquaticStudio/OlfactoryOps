@@ -30,3 +30,14 @@ Static/build/schema/RLS gates, the authenticated 12-role matrix, member invitati
 ## Phase 2 status
 
 Phase 2 Lab Operations is `PASS` on `codex/v2-phase2-lab-operations` using disposable PostgreSQL verification. The V2 source of truth remains PostgreSQL. The additive migration creates tenant-only Materials, Supplier Profiles/Offers, lots, immutable movements, reservations, Lab Weighing sessions, request/PO/shipment lifecycle, receipt/inspection/return and landed-cost records. V2 does not import Lluch, Global Master Materials, or legacy scientific assumptions. See `phase-2/` for domain documentation and checkpoint evidence.
+
+## Phase 3 status
+
+Phase 3 Scientific Structure / Features is `PASS` on
+`codex/v2-phase3-scientific-features`. It adds tenant-scoped scientific
+jobs/artifacts and exact RDKit, BCFP, MolFTP, and Osmordred provenance.
+BCFP/MolFTP run in a pinned RDKit 2026 runtime; Osmordred runs in a separate
+pinned RDKit 2023.09.3 runtime and is combined only after structure-hash
+verification. PostgreSQL/RLS, native compatibility, 12-role E2E, public UX,
+and static gates passed on disposable local infrastructure. See
+`phase-3/PHASE_3_IMPLEMENTATION_REPORT.md`.
