@@ -45,8 +45,19 @@ and static gates passed on disposable local infrastructure. See
 ## Phase 4 status
 
 Phase 4 Model and Dataset Platform is `PASS` on
-`codex/v2-phase3-scientific-features`. It adds tenant-scoped dataset/model
+`codex/v2-phase4-model-dataset-platform`. It adds tenant-scoped dataset/model
 provenance, reproducible split and evaluation evidence, model cards, pinned
 KGCNN/Transformer-CNN/Osmo Publications references, and a non-serving runtime
 compatibility image. No bulk dataset, prediction endpoint, embedding, external
 LLM, or production deployment is part of this checkpoint. See `phase-4/`.
+
+## Phase 5 status
+
+Phase 5 Olfactory Intelligence is `PASS` on
+`codex/v2-phase5-olfactory-intelligence` using disposable PostgreSQL
+verification. It adds
+tenant-private molecular fingerprint projections, versioned Tanimoto
+similarity, feature-based explainability records and full prediction
+provenance. It deliberately returns `NOT_EVALUATED` for odor predictions and
+odor embeddings until reviewed odor-labelled data, model evaluation and
+calibration exist. See `phase-5/`.

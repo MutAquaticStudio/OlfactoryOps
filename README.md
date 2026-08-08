@@ -31,7 +31,7 @@ tai [`docs/v2/phase-3/PHASE_3_IMPLEMENTATION_REPORT.md`](docs/v2/phase-3/PHASE_3
 ## Trang thai V2 Phase 4
 
 Phase 4 Model va Dataset Platform da `PASS` tren branch
-`codex/v2-phase3-scientific-features`. Phase nay them registry PostgreSQL
+`codex/v2-phase4-model-dataset-platform`. Phase nay them registry PostgreSQL
 tenant-scoped cho dataset, dataset version, license, transformation, artifact,
 model, model version, feature contract, checkpoint, training run, evaluation
 va metric. Moi dataset version can checksum, citation, license evidence va
@@ -41,6 +41,17 @@ inference tong hop va metric tong hop. Transformer-CNN van `BLOCKED` cho
 activation cho toi khi co license evidence review doc lap. Khong import bulk
 dataset, khong phuc vu model, khong goi LLM va khong deploy production. Xem
 [`docs/v2/phase-4`](docs/v2/phase-4/) de xem boundary va evidence.
+
+## Trang thai V2 Phase 5
+
+Phase 5 Olfactory Intelligence da `PASS` tren branch
+`codex/v2-phase5-olfactory-intelligence`, voi PostgreSQL disposable. He thong them
+molecular embedding duoc trace tu ECFP/BCFP artifact, similarity Tanimoto co
+method/metric/index version va explainability record luon kem canh bao khong
+phai bang chung nhan qua. Odor embedding va odor prediction chi tra ve
+`NOT_EVALUATED` neu chua co dataset co nhan hop le, model duoc danh gia va
+calibration. Khong co du doan mui huong gia hoac goi y cong thuc tu Phase 5.
+Xem evidence tai [`docs/v2/phase-5`](docs/v2/phase-5/).
 
 ## Purpose
 

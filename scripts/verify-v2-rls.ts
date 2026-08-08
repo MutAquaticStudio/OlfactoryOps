@@ -6,6 +6,7 @@ import { PlatformService } from '../services/platform/src/service.js'
 import { LabOperationsService } from '../services/lab-ops/src/service.js'
 import { ScientificFeatureService, type ScientificRuntime } from '../services/scientific/src/service.js'
 import { ModelDatasetService } from '../services/scientific/src/model-dataset-service.js'
+import { OlfactoryIntelligenceService } from '../services/scientific/src/olfactory-intelligence-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -22,7 +23,7 @@ class RlsScientificRuntime implements ScientificRuntime {
       runtimeVersion: 'rls-science-fixture/1', structure,
       artifacts: input.featureKinds.map((kind) => ({
         kind, status: kind === 'MOLFTP' ? 'NOT_EVALUATED' as const : 'VERIFIED' as const, schemaVersion: `${kind.toLowerCase()}/fixture`, componentKey: kind === 'ECFP' ? 'RDKIT' : kind, componentVersion: 'fixture/1', inputHash: structure.outputHash, contentHash: kind === 'ECFP' ? 'd'.repeat(64) : 'e'.repeat(64),
-        payload: kind === 'MOLFTP' ? { reason: 'No target dataset is registered.' } : { bits: [1, 5, 9] }, provenance: [{ kind: 'component', id: kind === 'ECFP' ? 'RDKIT' : kind, version: 'fixture/1' }],
+        payload: kind === 'MOLFTP' ? { reason: 'No target dataset is registered.' } : { onBits: [1, 5, 9], bitLength: 2048, onBitCount: 3 }, provenance: [{ kind: 'component', id: kind === 'ECFP' ? 'RDKIT' : kind, version: 'fixture/1' }],
       })),
     }
   }
@@ -57,6 +58,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0003_phase2_lab_operations.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0004_phase3_scientific_features.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0006_phase5_olfactory_intelligence.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -125,6 +127,7 @@ try {
   const lab = new LabOperationsService(appClient, service)
   const scientific = new ScientificFeatureService(appClient, service, new RlsScientificRuntime())
   const modelDataset = new ModelDatasetService(appClient, service)
+  const olfactory = new OlfactoryIntelligenceService(appClient, service)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -187,6 +190,14 @@ try {
   }, `rls-training-run-${suffix}`)
   const evaluation = await modelDataset.recordEvaluation(context.context, trainingRun.id, { datasetVersionId: datasetVersion.id, protocolVersion: 'qa-eval-1', leakageStatus: 'PASS', metrics: [{ key: 'accuracy', value: 0.75, unit: 'fraction' }] }, `rls-evaluation-${suffix}`)
   const modelRuntime = await modelDataset.runtimeStatus(context.context, modelVersion.id)
+  const comparisonMaterial = await lab.createMaterial(context.context, { name: 'RLS similarity material', internalCode: `SIM-${suffix}`, sensoryMetadata: { source: 'test' }, identifiers: [] }, `rls-sim-material-${suffix}`)
+  await lab.changeMaterialStatus(context.context, comparisonMaterial.id, 'ACTIVE', `rls-sim-material-status-${suffix}`)
+  await scientific.normalizeMaterial(context.context, comparisonMaterial.id, { smiles: 'CCO' }, `rls-sim-structure-${suffix}`)
+  await scientific.generateFeatures(context.context, comparisonMaterial.id, { featureKinds: ['ECFP'] }, `rls-sim-features-${suffix}`)
+  const molecularEmbedding = await olfactory.createMolecularEmbedding(context.context, material.id, { featureKinds: ['ECFP'], method: 'FINGERPRINT_BINARY_VECTOR', normalization: 'L2', indexVersion: 'qa-index/1' }, `rls-embedding-${suffix}`)
+  const molecularSimilarity = await olfactory.compareMolecularSimilarity(context.context, material.id, { candidateMaterialId: comparisonMaterial.id, featureKind: 'ECFP', indexVersion: 'qa-index/1' }, `rls-similarity-${suffix}`)
+  const odorPrediction = await olfactory.recordOdorPredictionNotEvaluated(context.context, material.id, { modelVersionId: modelVersion.id, requestedTask: 'odor-descriptor' }, `rls-odor-prediction-${suffix}`)
+  const explainability = await olfactory.explain(context.context, material.id, { featureKind: 'MOLFTP', requestedTask: 'odor-descriptor' }, `rls-explain-${suffix}`)
   const materialDocument = await lab.addMaterialDocument(context.context, material.id, { kind: 'SDS', objectRef: `test://material/${suffix}`, contentHash: `hash-${suffix}` }, `rls-material-document-${suffix}`)
   const supplier = await lab.createSupplier(context.context, { legalName: `RLS Supplier ${suffix}`, currency: 'USD', paymentTerms: {} }, `rls-supplier-${suffix}`)
   await lab.changeSupplierStatus(context.context, supplier.id, 'ACTIVE', `rls-supplier-status-${suffix}`)
@@ -277,6 +288,7 @@ try {
   const crossTenantScientificDenied = await deniedCode(() => scientific.materialArtifacts(secondContext.context, material.id), 'MATERIAL_NOT_FOUND')
   const crossTenantDatasetDenied = await deniedCode(() => modelDataset.datasetDetail(secondContext.context, dataset.id), 'DATASET_NOT_FOUND')
   const crossTenantModelDenied = await deniedCode(() => modelDataset.runtimeStatus(secondContext.context, modelVersion.id), 'MODEL_VERSION_NOT_FOUND')
+  const crossTenantEmbeddingDenied = await deniedCode(() => olfactory.createMolecularEmbedding(secondContext.context, material.id, { featureKinds: ['ECFP'] }, `rls-cross-embedding-${suffix}`), 'MATERIAL_NOT_FOUND')
   const secondDataset = await modelDataset.createDataset(secondContext.context, { key: `qa-other-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Second tenant dataset', task: 'Composite foreign-key isolation check' }, `rls-other-dataset-${suffix}`)
   const compositeCrossTenantDatasetDenied = await appClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
@@ -374,9 +386,14 @@ try {
     && crossTenantModelDenied
     && compositeCrossTenantDatasetDenied
     && modelRegistryPermissionDenied
+    && molecularEmbedding.status === 'VERIFIED'
+    && molecularSimilarity.status === 'VERIFIED'
+    && odorPrediction.status === 'NOT_EVALUATED'
+    && explainability.status === 'NOT_EVALUATED'
+    && crossTenantEmbeddingDenied
 
   if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied }, phase4: { duplicateDataset: duplicateDataset.id === dataset.id, approvedDatasetVersion: approvedDatasetVersion.status, trainingRun: trainingRun.status, evaluation: evaluation.leakageStatus, modelRuntime: modelRuntime.status, crossTenantDatasetDenied, crossTenantModelDenied, compositeCrossTenantDatasetDenied, modelRegistryPermissionDenied } })}`)
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied }, phase4: { duplicateDataset: duplicateDataset.id === dataset.id, approvedDatasetVersion: approvedDatasetVersion.status, trainingRun: trainingRun.status, evaluation: evaluation.leakageStatus, modelRuntime: modelRuntime.status, crossTenantDatasetDenied, crossTenantModelDenied, compositeCrossTenantDatasetDenied, modelRegistryPermissionDenied }, phase5: { molecularEmbedding: molecularEmbedding.status, molecularSimilarity: molecularSimilarity.status, odorPrediction: odorPrediction.status, explainability: explainability.status, crossTenantEmbeddingDenied } })}`)
   }
 
   console.log(JSON.stringify({
@@ -445,6 +462,13 @@ try {
       crossTenantModelDenied,
       compositeCrossTenantDatasetDenied,
       modelRegistryPermissionDenied,
+    },
+    phase5: {
+      molecularEmbedding: molecularEmbedding.status,
+      molecularSimilarity: molecularSimilarity.status,
+      odorPrediction: odorPrediction.status,
+      explainability: explainability.status,
+      crossTenantEmbeddingDenied,
     },
   }))
 } finally {

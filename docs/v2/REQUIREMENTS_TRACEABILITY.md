@@ -104,3 +104,13 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | KGCNN compatibility | Isolated synthetic model load, checkpoint, inference and metric smoke | PASS |
 | Transformer-CNN activation | Independent license evidence review has not completed | BLOCKED |
 | Bulk research dataset import, production training and serving | Outside Phase 4 scope | NOT_APPLICABLE |
+
+## Phase 5 evidence (2026-08-08)
+
+| Requirement family | Phase 5 evidence | Status |
+|---|---|---|
+| FR-ML-003 / FR-ML-006 | Versioned molecular fingerprint projection with source artifact/manifests, normalization and index version | PASS |
+| FR-ML-007 | Exact ECFP/BCFP Tanimoto records identify method, metric and index version | PASS |
+| FR-ML-008 | Explainability records retain a non-causal association disclaimer | PASS |
+| FR-ML-005 | Odor prediction requests retain model/input/task provenance and an honest evidence state | PASS |
+| Odor embedding, calibrated odor head and semantic odor prediction | No reviewed odor-labelled dataset or evaluated serving model exists | NOT_APPLICABLE |
