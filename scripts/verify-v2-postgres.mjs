@@ -3,7 +3,11 @@ import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
 const schema = 'infra/postgres/prisma/schema.prisma'
-const migrations = ['infra/postgres/migrations/0001_platform_security_core.sql', 'infra/postgres/migrations/0002_phase1_members_notifications.sql']
+const migrations = [
+  'infra/postgres/migrations/0001_platform_security_core.sql',
+  'infra/postgres/migrations/0002_phase1_members_notifications.sql',
+  'infra/postgres/migrations/0003_phase2_lab_operations.sql',
+]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
 

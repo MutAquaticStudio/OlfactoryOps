@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 
 type Locale = 'en-US' | 'vi-VN'
@@ -6,6 +6,7 @@ type V2Session = { user: { email: string; displayName: string; verified: boolean
 type V2Invitation = { id: string; email: string; role: string; status: string; expiresAt: string; createdAt: string }
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/api\/v1\/?$/, '/api/v1/v2/platform')
+const labApiBase = apiBase.replace(/\/platform$/, '/lab')
 
 const copy = {
   'en-US': {
@@ -24,6 +25,14 @@ function navigate(path: string) { window.history.pushState({}, '', path); window
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const csrf = document.cookie.match(/(?:^|;\s*)oo_v2_csrf=([^;]+)/)?.[1] || window.localStorage.getItem('oo_v2_csrf') || undefined
   const response = await fetch(`${apiBase}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}), ...(init?.headers || {}) } })
+  const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || 'Request failed')
+  return payload as T
+}
+
+async function labRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const csrf = document.cookie.match(/(?:^|;\s*)oo_v2_csrf=([^;]+)/)?.[1] || window.localStorage.getItem('oo_v2_csrf') || undefined
+  const response = await fetch(`${labApiBase}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}), ...(init?.method && init.method !== 'GET' ? { 'Idempotency-Key': crypto.randomUUID() } : {}), ...(init?.headers || {}) } })
   const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
   if (!response.ok) throw new Error(payload.error?.message || payload.message || 'Request failed')
   return payload as T
@@ -57,7 +66,7 @@ function AuthView({ mode, text, onLocale, onNavigate }: { mode: 'login' | 'signu
 function WorkspaceView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
   const [session, setSession] = useState<V2Session | null>(null); const [busy, setBusy] = useState(true); const [error, setError] = useState<string | null>(null); const [active, setActive] = useState(window.location.pathname.split('/').at(-1) || 'workspace')
   useEffect(() => { void request<V2Session>('/me').then(setSession).catch((err) => { setError(err instanceof Error ? err.message : text.unavailable); onNavigate('/v2/login') }).finally(() => setBusy(false)) }, [onNavigate, text.unavailable])
-  const items = useMemo(() => [{ key: 'workspace', label: text.status, permission: 'tenant.view' }, { key: 'security', label: text.security, permission: 'security.sessions.view' }, { key: 'members', label: text.members, permission: 'members.view' }, { key: 'domains', label: text.domains, permission: 'domains.view' }, { key: 'billing', label: text.billing, permission: 'billing.capabilities' }, { key: 'notifications', label: text.notifications, permission: 'notifications.view' }, { key: 'privacy', label: text.privacy, permission: 'security.profile.view' }, { key: 'observability', label: text.observability, permission: 'observability.view' }].filter((item) => session?.capabilities?.[item.permission] === true), [session, text])
+  const items = useMemo(() => [{ key: 'workspace', label: text.status, permission: 'tenant.view' }, { key: 'materials', label: 'Materials', permission: 'materials.view' }, { key: 'suppliers', label: 'Suppliers', permission: 'suppliers.view' }, { key: 'inventory', label: 'Inventory', permission: 'inventory.view' }, { key: 'procurement', label: 'Procurement', permission: 'procurement.view' }, { key: 'security', label: text.security, permission: 'security.sessions.view' }, { key: 'members', label: text.members, permission: 'members.view' }, { key: 'domains', label: text.domains, permission: 'domains.view' }, { key: 'billing', label: text.billing, permission: 'billing.capabilities' }, { key: 'notifications', label: text.notifications, permission: 'notifications.view' }, { key: 'privacy', label: text.privacy, permission: 'security.profile.view' }, { key: 'observability', label: text.observability, permission: 'observability.view' }].filter((item) => session?.capabilities?.[item.permission] === true), [session, text])
   if (busy) return <main className="v2-platform-page"><div className="v2-loading">{text.loading}</div></main>
   if (error && !session) return <main className="v2-platform-page"><div className="v2-auth-card"><div className="v2-alert is-error">{error}</div></div></main>
   const signOut = async () => { await request('/auth/logout', { method: 'POST' }).catch(() => undefined); onNavigate('/v2/login') }
@@ -76,8 +85,9 @@ function V2Section({ active, text, session }: { active: string; text: PlatformCo
     if (active === 'members') void Promise.all([request<{ members: typeof members }>('/workspace/members'), request<{ invitations: V2Invitation[] }>('/workspace/invitations')]).then(([memberPayload, invitationPayload]) => { setMembers(memberPayload.members); setInvitations(invitationPayload.invitations) }).catch((error) => setNotice(error instanceof Error ? error.message : text.noAccess))
   }, [active, text.noAccess])
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Request failed') } }
-  const requiredPermission: Record<string, string> = { security: 'security.sessions.view', members: 'members.view', domains: 'domains.view', billing: 'billing.capabilities', notifications: 'notifications.view', observability: 'observability.view', workspace: 'tenant.view' }
+  const requiredPermission: Record<string, string> = { materials: 'materials.view', suppliers: 'suppliers.view', inventory: 'inventory.view', procurement: 'procurement.view', security: 'security.sessions.view', members: 'members.view', domains: 'domains.view', billing: 'billing.capabilities', notifications: 'notifications.view', observability: 'observability.view', workspace: 'tenant.view' }
   if (requiredPermission[active] && session?.capabilities?.[requiredPermission[active]] !== true) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
+  if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
   if (active === 'billing') return <div className="v2-panel"><h2>{text.billing}</h2><p>Self-service billing is disabled during managed beta. Workspace access and capability limits remain enforced server-side.</p></div>
   if (active === 'security') return <div className="v2-panel"><h2>{text.security}</h2><p>Sessions are opaque, rotated, hash-only, and protected by CSRF for unsafe requests.</p><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/password', passwords); setPasswords({ currentPassword: '', newPassword: '' }) }}><label>Current password<input type="password" required value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} /></label><label>New password<input type="password" required minLength={12} value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change password</button></form><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/email', emailForm); setEmailForm({ currentPassword: '', newEmail: '' }) }}><label>New email<input type="email" required value={emailForm.newEmail} onChange={(event) => setEmailForm({ ...emailForm, newEmail: event.target.value })} /></label><label>Current password<input type="password" required value={emailForm.currentPassword} onChange={(event) => setEmailForm({ ...emailForm, currentPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change email</button></form>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
   if (active === 'privacy') return <div className="v2-panel"><h2>{text.privacy}</h2><p>Personal export and workspace export are separate authorization boundaries.</p><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/exports/privacy')}>{text.export}</button><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/consents', { purpose: 'PRIVACY', policyVersion: 'v2-2026-08' })}>{text.consent}</button>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
@@ -86,6 +96,49 @@ function V2Section({ active, text, session }: { active: string; text: PlatformCo
   if (active === 'notifications') return <div className="v2-panel"><h2>{text.notifications}</h2><p>In-app, email, and web-push delivery preferences are tenant-scoped.</p></div>
   if (active === 'observability') return <ObservabilityPanel text={text} />
   return <div className="v2-panel"><h2>{text.product}</h2><p>Platform Security Core is active. Lab and scientific modules remain outside this Phase 1 surface.</p></div>
+}
+
+type MaterialRow = { id: string; name: string; internalCode?: string | null; status: string; scope: 'TENANT'; description?: string | null }
+type LotRow = { id: string; materialId: string; status: string; qualityStatus: string; location: string; projection: { onHandGrams: number; reservedGrams: number; availableGrams: number } }
+type SupplierRow = { id: string; legalName: string; tradeName?: string | null; currency: string; leadTimeDays?: number | null; status: string }
+type ProcurementOverview = { requests: Array<{ id: string; status: string }>; orders: Array<{ id: string; status: string; currency: string }>; shipments: Array<{ id: string; status: string; carrier?: string | null; trackingReference?: string | null }> }
+
+function LabOperationsPanel({ active, capabilities }: { active: 'materials' | 'suppliers' | 'inventory' | 'procurement'; capabilities: Record<string, boolean> }) {
+  const [materials, setMaterials] = useState<MaterialRow[]>([])
+  const [suppliers, setSuppliers] = useState<SupplierRow[]>([])
+  const [lots, setLots] = useState<LotRow[]>([])
+  const [procurement, setProcurement] = useState<ProcurementOverview | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const [supplierName, setSupplierName] = useState('')
+  const refresh = useCallback(async () => {
+    try {
+      if ((active === 'materials' || active === 'procurement') && capabilities['materials.view']) setMaterials((await labRequest<{ materials: MaterialRow[] }>('/materials')).materials)
+      if (active === 'suppliers') setSuppliers((await labRequest<{ suppliers: SupplierRow[] }>('/suppliers')).suppliers)
+      if (active === 'inventory') setLots((await labRequest<{ lots: LotRow[] }>('/inventory/lots')).lots)
+      if (active === 'procurement') setProcurement(await labRequest<ProcurementOverview>('/procurement/overview'))
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to load this workspace data.') }
+  }, [active, capabilities])
+  useEffect(() => { void refresh() }, [refresh])
+  const createMaterial = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    try {
+      await labRequest('/materials', { method: 'POST', body: JSON.stringify({ name, internalCode: code || undefined, identifiers: [], sensoryMetadata: {} }) })
+      setName(''); setCode(''); await refresh(); setNotice('Material created as a draft. Review it before operational use.')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Material could not be created.') }
+  }
+  const createSupplier = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    try {
+      await labRequest('/suppliers', { method: 'POST', body: JSON.stringify({ legalName: supplierName, currency: 'USD', paymentTerms: {} }) })
+      setSupplierName(''); await refresh(); setNotice('Supplier profile created as a draft for review.')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Supplier profile could not be created.') }
+  }
+  if (active === 'materials') return <div className="v2-panel" data-testid="v2-materials"><div className="v2-panel-heading"><div><h2>Materials</h2><p>Tenant-owned materials remain private. A draft cannot be received or consumed until an authorized reviewer makes it active.</p></div></div>{capabilities['materials.edit'] ? <form className="v2-inline-form" onSubmit={createMaterial}><label>Material name<input required value={name} onChange={(event) => setName(event.target.value)} /></label><label>Internal code<input value={code} onChange={(event) => setCode(event.target.value)} /></label><button className="v2-secondary-button" type="submit">Create draft material</button></form> : null}<div className="v2-member-list">{materials.length ? materials.map((material) => <div className="v2-member-row" key={material.id}><strong>{material.name}</strong><span>{material.internalCode || 'No internal code'}</span><span>{material.status.replaceAll('_', ' ')}</span><span>Tenant material</span></div>) : <p className="v2-muted">No tenant materials have been created yet.</p>}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
+  if (active === 'suppliers') return <div className="v2-panel" data-testid="v2-suppliers"><h2>Supplier profiles</h2><p>Supplier identity, evidence and offer pricing are tenant-owned. Operational purchasing accepts only active supplier offers.</p>{capabilities['suppliers.edit'] ? <form className="v2-inline-form" onSubmit={createSupplier}><label>Legal supplier name<input required value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label><button className="v2-secondary-button" type="submit">Create draft supplier</button></form> : null}<div className="v2-member-list">{suppliers.length ? suppliers.map((supplier) => <div className="v2-member-row" key={supplier.id}><strong>{supplier.tradeName || supplier.legalName}</strong><span>{supplier.status}</span><span>{supplier.currency}</span><span>{supplier.leadTimeDays === null || supplier.leadTimeDays === undefined ? 'Lead time not set' : `${supplier.leadTimeDays} days`}</span></div>) : <p className="v2-muted">No supplier profile is available in this workspace.</p>}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
+  if (active === 'inventory') return <div className="v2-panel" data-testid="v2-inventory"><h2>Inventory lots</h2><p>Available stock is derived from the immutable ledger. Quarantine and failed-quality lots are excluded from FEFO allocation.</p><div className="v2-member-list">{lots.length ? lots.map((lot) => <div className="v2-member-row" key={lot.id}><strong>{lot.id.slice(0, 14)}</strong><span>{lot.status} / {lot.qualityStatus}</span><span>{lot.location}</span><span>{lot.projection.availableGrams.toFixed(3)} g available</span></div>) : <p className="v2-muted">No lots exist in this workspace.</p>}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
+  return <div className="v2-panel" data-testid="v2-procurement"><h2>Procurement & receiving</h2><p>Request, approval, order, shipment, receipt, inspection and landed-cost operations are all tenant-scoped. Receiving always creates a quarantine lot; inspection is the gate into available inventory.</p><div className="v2-member-list">{procurement?.orders.length ? procurement.orders.map((order) => <div className="v2-member-row" key={order.id}><strong>{order.id.slice(0, 16)}</strong><span>{order.status.replaceAll('_', ' ')}</span><span>{order.currency}</span><span>Order</span></div>) : <p className="v2-muted">No purchase order is available. Create an approved request, then select an active supplier offer.</p>}{procurement?.shipments.map((shipment) => <div className="v2-member-row" key={shipment.id}><strong>{shipment.carrier || 'Supplier shipment'}</strong><span>{shipment.status.replaceAll('_', ' ')}</span><span>{shipment.trackingReference || 'No tracking reference'}</span><span>Shipment</span></div>)}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
 }
 
 function ObservabilityPanel({ text }: { text: PlatformCopy }) {

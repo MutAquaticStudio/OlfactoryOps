@@ -13,6 +13,10 @@ The frozen legacy baseline remains release candidate `0.1.0-rc.1` with migration
 
 Read the source pack in [`docs/v2/README.md`](docs/v2/README.md), then [`docs/v2/PHASE_0_BASELINE.md`](docs/v2/PHASE_0_BASELINE.md) and [`docs/v2/PHASE_0_IMPLEMENTATION_REPORT.md`](docs/v2/PHASE_0_IMPLEMENTATION_REPORT.md). Run the shared contract checks with `npm.cmd test` and `npm.cmd run typecheck:v2`.
 
+## Trang thai V2 Phase 2
+
+Phase 2 Lab Operations da `PASS` tren branch `codex/v2-phase2-lab-operations` voi PostgreSQL disposable. PostgreSQL la source of truth cho Material tenant-private, Supplier Profile/Offer, document reference, price history, lot inventory, immutable ledger, FEFO, Lab Weighing, reservation, procurement request/PO/shipment, quarantine, inspection, return va landed cost. V2 khong import Lluch, Global Master Materials hay legacy Formula R&D. Tai lieu va evidence nam trong [`docs/v2/phase-2`](docs/v2/phase-2/). Production deploy va remote migration van `NOT_APPLICABLE` cho checkpoint local nay.
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

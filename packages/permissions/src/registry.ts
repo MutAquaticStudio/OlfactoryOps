@@ -45,6 +45,7 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('inventory.reserve', 'inventory', 'Reserve eligible lots', true),
   definition('inventory.consume', 'inventory', 'Consume inventory through a session', true, true),
   definition('inventory.adjust', 'inventory', 'Post a controlled adjustment', true, true),
+  definition('inventory.transfer', 'inventory', 'Transfer a lot between controlled locations', true),
   definition('inventory.reverse', 'inventory', 'Post a compensating reversal', true, true),
   definition('procurement.view', 'procurement', 'View procurement records'),
   definition('procurement.create', 'procurement', 'Create procurement requests or orders', true),

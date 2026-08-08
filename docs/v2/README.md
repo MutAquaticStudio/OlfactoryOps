@@ -25,4 +25,8 @@ Phase 0 outputs are tracked in `PHASE_0_BASELINE.md`, `PHASE_0_ARCHITECTURE_MAP.
 
 Phase 1 Platform Security Core is implemented on `codex/v2-phase1-platform-security` under `phase-1/`. It uses isolated `/v2/*` routes and PostgreSQL as the V2 source of truth. Current verdict: `PHASE_1_READY = YES`.
 
-Static/build/schema/RLS gates, the authenticated 12-role matrix, member invitation workflow, and notification retry worker are `PASS` on disposable infrastructure. Cloudflare provisioning, remote migrations, and production deployment are `NOT_APPLICABLE` for this checkpoint. See `phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` and `phase-1/ROLE_E2E_MATRIX.md` for evidence. Phase 2 remains out of scope for this checkpoint.
+Static/build/schema/RLS gates, the authenticated 12-role matrix, member invitation workflow, and notification retry worker are `PASS` on disposable infrastructure. Cloudflare provisioning, remote migrations, and production deployment are `NOT_APPLICABLE` for this checkpoint. See `phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` and `phase-1/ROLE_E2E_MATRIX.md` for evidence.
+
+## Phase 2 status
+
+Phase 2 Lab Operations is `PASS` on `codex/v2-phase2-lab-operations` using disposable PostgreSQL verification. The V2 source of truth remains PostgreSQL. The additive migration creates tenant-only Materials, Supplier Profiles/Offers, lots, immutable movements, reservations, Lab Weighing sessions, request/PO/shipment lifecycle, receipt/inspection/return and landed-cost records. V2 does not import Lluch, Global Master Materials, or legacy scientific assumptions. See `phase-2/` for domain documentation and checkpoint evidence.

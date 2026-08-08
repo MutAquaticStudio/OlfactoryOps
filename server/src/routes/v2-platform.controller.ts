@@ -34,6 +34,8 @@ function requestOriginAllowed(request: FastifyRequest) {
     `https://${requestHost(request)}`,
     'http://localhost:5173',
     'http://127.0.0.1:5173',
+    'http://localhost:4173',
+    'http://127.0.0.1:4173',
     'https://labofscents.org',
     'https://www.labofscents.org',
   ])
@@ -215,12 +217,12 @@ export class V2PlatformController {
       'domains.view', 'domains.manage',
       'billing.capabilities', 'notifications.view', 'notifications.manage',
       'privacy.export.self', 'workspace.export.request', 'observability.view',
-      'materials.view', 'materials.viewSensitive',
-      'inventory.view', 'inventory.manage',
+      'materials.view', 'materials.viewSensitive', 'materials.edit', 'materials.approve',
+      'inventory.view', 'inventory.receive', 'inventory.reserve', 'inventory.consume', 'inventory.adjust', 'inventory.transfer', 'inventory.reverse',
       'formula.view', 'formula.edit',
       'trials.view', 'sensory.view', 'sensory.evaluate',
       'scientific_ai.use', 'rag.view',
-      'suppliers.view', 'procurement.view', 'procurement.create',
+      'suppliers.view', 'suppliers.edit', 'suppliers.approve', 'procurement.view', 'procurement.create', 'procurement.approve', 'procurement.receive', 'procurement.inspect',
       'production.view', 'production.qc',
       'costing.view', 'costing.viewMargin', 'finance.viewMargin'
     ]

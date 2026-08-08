@@ -8,7 +8,7 @@ const manifest = JSON.parse(await readFile('.qa/v2-role-fixtures/manifest.json',
 const expected: Record<Role, { required: string[]; forbidden: string[] }> = {
   Owner: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'observability.view', 'privacy.export.self'], forbidden: [] },
   Admin: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'privacy.export.self'], forbidden: ['observability.view'] },
-  'Lab Manager': { required: ['tenant.view', 'members.view', 'inventory.view', 'notifications.view'], forbidden: ['billing.capabilities', 'observability.view'] },
+  'Lab Manager': { required: ['tenant.view', 'members.view', 'inventory.view', 'inventory.transfer', 'notifications.view'], forbidden: ['billing.capabilities', 'observability.view'] },
   Perfumer: { required: ['tenant.view', 'formula.view', 'formula.edit', 'trials.view'], forbidden: ['members.view', 'billing.capabilities', 'observability.view'] },
   'R&D Scientist': { required: ['tenant.view', 'formula.view', 'scientific_ai.use', 'rag.view'], forbidden: ['members.view', 'billing.capabilities', 'observability.view'] },
   'Lab Technician': { required: ['tenant.view', 'inventory.view', 'trials.view', 'sensory.evaluate'], forbidden: ['members.view', 'billing.capabilities', 'observability.view'] },
@@ -50,6 +50,28 @@ for (const role of roles) {
       expect(denied.status()).toBe(role === 'Owner' ? 200 : 403)
       const crossTenant = await page.request.get('/api/v1/v2/platform/me', { headers: { 'x-forwarded-host': manifest.otherHostname } })
       expect(crossTenant.status()).toBe(403)
+
+      const materials = await page.request.get('/api/v1/v2/lab/materials')
+      expect(materials.status(), `${role} material projection`).toBe(payload.capabilities['materials.view'] ? 200 : 403)
+      const lots = await page.request.get('/api/v1/v2/lab/inventory/lots')
+      expect(lots.status(), `${role} inventory projection`).toBe(payload.capabilities['inventory.view'] ? 200 : 403)
+      const suppliers = await page.request.get('/api/v1/v2/lab/suppliers')
+      expect(suppliers.status(), `${role} supplier projection`).toBe(payload.capabilities['suppliers.view'] ? 200 : 403)
+      const procurement = await page.request.get('/api/v1/v2/lab/procurement/overview')
+      expect(procurement.status(), `${role} procurement projection`).toBe(payload.capabilities['procurement.view'] ? 200 : 403)
+      if (role === 'Owner') {
+        await page.goto('/v2/workspace/materials')
+        await expect(page.getByTestId('v2-materials')).toBeVisible()
+        await page.getByLabel('Material name').fill('Role E2E material')
+        await page.getByLabel('Internal code').fill('ROLE-E2E')
+        await page.getByRole('button', { name: 'Create draft material' }).click()
+        await expect(page.getByText('Material created as a draft. Review it before operational use.')).toBeVisible()
+        await page.goto('/v2/workspace/suppliers')
+        await expect(page.getByTestId('v2-suppliers')).toBeVisible()
+        await page.getByLabel('Legal supplier name').fill('Role E2E supplier')
+        await page.getByRole('button', { name: 'Create draft supplier' }).click()
+        await expect(page.getByText('Supplier profile created as a draft for review.')).toBeVisible()
+      }
 
       for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {
         await page.setViewportSize(viewport)

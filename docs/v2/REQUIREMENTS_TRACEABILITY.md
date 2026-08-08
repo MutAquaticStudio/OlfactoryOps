@@ -67,3 +67,16 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-PRIV-001..005 | V2 consent, privacy export, workspace export and erasure review boundary | PASS |
 | FR-AUTH-011 | V2 member invitation, resend, revoke and acceptance workflow | PASS |
 | Phase 1 release gate | `docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` | PASS |
+
+## Phase 2 evidence (2026-08-08)
+
+| Requirement family | Phase 2 evidence | Status |
+|---|---|---|
+| FR-MAT-001..005 | Tenant-only material aggregate, identity placeholder, identifiers, document reference, compliance, audit and approval gates | PASS |
+| FR-SUP-001..002 | Supplier Profile, evidence references, approved Offer and append-only price history | PASS |
+| FR-INV-001..006 | Lot records, immutable ledger, reconstructable projection, reservation consumption/expiry, transfer and deterministic FEFO | PASS |
+| FR-WEIGH-001..004 | Planned/confirmed weighing session with lot selection, tolerance, reserved consumption and compensating traceability | PASS |
+| FR-PROC-001..006 | Request lines/approval, PO/shipment lifecycle, quarantine receipt, inspection hold/review/final decision, return and landed-cost boundary | PASS |
+| Tenant isolation/RBAC/idempotency | Disposable PostgreSQL `v2_app` RLS harness and 12-role Playwright matrix | PASS |
+| Legacy global catalogue and V1 material paths | Not introduced into V2 Phase 2 | PASS |
+| Production deployment, remote migration, external suppliers/documents | No release is authorized for this local phase checkpoint | NOT_APPLICABLE |
