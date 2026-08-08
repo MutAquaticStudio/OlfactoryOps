@@ -53,6 +53,16 @@ phai bang chung nhan qua. Odor embedding va odor prediction chi tra ve
 calibration. Khong co du doan mui huong gia hoac goi y cong thuc tu Phase 5.
 Xem evidence tai [`docs/v2/phase-5`](docs/v2/phase-5/).
 
+## Trang thai V2 Phase 5B
+
+Phase 5B Consumer Intelligence da `PASS` tren PostgreSQL disposable. Du lieu
+feedback chi luu hash va private reference, khong luu raw text trong V2. Ket qua
+phan tich co evidence status, preference vector tach rieng theo tenant/source
+va can it nhat ba analysis hop le; neu thieu bang chung he thong tra
+`NOT_ENOUGH_EVIDENCE`. Huy consent/source se invalidate cac analysis/vector lien
+quan. Khong co NLP/LLM provider, cross-tenant learning hay tu dong sua cong thuc.
+Xem [`docs/v2/phase-5b`](docs/v2/phase-5b/).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

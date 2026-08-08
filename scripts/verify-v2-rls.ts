@@ -7,6 +7,7 @@ import { LabOperationsService } from '../services/lab-ops/src/service.js'
 import { ScientificFeatureService, type ScientificRuntime } from '../services/scientific/src/service.js'
 import { ModelDatasetService } from '../services/scientific/src/model-dataset-service.js'
 import { OlfactoryIntelligenceService } from '../services/scientific/src/olfactory-intelligence-service.js'
+import { ConsumerIntelligenceService } from '../services/sentiment/src/consumer-intelligence-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -59,6 +60,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0004_phase3_scientific_features.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0006_phase5_olfactory_intelligence.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0007_phase5b_consumer_intelligence.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -128,6 +130,7 @@ try {
   const scientific = new ScientificFeatureService(appClient, service, new RlsScientificRuntime())
   const modelDataset = new ModelDatasetService(appClient, service)
   const olfactory = new OlfactoryIntelligenceService(appClient, service)
+  const consumer = new ConsumerIntelligenceService(appClient, service)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -198,6 +201,10 @@ try {
   const molecularSimilarity = await olfactory.compareMolecularSimilarity(context.context, material.id, { candidateMaterialId: comparisonMaterial.id, featureKind: 'ECFP', indexVersion: 'qa-index/1' }, `rls-similarity-${suffix}`)
   const odorPrediction = await olfactory.recordOdorPredictionNotEvaluated(context.context, material.id, { modelVersionId: modelVersion.id, requestedTask: 'odor-descriptor' }, `rls-odor-prediction-${suffix}`)
   const explainability = await olfactory.explain(context.context, material.id, { featureKind: 'MOLFTP', requestedTask: 'odor-descriptor' }, `rls-explain-${suffix}`)
+  const sentimentSource = await consumer.createSource(context.context, { key: `sentiment-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, type: 'SURVEY', sourceScope: 'qa-project', storageRef: 'test://consumer-feedback', purpose: 'Isolated consumer preference verification.', consentRequired: true, retentionDays: 30 }, `rls-sentiment-source-${suffix}`)
+  const sentimentFeedback = await consumer.ingestFeedback(context.context, { sourceId: sentimentSource.id, externalRefHash: '1'.repeat(64), contentHash: '2'.repeat(64), privateContentRef: 'private://qa-feedback/1', consentProofHash: '3'.repeat(64), languageHint: 'EN', collectedAt: new Date().toISOString() }, `rls-sentiment-feedback-${suffix}`)
+  const sentimentAnalysis = await consumer.recordAnalysis(context.context, { feedbackItemId: sentimentFeedback.id, extractionVersion: 'manual-v1', provider: 'manual-review', modelVersion: 'manual-v1', language: 'EN', languageConfidence: 1, overall: { label: 'POSITIVE', score: 0.5, confidence: 0.8 }, descriptors: [{ id: 'woody', value: 0.6, confidence: 0.8 }], evidenceStatus: 'VERIFIED' }, `rls-sentiment-analysis-${suffix}`)
+  const preference = await consumer.createPreferenceVector(context.context, { sourceIds: [sentimentSource.id], sourceScope: 'qa-project', vocabularyVersion: 'v1', aggregationVersion: 'v1' }, `rls-sentiment-preference-${suffix}`)
   const materialDocument = await lab.addMaterialDocument(context.context, material.id, { kind: 'SDS', objectRef: `test://material/${suffix}`, contentHash: `hash-${suffix}` }, `rls-material-document-${suffix}`)
   const supplier = await lab.createSupplier(context.context, { legalName: `RLS Supplier ${suffix}`, currency: 'USD', paymentTerms: {} }, `rls-supplier-${suffix}`)
   await lab.changeSupplierStatus(context.context, supplier.id, 'ACTIVE', `rls-supplier-status-${suffix}`)
@@ -289,6 +296,9 @@ try {
   const crossTenantDatasetDenied = await deniedCode(() => modelDataset.datasetDetail(secondContext.context, dataset.id), 'DATASET_NOT_FOUND')
   const crossTenantModelDenied = await deniedCode(() => modelDataset.runtimeStatus(secondContext.context, modelVersion.id), 'MODEL_VERSION_NOT_FOUND')
   const crossTenantEmbeddingDenied = await deniedCode(() => olfactory.createMolecularEmbedding(secondContext.context, material.id, { featureKinds: ['ECFP'] }, `rls-cross-embedding-${suffix}`), 'MATERIAL_NOT_FOUND')
+  const crossTenantSentimentDenied = await deniedCode(() => consumer.invalidateSource(secondContext.context, sentimentSource.id, { reasonCode: 'CROSS_TENANT' }, `rls-cross-sentiment-${suffix}`), 'FEEDBACK_SOURCE_NOT_FOUND')
+  const invalidation = await consumer.invalidateSource(context.context, sentimentSource.id, { reasonCode: 'CONSENT_REVOKED' }, `rls-sentiment-invalidate-${suffix}`)
+  const invalidatedPreference = await consumer.latestPreference(context.context, 'qa-project')
   const secondDataset = await modelDataset.createDataset(secondContext.context, { key: `qa-other-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Second tenant dataset', task: 'Composite foreign-key isolation check' }, `rls-other-dataset-${suffix}`)
   const compositeCrossTenantDatasetDenied = await appClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
@@ -327,6 +337,7 @@ try {
   } catch (error) { permissionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED' }
   const scientificPermissionDenied = await deniedCode(() => scientific.materialArtifacts({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_science_${restrictedUserId}` }, material.id), 'TENANT_ACCESS_DENIED')
   const modelRegistryPermissionDenied = await deniedCode(() => modelDataset.createDataset({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_model_${restrictedUserId}` }, { key: `denied-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Denied', task: 'Denied' }, `rls-model-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
+  const sentimentPermissionDenied = await deniedCode(() => consumer.createSource({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_sentiment_${restrictedUserId}` }, { key: `denied-sentiment-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)}`, type: 'SURVEY', sourceScope: 'qa-project', storageRef: 'test://denied', purpose: 'Denied fixture', consentRequired: false, retentionDays: 30 }, `rls-sentiment-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
 
   const projection = firstLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
   const reservedProjection = reservedLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
@@ -391,8 +402,14 @@ try {
     && odorPrediction.status === 'NOT_EVALUATED'
     && explainability.status === 'NOT_EVALUATED'
     && crossTenantEmbeddingDenied
+  const phase5bPass = sentimentAnalysis.evidenceStatus === 'VERIFIED'
+    && preference.evidenceStatus === 'NOT_ENOUGH_EVIDENCE'
+    && crossTenantSentimentDenied
+    && sentimentPermissionDenied
+    && invalidation.status === 'INVALIDATED'
+    && invalidatedPreference.status === 'NOT_ENOUGH_EVIDENCE'
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass) {
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass) {
     throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied }, phase4: { duplicateDataset: duplicateDataset.id === dataset.id, approvedDatasetVersion: approvedDatasetVersion.status, trainingRun: trainingRun.status, evaluation: evaluation.leakageStatus, modelRuntime: modelRuntime.status, crossTenantDatasetDenied, crossTenantModelDenied, compositeCrossTenantDatasetDenied, modelRegistryPermissionDenied }, phase5: { molecularEmbedding: molecularEmbedding.status, molecularSimilarity: molecularSimilarity.status, odorPrediction: odorPrediction.status, explainability: explainability.status, crossTenantEmbeddingDenied } })}`)
   }
 
@@ -469,6 +486,14 @@ try {
       odorPrediction: odorPrediction.status,
       explainability: explainability.status,
       crossTenantEmbeddingDenied,
+    },
+    phase5b: {
+      sentimentAnalysis: sentimentAnalysis.evidenceStatus,
+      preference: preference.evidenceStatus,
+      crossTenantSentimentDenied,
+      sentimentPermissionDenied,
+      invalidation: invalidation.status,
+      invalidatedPreference: invalidatedPreference.status,
     },
   }))
 } finally {

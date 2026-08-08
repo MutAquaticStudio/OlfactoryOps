@@ -61,3 +61,11 @@ similarity, feature-based explainability records and full prediction
 provenance. It deliberately returns `NOT_EVALUATED` for odor predictions and
 odor embeddings until reviewed odor-labelled data, model evaluation and
 calibration exist. See `phase-5/`.
+
+## Phase 5B status
+
+Phase 5B Consumer Intelligence is `PASS` on disposable PostgreSQL. It stores
+only consent-aware feedback hashes/private references and bounded derived
+signals, separates aggregate from raw-content access, and invalidates dependent
+evidence when a source is withdrawn. No NLP provider, cross-tenant learning,
+or automatic Formula change is active. See `phase-5b/`.

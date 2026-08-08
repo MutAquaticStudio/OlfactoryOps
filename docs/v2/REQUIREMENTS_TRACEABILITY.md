@@ -114,3 +114,13 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-ML-008 | Explainability records retain a non-causal association disclaimer | PASS |
 | FR-ML-005 | Odor prediction requests retain model/input/task provenance and an honest evidence state | PASS |
 | Odor embedding, calibrated odor head and semantic odor prediction | No reviewed odor-labelled dataset or evaluated serving model exists | NOT_APPLICABLE |
+
+## Phase 5B evidence (2026-08-08)
+
+| Requirement family | Phase 5B evidence | Status |
+|---|---|---|
+| FR-SENT-001..005 | Tenant-scoped consent-aware source, minimized feedback reference, EN/VI analysis envelope, bounded signals | PASS |
+| FR-SENT-006..008 | Versioned preference vector, source-set provenance, aggregate-only projection and permissions | PASS |
+| FR-SENT-009..010 | RLS/composite tenant scope and source invalidation propagation | PASS |
+| FR-SENT-011..012 | Advisory data boundary only; no Formula/Trial/Material/Inventory/Production mutation | PASS |
+| FR-SENT-013..015 | Explicit `NOT_ENOUGH_EVIDENCE`; external NLP/LLM provider remains disabled | PASS |

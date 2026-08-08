@@ -12,6 +12,7 @@ const migrations = [
   'infra/postgres/migrations/0004_phase3_scientific_features.sql',
   'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql',
   'infra/postgres/migrations/0006_phase5_olfactory_intelligence.sql',
+  'infra/postgres/migrations/0007_phase5b_consumer_intelligence.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')

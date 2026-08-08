@@ -9,9 +9,10 @@ import { V2LabOperationsModule } from './v2-lab-ops.module.js'
 import { V2ScientificModule } from './v2-scientific.module.js'
 import { V2ModelDatasetModule } from './v2-model-dataset.module.js'
 import { V2OlfactoryIntelligenceModule } from './v2-olfactory-intelligence.module.js'
+import { V2ConsumerIntelligenceModule } from './v2-consumer-intelligence.module.js'
 
 @Module({
-  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule],
+  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule, V2ConsumerIntelligenceModule],
   controllers: [HealthController, NorthStarController],
   providers: [
     MutationIdempotencyService,
