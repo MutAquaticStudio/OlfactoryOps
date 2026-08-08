@@ -5,6 +5,7 @@ import { PrismaPlatformRepository } from '../services/platform/src/prisma-reposi
 import { PlatformService } from '../services/platform/src/service.js'
 import { LabOperationsService } from '../services/lab-ops/src/service.js'
 import { ScientificFeatureService, type ScientificRuntime } from '../services/scientific/src/service.js'
+import { ModelDatasetService } from '../services/scientific/src/model-dataset-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -55,6 +56,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0002_phase1_members_notifications.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0003_phase2_lab_operations.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0004_phase3_scientific_features.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -122,6 +124,7 @@ try {
   const service = new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'rls-session', passwordPepper: 'rls-password' })
   const lab = new LabOperationsService(appClient, service)
   const scientific = new ScientificFeatureService(appClient, service, new RlsScientificRuntime())
+  const modelDataset = new ModelDatasetService(appClient, service)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -158,6 +161,32 @@ try {
   const duplicateStructureJob = await scientific.normalizeMaterial(context.context, material.id, { smiles: 'OCC' }, `rls-science-structure-${suffix}`)
   const featureJob = await scientific.generateFeatures(context.context, material.id, { featureKinds: ['ECFP', 'MOLFTP'] }, `rls-science-features-${suffix}`)
   const scienceArtifacts = await scientific.materialArtifacts(context.context, material.id)
+  const dataset = await modelDataset.createDataset(context.context, { key: `qa-dataset-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Isolated scaffold benchmark', task: 'Bounded fragrance research benchmark' }, `rls-dataset-create-${suffix}`)
+  const duplicateDataset = await modelDataset.createDataset(context.context, { key: dataset.key, name: 'Isolated scaffold benchmark', task: 'Bounded fragrance research benchmark' }, `rls-dataset-create-${suffix}`)
+  const datasetVersion = await modelDataset.registerDatasetVersion(context.context, dataset.id, {
+    version: 'qa-1', sourceRepository: 'https://github.com/osmoai/publications', sourcePath: 'tests/fixture.csv', sourceCommit: '5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8', citation: 'Osmo Publications isolated fixture', sourceVersion: 'qa-source-1', schemaVersion: 'dataset/1', contentChecksum: '1'.repeat(64), materialUniverseHash: '2'.repeat(64), rowCount: 3,
+    license: { spdxId: 'CC-BY-4.0', attribution: 'Osmo Publications dataset attribution preserved in fixture.', usagePolicy: 'Isolated QA benchmark only.', evidenceUrl: 'https://github.com/osmoai/publications', evidenceStatus: 'VERIFIED' },
+    transformations: [{ key: 'scaffold-split', version: '1', codeRef: 'tests/fixture', configurationHash: '3'.repeat(64), inputHash: '1'.repeat(64), outputHash: '4'.repeat(64) }],
+    artifacts: [{ kind: 'MANIFEST', storageRef: 'test://dataset/manifest', contentHash: '5'.repeat(64), schemaVersion: 'manifest/1' }],
+  }, `rls-dataset-version-${suffix}`)
+  const approvedDatasetVersion = await modelDataset.approveDatasetVersion(context.context, datasetVersion.id, `rls-dataset-approve-${suffix}`)
+  const model = await modelDataset.createModel(context.context, { key: `qa-model-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Isolated KGCNN benchmark', intendedUse: 'Research-only architecture and provenance verification.' }, `rls-model-create-${suffix}`)
+  const modelVersion = await modelDataset.registerModelVersion(context.context, model.id, {
+    version: 'qa-1', architecture: { key: 'KGCNN', version: '2025.1', componentKey: 'KGCNN_KERAS_UNLOCKED', configurationHash: '6'.repeat(64) },
+    featureContract: { key: 'qa-graph', version: '1', featureKinds: ['MOLECULAR_GRAPH'], schemaHash: '7'.repeat(64) }, trainingTask: 'Research-only binary fixture',
+    modelCard: { purpose: 'Verify model registry provenance.', limitations: ['No scientific claim is made from this fixture.'], prohibitedInterpretations: ['Do not use as a production prediction.'] },
+    checkpoint: { storageRef: 'test://checkpoint/qa', checkpointHash: '8'.repeat(64), format: 'KERAS' },
+  }, `rls-model-version-${suffix}`)
+  const trainingRun = await modelDataset.createTrainingRun(context.context, modelVersion.id, {
+    seed: 42, splitStrategy: 'SCAFFOLD_GROUP', splitManifestHash: '9'.repeat(64), configurationHash: 'a'.repeat(64),
+    datasets: [
+      { datasetVersionId: datasetVersion.id, splitRole: 'TRAIN', splitArtifactHash: 'b'.repeat(64), groupSetHash: 'c'.repeat(64) },
+      { datasetVersionId: datasetVersion.id, splitRole: 'VALIDATION', splitArtifactHash: 'd'.repeat(64), groupSetHash: 'e'.repeat(64) },
+      { datasetVersionId: datasetVersion.id, splitRole: 'TEST', splitArtifactHash: 'f'.repeat(64), groupSetHash: '0'.repeat(64) },
+    ],
+  }, `rls-training-run-${suffix}`)
+  const evaluation = await modelDataset.recordEvaluation(context.context, trainingRun.id, { datasetVersionId: datasetVersion.id, protocolVersion: 'qa-eval-1', leakageStatus: 'PASS', metrics: [{ key: 'accuracy', value: 0.75, unit: 'fraction' }] }, `rls-evaluation-${suffix}`)
+  const modelRuntime = await modelDataset.runtimeStatus(context.context, modelVersion.id)
   const materialDocument = await lab.addMaterialDocument(context.context, material.id, { kind: 'SDS', objectRef: `test://material/${suffix}`, contentHash: `hash-${suffix}` }, `rls-material-document-${suffix}`)
   const supplier = await lab.createSupplier(context.context, { legalName: `RLS Supplier ${suffix}`, currency: 'USD', paymentTerms: {} }, `rls-supplier-${suffix}`)
   await lab.changeSupplierStatus(context.context, supplier.id, 'ACTIVE', `rls-supplier-status-${suffix}`)
@@ -246,6 +275,34 @@ try {
   const crossTenantWeighingDenied = await deniedCode(() => lab.confirmWeighing(secondContext.context, weighing.id, [], `rls-cross-weigh-${suffix}`), 'WEIGHING_NOT_FOUND')
   const crossTenantSupplierDenied = await deniedCode(() => lab.createPurchaseOrder(secondContext.context, { supplierId: supplier.id, currency: 'USD', lines: [{ materialId: material.id, orderedGrams: 1 }] }, `rls-cross-order-${suffix}`), 'SUPPLIER_NOT_FOUND')
   const crossTenantScientificDenied = await deniedCode(() => scientific.materialArtifacts(secondContext.context, material.id), 'MATERIAL_NOT_FOUND')
+  const crossTenantDatasetDenied = await deniedCode(() => modelDataset.datasetDetail(secondContext.context, dataset.id), 'DATASET_NOT_FOUND')
+  const crossTenantModelDenied = await deniedCode(() => modelDataset.runtimeStatus(secondContext.context, modelVersion.id), 'MODEL_VERSION_NOT_FOUND')
+  const secondDataset = await modelDataset.createDataset(secondContext.context, { key: `qa-other-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Second tenant dataset', task: 'Composite foreign-key isolation check' }, `rls-other-dataset-${suffix}`)
+  const compositeCrossTenantDatasetDenied = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    try {
+      await tx.$executeRawUnsafe(
+        'INSERT INTO v2_dataset_versions (id, organization_id, dataset_id, version, source_repository, source_commit, citation, source_version, schema_version, content_checksum, material_universe_hash, row_count, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
+        `datasetver_cross_${suffix.replace(/[^a-z0-9]/gi, '')}`,
+        firstOrganizationId!,
+        secondDataset.id,
+        'cross-tenant-attempt',
+        'https://example.test/source',
+        'fixture',
+        'Cross-tenant relationship attempt',
+        'fixture',
+        'dataset/1',
+        'a'.repeat(64),
+        'b'.repeat(64),
+        0,
+        firstUserId!,
+      )
+      return false
+    } catch {
+      return true
+    }
+  })
 
   restrictedUserId = `usr_restricted_${suffix.replace(/[^a-z0-9]/gi, '')}`
   await adminClient!.$transaction(async (tx) => {
@@ -257,6 +314,7 @@ try {
     await lab.receiveGoods({ ...context.context, userId: restrictedUserId, role: 'Perfumer', sessionId: `ses_${restrictedUserId}` }, { freightCost: 0, dutyCost: 0, insuranceCost: 0, currency: 'USD', lines: [{ materialId: material.id, quantity: 1, unit: 'G', location: 'denied' }] }, `rls-denied-${suffix}`)
   } catch (error) { permissionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED' }
   const scientificPermissionDenied = await deniedCode(() => scientific.materialArtifacts({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_science_${restrictedUserId}` }, material.id), 'TENANT_ACCESS_DENIED')
+  const modelRegistryPermissionDenied = await deniedCode(() => modelDataset.createDataset({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_model_${restrictedUserId}` }, { key: `denied-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Denied', task: 'Denied' }, `rls-model-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
 
   const projection = firstLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
   const reservedProjection = reservedLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
@@ -307,9 +365,18 @@ try {
     && scienceArtifacts.some((artifact) => artifact.artifactKind === 'MOLFTP' && artifact.evidenceStatus === 'NOT_EVALUATED')
     && crossTenantScientificDenied
     && scientificPermissionDenied
+  const phase4Pass = duplicateDataset.id === dataset.id
+    && approvedDatasetVersion.status === 'APPROVED'
+    && trainingRun.status === 'PLANNED'
+    && evaluation.leakageStatus === 'PASS'
+    && modelRuntime.status === 'NOT_CONFIGURED'
+    && crossTenantDatasetDenied
+    && crossTenantModelDenied
+    && compositeCrossTenantDatasetDenied
+    && modelRegistryPermissionDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied } })}`)
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass) {
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied }, phase4: { duplicateDataset: duplicateDataset.id === dataset.id, approvedDatasetVersion: approvedDatasetVersion.status, trainingRun: trainingRun.status, evaluation: evaluation.leakageStatus, modelRuntime: modelRuntime.status, crossTenantDatasetDenied, crossTenantModelDenied, compositeCrossTenantDatasetDenied, modelRegistryPermissionDenied } })}`)
   }
 
   console.log(JSON.stringify({
@@ -367,6 +434,17 @@ try {
       artifacts: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`),
       crossTenantScientificDenied,
       scientificPermissionDenied,
+    },
+    phase4: {
+      duplicateDataset: duplicateDataset.id === dataset.id,
+      approvedDatasetVersion: approvedDatasetVersion.status,
+      trainingRun: trainingRun.status,
+      evaluation: evaluation.leakageStatus,
+      modelRuntime: modelRuntime.status,
+      crossTenantDatasetDenied,
+      crossTenantModelDenied,
+      compositeCrossTenantDatasetDenied,
+      modelRegistryPermissionDenied,
     },
   }))
 } finally {

@@ -41,3 +41,12 @@ pinned RDKit 2023.09.3 runtime and is combined only after structure-hash
 verification. PostgreSQL/RLS, native compatibility, 12-role E2E, public UX,
 and static gates passed on disposable local infrastructure. See
 `phase-3/PHASE_3_IMPLEMENTATION_REPORT.md`.
+
+## Phase 4 status
+
+Phase 4 Model and Dataset Platform is `PASS` on
+`codex/v2-phase3-scientific-features`. It adds tenant-scoped dataset/model
+provenance, reproducible split and evaluation evidence, model cards, pinned
+KGCNN/Transformer-CNN/Osmo Publications references, and a non-serving runtime
+compatibility image. No bulk dataset, prediction endpoint, embedding, external
+LLM, or production deployment is part of this checkpoint. See `phase-4/`.

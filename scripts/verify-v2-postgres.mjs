@@ -10,6 +10,7 @@ const migrations = [
   'infra/postgres/migrations/0002_phase1_members_notifications.sql',
   'infra/postgres/migrations/0003_phase2_lab_operations.sql',
   'infra/postgres/migrations/0004_phase3_scientific_features.sql',
+  'infra/postgres/migrations/0005_phase4_model_dataset_platform.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -60,6 +61,7 @@ if (!databaseUrl) {
 try {
   for (const migration of migrations) execFileSync(process.execPath, [prismaCli, 'db', 'execute', '--schema', schema, '--file', migration], { stdio: 'inherit', env })
   const pins = JSON.parse(readFileSync('services/scientific/runtime/component-pins.json', 'utf8')).components
+  const modelPins = JSON.parse(readFileSync('services/scientific/runtime/model-component-pins.json', 'utf8')).components
   const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
   try {
     const rows = await client.$queryRawUnsafe('SELECT component_key, repository, license, upstream_ref, upstream_commit, adapter_version, runtime_version, patch_status, compatibility_test, manifest_hash FROM v2_scientific_component_pins')
@@ -68,6 +70,14 @@ try {
       const pin = pins[row.component_key]
       if (!pin || row.repository !== pin.repository || row.license !== pin.license || row.upstream_ref !== pin.upstreamRef || row.upstream_commit !== pin.upstreamCommit || row.adapter_version !== pin.adapterVersion || row.runtime_version !== pin.runtimeVersion || row.patch_status !== pin.patchStatus || row.compatibility_test !== pin.compatibilityTest || row.manifest_hash !== componentHash(pin)) {
         throw new Error(`Scientific component registry diverged for ${row.component_key}`)
+      }
+    }
+    const modelRows = await client.$queryRawUnsafe('SELECT component_key, repository, license, license_evidence_status, upstream_ref, upstream_commit, adapter_version, patch_status, compatibility_test, manifest_hash FROM v2_model_component_pins')
+    if (modelRows.length !== Object.keys(modelPins).length) throw new Error('Model component registry row count mismatch')
+    for (const row of modelRows) {
+      const pin = modelPins[row.component_key]
+      if (!pin || row.repository !== pin.repository || row.license !== pin.license || row.license_evidence_status !== pin.licenseEvidenceStatus || row.upstream_ref !== pin.upstreamRef || row.upstream_commit !== pin.upstreamCommit || row.adapter_version !== pin.adapterVersion || row.patch_status !== pin.patchStatus || row.compatibility_test !== pin.compatibilityTest || row.manifest_hash !== componentHash(pin)) {
+        throw new Error(`Model component registry diverged for ${row.component_key}`)
       }
     }
   } finally {

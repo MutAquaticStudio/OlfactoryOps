@@ -92,3 +92,15 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-SCI-005 | Versioned job/artifact provenance, pin registry, audit and hash evidence | PASS |
 | Native BCFP/MolFTP/Osmordred compatibility image | Exact BCFP/MolFTP primary and isolated Osmordred images built; both native test suites passed and cross-runtime structure hashes matched | PASS |
 | Model training, datasets, odor prediction, embeddings, similarity and external LLM | Later phases only | NOT_APPLICABLE |
+
+## Phase 4 evidence (2026-08-08)
+
+| Requirement family | Phase 4 evidence | Status |
+|---|---|---|
+| FR-DATASET-001..006 | Tenant-scoped dataset, version, license, transformation, artifact and checksum records | PASS |
+| FR-ML-001..004 | Model, architecture, feature contract, checkpoint, model card, training/evaluation and metric records | PASS |
+| Reproducibility and leakage control | Seeded scaffold/time split and distinct train/validation/test group-set hashes | PASS |
+| Upstream model provenance | Immutable KGCNN, Transformer-CNN and Osmo Publications pin records with compatibility/license status | PASS |
+| KGCNN compatibility | Isolated synthetic model load, checkpoint, inference and metric smoke | PASS |
+| Transformer-CNN activation | Independent license evidence review has not completed | BLOCKED |
+| Bulk research dataset import, production training and serving | Outside Phase 4 scope | NOT_APPLICABLE |

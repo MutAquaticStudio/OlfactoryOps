@@ -45,6 +45,7 @@
     "release:nonsecret-gate": "npm run release:identity:check && npm run release:migrations:verify && npm run release:docs:check && npm run release:manifest:generate && npm run release:manifest:validate",
     "v2:postgres:verify": "cross-env V2_QA_ENVIRONMENT=test node scripts/verify-v2-postgres.mjs",
     "v2:postgres:rls": "cross-env V2_QA_ENVIRONMENT=test tsx scripts/verify-v2-rls.ts",
+    "test:model-runtime": "docker build --pull=false --tag olfactoryops-model-runtime-phase4 services/scientific/model-runtime && docker run --rm olfactoryops-model-runtime-phase4",
     "security:client-bundle": "node scripts/check-client-bundle-secrets.mjs",
     "security:hash-admin-password": "node scripts/generate-admin-password-hash.mjs",
     "deploy:check": "npm run build && npm run build:api && npm run typecheck:worker && npm run build:worker && npm run build:tenant-router && npm run test && npm run security:client-bundle",

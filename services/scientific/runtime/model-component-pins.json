@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "components": {
+    "KGCNN_KERAS_UNLOCKED": {
+      "repository": "https://github.com/osmoai/kgcnn-keras-unlocked",
+      "license": "MIT",
+      "licenseEvidenceStatus": "VERIFIED",
+      "upstreamRef": "commit:24d8b61214405f855d8a893469dfc59c0ea6c075",
+      "upstreamCommit": "24d8b61214405f855d8a893469dfc59c0ea6c075",
+      "adapterVersion": "kgcnn-adapter/1.0.0",
+      "patchStatus": "KERAS_CORE_0_1_7_SYMBOLIC_COMPAT_PATCH",
+      "compatibilityTest": "model_runtime.tests.test_kgcnn_forward"
+    },
+    "TRANSFORMER_CNN": {
+      "repository": "https://github.com/osmoai/transformer-CNN",
+      "license": "MIT",
+      "licenseEvidenceStatus": "REVIEW_REQUIRED",
+      "upstreamRef": "commit:4db725b5e549af7697215d8cc7a6e8a2a952dca5",
+      "upstreamCommit": "4db725b5e549af7697215d8cc7a6e8a2a952dca5",
+      "adapterVersion": "transformer-cnn-adapter/1.0.0",
+      "patchStatus": "NONE",
+      "compatibilityTest": "model_runtime.tests.test_transformer_cnn_forward"
+    },
+    "OSMO_PUBLICATIONS": {
+      "repository": "https://github.com/osmoai/publications",
+      "license": "Apache-2.0 (code); CC-BY-4.0 (datasets)",
+      "licenseEvidenceStatus": "VERIFIED",
+      "upstreamRef": "commit:5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+      "upstreamCommit": "5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+      "adapterVersion": "publication-dataset-adapter/1.0.0",
+      "patchStatus": "NONE",
+      "compatibilityTest": "model_dataset.tests.test_source_provenance"
+    }
+  }
+}

@@ -28,6 +28,20 @@ structure hash trung khop. PostgreSQL/RLS, native compatibility, 12-role E2E,
 public UX va static gate deu `PASS` tren ha tang disposable local. Xem bao cao
 tai [`docs/v2/phase-3/PHASE_3_IMPLEMENTATION_REPORT.md`](docs/v2/phase-3/PHASE_3_IMPLEMENTATION_REPORT.md).
 
+## Trang thai V2 Phase 4
+
+Phase 4 Model va Dataset Platform da `PASS` tren branch
+`codex/v2-phase3-scientific-features`. Phase nay them registry PostgreSQL
+tenant-scoped cho dataset, dataset version, license, transformation, artifact,
+model, model version, feature contract, checkpoint, training run, evaluation
+va metric. Moi dataset version can checksum, citation, license evidence va
+provenance; split train/validation/test phai co seed va group hash rieng de
+chan data leakage. KGCNN da co compatibility smoke voi checkpoint round-trip,
+inference tong hop va metric tong hop. Transformer-CNN van `BLOCKED` cho
+activation cho toi khi co license evidence review doc lap. Khong import bulk
+dataset, khong phuc vu model, khong goi LLM va khong deploy production. Xem
+[`docs/v2/phase-4`](docs/v2/phase-4/) de xem boundary va evidence.
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

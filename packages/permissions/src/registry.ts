@@ -86,6 +86,7 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('scientific_ai.predict', 'scientific_ai', 'Request a scientific prediction'),
   definition('scientific_ai.similarity', 'scientific_ai', 'Run authorized similarity search'),
   definition('scientific_ai.explain', 'scientific_ai', 'View scientific explanations'),
+  definition('scientific_ai.manage', 'scientific_ai', 'Manage tenant model and dataset registry records', true, true),
   definition('sentiment.view', 'sentiment', 'View authorized sentiment evidence'),
   definition('sentiment.analyze', 'sentiment', 'Request sentiment analysis', true),
   definition('sentiment.manageSources', 'sentiment', 'Manage feedback sources and usage policy', true, true),
