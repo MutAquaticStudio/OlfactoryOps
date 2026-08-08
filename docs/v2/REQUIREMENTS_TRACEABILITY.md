@@ -32,27 +32,38 @@ Tests:
 
 ## Requirement evidence state
 
-- PLANNED
-- IMPLEMENTED
-- VERIFIED_LOCAL
-- VERIFIED_TEST
-- VERIFIED_PRODUCTION
-- BLOCKED
-- DEFERRED
+This release checkpoint uses only four evidence states:
 
-Never label VERIFIED_PRODUCTION without hosted evidence.
+- PASS
+- FAIL
+- BLOCKED
+- NOT_APPLICABLE
+
+Hosted evidence is required before any production gate can be marked PASS.
 
 ## Phase 0 evidence (2026-08-08)
 
 | Requirement family | Phase 0 evidence | Status |
 |---|---|---|
-| FR-PLAT-001..003 | Tenant/actor context contracts and platform boundary | IMPLEMENTED |
-| FR-DATASET-* | Dataset, license, version, source and checksum provenance contracts | IMPLEMENTED |
-| FR-SCI-005 | Scientific artifact/model/dataset provenance references | IMPLEMENTED |
-| FR-AG-* | Agent tool mode, permission, timeout, retry and confirmation contracts | IMPLEMENTED |
-| FR-SENS-* / FR-MEM-* | Sentiment and sensory boundary contracts kept separate | IMPLEMENTED |
-| Domain event envelope | Versioned event envelope with tenant, actor, correlation and subject | IMPLEMENTED |
-| Permission registry | Versioned registry for all V2 permission groups | VERIFIED_LOCAL |
-| Contract tests | Shared contract test suite executed with Vitest | VERIFIED_LOCAL |
+| FR-PLAT-001..003 | Tenant/actor context contracts and platform boundary | PASS |
+| FR-DATASET-* | Dataset, license, version, source and checksum provenance contracts | PASS |
+| FR-SCI-005 | Scientific artifact/model/dataset provenance references | PASS |
+| FR-AG-* | Agent tool mode, permission, timeout, retry and confirmation contracts | PASS |
+| FR-SENS-* / FR-MEM-* | Sentiment and sensory boundary contracts kept separate | PASS |
+| Domain event envelope | Versioned event envelope with tenant, actor, correlation and subject | PASS |
+| Permission registry | Versioned registry for all V2 permission groups | PASS |
+| Contract tests | Shared contract suite executed with Vitest | PASS |
 
-Phase 0 does not claim product-module, scientific-engine, provider, remote migration, or production verification. Those items remain PLANNED or DEFERRED until the approved phase that implements them.
+Phase 0 product-module, scientific-engine, provider, remote migration, and production gates are NOT_APPLICABLE to that foundation checkpoint.
+
+## Phase 1 evidence (2026-08-08)
+
+| Requirement family | Phase 1 evidence | Status |
+|---|---|---|
+| FR-PLAT-001..003 | V2 tenant, membership, role-policy, session, hostname and platform contracts | PASS |
+| FR-AUTH-001..010 | V2 opaque session, CSRF, verification, profile and security service boundary | PASS |
+| FR-DOM-001..006 | V2 hostname registry, router base-domain contract and Cloudflare adapter boundary | PASS |
+| FR-NOTIF-001..004 | V2 notification outbox, delivery worker, retry/backoff and push contracts | PASS |
+| FR-PRIV-001..005 | V2 consent, privacy export, workspace export and erasure review boundary | PASS |
+| FR-AUTH-011 | V2 member invitation, resend, revoke and acceptance workflow | PASS |
+| Phase 1 release gate | `docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` | PASS |

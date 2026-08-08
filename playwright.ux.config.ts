@@ -6,6 +6,7 @@ const authenticatedStorageState = process.env.UX_TEST_STORAGE_STATE?.trim()
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.playwright.ts',
+  testIgnore: ['**/v2-role-workflows.playwright.ts'],
   fullyParallel: false,
   workers: 1,
   timeout: 90_000,

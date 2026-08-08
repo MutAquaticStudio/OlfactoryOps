@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import router, {
   activeSystemWorkspaceForHostname,
+  isTenantWorkspaceHostname,
   proxiedPagesRequest,
   tenantRouterReleaseHeaders,
   tenantRouterHostname,
@@ -8,6 +9,12 @@ import router, {
 } from './tenant-app-router'
 
 describe('tenant app router', () => {
+  it('accepts configured V2 workspace hostnames while preserving the legacy domain', () => {
+    const env = { SYSTEM_WORKSPACE_DOMAIN: 'labofscents.org', V2_WORKSPACE_DOMAIN: 'olfactoryops.com' }
+    expect(isTenantWorkspaceHostname('atelier.olfactoryops.com', env)).toBe(true)
+    expect(isTenantWorkspaceHostname('atelier.labofscents.org', env)).toBe(true)
+    expect(isTenantWorkspaceHostname('api.olfactoryops.com', env)).toBe(false)
+  })
   it('uses the request hostname and returns a non-cacheable 404 for unknown addresses', async () => {
     expect(tenantRouterHostname(new Request('https://atelier.labofscents.org/ai/formula-design-studio'))).toBe('atelier.labofscents.org')
     const notFound = tenantRouterNotFound()

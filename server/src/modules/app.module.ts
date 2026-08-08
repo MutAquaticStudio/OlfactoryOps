@@ -4,8 +4,10 @@ import { NorthStarController } from '../routes/northstar.controller.js'
 import { NorthStarService } from '../services/northstar.service.js'
 import { MutationIdempotencyService } from '../services/mutation-idempotency.service.js'
 import { seededAdminCredentialsForEnv } from './auth-credentials.js'
+import { V2PlatformModule } from './v2-platform.module.js'
 
 @Module({
+  imports: [V2PlatformModule],
   controllers: [HealthController, NorthStarController],
   providers: [
     MutationIdempotencyService,

@@ -75,6 +75,7 @@ import { TrialEvidenceSummary } from './features/trials/TrialEvidenceSummary'
 import { OperationalLineageSummary } from './features/trials/OperationalLineageSummary'
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
+import { V2PlatformApp } from './features/v2-platform/V2PlatformApp'
 import { isProtectedApplicationPath, isRemovedV1Path, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { publicAuthUrlForWorkspaceOrigin } from './data/workspaceHostnames'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
@@ -1884,7 +1885,7 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
   )
 }
 
-function App() {
+function LegacyApp() {
   const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
   const [publicRoute, setPublicRoute] = useState<PublicRoute | null>(() => publicRouteForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
@@ -17949,6 +17950,10 @@ function LabBackdrop() {
       <div className="scanline" />
     </div>
   )
+}
+
+function App() {
+  return window.location.pathname.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
 }
 
 export default App

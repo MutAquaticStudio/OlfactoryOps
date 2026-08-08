@@ -1,0 +1,384 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  status      String   @default("ACTIVE")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  memberships Membership[]
+  invitations Invitation[]
+  hostnames   WorkspaceHostname[]
+  branding    WorkspaceBranding?
+  plans       Subscription[]
+  policies    RolePolicy[]
+  entitlements Entitlement[]
+  usageLimits UsageLimit[]
+  notificationPreferences NotificationPreference[]
+  notifications NotificationOutbox[]
+  notificationDeliveries NotificationDelivery[]
+  pushSubscriptions PushSubscription[]
+  consents ConsentRecord[]
+  privacyExports PrivacyExportRequest[]
+  workspaceExports WorkspaceExportRequest[]
+  erasureReviews ErasureReviewRequest[]
+  auditEvents AuditEvent[]
+  observabilitySnapshots ObservabilitySnapshot[]
+  @@map("v2_organizations")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  displayName String   @map("display_name")
+  passwordHash String  @map("password_hash")
+  status      String   @default("ACTIVE")
+  verifiedAt  DateTime? @map("verified_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  memberships Membership[]
+  sessions    Session[]
+  verifications EmailVerification[]
+  sentInvitations Invitation[] @relation("InvitationSender")
+  consents    ConsentRecord[]
+  pushSubscriptions PushSubscription[]
+  notificationPreferences NotificationPreference[]
+  privacyExports PrivacyExportRequest[]
+  erasureReviews ErasureReviewRequest[]
+  @@map("v2_users")
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  userId         String       @map("user_id")
+  roleKey        String       @map("role_key")
+  status         String       @default("ACTIVE")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+  @@index([organizationId, status])
+  @@map("v2_memberships")
+}
+
+model Invitation {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  email          String
+  roleKey        String   @map("role_key")
+  tokenHash      String   @unique @map("token_hash")
+  status         String   @default("PENDING")
+  invitedBy      String   @map("invited_by")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  acceptedAt     DateTime? @map("accepted_at")
+  acceptedUserId String?  @map("accepted_user_id")
+  revokedAt      DateTime? @map("revoked_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter        User @relation("InvitationSender", fields: [invitedBy], references: [id], onDelete: Cascade)
+  @@index([organizationId, status, email])
+  @@index([tokenHash, status])
+  @@map("v2_invitations")
+}
+
+model RolePolicy {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  roleKey        String       @map("role_key")
+  permissions    Json
+  version        Int          @default(1)
+  updatedBy      String       @map("updated_by")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, roleKey])
+  @@map("v2_role_policies")
+}
+
+model Session {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  organizationId  String   @map("organization_id")
+  tokenVerifierHash String @unique @map("token_verifier_hash")
+  csrfVerifierHash String   @map("csrf_verifier_hash")
+  deviceLabel     String?  @map("device_label")
+  userAgent       String?  @map("user_agent")
+  ipHash          String?  @map("ip_hash")
+  createdAt       DateTime @default(now()) @map("created_at")
+  lastSeenAt      DateTime @default(now()) @map("last_seen_at")
+  idleExpiresAt   DateTime @map("idle_expires_at")
+  absoluteExpiresAt DateTime @map("absolute_expires_at")
+  rotatedFromId   String?  @map("rotated_from_id")
+  revokedAt       DateTime? @map("revoked_at")
+  revokeReason    String?  @map("revoke_reason")
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, revokedAt])
+  @@index([organizationId, revokedAt])
+  @@map("v2_sessions")
+}
+
+model EmailVerification {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  organizationId String   @map("organization_id")
+  email          String
+  tokenHash      String   @unique @map("token_hash")
+  expiresAt      DateTime @map("expires_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  verifiedAt     DateTime? @map("verified_at")
+  revokedAt      DateTime? @map("revoked_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, revokedAt, expiresAt])
+  @@map("v2_email_verifications")
+}
+
+model WorkspaceHostname {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  hostname       String       @unique
+  kind           String       @default("DEFAULT")
+  status         String       @default("PENDING")
+  providerRef    String?      @map("provider_ref")
+  validationStatus String?    @map("validation_status")
+  sslStatus      String?      @map("ssl_status")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  activatedAt    DateTime?    @map("activated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, status])
+  @@map("v2_workspace_hostnames")
+}
+
+model WorkspaceBranding {
+  id             String       @id @default(cuid())
+  organizationId String       @unique @map("organization_id")
+  displayName    String       @map("display_name")
+  logoObjectRef  String?      @map("logo_object_ref")
+  faviconObjectRef String?    @map("favicon_object_ref")
+  accentColor    String?      @map("accent_color")
+  footerText     String?      @map("footer_text")
+  locale         String       @default("en-US")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@map("v2_workspace_branding")
+}
+
+model Plan {
+  id            String   @id
+  name          String
+  billingMode   String   @map("billing_mode")
+  capabilities  Json
+  limits        Json
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  subscriptions Subscription[]
+  @@map("v2_plans")
+}
+
+model Subscription {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  planId         String       @map("plan_id")
+  status         String       @default("MANAGED_BETA")
+  providerRef    String?      @map("provider_ref")
+  startedAt      DateTime     @default(now()) @map("started_at")
+  endsAt         DateTime?    @map("ends_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan           Plan         @relation(fields: [planId], references: [id])
+  @@index([organizationId, status])
+  @@map("v2_subscriptions")
+}
+
+model Entitlement {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  capability     String
+  enabled        Boolean      @default(false)
+  source         String       @default("MANAGED_BETA")
+  expiresAt      DateTime?    @map("expires_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, capability])
+  @@map("v2_entitlements")
+}
+
+model UsageLimit {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  key            String
+  value          Int
+  period         String       @default("LIFETIME")
+  used           Int          @default(0)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, key, period])
+  @@map("v2_usage_limits")
+}
+
+model NotificationPreference {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  userId         String       @map("user_id")
+  eventType      String       @map("event_type")
+  channel        String
+  enabled        Boolean      @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, userId, eventType, channel])
+  @@map("v2_notification_preferences")
+}
+
+model NotificationOutbox {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  recipientUserId String?     @map("recipient_user_id")
+  eventType      String       @map("event_type")
+  channel        String
+  payload        Json
+  idempotencyKey String       @map("idempotency_key")
+  status         String       @default("QUEUED")
+  attempts       Int          @default(0)
+  maxAttempts    Int          @default(5) @map("max_attempts")
+  nextAttemptAt  DateTime     @default(now()) @map("next_attempt_at")
+  lastErrorCode  String?      @map("last_error_code")
+  leaseToken     String?      @map("lease_token")
+  leaseExpiresAt DateTime?    @map("lease_expires_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, idempotencyKey, channel])
+  @@index([status, nextAttemptAt])
+  @@index([organizationId, status, nextAttemptAt])
+  @@map("v2_notification_outbox")
+}
+
+model NotificationDelivery {
+  id             String   @id @default(cuid())
+  outboxId       String   @map("outbox_id")
+  organizationId String   @map("organization_id")
+  channel        String
+  status         String
+  attempt        Int
+  errorCode      String?  @map("error_code")
+  attemptedAt    DateTime @default(now()) @map("attempted_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, outboxId])
+  @@unique([outboxId, attempt])
+  @@map("v2_notification_deliveries")
+}
+
+model PushSubscription {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  endpointHash   String   @map("endpoint_hash")
+  endpoint       String
+  p256dh         String
+  auth           String
+  userAgent      String?  @map("user_agent")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@unique([organizationId, endpointHash])
+  @@map("v2_push_subscriptions")
+}
+
+model ConsentRecord {
+  id             String    @id @default(cuid())
+  userId         String    @map("user_id")
+  organizationId String?   @map("organization_id")
+  purpose        String
+  policyVersion  String    @map("policy_version")
+  acceptedAt     DateTime  @map("accepted_at")
+  withdrawnAt    DateTime? @map("withdrawn_at")
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([userId, purpose, acceptedAt])
+  @@map("v2_consent_records")
+}
+
+model PrivacyExportRequest {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  organizationId String?  @map("organization_id")
+  status         String   @default("REQUESTED")
+  requestedAt    DateTime @default(now()) @map("requested_at")
+  completedAt    DateTime? @map("completed_at")
+  artifactRef    String?  @map("artifact_ref")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([userId, status])
+  @@map("v2_privacy_export_requests")
+}
+
+model WorkspaceExportRequest {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  requestedBy    String   @map("requested_by")
+  status         String   @default("REQUESTED")
+  requestedAt    DateTime @default(now()) @map("requested_at")
+  completedAt    DateTime? @map("completed_at")
+  artifactRef    String?  @map("artifact_ref")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, status])
+  @@map("v2_workspace_export_requests")
+}
+
+model ErasureReviewRequest {
+  id             String   @id @default(cuid())
+  userId         String   @map("user_id")
+  organizationId String?  @map("organization_id")
+  status         String   @default("REVIEW_REQUIRED")
+  reason         String?
+  requestedAt    DateTime @default(now()) @map("requested_at")
+  reviewedAt     DateTime? @map("reviewed_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@map("v2_erasure_review_requests")
+}
+
+model AuditEvent {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  actorUserId    String?      @map("actor_user_id")
+  action         String
+  outcome        String
+  subjectType    String       @map("subject_type")
+  subjectId      String       @map("subject_id")
+  correlationId  String       @map("correlation_id")
+  payloadHash    String?      @map("payload_hash")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, createdAt])
+  @@index([organizationId, action])
+  @@map("v2_audit_events")
+}
+
+model ObservabilitySnapshot {
+  id             String       @id @default(cuid())
+  organizationId String       @map("organization_id")
+  apiStatus      String       @map("api_status")
+  databaseStatus String       @map("database_status")
+  queueStatus    String       @map("queue_status")
+  emailStatus    String       @map("email_status")
+  pushStatus     String       @map("push_status")
+  billingStatus  String       @map("billing_status")
+  domainStatus   String       @map("domain_status")
+  degradedCount  Int          @default(0) @map("degraded_count")
+  capturedAt     DateTime     @default(now()) @map("captured_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, capturedAt])
+  @@map("v2_observability_snapshots")
+}

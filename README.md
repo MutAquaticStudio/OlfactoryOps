@@ -87,3 +87,17 @@ Historical code is reference material, not permission to carry legacy scientific
 ## Legacy removal prompt
 
 Before implementing V2 on top of the historical repository, run [`PROMPT_REMOVE_LEGACY_FEATURES.md`](PROMPT_REMOVE_LEGACY_FEATURES.md). It performs end-to-end cleanup rather than merely hiding deprecated features.
+
+## V2 Phase 1 status
+
+The Platform Security Core is isolated under `/v2/*` on branch `codex/v2-phase1-platform-security`. It uses PostgreSQL for V2 identity, tenant, session, domain, billing-capability, notification, consent, export, audit, and observability records. V1 routes and D1 migrations `0001-0044` remain unchanged.
+
+Phase 1 is not production-deployed. The local transition checkpoint is now `PHASE_1_READY = YES`; the release report is [`docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md`](docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md), with the authenticated matrix in [`ROLE_E2E_MATRIX.md`](docs/v2/phase-1/ROLE_E2E_MATRIX.md). This means all applicable local security, PostgreSQL, role, router, UI, build, and dependency gates pass; production deployment remains out of scope.
+
+## Trạng thái V2 Phase 1 (tiếng Việt)
+
+Phase 1 Platform Security Core đang chạy trên branch `codex/v2-phase1-platform-security`, tách biệt dưới các route `/v2/*`. PostgreSQL là nguồn ghi dữ liệu duy nhất của V2; V1 và các migration D1 `0001–0044` được giữ nguyên. Signup tạo workspace, Owner membership, role policies, hostname mặc định, managed-beta billing state, session opaque và bản ghi xác minh email trong transaction.
+
+Các lớp đã kiểm chứng `PASS`: Prisma schema/migration disposable, RLS với role `NOBYPASSRLS`, tenant isolation, CSRF/Origin, session rotation/revoke, credential re-auth, hostname matching, append-only audit, member invitation, notification retry/outbox, ma trận E2E độc lập cho 12 role, build/lint/test, secret scan và dependency audit. `NOT_APPLICABLE`: migration từ xa, DNS/Cloudflare SaaS và production deploy trong checkpoint này.
+
+`PHASE_1_READY = YES` cho checkpoint local/disposable. Chi tiết, lệnh kiểm thử và giới hạn môi trường nằm trong [`docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md`](docs/v2/phase-1/PHASE_1_IMPLEMENTATION_REPORT.md). Không deploy production và không bắt đầu Phase 2 trong checkpoint này.

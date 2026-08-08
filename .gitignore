@@ -24,9 +24,11 @@ dist-ssr
 reports/evidence/
 reports/*.md
 reports/ux-playwright/
+reports/v2-role-playwright/
 reports/releases/
 reports/bundle-analysis-latest.json
 .qa/
+test-results/
 .qa-isolated-worker-*/
 .d1-migration-audit/
 .olfactoryops-agent.local.json

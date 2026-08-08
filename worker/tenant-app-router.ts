@@ -10,6 +10,7 @@ type Env = {
   DB: D1Database
   PAGES_ORIGIN?: string
   SYSTEM_WORKSPACE_DOMAIN?: string
+  V2_WORKSPACE_DOMAIN?: string
   RELEASE_GIT_SHA?: string
   RELEASE_BUILD_TIMESTAMP_UTC?: string
   RELEASE_ENVIRONMENT?: string
@@ -23,6 +24,14 @@ const defaultPagesOrigin = 'https://labofscents.pages.dev'
 
 export function tenantRouterHostname(request: Request) {
   return normalizeWorkspaceHostname(new URL(request.url).hostname)
+}
+
+export function tenantRouterBaseDomains(env: Pick<Env, 'SYSTEM_WORKSPACE_DOMAIN' | 'V2_WORKSPACE_DOMAIN'>) {
+  return [env.SYSTEM_WORKSPACE_DOMAIN, env.V2_WORKSPACE_DOMAIN].filter((value): value is string => Boolean(value)).map(normalizeWorkspaceBaseDomain)
+}
+
+export function isTenantWorkspaceHostname(hostname: string, env: Pick<Env, 'SYSTEM_WORKSPACE_DOMAIN' | 'V2_WORKSPACE_DOMAIN'>) {
+  return tenantRouterBaseDomains(env).some((baseDomain) => isSystemWorkspaceHostname(hostname, baseDomain))
 }
 
 export function tenantRouterOrigin(value: string | undefined) {
@@ -87,8 +96,8 @@ export function proxiedPagesRequest(request: Request, pagesOrigin: URL, hostname
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const hostname = tenantRouterHostname(request)
-    const baseDomain = normalizeWorkspaceBaseDomain(env.SYSTEM_WORKSPACE_DOMAIN ?? defaultWorkspaceBaseDomain)
-    if (!hostname || !isSystemWorkspaceHostname(hostname, baseDomain)) {
+    const baseDomains = tenantRouterBaseDomains({ SYSTEM_WORKSPACE_DOMAIN: env.SYSTEM_WORKSPACE_DOMAIN ?? defaultWorkspaceBaseDomain, V2_WORKSPACE_DOMAIN: env.V2_WORKSPACE_DOMAIN })
+    if (!hostname || !baseDomains.some((baseDomain) => isSystemWorkspaceHostname(hostname, baseDomain))) {
       return tenantRouterNotFound()
     }
 

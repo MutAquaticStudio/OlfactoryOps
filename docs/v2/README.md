@@ -22,3 +22,7 @@ Primary reading order:
 14. `manifests/osmo-components.yaml`
 
 Phase 0 outputs are tracked in `PHASE_0_BASELINE.md`, `PHASE_0_ARCHITECTURE_MAP.md`, `PHASE_0_IMPLEMENTATION_REPORT.md`, `OSMO_COMPONENT_REGISTRY.md`, `V2_DATABASE_PLAN.md`, and `adr/`.
+
+Phase 1 Platform Security Core is implemented on `codex/v2-phase1-platform-security` under `phase-1/`. It uses isolated `/v2/*` routes and PostgreSQL as the V2 source of truth. Current verdict: `PHASE_1_READY = YES`.
+
+Static/build/schema/RLS gates, the authenticated 12-role matrix, member invitation workflow, and notification retry worker are `PASS` on disposable infrastructure. Cloudflare provisioning, remote migrations, and production deployment are `NOT_APPLICABLE` for this checkpoint. See `phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` and `phase-1/ROLE_E2E_MATRIX.md` for evidence. Phase 2 remains out of scope for this checkpoint.

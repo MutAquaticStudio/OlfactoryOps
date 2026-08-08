@@ -2,9 +2,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const v2E2eApiProxy = process.env.V2_E2E_API_PROXY?.trim()
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: v2E2eApiProxy ? { proxy: { '/api': { target: v2E2eApiProxy, changeOrigin: true, secure: false } } } : undefined,
+  preview: v2E2eApiProxy ? { proxy: { '/api': { target: v2E2eApiProxy, changeOrigin: true, secure: false } } } : undefined,
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', '**/archive/**'],
   },
