@@ -1,5 +1,8 @@
 import { execFileSync } from 'node:child_process'
 
+const npmCli = process.env.npm_execpath
+if (!npmCli) throw new Error('npm_execpath is required to run the V2 role harness without a shell wrapper.')
+
 const env = {
   ...process.env,
   NODE_ENV: 'test',
@@ -18,9 +21,9 @@ const env = {
   V2_QA_STRICT_CLEANUP: 'true',
 }
 
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-const options = { cwd: process.cwd(), env, stdio: 'inherit', shell: process.platform === 'win32' }
-execFileSync(npm, ['run', 'build:api'], options)
-execFileSync(npm, ['run', 'build'], options)
-execFileSync(npm, ['run', 'v2:postgres:verify'], options)
-execFileSync(npm, ['exec', '--', 'playwright', 'test', '--config', 'playwright.v2.config.ts'], options)
+const options = { cwd: process.cwd(), env, stdio: 'inherit' }
+const runNpm = (args) => execFileSync(process.execPath, [npmCli, ...args], options)
+runNpm(['run', 'build:api'])
+runNpm(['run', 'build'])
+runNpm(['run', 'v2:postgres:verify'])
+runNpm(['exec', '--', 'playwright', 'test', '--config', 'playwright.v2.config.ts'])

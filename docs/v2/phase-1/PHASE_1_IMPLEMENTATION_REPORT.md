@@ -11,7 +11,7 @@
 | Area | Status | Evidence |
 |---|---|---|
 | PostgreSQL Prisma schema and additive migrations | PASS | `infra/postgres/prisma/schema.prisma`, migrations `0001` and `0002` |
-| Tenant RLS and non-bypass verification | PASS | `scripts/verify-v2-rls.ts`: signup, login, root-host fallback, cross-tenant denial with `NOBYPASSRLS` role |
+| Tenant RLS and non-bypass verification | PASS | `scripts/verify-v2-rls.ts`: loopback-only disposable PostgreSQL, `v2_app` with `NOBYPASSRLS`, unscoped denial, tenant-scoped visibility and cross-host denial |
 | Signup transaction and default role policies | PASS | `PlatformService.signup`, `PrismaPlatformRepository.createSignup`, role-policy assertions |
 | Opaque sessions, CSRF, expiry, revoke, credential rotation | PASS | `services/platform/src/service.test.ts`; hash-only persistence and rotation tests |
 | Email verification, resend throttling, invalidation | PASS | Verification hash tests, `EMAIL_NOT_VERIFIED` gate, resend route and outbox enqueue |
@@ -43,8 +43,8 @@ All roles are independently fixture-backed and PASS: Owner, Admin, Lab Manager, 
 | `npm run build:tenant-router` | PASS | dry-run only |
 | `npm run security:client-bundle` | PASS | no client secret detected |
 | `npm audit --omit=dev --audit-level=high` | PASS | 0 vulnerabilities |
-| `npm run v2:postgres:verify` | PASS | disposable PostgreSQL migrations executed |
-| `npm run v2:postgres:rls` | PASS | non-bypass RLS role and cross-tenant denial verified |
+| `npm run v2:postgres:verify` | PASS | test-only loopback PostgreSQL migrations executed |
+| `npm run v2:postgres:rls` | PASS | non-bypass `v2_app` role, unscoped denial, scoped visibility and cross-tenant denial verified |
 | `npm run release:migrations:verify` | PASS | legacy D1 head `0044`, count `44` |
 | `npm run release:docs:check` | PASS | release documentation valid |
 | `npm run test:ux` | PASS | public/V2 UX and accessibility baseline passed; legacy role tests remain explicitly skipped |
@@ -57,7 +57,7 @@ All roles are independently fixture-backed and PASS: Owner, Admin, Lab Manager, 
 - Browser-provided organization IDs and public `X-Organization-ID` headers are not trusted.
 - Session, CSRF, password, verification, push endpoint, invitation token, and provider credentials are never returned as persistent audit payloads.
 - V2 controller errors use a stable normalized envelope; cross-tenant host mismatch returns `403 TENANT_ACCESS_DENIED`, not an internal error.
-- The non-bypass RLS test and authenticated role matrix use disposable loopback PostgreSQL only.
+- The non-bypass RLS test self-provisions a local `v2_app` role without superuser or `BYPASSRLS`, then cleans its random tenant fixtures. It and the authenticated role matrix accept only disposable loopback PostgreSQL.
 - Cloudflare provider status remains `NOT_CONFIGURED` until an explicitly configured adapter and credentials are supplied.
 
 ## Exit verdict
