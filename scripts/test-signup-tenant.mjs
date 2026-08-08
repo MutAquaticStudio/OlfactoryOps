@@ -8,8 +8,8 @@ const reportRoot = path.join(repoRoot, 'reports')
 
 const apiBaseUrl = stripTrailingSlash(process.env.SIGNUP_TEST_API_URL ?? process.env.FUNCTIONAL_API_URL ?? '')
 const appUrl = stripTrailingSlash(process.env.SIGNUP_TEST_APP_URL ?? process.env.FUNCTIONAL_APP_URL ?? '')
-if (process.env.ALLOW_SIGNUP_TENANT_TEST !== 'true' || !apiBaseUrl || !appUrl) {
-  throw new Error('Refusing signup mutation. Set ALLOW_SIGNUP_TENANT_TEST=true plus SIGNUP_TEST_API_URL and SIGNUP_TEST_APP_URL for an isolated test environment.')
+if (process.env.QA_ENVIRONMENT !== 'test' || process.env.ALLOW_SIGNUP_TENANT_TEST !== 'true' || !apiBaseUrl || !appUrl) {
+  throw new Error('Refusing signup mutation. Set QA_ENVIRONMENT=test, ALLOW_SIGNUP_TENANT_TEST=true, SIGNUP_TEST_API_URL, and SIGNUP_TEST_APP_URL for an isolated test environment.')
 }
 const runStartedAt = new Date()
 const runStamp = stampForFile(runStartedAt)
@@ -138,6 +138,27 @@ try {
   assertStatus(crossTenant, 403, 'new signup tenant should not access org-nxl')
   evidence.push(`Cross-tenant probe status: ${crossTenant.status}`)
 
+  const freshLogin = await apiFetch(
+    '/auth/login',
+    {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    },
+    { useCookie: false, useCsrf: false },
+  )
+  assertStatus(freshLogin, 200, 'a newly signed-up owner should be able to log in from persisted D1 state')
+  assert(
+    freshLogin.json?.data?.session?.organizationId === expectedOrganizationId,
+    'fresh login should resolve the newly created tenant rather than a seeded workspace',
+  )
+  const meAfterFreshLogin = await apiFetch('/me')
+  assertStatus(meAfterFreshLogin, 200, '/me should restore the fresh owner session')
+  assert(
+    meAfterFreshLogin.json?.data?.session?.organizationId === expectedOrganizationId,
+    'fresh owner session should retain tenant scope',
+  )
+  evidence.push(`Fresh login tenant: ${meAfterFreshLogin.json.data.session.organizationId}`)
+
   await writeFile(reportPath, renderReport('PASS'), 'utf8')
   console.log(`Signup tenant test report: ${reportPath}`)
   console.log(`Result: PASS (${expectedOrganizationId})`)
@@ -156,6 +177,9 @@ async function apiFetch(pathname, init = {}, options = {}) {
   }
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
+  }
+  if (isMutatingRequest(init) && !headers.has('Idempotency-Key')) {
+    headers.set('Idempotency-Key', `qa-signup-${randomBytes(12).toString('hex')}`)
   }
   if (options.useCookie !== false) {
     const cookieHeader = Array.from(cookieJar.entries())
@@ -254,6 +278,7 @@ Signup email: ${email}
 - POST /auth/signup atomically creates organization, system hostname, brand, active owner membership, owner session, and CSRF token.
 - Worker signup cookie is HttpOnly, Secure, SameSite=None when the edge wrapper emits Set-Cookie.
 - GET /me hydrates the signup session from the persisted Worker state.
+- POST /auth/login resolves the same tenant from persisted D1 state and its new session restores through GET /me.
 - GET /security/tenant-console remains hidden behind the internal security permission for customer owners.
 - GET /billing/console returns the new tenant's managed-beta state without enabling checkout or plan changes.
 - A new beta workspace can create its first Formula and its usage is tenant-scoped.

@@ -8,6 +8,8 @@ import { resolveLocalApiConfig } from './modules/local-api-config.js'
 import { isLocalWorkspaceOrigin, localWorkspaceUrl, workspaceSlugFromLocalOrigin } from './modules/local-workspace-hosts.js'
 import { NorthStarService } from './services/northstar.service.js'
 import { isAppHttpError } from './shared/http-error.js'
+import { releaseHeaders, releaseMetadata } from '../../src/data/release.js'
+import { isRemovedV1Path, removedV1RouteCode } from '../../src/data/appRoutes.js'
 
 @Catch()
 class AppHttpErrorFilter implements ExceptionFilter {
@@ -34,6 +36,15 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
     logger: ['log', 'warn', 'error'],
   })
+  const release = releaseMetadata({
+    fullGitSha: process.env.RELEASE_GIT_SHA,
+    buildTimestampUtc: process.env.RELEASE_BUILD_TIMESTAMP_UTC,
+    environment: process.env.RELEASE_ENVIRONMENT ?? 'local',
+  })
+  app.getHttpAdapter().getInstance().addHook('onSend', async (_request: FastifyRequest, reply: FastifyReply, payload: unknown) => {
+    for (const [name, value] of Object.entries(releaseHeaders(release))) reply.header(name, value)
+    return payload
+  })
 
   app.enableCors({
     origin: (origin, callback) => {
@@ -45,6 +56,16 @@ async function bootstrap() {
     credentials: true,
     methods: ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'Idempotency-Key'],
+  })
+  app.getHttpAdapter().getInstance().addHook('preHandler', async (request: FastifyRequest, reply: FastifyReply) => {
+    const pathname = request.url.split('?', 1)[0]?.replace(/^\/api\/v1(?=\/|$)/, '') || '/'
+    if (!isRemovedV1Path(pathname)) return
+    reply.status(410).send({
+      statusCode: 410,
+      code: removedV1RouteCode,
+      message: 'This V1 product surface is no longer active. Use the current workspace modules after the V2 hand-off.',
+    })
+    return reply
   })
   if (config.workspaceHostnamesEnabled) {
     const northStar = app.get(NorthStarService)

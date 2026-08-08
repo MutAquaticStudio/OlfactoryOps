@@ -34,10 +34,10 @@ type LandingCopy = {
 
 const copy: Record<Locale, LandingCopy> = {
   'en-US': {
-    nav: { workflow: 'Workflow', intelligence: 'Formula intelligence', trust: 'Trust', signIn: 'Sign in', trial: 'Create workspace' },
+    nav: { workflow: 'Workflow', intelligence: 'Formula operations', trust: 'Trust', signIn: 'Sign in', trial: 'Create workspace' },
     eyebrow: 'OlfactoryOps beta',
     title: 'The operating system for fragrance teams',
-    subtitle: 'From brief to batch, formula intelligence and operational control in one workspace.',
+    subtitle: 'From brief to batch, formula operations and operational control in one workspace.',
     primary: 'Create workspace',
     secondary: 'Explore the workflow',
     heroCaption: 'A controlled workspace for formula, inventory, production, and commercial decisions.',
@@ -51,7 +51,7 @@ const copy: Record<Locale, LandingCopy> = {
     ],
     rolesTitle: 'A shared language for the people behind the product',
     roles: [
-      { title: 'Perfumer', copy: 'Build directions, compare reformulations, and retain the reasoning behind each draft.' },
+      { title: 'Perfumer', copy: 'Build formulas, compare revisions, and retain the review record behind each draft.' },
       { title: 'Lab & production', copy: 'Work from approved formula data through controlled stock, QC, and release.' },
       { title: 'Brand & commercial', copy: 'Contribute a brief and review safe decisions without exposing sensitive composition or cost.' },
     ],
@@ -59,10 +59,10 @@ const copy: Record<Locale, LandingCopy> = {
     productLead: 'The workbench stays quiet. Evidence appears when a decision needs it.',
     product: [
       { title: 'Materials & inventory', copy: 'Catalog, lots, compliance review, receiving, weighing, and movement traceability.' },
-      { title: 'Formula intelligence', copy: 'Design Studio and Reformulation Optimizer keep creative work connected to governed evidence.' },
+      { title: 'Formula operations', copy: 'Versioned formulas, compliance evidence, and approval gates keep every change reviewable.' },
       { title: 'Production & commercial', copy: 'Move from approved batch to fulfillment, with cost and margin decisions where authorized.' },
     ],
-    intelligenceTitle: 'Formula Intelligence, kept under control',
+    intelligenceTitle: 'Formula operations, kept under control',
     intelligenceLead: 'Research runs are typed, permission-aware, auditable, and confirmation-based. A proposed draft never reserves or consumes stock by itself.',
     trustTitle: 'Tenant trust is part of the product',
     trustLead: 'Workspace data, actions, and approvals stay scoped to the people who are allowed to make that decision.',
@@ -77,10 +77,10 @@ const copy: Record<Locale, LandingCopy> = {
     status: 'Beta status',
   },
   'vi-VN': {
-    nav: { workflow: 'Quy trinh', intelligence: 'Formula Intelligence', trust: 'Tin cay', signIn: 'Dang nhap', trial: 'Tao workspace' },
+    nav: { workflow: 'Quy trinh', intelligence: 'Formula operations', trust: 'Tin cay', signIn: 'Dang nhap', trial: 'Tao workspace' },
     eyebrow: 'OlfactoryOps beta',
     title: 'He dieu hanh cho doi ngu nuoc hoa',
-    subtitle: 'Tu brief den batch, formula intelligence va kiem soat van hanh trong mot workspace.',
+    subtitle: 'Tu brief den batch, formula operations va kiem soat van hanh trong mot workspace.',
     primary: 'Tao workspace',
     secondary: 'Kham pha quy trinh',
     heroCaption: 'Workspace co kiem soat cho formula, inventory, production va quyet dinh thuong mai.',
@@ -94,7 +94,7 @@ const copy: Record<Locale, LandingCopy> = {
     ],
     rolesTitle: 'Mot ngon ngu chung cho nhung nguoi tao ra san pham',
     roles: [
-      { title: 'Perfumer', copy: 'Xay dung huong sang tao, so sanh reformulation va giu lai ly do cua tung draft.' },
+      { title: 'Perfumer', copy: 'Xay dung cong thuc, so sanh ban sua doi va giu lai ly do cua tung draft.' },
       { title: 'Lab va production', copy: 'Lam viec tu formula da duyet qua stock, QC va release co kiem soat.' },
       { title: 'Brand va commercial', copy: 'Dong gop brief va review quyet dinh an toan ma khong lo composition hay cost nhay cam.' },
     ],
@@ -102,10 +102,10 @@ const copy: Record<Locale, LandingCopy> = {
     productLead: 'Workbench giu su yen tinh. Bang chung chi xuat hien khi mot quyet dinh can den no.',
     product: [
       { title: 'Materials va inventory', copy: 'Catalog, lot, compliance review, receiving, weighing va movement traceability.' },
-      { title: 'Formula Intelligence', copy: 'Design Studio va Reformulation Optimizer giu cong viec sang tao gan voi bang chung duoc quan tri.' },
+      { title: 'Formula operations', copy: 'Formula co phien ban, bang chung tuan thu va cong doan phe duyet ro rang.' },
       { title: 'Production va commercial', copy: 'Di tu batch da duyet den fulfillment, voi quyet dinh cost va margin dung quyen.' },
     ],
-    intelligenceTitle: 'Formula Intelligence duoc kiem soat',
+    intelligenceTitle: 'Formula operations duoc kiem soat',
     intelligenceLead: 'Research run co schema, phan quyen, audit va confirmation. Draft de xuat khong tu reserve hay consume stock.',
     trustTitle: 'Tenant trust la mot phan cua san pham',
     trustLead: 'Du lieu workspace, action va approval luon duoc scope cho dung nguoi duoc phep quyet dinh.',
@@ -125,7 +125,7 @@ function ProductSurface({ caption }: { caption: string }) {
   return <figure className="landing-product-surface" aria-label={caption}>
     <div className="landing-product-topline"><span>OlfactoryOps</span><span>Formula R&D</span><span>Workspace guard</span></div>
     <div className="landing-product-body">
-      <aside><span>Workbench</span><strong>Formula Design Studio</strong><span>Materials</span><span>Inventory</span><span>Production</span></aside>
+      <aside><span>Workbench</span><strong>Formula operations</strong><span>Materials</span><span>Inventory</span><span>Production</span></aside>
       <section><header><span>Fine fragrance brief</span><strong>Coastal amber</strong><small>Research ready for review</small></header><div className="landing-product-steps"><span>Brief</span><span className="is-active">Direction</span><span>Review</span><span>Draft</span></div><div className="landing-product-cards"><article><span>Bright opening</span><strong>Citrus, salt, clean woods</strong><small>Eligible catalog first</small></article><article><span>Compliance</span><strong>Review required</strong><small>Evidence available on review</small></article></div></section>
     </div>
     <figcaption>{caption}</figcaption>

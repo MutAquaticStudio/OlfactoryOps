@@ -1,13 +1,13 @@
 {
   "name": "olfactoryops",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0-rc.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build:test": "tsc -b && vite build --mode test",
+    "build:test": "tsc -b && vite build --mode test && node scripts/release-manifest.mjs page-artifact dist",
     "dev:api": "tsx watch --tsconfig server/tsconfig.json server/src/main.ts",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/release-manifest.mjs page-artifact dist",
     "build:api": "tsc -p server/tsconfig.json",
     "typecheck:worker": "tsc -p tsconfig.worker.json",
     "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
@@ -28,6 +28,19 @@
     "test:formula:live": "node scripts/test-formula-live.mjs",
     "test:functional:report": "node scripts/run-functional-report.mjs",
     "test:signup:tenant": "node scripts/test-signup-tenant.mjs",
+    "test:qa:fixtures": "vitest run scripts/qa-isolated-fixture-support.test.mjs",
+    "test:qa:role-fixtures": "node scripts/create-isolated-role-fixtures.mjs",
+    "test:qa:production-smoke": "node scripts/run-production-smoke.mjs",
+    "test:role-e2e:strict": "cross-env QA_REQUIRE_ROLE_E2E=true playwright test --config playwright.ux.config.ts e2e/role-workflows.playwright.ts",
+    "release:identity:check": "node scripts/release-identity-check.mjs",
+    "release:manifest:generate": "node scripts/release-manifest.mjs generate",
+    "release:manifest:validate": "node scripts/release-manifest.mjs validate",
+    "release:provenance:verify": "node scripts/release-manifest.mjs provenance",
+    "release:migrations:verify": "node scripts/verify-migrations.mjs",
+    "release:docs:check": "node scripts/validate-release-docs.mjs",
+    "release:bundle:report": "node scripts/analyze-bundle.mjs",
+    "release:status:benchmark": "node scripts/benchmark-status.mjs",
+    "release:nonsecret-gate": "npm run release:identity:check && npm run release:migrations:verify && npm run release:docs:check && npm run release:manifest:generate && npm run release:manifest:validate",
     "security:client-bundle": "node scripts/check-client-bundle-secrets.mjs",
     "security:hash-admin-password": "node scripts/generate-admin-password-hash.mjs",
     "deploy:check": "npm run build && npm run build:api && npm run typecheck:worker && npm run build:worker && npm run build:tenant-router && npm run test && npm run security:client-bundle",
@@ -46,7 +59,6 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "read-excel-file": "^9.3.4",
     "recharts": "^3.9.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
@@ -76,6 +88,7 @@
     "wrangler": "^4.113.0"
   },
   "overrides": {
-    "find-my-way": "9.7.0"
+    "find-my-way": "9.7.0",
+    "fast-uri": "3.1.5"
   }
 }

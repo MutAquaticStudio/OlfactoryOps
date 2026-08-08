@@ -7,6 +7,7 @@ import {
   type FormulaVersionRecord,
   type Material,
 } from '../src/data/northStar'
+import { NorthStarService } from '../server/src/services/northstar.service'
 import {
   auditChainHash,
   canonicalAuditChainPayload,
@@ -24,6 +25,9 @@ import {
   resolveSeededAdminCredentialState,
   resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
+  hydrateLoginState,
+  apiReleaseMetadata,
+  withReleaseHeaders,
 } from './index'
 
 describe('Worker mutation protocol', () => {
@@ -45,6 +49,21 @@ describe('Worker mutation protocol', () => {
     await expect(operationRequestHash('PATCH', '/formulas/F-001', first)).resolves.not.toBe(
       await operationRequestHash('PATCH', '/formulas/F-001', { ...first, name: 'Different formula' }),
     )
+  })
+})
+
+describe('Worker release provenance', () => {
+  it('projects safe build provenance into API response headers', async () => {
+    const metadata = apiReleaseMetadata({
+      RELEASE_GIT_SHA: '356b4e078247dcb6bed6a8a7a9b6e64de6afa141',
+      RELEASE_BUILD_TIMESTAMP_UTC: '2026-08-05T00:00:00Z',
+      RELEASE_ENVIRONMENT: 'test',
+    })
+    const response = withReleaseHeaders(new Response('{}'), metadata)
+
+    expect(response.headers.get('X-OlfactoryOps-Version')).toBe('0.1.0-rc.1')
+    expect(response.headers.get('X-OlfactoryOps-Git-SHA')).toBe('356b4e078247dcb6bed6a8a7a9b6e64de6afa141')
+    expect(response.headers.get('X-OlfactoryOps-Environment')).toBe('test')
   })
 })
 
@@ -209,6 +228,79 @@ describe('Seeded administrator credential migration', () => {
 
     expect(state.needsCanonicalUpsert).toBe(true)
     expect(state.legacyCredentialEmails).toEqual(['admin@labofscents.org'])
+  })
+})
+
+describe('Worker login tenant hydration', () => {
+  it('loads the membership organization and brand before resolving a canonical workspace', async () => {
+    const organization = {
+      id: 'org-qa-login',
+      name: 'QA Login Workspace',
+      slug: 'qa-login',
+      custom_domain: null,
+      plan: 'BETA',
+      status: 'ACTIVE',
+      primary_contact: 'owner@qa.test',
+      created_at: '2026-08-05T00:00:00.000Z',
+    }
+    const brand = {
+      id: 'brand-qa-login',
+      organization_id: organization.id,
+      name: 'QA Brand',
+      status: 'ACTIVE',
+      default_currency: 'USD',
+    }
+    const membership = {
+      id: 'mem-qa-login',
+      user_id: 'usr-qa-login',
+      email: 'owner@qa.test',
+      name: 'QA Owner',
+      organization_id: organization.id,
+      brand_ids_json: JSON.stringify([brand.id]),
+      role: 'Owner',
+      status: 'ACTIVE',
+      mfa_enabled: 0,
+      last_active_at: '2026-08-05T00:00:00.000Z',
+      invited_at: null,
+    }
+    const statement = (result: unknown, kind: 'first' | 'all') => ({
+      bind: vi.fn().mockReturnValue({
+        first: vi.fn().mockResolvedValue(kind === 'first' ? result : null),
+        all: vi.fn().mockResolvedValue(kind === 'all' ? result : { results: [] }),
+      }),
+      all: vi.fn().mockResolvedValue(kind === 'all' ? result : { results: [] }),
+    })
+    const db = {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('FROM auth_credentials')) {
+          return statement({ email: membership.email, password_hash: 'hash', password_set_at: organization.created_at }, 'first')
+        }
+        if (sql.includes('FROM tenant_memberships')) {
+          return statement(membership, 'first')
+        }
+        if (sql.includes('FROM auth_sessions')) {
+          return statement({ results: [] }, 'all')
+        }
+        if (sql.includes('FROM tenant_organizations')) {
+          return statement(organization, 'first')
+        }
+        if (sql.includes('FROM tenant_brands')) {
+          return statement({ results: [brand] }, 'all')
+        }
+        if (sql.includes('FROM tenant_role_policies')) {
+          return statement({ results: [] }, 'all')
+        }
+        return statement({ results: [] }, 'all')
+      }),
+    } as unknown as D1Database
+    const service = new NorthStarService()
+
+    await hydrateLoginState(db, service, membership.email)
+
+    expect(service.workspaceAccessForOrganization(organization.id)).toMatchObject({
+      systemHostname: 'qa-login.labofscents.org',
+      workspaceUrl: 'https://qa-login.labofscents.org',
+    })
   })
 })
 

@@ -8,6 +8,7 @@ workers_dev = true
 [vars]
 PAGES_ORIGIN = "https://labofscents.pages.dev"
 SYSTEM_WORKSPACE_DOMAIN = "labofscents.org"
+RELEASE_ENVIRONMENT = "production"
 
 [[d1_databases]]
 binding = "DB"

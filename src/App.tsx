@@ -70,14 +70,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { FormulaDesignStudioWorkspace, ReformulationOptimizerWorkspace } from './features/formula-intelligence/FormulaIntelligenceWorkspaces'
 import { TrialsWorkspace } from './features/trials/TrialsWorkspace'
 import { TrialEvidenceSummary } from './features/trials/TrialEvidenceSummary'
 import { OperationalLineageSummary } from './features/trials/OperationalLineageSummary'
 import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
 import { PublicLanding } from './features/marketing/PublicLanding'
-import { isProtectedApplicationPath, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext, type PublicRoute } from './data/appRoutes'
-import { isLluchCatalogueMasterMaterial, isLluchCatalogueSourceMaterial } from './data/lluch-catalogue-2026'
+import { isProtectedApplicationPath, isRemovedV1Path, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext, type PublicRoute } from './data/appRoutes'
 import { publicAuthUrlForWorkspaceOrigin } from './data/workspaceHostnames'
 import { WorkspaceDialog } from './ui/WorkspaceDialog'
 import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
@@ -133,7 +131,6 @@ import {
   type CommercialSkuRecord,
   type CostingOverview,
   type CustomerRecord,
-  type DataImportJobRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type FormulaEvaluationRecord,
@@ -344,13 +341,6 @@ function workspaceBrandingFallback(organizationId?: string): BrandingConfig {
     ...clientFallbackBranding,
     organizationId: organizationId ?? clientFallbackBranding.organizationId,
   }
-}
-
-function formatCatalogueEvidenceRange(range?: { value?: string; min?: string; max?: string }) {
-  if (!range) return 'Not documented'
-  if (range.value) return range.value
-  if (range.min && range.max) return `${range.min} to ${range.max}`
-  return range.min ?? range.max ?? 'Not documented'
 }
 
 const clientFallbackCosting: CostingOverview = {
@@ -1170,9 +1160,6 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   customization: Settings,
   materials: Atom,
   formulas: FlaskConical,
-  formulaAgent: Sparkles,
-  formulaDesignStudio: Sparkles,
-  reformulationOptimizer: SlidersHorizontal,
   trials: ClipboardCheck,
   inventory: Boxes,
   labUsage: Beaker,
@@ -1189,7 +1176,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
 const navGroups: { title: string; keys: DomainKey[]; internalOnly?: boolean }[] = [
   {
     title: 'Workbench',
-    keys: ['dashboard', 'materials', 'formulas', 'formulaDesignStudio', 'reformulationOptimizer', 'trials', 'inventory', 'labUsage'],
+    keys: ['dashboard', 'materials', 'formulas', 'trials', 'inventory', 'labUsage'],
   },
   { title: 'Operations', keys: ['production', 'procurement', 'orders'] },
   { title: 'Commercial', keys: ['commerce', 'costing'] },
@@ -1314,116 +1301,14 @@ function openPrintDocument(title: string, content: string) {
   return true
 }
 
-const materialImportFields = [
-  { key: 'name', label: 'Material name' },
-  { key: 'cas', label: 'CAS' },
-  { key: 'family', label: 'Family' },
-  { key: 'tier', label: 'Tier' },
-  { key: 'ifraLimit', label: 'IFRA limit %' },
-  { key: 'costPerGram', label: 'Cost / gram' },
-  { key: 'odor', label: 'Odor tags' },
-] as const
-
-const lotImportFields = [
-  { key: 'materialId', label: 'Material ID' },
-  { key: 'materialCas', label: 'Material CAS' },
-  { key: 'materialName', label: 'Material name' },
-  { key: 'lotNumber', label: 'Lot number' },
-  { key: 'quantityGrams', label: 'Quantity (g)' },
-  { key: 'expiryDate', label: 'Expiry date' },
-  { key: 'location', label: 'Storage location' },
-  { key: 'qualityStatus', label: 'QC status' },
-  { key: 'supplierLotRef', label: 'Supplier lot ref.' },
-] as const
-
-function buildMaterialImportMapping(headers: string[]) {
-  const mapping: Record<string, string> = {}
-  for (const field of materialImportFields) {
-    const header = headers.find((candidate) => {
-      const value = candidate.toLowerCase().replace(/[^a-z0-9]/g, '')
-      if (field.key === 'name') return value === 'name' || value === 'materialname'
-      if (field.key === 'cas') return value === 'cas' || value === 'casnumber'
-      if (field.key === 'family') return value === 'family' || value === 'olfactoryfamily'
-      if (field.key === 'tier') return value === 'tier' || value === 'note' || value === 'pyramidnote'
-      if (field.key === 'ifraLimit') return value === 'ifralimit' || value === 'ifralimitpercent' || value === 'ifra'
-      if (field.key === 'costPerGram') return value === 'costpergram' || value === 'costg' || value === 'unitcost'
-      return value === 'odor' || value === 'odortags' || value === 'tags'
-    })
-    if (header) mapping[field.key] = header
-  }
-  return mapping
-}
-
-function buildLotImportMapping(headers: string[]) {
-  const mapping: Record<string, string> = {}
-  for (const field of lotImportFields) {
-    const header = headers.find((candidate) => {
-      const value = candidate.toLowerCase().replace(/[^a-z0-9]/g, '')
-      if (field.key === 'materialId') return value === 'materialid' || value === 'id'
-      if (field.key === 'materialCas') return value === 'materialcas' || value === 'cas' || value === 'casnumber'
-      if (field.key === 'materialName') return value === 'materialname' || value === 'material' || value === 'name'
-      if (field.key === 'lotNumber') return value === 'lotnumber' || value === 'lot' || value === 'batchnumber'
-      if (field.key === 'quantityGrams') return value === 'quantitygrams' || value === 'quantityg' || value === 'quantity' || value === 'grams'
-      if (field.key === 'expiryDate') return value === 'expirydate' || value === 'expiry' || value === 'expirationdate'
-      if (field.key === 'location') return value === 'location' || value === 'storagelocation' || value === 'warehouse'
-      if (field.key === 'qualityStatus') return value === 'qualitystatus' || value === 'qcstatus' || value === 'status'
-      return value === 'supplierlotref' || value === 'supplierlot' || value === 'supplierbatch'
-    })
-    if (header) mapping[field.key] = header
-  }
-  return mapping
-}
-
-function importCellText(value: unknown) {
-  if (value instanceof Date) return value.toISOString().slice(0, 10)
-  return value === null || value === undefined ? '' : String(value).trim()
-}
-
-function parseCsvCells(source: string) {
-  const rows: string[][] = []
-  let row: string[] = []
-  let value = ''
-  let quoted = false
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index]
-    const next = source[index + 1]
-    if (character === '"' && quoted && next === '"') {
-      value += '"'
-      index += 1
-      continue
-    }
-    if (character === '"') {
-      quoted = !quoted
-      continue
-    }
-    if (character === ',' && !quoted) {
-      row.push(value.trim())
-      value = ''
-      continue
-    }
-    if ((character === '\n' || character === '\r') && !quoted) {
-      if (character === '\r' && next === '\n') index += 1
-      row.push(value.trim())
-      if (row.some(Boolean)) rows.push(row)
-      row = []
-      value = ''
-      continue
-    }
-    value += character
-  }
-  row.push(value.trim())
-  if (row.some(Boolean)) rows.push(row)
-  return rows
-}
-
-async function digestImportRows(rows: Array<Record<string, unknown>>) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(rows)))
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-}
 
 let csrfToken: string | null = null
 
 function workspaceRedirectUrl(workspaceUrl: string | undefined, localPath: string) {
+  // Isolated role E2E runs keep the app on the loopback origin while the
+  // fixture Worker remains on its own port. Production builds never set this
+  // test-only flag, so canonical tenant-host redirects stay enforced live.
+  if (import.meta.env.VITE_DISABLE_WORKSPACE_HOST_REDIRECT === 'true') return undefined
   const localWorkspaceHostsEnabled = import.meta.env.DEV && import.meta.env.VITE_LOCAL_WORKSPACE_HOSTS === 'true'
   if ((import.meta.env.DEV && !localWorkspaceHostsEnabled) || !workspaceUrl) return undefined
   try {
@@ -1690,6 +1575,8 @@ function domainVisibleForSession(key: DomainKey, session: AuthSession) {
     return true
   }
 
+  // Deferred research surfaces remain archived; active routes stay task-focused.
+  // during the pre-V2 hand-off. Generic agent runtime records remain durable.
   if (key === 'documents') {
     return false
   }
@@ -1740,13 +1627,11 @@ function visibleNavGroupsForSession(session: AuthSession) {
 }
 
 function safeLandingForSession(key: DomainKey, session: AuthSession) {
-  const normalized = key === 'formulaAgent' ? 'formulaDesignStudio' : key
-  return domainVisibleForSession(normalized, session) ? normalized : 'dashboard'
+  return domainVisibleForSession(key, session) ? key : 'dashboard'
 }
 
 function domainKeyForPath(pathname: string): DomainKey {
-  if (pathname === '/ai/formula-agent' || pathname === '/ai/formula-design-studio') return 'formulaDesignStudio'
-  if (pathname === '/ai/reformulation-optimizer') return 'reformulationOptimizer'
+  if (isRemovedV1Path(pathname)) return 'dashboard'
   if (pathname === '/trials') return 'trials'
   if (pathname === '/workspace') return 'dashboard'
   const workspaceKey = pathname.startsWith('/workspace/') ? pathname.slice('/workspace/'.length) : ''
@@ -1755,8 +1640,6 @@ function domainKeyForPath(pathname: string): DomainKey {
 }
 
 function pathForDomainKey(key: DomainKey) {
-  if (key === 'formulaAgent' || key === 'formulaDesignStudio') return '/ai/formula-design-studio'
-  if (key === 'reformulationOptimizer') return '/ai/reformulation-optimizer'
   if (key === 'trials') return '/trials'
   if (key === 'dashboard') return '/workspace'
   return `/workspace/${key}`
@@ -3092,7 +2975,7 @@ function App() {
   }
 
   if (authRestoring) {
-    return <main className="auth-restore-screen" aria-live="polite"><div><span className="formula-intelligence-eyebrow">OlfactoryOps</span><strong>Restoring your workspace</strong><small>Checking the active session and requested page.</small></div></main>
+    return <main className="auth-restore-screen" aria-live="polite"><div><span className="section-eyebrow">OlfactoryOps</span><strong>Restoring your workspace</strong><small>Checking the active session and requested page.</small></div></main>
   }
 
   if (!currentSession) {
@@ -3195,71 +3078,6 @@ function App() {
                   session={currentSession}
                   onNavigate={navigateToDomain}
                   onOpenModal={setModal}
-                />
-              </motion.div>
-            ) : activeKey === 'formulaDesignStudio' ? (
-              <motion.div key="formula-design-studio" {...shellMotionPreset}>
-                <FormulaDesignStudioWorkspace
-                  apiBaseUrl={apiBaseUrl}
-                  requestApi={requestApi}
-                  formulaRecords={scopedFormulaRecords}
-                  materialRecords={materialRecords}
-                  capabilities={{
-                    currentUserId: currentSession.userId,
-                    currentUserEmail: currentSession.email,
-                    canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
-                    canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
-                    canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
-                    canApproveBrief: sessionHasPermission(currentSession, 'formulas.approve'),
-                    canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
-                    canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
-                    canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
-                    canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
-                    canSubmitFormulaReview: sessionHasPermission(currentSession, 'formulas.edit'),
-                    canApproveFormula: isFormulaApproverRole(currentSession.role) && sessionHasPermission(currentSession, 'formulas.approve'),
-                    canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
-                    canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
-                  }}
-                  onFormulaSaved={(formula) => {
-                    setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
-                    setActiveFormulaId(formula.id)
-                  }}
-                  onTrialPlanned={() => navigateToDomain('trials')}
-                />
-              </motion.div>
-            ) : activeKey === 'reformulationOptimizer' ? (
-              <motion.div key="reformulation-optimizer" {...shellMotionPreset}>
-                <ReformulationOptimizerWorkspace
-                  apiBaseUrl={apiBaseUrl}
-                  requestApi={requestApi}
-                  formulaRecords={scopedFormulaRecords}
-                  materialRecords={materialRecords}
-                  capabilities={{
-                    currentUserId: currentSession.userId,
-                    currentUserEmail: currentSession.email,
-                    canArchiveAnyDesignProject: ['owner', 'admin'].includes(currentSession.role.trim().toLowerCase()),
-                    canCreateBrief: sessionHasPermission(currentSession, 'formulas.view'),
-                    canReviewBrief: sessionHasPermission(currentSession, 'formulas.edit'),
-                    canApproveBrief: sessionHasPermission(currentSession, 'formulas.approve'),
-                    canGenerateDirections: sessionHasAnyPermission(currentSession, ['formulas.edit']) && sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canRunOptimizer: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canViewSensitiveComposition: sessionHasAnyPermission(currentSession, ['formulas.viewSensitive']) && sessionHasAnyPermission(currentSession, ['materials.view']),
-                    canViewCostEvidence: sessionHasPermission(currentSession, 'costing.view'),
-                    canViewInventoryEvidence: sessionHasPermission(currentSession, 'inventory.view'),
-                    canViewMaterialEvidence: sessionHasPermission(currentSession, 'documents.view') && sessionHasPermission(currentSession, 'materials.view'),
-                    canSaveDraft: sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
-                    canSubmitFormulaReview: sessionHasPermission(currentSession, 'formulas.edit'),
-                    canApproveFormula: isFormulaApproverRole(currentSession.role) && sessionHasPermission(currentSession, 'formulas.approve'),
-                    canPlanTrial: sessionHasPermission(currentSession, 'trials.create') && sessionHasPermission(currentSession, 'formulas.edit') && sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view'),
-                    canViewTrialEvidence: sessionHasPermission(currentSession, 'formulas.viewSensitive') && sessionHasPermission(currentSession, 'materials.view') && sessionHasPermission(currentSession, 'trials.view'),
-                  }}
-                  onFormulaSaved={(formula) => {
-                    setFormulaRecords((current) => [formula, ...current.filter((item) => item.id !== formula.id)])
-                    setActiveFormulaId(formula.id)
-                  }}
                 />
               </motion.div>
             ) : activeKey === 'trials' ? (
@@ -5018,7 +4836,6 @@ function compactIntegrationDetail(check: IntegrationReadinessResponse['checks'][
     beta_hostname: check.status === 'ready' ? 'DNS and HTTPS active' : 'Finish DNS and HTTPS setup',
     workers_ai: check.status === 'ready' ? 'Available' : 'Not available',
     vectorize_rag: check.status === 'ready' ? 'Evidence index available' : 'Index requires setup',
-    formula_agent: check.status === 'ready' ? 'Research agent available' : 'Agent requires setup',
   }
   return detail[check.key]
 }
@@ -5386,8 +5203,6 @@ function MaterialWorkspace({
   const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
-  const selectedIsSourceOnly = isLluchCatalogueSourceMaterial(selected)
-  const selectedIsGlobalMaster = isLluchCatalogueMasterMaterial(selected)
   const selectedIsShared = (selected.libraryScope ?? (selected.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL'
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
@@ -5438,25 +5253,6 @@ function MaterialWorkspace({
   const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
   )
-  const [importHeaders, setImportHeaders] = useState<string[]>([])
-  const [importRows, setImportRows] = useState<Array<Record<string, unknown>>>([])
-  const [importMapping, setImportMapping] = useState<Record<string, string>>({})
-  const [importEntity, setImportEntity] = useState<'materials' | 'lots'>('materials')
-  const [importJob, setImportJob] = useState<DataImportJobRecord | null>(null)
-  const [importStatus, setImportStatus] = useState('Choose a CSV or XLSX file to start a dry-run.')
-  const [importBusy, setImportBusy] = useState(false)
-  const canReceiveInventory = sessionHasPermission(session, 'inventory.receive')
-  const canRunImport = importEntity === 'materials' ? canCreateMaterials : canReceiveInventory
-  const activeImportFields = importEntity === 'materials' ? materialImportFields : lotImportFields
-
-  const mappedImportRows = useMemo(
-    () => importRows.map((row) => Object.fromEntries(
-      Object.entries(importMapping)
-        .filter(([, source]) => source)
-        .map(([field, source]) => [field, row[source]]),
-    )),
-    [importMapping, importRows],
-  )
 
   const filteredMaterialRecords = useMemo(() => {
     const query = materialQuery.trim().toLowerCase()
@@ -5465,14 +5261,6 @@ function MaterialWorkspace({
       material.name,
       material.cas,
       material.family,
-      material.catalogueSource?.supplier,
-      material.catalogueSource?.category,
-      ...material.supplierCatalogueReferences?.flatMap((reference) => [
-        reference.productName,
-        reference.productCas,
-        reference.einecs ?? '',
-        reference.fema ?? '',
-      ]) ?? [],
     ].some((value) => value?.toLowerCase().includes(query)))
   }, [materialQuery, materialRecords])
 
@@ -5732,103 +5520,6 @@ function MaterialWorkspace({
     }
   }
 
-  function selectImportEntity(entity: 'materials' | 'lots') {
-    if (entity === importEntity) return
-    setImportEntity(entity)
-    setImportHeaders([])
-    setImportRows([])
-    setImportMapping({})
-    setImportJob(null)
-    setImportStatus(`Choose a CSV or XLSX file to dry-run ${entity === 'materials' ? 'materials' : 'inventory lots'}.`)
-  }
-
-  async function loadDataImport(file: File | null) {
-    if (!file) {
-      return
-    }
-    setImportBusy(true)
-    setImportStatus(`Reading ${file.name}...`)
-    try {
-      const cells = file.name.toLowerCase().endsWith('.csv')
-        ? parseCsvCells(await file.text())
-        : await (await import('read-excel-file/browser')).readSheet(file)
-      const [headerRow, ...dataRows] = cells
-      const headers = (headerRow ?? []).map((value) => importCellText(value)).filter(Boolean)
-      if (headers.length === 0) {
-        throw new Error('The selected sheet has no header row or data rows')
-      }
-      const rows = dataRows
-        .filter((row) => row.some((value) => importCellText(value)))
-        .slice(0, 500)
-        .map((row) => Object.fromEntries(headers.map((header, index) => [header, importCellText(row[index])])) as Record<string, unknown>)
-      const defaultMapping = importEntity === 'materials' ? buildMaterialImportMapping(headers) : buildLotImportMapping(headers)
-      setImportHeaders(headers)
-      setImportRows(rows)
-      setImportMapping(defaultMapping)
-      setImportJob(null)
-      setImportStatus(`${rows.length} ${importEntity === 'materials' ? 'material' : 'lot'} row(s) loaded. Confirm column mapping, then run dry-run.`)
-    } catch (error) {
-      setImportHeaders([])
-      setImportRows([])
-      setImportMapping({})
-      setImportStatus(error instanceof Error ? error.message : 'Could not parse the import file')
-    } finally {
-      setImportBusy(false)
-    }
-  }
-
-  async function previewDataImport() {
-    if (!canRunImport || mappedImportRows.length === 0) {
-      return
-    }
-    setImportBusy(true)
-    try {
-      const payload = await requestApi<{ job: DataImportJobRecord; idempotent: boolean }>('/imports/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          entity: importEntity,
-          fileName: `${importEntity}-import`,
-          idempotencyKey: await digestImportRows([{ entity: importEntity }, ...mappedImportRows]),
-          rows: mappedImportRows,
-        }),
-      })
-      setImportJob(payload.job)
-      setImportStatus(
-        payload.job.invalidRows > 0
-          ? `Dry-run found ${payload.job.errors.length} issue(s) across ${payload.job.invalidRows} row(s).`
-          : `Dry-run passed for ${payload.job.validRows} ${importEntity === 'materials' ? 'material' : 'lot'} row(s).`,
-      )
-    } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : 'Import dry-run failed')
-    } finally {
-      setImportBusy(false)
-    }
-  }
-
-  async function commitDataImport() {
-    if (!importJob || importJob.status !== 'VALIDATED') {
-      return
-    }
-    setImportBusy(true)
-    try {
-      const payload = await requestApi<{ job: DataImportJobRecord; created: number }>(`/imports/${encodeURIComponent(importJob.id)}/commit`, {
-        method: 'POST',
-      })
-      const refreshed = await requestApi<Material[]>('/materials')
-      onMaterialsChange(refreshed)
-      setImportJob(payload.job)
-      setImportStatus(
-        importEntity === 'materials'
-          ? `Imported ${payload.created} material record(s) ${canCurateSharedMaterials ? 'to the shared library' : 'privately into this workspace'}.`
-          : `Imported ${payload.created} inventory lot record(s).`,
-      )
-    } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : 'Import commit failed')
-    } finally {
-      setImportBusy(false)
-    }
-  }
 
   async function saveMaterialUpdate() {
     if (!canEditSelectedMaterial) {
@@ -6013,67 +5704,6 @@ function MaterialWorkspace({
             ? 'You are publishing as an OlfactoryOps curator. New materials and material imports become part of the shared library for every workspace.'
             : 'New materials and material imports belong only to this workspace. Other tenants cannot search, edit, or use them.'}
         </p>
-        <section className="import-panel" aria-label="Data import">
-          <div className="section-heading compact-heading">
-            <div>
-              <span className="eyebrow">Data import</span>
-              <strong>CSV / XLSX import</strong>
-            </div>
-            <DataTag label="Rows" value={String(importRows.length)} tone="blue" />
-          </div>
-          <div className="segmented-control" aria-label="Import data type">
-            <button className={importEntity === 'materials' ? 'is-active' : ''} type="button" onClick={() => selectImportEntity('materials')}>
-              Materials
-            </button>
-            <button className={importEntity === 'lots' ? 'is-active' : ''} type="button" onClick={() => selectImportEntity('lots')}>
-              Inventory lots
-            </button>
-          </div>
-          <label className="field-row wide-field">
-            <span>Source file</span>
-            <input
-              accept=".csv,.xlsx,.xls"
-              aria-label="Import source file"
-              type="file"
-              disabled={!canRunImport || importBusy}
-              onChange={(event) => void loadDataImport(event.target.files?.[0] ?? null)}
-            />
-          </label>
-          {importHeaders.length > 0 ? (
-            <div className="import-mapping-grid">
-              {activeImportFields.map((field) => (
-                <label className="field-row" key={field.key}>
-                  <span>{field.label}</span>
-                  <select
-                    aria-label={`Map ${field.label}`}
-                    value={importMapping[field.key] ?? ''}
-                    onChange={(event) => setImportMapping((current) => ({ ...current, [field.key]: event.target.value }))}
-                  >
-                    <option value="">Do not import</option>
-                    {importHeaders.map((header) => <option key={header} value={header}>{header}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
-          ) : null}
-          <div className="action-row">
-            <button className="ghost-button small" type="button" disabled={!canRunImport || importBusy || mappedImportRows.length === 0} onClick={() => void previewDataImport()}>
-              {importBusy ? 'Working...' : 'Dry-run import'}
-            </button>
-            <button className="primary-button small" type="button" disabled={importBusy || importJob?.status !== 'VALIDATED'} onClick={() => void commitDataImport()}>
-              Commit valid rows
-            </button>
-          </div>
-          <p className="muted-copy">{importStatus}</p>
-          {importEntity === 'lots' ? <p className="muted-copy">Map one material identifier: Material ID, CAS, or material name. Expiry must be YYYY-MM-DD; QC status defaults to QUARANTINE.</p> : null}
-          {importJob?.errors.length ? (
-            <div className="import-errors" role="status">
-              {importJob.errors.slice(0, 6).map((issue, index) => (
-                <span key={`${issue.row}-${issue.field ?? 'row'}-${index}`}>Row {issue.row}{issue.field ? ` / ${issue.field}` : ''}: {issue.message}</span>
-              ))}
-            </div>
-          ) : null}
-        </section>
         <p className="muted-copy" role="status">{materialStatus}</p>
         <section className="material-directory-controls" aria-label="Material directory controls">
           <label className="field-row wide-field">
@@ -6092,13 +5722,11 @@ function MaterialWorkspace({
             <DataTag label="Materials" value={materialRecords.length.toLocaleString()} tone="blue" />
             <DataTag label="Showing" value={`${visibleMaterialRecords.length} / ${filteredMaterialRecords.length.toLocaleString()}`} />
           </div>
-          <p className="helper-copy">The Lluch range is published as read-only Global Master Materials for research and formula drafting. Tenant-owned material, supplier, compliance, and lot evidence are still required before procurement or stock operations.</p>
+          <p className="helper-copy">Materials are workspace-scoped. Technical and compliance evidence is reviewed here before a material can enter procurement or inventory operations.</p>
         </section>
         <div className="material-list">
           {visibleMaterialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)
-            const sourceOnly = isLluchCatalogueSourceMaterial(material)
-            const globalMaster = isLluchCatalogueMasterMaterial(material)
             return (
               <button
                 key={material.id}
@@ -6108,12 +5736,12 @@ function MaterialWorkspace({
               >
                 <div>
                   <strong>{material.name}</strong>
-                  <span>{sourceOnly || globalMaster ? `${material.catalogueSource?.supplier} / ${material.catalogueSource?.category}` : material.family}</span>
+                  <span>{material.family}</span>
                 </div>
                 <DataTag
-                  label={sourceOnly ? 'Review' : globalMaster ? 'Library' : (material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
-                  value={sourceOnly ? 'Source only' : globalMaster ? 'R&D-ready' : material.cas}
-                  tone={sourceOnly ? 'amber' : globalMaster ? 'green' : 'blue'}
+                  label={(material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
+                  value={material.cas}
+                  tone="blue"
                 />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
@@ -6132,61 +5760,9 @@ function MaterialWorkspace({
           <DataTag label="Library" value={selectedIsShared ? 'Shared' : 'Workspace private'} tone={selectedIsShared ? 'blue' : 'green'} />
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
-          {selectedIsSourceOnly ? <DataTag label="Status" value="Needs review" tone="amber" /> : selectedIsGlobalMaster ? <DataTag label="Status" value="R&D-ready" tone="green" /> : <DataTag label="Molecules" value={String(moleculeRows.length)} />}
+          <DataTag label="Molecules" value={String(moleculeRows.length)} />
         </div>
-        {selectedIsSourceOnly ? (
-          <section className="material-source-notice" aria-label="Supplier source status">
-            <strong>Supplier source material</strong>
-            <p>Identity and supplier-declared profile data came from the Lluch catalogue. Technical, cost, IFRA, allergen, and compliance evidence still need their own controlled review before this material can be used in an approved formula, procurement, or inventory workflow.</p>
-            <div className="tag-row">
-              <DataTag label="Category" value={selected.catalogueSource?.category ?? selected.family} tone="blue" />
-              <DataTag label="Catalogue page" value={`p. ${selected.catalogueSource?.page ?? 'n/a'}`} />
-            </div>
-            {selected.catalogueEvidence ? (
-              <section className="olfactive-profile" aria-label="Supplier-declared material profile">
-                <div className="section-heading compact-heading">
-                  <div>
-                    <span className="eyebrow">Supplier-declared profile</span>
-                    <strong>{selected.catalogueEvidence.appearance ?? 'Catalogue evidence'}</strong>
-                  </div>
-                  <StatusBadge status="review" label="Evidence only" />
-                </div>
-                {selected.catalogueEvidence.chemicalIdentification ? <p>{selected.catalogueEvidence.chemicalIdentification}</p> : null}
-                <dl className="olfactive-profile-signals" aria-label="Supplier-declared physical profile">
-                  <div><dt>Density</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.density)}</dd></div>
-                  <div><dt>Vapor pressure</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.vaporPressure)}</dd></div>
-                  <div><dt>Molecular weight</dt><dd>Not documented</dd></div>
-                  <div><dt>LogP</dt><dd>Not documented</dd></div>
-                  <div className="olfactive-profile-role"><dt>Declared use</dt><dd>{selected.catalogueEvidence.declaredUse ?? 'Not documented'}</dd></div>
-                </dl>
-                {selected.catalogueEvidence.declaredOdour.length ? (
-                  <div className="odor-row" aria-label="Supplier-declared odour">
-                    {selected.catalogueEvidence.declaredOdour.map((descriptor) => <span key={descriptor}>{descriptor}</span>)}
-                  </div>
-                ) : null}
-                <small>{selected.catalogueEvidence.source} / {selected.catalogueEvidence.version}</small>
-              </section>
-            ) : null}
-          </section>
-        ) : selectedIsGlobalMaster ? (
-          <section className="material-source-notice" aria-label="Global Master Material status">
-            <strong>Global Master Material</strong>
-            <p>This Lluch catalogue material is available to every workspace for research, Formula Intelligence, and non-consuming formula drafts. It is read-only and cannot be purchased, received into stock, reserved, consumed, or released until the workspace creates its own operational material evidence.</p>
-            <div className="tag-row">
-              <DataTag label="Category" value={selected.catalogueSource?.category ?? selected.family} tone="blue" />
-              <DataTag label="Catalogue page" value={`p. ${selected.catalogueSource?.page ?? 'n/a'}`} />
-            </div>
-            {selected.catalogueEvidence ? (
-              <dl className="olfactive-profile-signals" aria-label="Global Master technical evidence">
-                <div><dt>Identity</dt><dd>{selected.catalogueEvidence.chemicalIdentification ?? 'Not documented'}</dd></div>
-                <div><dt>Declared use</dt><dd>{selected.catalogueEvidence.declaredUse ?? 'Not documented'}</dd></div>
-                <div><dt>Density</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.density)}</dd></div>
-                <div><dt>Vapor pressure</dt><dd>{formatCatalogueEvidenceRange(selected.catalogueEvidence.vaporPressure)}</dd></div>
-              </dl>
-            ) : null}
-          </section>
-        ) : (
-          <>
+        <>
             <div className="inspector-grid">
               <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
               <Metric label="Density" value={`${selected.density} g/ml`} />
@@ -6200,8 +5776,7 @@ function MaterialWorkspace({
                 <span key={tag}>{tag}</span>
               ))}
             </div>
-          </>
-        )}
+        </>
         {selected.olfactiveProfile ? (
           <section className="olfactive-profile" aria-label="Olfactive profile">
             <div className="section-heading compact-heading">
@@ -6226,21 +5801,6 @@ function MaterialWorkspace({
               {selected.olfactiveProfile.facets.map((facet) => <DataTag key={facet} label="Facet" value={facet} />)}
             </div>
             <small>{selected.olfactiveProfile.source} / {selected.olfactiveProfile.version}</small>
-          </section>
-        ) : null}
-        {selected.supplierCatalogueReferences?.length ? (
-          <section className="catalogue-reference-list" aria-label="Supplier catalogue references">
-            <span className="eyebrow">Supplier catalogue reference</span>
-            {selected.supplierCatalogueReferences.map((reference) => (
-              <div className="catalogue-reference" key={`${reference.supplier}-${reference.catalogueVersion}-${reference.productName}`}>
-                <div>
-                  <strong>{reference.productName}</strong>
-                  <span>{reference.supplier} / {reference.category} / p. {reference.page}</span>
-                </div>
-                <DataTag label={reference.match === 'EXACT_PRODUCT' ? 'Match' : 'Reference'} value={reference.productCas} tone={reference.match === 'RELATED_VARIANT' ? 'amber' : 'blue'} />
-                {reference.note ? <p>{reference.note}</p> : null}
-              </div>
-            ))}
           </section>
         ) : null}
         {canViewMaterialEvidence ? (
@@ -14686,7 +14246,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         {detailMode === 'view' ? (
           <div className="order-detail-content" data-testid="order-detail-view">
             <section className="order-detail-section order-detail-overview">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Order overview</span><h3>{detailOrder.customer}</h3></div><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Order overview</span><h3>{detailOrder.customer}</h3></div><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /></div>
               <div className="metric-grid compact-metrics">
                 <Metric label="Order total" value={formatCurrency(detailOrder.total)} />
                 <Metric label="SKU lines" value={String(detailOrder.lines?.length ?? 1)} />
@@ -14697,7 +14257,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
             </section>
 
             <section className="order-detail-section">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Items</span><h3>Order lines</h3></div></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Items</span><h3>Order lines</h3></div></div>
               <div className="order-detail-lines">
                 {(detailOrder.lines?.length ? detailOrder.lines : [{ skuId: detailOrder.skuId, quantity: detailOrder.quantity, unitPrice: detailOrder.unitPrice, lineTotal: detailOrder.unitPrice * detailOrder.quantity }]).map((line) => (
                   <div className="order-detail-line" key={line.skuId}>
@@ -14710,7 +14270,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
             </section>
 
             <section className="order-detail-section">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Delivery</span><h3>Recipient and shipping</h3></div></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Delivery</span><h3>Recipient and shipping</h3></div></div>
               <dl className="order-detail-definition-list">
                 <div><dt>Contact</dt><dd>{detailOrder.contactEmail ?? detailCustomer?.contactEmail ?? 'Not provided'}</dd></div>
                 <div><dt>Address</dt><dd>{[detailOrder.shippingAddress?.line1 ?? detailCustomer?.shippingAddress.line1, detailOrder.shippingAddress?.city ?? detailCustomer?.shippingAddress.city, detailOrder.shippingAddress?.country ?? detailCustomer?.shippingAddress.country].filter(Boolean).join(', ') || 'Not provided'}</dd></div>
@@ -14720,12 +14280,12 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               </dl>
             </section>
 
-            {detailOrder.status === 'CANCELLED' ? <section className="order-detail-section order-cancellation-evidence"><div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Cancellation</span><h3>Order closed without fulfillment</h3></div></div><p>{detailOrder.cancellationReason ?? 'Cancelled by operator'}</p><small>{detailOrder.cancelledAt ? new Date(detailOrder.cancelledAt).toLocaleString() : 'Cancellation time unavailable'}</small></section> : null}
+            {detailOrder.status === 'CANCELLED' ? <section className="order-detail-section order-cancellation-evidence"><div className="order-detail-section-heading"><div><span className="section-eyebrow">Cancellation</span><h3>Order closed without fulfillment</h3></div></div><p>{detailOrder.cancellationReason ?? 'Cancelled by operator'}</p><small>{detailOrder.cancelledAt ? new Date(detailOrder.cancelledAt).toLocaleString() : 'Cancellation time unavailable'}</small></section> : null}
           </div>
         ) : detailMode === 'edit' && orderEditDraft ? (
           <div className="order-detail-content order-detail-edit" data-testid="order-detail-edit">
             <section className="order-detail-section">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Commercial details</span><h3>Reference and pricing</h3></div></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Commercial details</span><h3>Reference and pricing</h3></div></div>
               <div className="form-grid-two">
                 <label className="field-row"><span>Customer reference</span><input value={orderEditDraft.customerReference} maxLength={80} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, customerReference: event.target.value } : current)} /></label>
                 <label className="field-row"><span>Contact email</span><input type="email" value={orderEditDraft.contactEmail} maxLength={254} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, contactEmail: event.target.value } : current)} /></label>
@@ -14737,7 +14297,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
             </section>
 
             <section className="order-detail-section">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Items</span><h3>Editable order lines</h3></div><button className="ghost-button small" type="button" onClick={addDetailLine}>Add SKU</button></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Items</span><h3>Editable order lines</h3></div><button className="ghost-button small" type="button" onClick={addDetailLine}>Add SKU</button></div>
               <div className="order-edit-lines">
                 {orderEditDraft.lines.map((line) => (
                   <div className="order-edit-line" key={line.id}>
@@ -14750,7 +14310,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
             </section>
 
             <section className="order-detail-section">
-              <div className="order-detail-section-heading"><div><span className="formula-intelligence-eyebrow">Delivery</span><h3>Shipping destination</h3></div></div>
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Delivery</span><h3>Shipping destination</h3></div></div>
               <div className="form-grid-two">
                 <label className="field-row wide-field"><span>Address</span><input value={orderEditDraft.shippingLine1} maxLength={200} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingLine1: event.target.value } : current)} /></label>
                 <label className="field-row"><span>City</span><input value={orderEditDraft.shippingCity} maxLength={100} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCity: event.target.value } : current)} /></label>
@@ -14762,7 +14322,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         ) : (
           <div className="order-detail-content" data-testid="order-cancel-view">
             <section className="order-detail-section order-cancel-confirmation">
-              <span className="formula-intelligence-eyebrow">Cancel order</span>
+              <span className="section-eyebrow">Cancel order</span>
               <h3>Cancel {detailOrder.id}?</h3>
               <p>This stops the order and releases any active reservation. It does not delete order history or create an inventory movement.</p>
               <label className="field-row"><span>Cancellation reason</span><textarea autoFocus rows={5} maxLength={500} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Explain why this order is being cancelled" /></label>

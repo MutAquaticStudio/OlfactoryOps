@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Put, Query, Res } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Headers, Inject, Param, Patch, Post, Put, Query } from '@nestjs/common'
 import { NorthStarService } from '../services/northstar.service.js'
-import { AgentLocalRuntimeService } from '../services/agent-local-runtime.service.js'
+import { MutationIdempotencyService } from '../services/mutation-idempotency.service.js'
 
 type LabUsageBody = {
   formulaId?: string
@@ -190,16 +190,11 @@ type ShipOrderBody = {
 export class NorthStarController {
   constructor(
     @Inject(NorthStarService) private readonly northStar: NorthStarService,
-    @Inject(AgentLocalRuntimeService) private readonly agentRuntime: AgentLocalRuntimeService,
+    @Inject(MutationIdempotencyService) private readonly mutationIdempotency: MutationIdempotencyService,
   ) {}
 
-  private formulaIntelligenceMutation<T>(route: string, idempotencyKey: string | undefined, body: unknown, mutation: () => Promise<T>) {
-    return this.agentRuntime.idempotentMutation(this.northStar.me().data.session, route, idempotencyKey, body, mutation)
-  }
-
-  @Get('phases')
-  phases() {
-    return this.northStar.phases()
+  private scopedMutation<T>(route: string, idempotencyKey: string | undefined, body: unknown, mutation: () => Promise<T>) {
+    return this.mutationIdempotency.idempotentMutation(this.northStar.me().data.session, route, idempotencyKey, body, mutation)
   }
 
   @Get('domains')
@@ -236,12 +231,7 @@ export class NorthStarController {
     },
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.formulaIntelligenceMutation('POST:/materials/substitutions', idempotencyKey, body, async () => this.northStar.upsertApprovedMaterialSubstitution(body))
-  }
-
-  @Get('materials/catalogues/lluch-2026')
-  lluchCatalogue(@Query('query') query = '') {
-    return this.northStar.lluchCatalogue(query)
+    return this.scopedMutation('POST:/materials/substitutions', idempotencyKey, body, async () => this.northStar.upsertApprovedMaterialSubstitution(body))
   }
 
   @Post('materials')
@@ -296,16 +286,6 @@ export class NorthStarController {
     return this.northStar.updateMaterial(id, body)
   }
 
-  @Post('materials/catalogues/lluch-2026/enrich')
-  enrichMaterialsFromLluchCatalogue() {
-    return this.northStar.enrichMaterialsFromLluchCatalogue()
-  }
-
-  @Post('materials/catalogues/lluch-2026/import')
-  importLluchCatalogue() {
-    return this.northStar.enrichMaterialsFromLluchCatalogue()
-  }
-
   @Post('materials/:id/ingest')
   ingestMaterialDocument(
     @Param('id') id: string,
@@ -349,227 +329,6 @@ export class NorthStarController {
     return this.northStar.formulas()
   }
 
-  @Get('agent/runs')
-  agentRuns() {
-    return this.agentRuntime.list(this.northStar.me().data.session)
-  }
-
-  @Post('agent/runs')
-  createAgentRun(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation('POST:/agent/runs', idempotencyKey, body, () => this.agentRuntime.create(this.northStar, this.northStar.me().data.session, body))
-  }
-
-  @Get('formula-intelligence/design-projects')
-  formulaDesignProjects(@Query('includeArchived') includeArchived?: string) {
-    const context = this.northStar.me().data
-    return this.agentRuntime.listDesignProjects(
-      this.northStar,
-      context.session,
-      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
-      includeArchived === 'true',
-      context.permissions.includes('formulas.approve'),
-    )
-  }
-
-  @Get('formula-intelligence/capabilities')
-  formulaIntelligenceCapabilities() {
-    const permissions = new Set(this.northStar.me().data.permissions)
-    const canViewSensitiveComposition = permissions.has('formulas.viewSensitive') && permissions.has('materials.view')
-    const candidateGenerationEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')
-    const optimizerEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioOptimizer')
-    const sensoryMemoryEnabled = this.northStar.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
-    const evidenceRetrievalEnabled = this.northStar.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
-    return {
-      data: {
-        currentUserId: this.northStar.me().data.session.userId,
-        canArchiveAnyDesignProject: ['owner', 'admin'].includes(this.northStar.me().data.session.role.trim().toLowerCase()),
-        canCreateBrief: permissions.has('formulas.view'),
-        canReviewBrief: permissions.has('formulas.edit'),
-        canApproveBrief: permissions.has('formulas.approve'),
-        canGenerateDirections: candidateGenerationEnabled && permissions.has('formulas.edit') && canViewSensitiveComposition,
-        canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
-        canViewSensitiveComposition,
-        canViewCostEvidence: permissions.has('costing.view'),
-        canViewInventoryEvidence: permissions.has('inventory.view'),
-        canViewMaterialEvidence: evidenceRetrievalEnabled && permissions.has('documents.view') && permissions.has('materials.view'),
-        canSaveDraft: permissions.has('formulas.edit') && canViewSensitiveComposition,
-        canPlanTrial: permissions.has('trials.create') && permissions.has('formulas.edit') && canViewSensitiveComposition,
-        canViewTrialEvidence: sensoryMemoryEnabled && canViewSensitiveComposition && permissions.has('trials.view'),
-        formulaIntelligenceFeatures: {
-          candidateGenerationEnabled,
-          optimizerEnabled,
-          sensoryMemoryEnabled,
-          evidenceRetrievalEnabled,
-        },
-      },
-    }
-  }
-
-  @Get('formula-intelligence/materials')
-  formulaIntelligenceMaterials() {
-    return this.agentRuntime.designMaterialCatalog(this.northStar, this.northStar.me().data.session)
-  }
-
-  @Post('formula-intelligence/design-projects')
-  createFormulaDesignProject(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation('POST:/formula-intelligence/design-projects', idempotencyKey, body, () => this.agentRuntime.createDesignProject(this.northStar, this.northStar.me().data.session, body))
-  }
-
-  @Delete('formula-intelligence/design-projects/:projectId')
-  archiveFormulaDesignProject(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`DELETE:/formula-intelligence/design-projects/${projectId}`, idempotencyKey, {}, () => this.agentRuntime.archiveDesignProject(this.northStar, this.northStar.me().data.session, projectId))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/restore')
-  restoreFormulaDesignProject(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/restore`, idempotencyKey, {}, () => this.agentRuntime.restoreDesignProject(this.northStar, this.northStar.me().data.session, projectId))
-  }
-
-  @Get('formula-intelligence/design-projects/:projectId')
-  formulaDesignProject(@Param('projectId') projectId: string) {
-    const context = this.northStar.me().data
-    return this.agentRuntime.designProject(
-      this.northStar,
-      context.session,
-      projectId,
-      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
-      context.permissions.includes('formulas.approve'),
-    )
-  }
-
-  @Get('formula-intelligence/design-projects/:projectId/brief-versions')
-  formulaDesignBriefVersions(@Param('projectId') projectId: string) {
-    const context = this.northStar.me().data
-    return this.agentRuntime.designBriefVersions(
-      this.northStar,
-      context.session,
-      projectId,
-      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
-      context.permissions.includes('formulas.approve'),
-    )
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/brief-versions/compile')
-  formulaDesignBriefCompilerStatus(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    const context = this.northStar.me().data
-    if (!this.northStar.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
-      return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
-    }
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions/compile`, idempotencyKey, {}, () => this.agentRuntime.designBriefCompilerStatus(
-      this.northStar,
-      context.session,
-      projectId,
-      context.permissions.includes('formulas.viewSensitive') && context.permissions.includes('materials.view'),
-      context.permissions.includes('formulas.approve'),
-    ))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/brief-versions')
-  saveFormulaDesignBriefVersion(@Param('projectId') projectId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/brief-versions`, idempotencyKey, body, () => this.agentRuntime.saveDesignBriefVersion(this.northStar, this.northStar.me().data.session, projectId, body))
-  }
-
-  @Get('formula-intelligence/design-projects/:projectId/recipients')
-  formulaDesignRecipients(@Param('projectId') projectId: string) {
-    return this.agentRuntime.designRecipients(this.northStar, this.northStar.me().data.session, projectId)
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/generate')
-  generateFormulaDesignDirections(@Param('projectId') projectId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/generate`, idempotencyKey, {}, () => this.agentRuntime.generateDesignDirections(this.northStar, this.northStar.me().data.session, projectId))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/share')
-  shareFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/share`, idempotencyKey, body, () => this.agentRuntime.shareDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/shares/:recipientUserId/revoke')
-  revokeFormulaDesignDirectionShare(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Param('recipientUserId') recipientUserId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/shares/${recipientUserId}/revoke`, idempotencyKey, {}, () => this.agentRuntime.revokeDesignDirectionShare(this.northStar, this.northStar.me().data.session, projectId, directionId, recipientUserId))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/feedback')
-  feedbackFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/feedback`, idempotencyKey, body, () => this.agentRuntime.feedbackDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/save')
-  saveFormulaDesignDirection(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/save`, idempotencyKey, {}, () => this.agentRuntime.requestDesignDraftSave(this.northStar, this.northStar.me().data.session, projectId, directionId))
-  }
-
-  @Post('formula-intelligence/design-projects/:projectId/directions/:directionId/trial')
-  createFormulaDesignDirectionTrial(@Param('projectId') projectId: string, @Param('directionId') directionId: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/design-projects/${projectId}/directions/${directionId}/trial`, idempotencyKey, body, () => this.agentRuntime.createTrialFromDesignDirection(this.northStar, this.northStar.me().data.session, projectId, directionId, body))
-  }
-
-  @Post('formula-intelligence/optimizer/runs')
-  startFormulaOptimizer(@Body() body: Record<string, unknown>, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation('POST:/formula-intelligence/optimizer/runs', idempotencyKey, body, () => this.agentRuntime.startOptimizer(this.northStar, this.northStar.me().data.session, body))
-  }
-
-  @Post('formula-intelligence/optimizer/runs/:runId/candidates/:candidateId/save')
-  saveFormulaOptimizerCandidate(@Param('runId') runId: string, @Param('candidateId') candidateId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formula-intelligence/optimizer/runs/${runId}/candidates/${candidateId}/save`, idempotencyKey, {}, () => this.agentRuntime.requestOptimizerDraftSave(this.northStar, this.northStar.me().data.session, runId, candidateId))
-  }
-
-  @Get('agent/runs/:id')
-  agentRun(@Param('id') id: string) {
-    return this.agentRuntime.detail(this.northStar.me().data.session, id)
-  }
-
-  @Get('agent/runs/:id/events')
-  agentEvents(@Param('id') id: string, @Query('afterSequence') afterSequence?: string) {
-    return this.agentRuntime.events(this.northStar.me().data.session, id, Math.max(0, Number(afterSequence ?? '0') || 0))
-  }
-
-  @Get('agent/runs/:id/artifacts')
-  agentArtifacts(@Param('id') id: string) {
-    return this.agentRuntime.artifacts(this.northStar.me().data.session, id)
-  }
-
-  @Get('agent/runs/:id/artifacts/:artifactId')
-  agentArtifact(@Param('id') id: string, @Param('artifactId') artifactId: string) {
-    return this.agentRuntime.artifact(this.northStar.me().data.session, id, artifactId)
-  }
-
-  @Get('agent/runs/:id/stream')
-  async agentStream(@Param('id') id: string, @Query('afterSequence') afterSequence: string | undefined, @Headers('last-event-id') lastEventId: string | undefined, @Res() reply: any) {
-    const replaySequence = Math.max(0, Number(lastEventId ?? afterSequence ?? '0') || 0)
-    const events = await this.agentRuntime.events(this.northStar.me().data.session, id, replaySequence)
-    reply.header('Cache-Control', 'no-cache, no-transform')
-    reply.header('Connection', 'keep-alive')
-    reply.header('Content-Type', 'text/event-stream; charset=utf-8')
-    reply.raw.write(events.map((event) => `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''))
-    reply.raw.end(': complete\n\n')
-  }
-
-  @Post('agent/runs/:id/cancel')
-  cancelAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/cancel`, idempotencyKey, {}, () => this.agentRuntime.cancel(this.northStar.me().data.session, id))
-  }
-
-  @Post('agent/runs/:id/resume')
-  resumeAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/resume`, idempotencyKey, {}, () => this.agentRuntime.resume(this.northStar, this.northStar.me().data.session, id))
-  }
-
-  @Post('agent/runs/:id/nodes/:nodeId/retry')
-  retryAgentNode(@Param('id') id: string, @Param('nodeId') nodeId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/nodes/${nodeId}/retry`, idempotencyKey, {}, () => this.agentRuntime.retryNode(this.northStar, this.northStar.me().data.session, id, nodeId))
-  }
-
-  @Post('agent/runs/:id/restart')
-  restartAgentRun(@Param('id') id: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/restart`, idempotencyKey, {}, () => this.agentRuntime.restart(this.northStar, this.northStar.me().data.session, id))
-  }
-
-  @Post('agent/runs/:id/confirmations/:confirmationId')
-  resolveAgentConfirmation(@Param('id') id: string, @Param('confirmationId') confirmationId: string, @Body() body: { decision?: string }, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/agent/runs/${id}/confirmations/${confirmationId}`, idempotencyKey, body, () => this.agentRuntime.resolveConfirmation(this.northStar, this.northStar.me().data.session, id, confirmationId, body.decision))
-  }
-
   @Post('formulas')
   createFormulaDraft(@Body() body: FormulaDraftBody) {
     return this.northStar.createFormulaDraft(body)
@@ -577,7 +336,7 @@ export class NorthStarController {
 
   @Post('formulas/compose')
   composeFineFragrance(@Body() body: FineFragranceCompositionBody, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation('POST:/formulas/compose', idempotencyKey, body, async () => this.northStar.composeFineFragrance(body))
+    return this.scopedMutation('POST:/formulas/compose', idempotencyKey, body, async () => this.northStar.composeFineFragrance(body))
   }
 
   @Patch('formulas/:id')
@@ -657,7 +416,7 @@ export class NorthStarController {
 
   @Post('formulas/:id/lines/:lineId/refresh-accord')
   refreshFineFragranceAccordComponent(@Param('id') id: string, @Param('lineId') lineId: string, @Headers('idempotency-key') idempotencyKey?: string) {
-    return this.formulaIntelligenceMutation(`POST:/formulas/${id}/lines/${lineId}/refresh-accord`, idempotencyKey, {}, async () => this.northStar.refreshFineFragranceAccordComponent(id, lineId))
+    return this.scopedMutation(`POST:/formulas/${id}/lines/${lineId}/refresh-accord`, idempotencyKey, {}, async () => this.northStar.refreshFineFragranceAccordComponent(id, lineId))
   }
 
   @Get('formulas/:id/resolve')
@@ -696,16 +455,6 @@ export class NorthStarController {
   @Get('formulas/:id/trial-evidence')
   formulaTrialEvidence(@Param('id') id: string, @Query('version') version?: string) {
     return this.northStar.formulaTrialEvidence(id, version)
-  }
-
-  @Get('formula-intelligence/sensory-memory')
-  workspaceSensoryMemory() {
-    return this.northStar.workspaceSensoryMemory()
-  }
-
-  @Get('formula-intelligence/operational-metrics')
-  formulaIntelligenceOperationalMetrics() {
-    return this.northStar.formulaIntelligenceOperationalMetrics()
   }
 
   @Get('lineage/:type/:id')
@@ -1487,28 +1236,6 @@ export class NorthStarController {
     },
   ) {
     return this.northStar.upsertMaterialCompliance(id, body)
-  }
-
-  @Get('suppliers/:id/material-profiles')
-  supplierMaterialProfiles(@Param('id') id: string) {
-    return this.northStar.supplierMaterialProfiles(id)
-  }
-
-  @Put('suppliers/:id/material-profiles/:materialId')
-  upsertSupplierMaterialProfile(
-    @Param('id') id: string,
-    @Param('materialId') materialId: string,
-    @Body()
-    body: {
-      status?: 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
-      leadTimeDays?: number
-      minimumOrderGrams?: number
-      unitCost?: number
-      currency?: string
-      supplierMaterialCode?: string
-    },
-  ) {
-    return this.northStar.upsertSupplierMaterialProfile(id, materialId, body)
   }
 
   @Get('materials/:id/price-history')

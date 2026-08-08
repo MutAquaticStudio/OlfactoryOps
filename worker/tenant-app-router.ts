@@ -4,11 +4,15 @@ import {
   normalizeWorkspaceBaseDomain,
   normalizeWorkspaceHostname,
 } from '../src/data/workspaceHostnames.js'
+import { releaseHeaders, releaseMetadata } from '../src/data/release.js'
 
 type Env = {
   DB: D1Database
   PAGES_ORIGIN?: string
   SYSTEM_WORKSPACE_DOMAIN?: string
+  RELEASE_GIT_SHA?: string
+  RELEASE_BUILD_TIMESTAMP_UTC?: string
+  RELEASE_ENVIRONMENT?: string
 }
 
 type WorkspaceHostnameRow = {
@@ -39,6 +43,14 @@ export function tenantRouterNotFound() {
       'X-Content-Type-Options': 'nosniff',
     },
   })
+}
+
+export function tenantRouterReleaseHeaders(env: Pick<Env, 'RELEASE_GIT_SHA' | 'RELEASE_BUILD_TIMESTAMP_UTC' | 'RELEASE_ENVIRONMENT'>) {
+  return releaseHeaders(releaseMetadata({
+    fullGitSha: env.RELEASE_GIT_SHA,
+    buildTimestampUtc: env.RELEASE_BUILD_TIMESTAMP_UTC,
+    environment: env.RELEASE_ENVIRONMENT,
+  }))
 }
 
 export async function activeSystemWorkspaceForHostname(db: D1Database, hostname: string) {
@@ -88,6 +100,7 @@ export default {
     const upstream = await fetch(proxiedPagesRequest(request, tenantRouterOrigin(env.PAGES_ORIGIN), hostname))
     const responseHeaders = new Headers(upstream.headers)
     responseHeaders.set('X-OlfactoryOps-Workspace-Router', 'active')
+    for (const [name, value] of Object.entries(tenantRouterReleaseHeaders(env))) responseHeaders.set(name, value)
     responseHeaders.set('Cache-Control', responseHeaders.get('Cache-Control') || 'public, max-age=0, must-revalidate')
     return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders })
   },

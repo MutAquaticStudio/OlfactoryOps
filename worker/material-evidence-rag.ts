@@ -1,9 +1,8 @@
 import { z } from 'zod'
 import { ForbiddenException, NotFoundException, UnprocessableEntityException } from '../server/src/shared/http-error.js'
-import { isLluchCatalogueMasterMaterial, lluchCatalogueGlobalMasterMaterialById, lluchCatalogueGlobalMasterMaterials } from '../src/data/lluch-catalogue-2026.js'
 import type { DocumentRecord, Material } from '../src/data/northStar.js'
-import type { AgentActor } from './agent-runtime.js'
-import { auditFormulaIntelligence } from './formula-intelligence.js'
+import type { AgentActor } from './agent-context.js'
+import { auditAgentEvent } from './audit-chain.js'
 
 export const MATERIAL_EVIDENCE_EMBEDDING_MODEL = '@cf/baai/bge-m3'
 export const MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS = 1024
@@ -15,22 +14,13 @@ const MAX_CHUNK_CHARS = 1_200
 const MAX_CHUNKS_PER_SOURCE = 48
 const JOB_LEASE_MS = 90_000
 const RETRY_BACKOFF_MS = [30_000, 120_000]
-const GLOBAL_MASTER_QUEUE_LIMIT = 48
-const GLOBAL_MASTER_SCAN_LIMIT = 96
-const GLOBAL_MASTER_CURSOR_KEY = 'material_evidence.global_master.cursor.v2'
 export const GLOBAL_LIBRARY_ORGANIZATION_ID = 'org-nxl'
 
 export function materialEvidenceQueryScopes(
   actorOrganizationId: string,
   sourceKinds: Array<'MATERIAL' | 'DOCUMENT'>,
 ) {
-  const scopes: Array<{ organizationId: string; sourceKinds: Array<'MATERIAL' | 'DOCUMENT'> }> = [
-    { organizationId: actorOrganizationId, sourceKinds },
-  ]
-  if (actorOrganizationId !== GLOBAL_LIBRARY_ORGANIZATION_ID && sourceKinds.includes('MATERIAL')) {
-    scopes.push({ organizationId: GLOBAL_LIBRARY_ORGANIZATION_ID, sourceKinds: ['MATERIAL'] })
-  }
-  return scopes
+  return [{ organizationId: actorOrganizationId, sourceKinds }]
 }
 
 export type RagAiBinding = {
@@ -205,36 +195,15 @@ export function isCurrentEvidenceDocument(
 }
 
 export function materialEvidenceSourceVersion(material: Material) {
-  const catalogueSource = material.catalogueSource
-  if (catalogueSource?.status === 'MASTER_APPROVED' && isLluchCatalogueMasterMaterial(material)) {
-    return [
-      'catalogue-master',
-      catalogueSource.catalogueVersion,
-      material.olfactiveProfile?.version ?? 'supplier-declared',
-    ].join(':')
-  }
   return material.olfactiveProfile?.version ?? 'material-v1'
 }
 
 export function materialEvidenceText(material: Material) {
   const profile = material.olfactiveProfile
-  const catalogue = material.supplierCatalogueReferences?.map((item) => `${item.supplier} ${item.productName} ${item.catalogue} ${item.catalogueVersion}`).join('; ') ?? ''
-  const supplierEvidence = material.catalogueEvidence
-  const density = supplierEvidence?.density
-    ? [supplierEvidence.density.value, supplierEvidence.density.min, supplierEvidence.density.max].filter(Boolean).join(' to ')
-    : ''
   return compactText([
     `Material: ${material.name}.`, `CAS: ${material.cas}.`, `Family: ${material.family}.`, `Note: ${material.tier}.`,
     `Odor: ${material.odor.join(', ')}.`,
     profile ? `Profile: ${profile.description}. Strength ${profile.strength}. Diffusion ${profile.diffusion}. Tenacity ${profile.tenacity}. Volatility ${profile.volatility}. Formula role ${profile.formulaRole}. Facets ${profile.facets.join(', ')}.` : '',
-    catalogue ? `Supplier catalogue: ${catalogue}.` : '',
-    supplierEvidence ? [
-      `Supplier-declared chemical identity: ${supplierEvidence.chemicalIdentification ?? 'Not documented'}.`,
-      `Supplier-declared use: ${supplierEvidence.declaredUse ?? 'Not documented'}.`,
-      `Supplier-declared appearance: ${supplierEvidence.appearance ?? 'Not documented'}.`,
-      `Supplier-declared density: ${density || 'Not documented'}.`,
-      `Supplier evidence source: ${supplierEvidence.source} ${supplierEvidence.version}.`,
-    ].join(' ') : '',
   ].filter(Boolean).join(' '))
 }
 
@@ -258,7 +227,7 @@ export class MaterialEvidenceRag {
   }
 
   private async audit(actor: MaterialEvidenceActor, action: string, entity: string, outcome = 'allowed') {
-    await auditFormulaIntelligence(this.env.DB, { ...actor, sessionId: 'material-evidence', role: 'System' }, action, entity, outcome)
+    await auditAgentEvent(this.env.DB, { ...actor, sessionId: 'material-evidence', role: 'System' }, action, entity, outcome)
   }
 
   private async requireView(actor: MaterialEvidenceActor, entity: string) {
@@ -296,11 +265,7 @@ export class MaterialEvidenceRag {
        FROM material_records
        WHERE id = ? AND (library_scope = 'GLOBAL' OR organization_id = ?)`,
     ).bind(materialId, actor.organizationId).first<{ id: string; library_scope: 'GLOBAL' | 'TENANT'; organization_id: string | null; record_json: string }>()
-    if (!row) {
-      const master = lluchCatalogueGlobalMasterMaterialById(materialId)
-      if (master) return master
-      throw new NotFoundException('Material not found')
-    }
+    if (!row) throw new NotFoundException('Material not found')
     const material = parseJson<Material>(row.record_json, { id: row.id } as Material)
     return {
       ...material,
@@ -336,10 +301,6 @@ export class MaterialEvidenceRag {
   async queueMaterial(actor: MaterialEvidenceActor, materialId: string, idempotencyKey: string) {
     await this.requireManage(actor, materialId)
     const material = await this.materialForActor(actor, materialId)
-    if (material.libraryScope === 'GLOBAL' && actor.organizationId !== GLOBAL_LIBRARY_ORGANIZATION_ID) {
-      await this.audit(actor, 'material-evidence.global.manage.denied', materialId, 'denied')
-      throw new ForbiddenException('Only the internal material curator can index global material evidence')
-    }
     const evidenceOrganizationId = this.evidenceOrganizationForMaterial(material, actor.organizationId)
     const evidenceActor = { ...actor, organizationId: evidenceOrganizationId }
     const text = materialEvidenceText(material)
@@ -707,10 +668,6 @@ export class MaterialEvidenceRag {
   private async chunkStillEligible(chunk: EvidenceChunkRow, evidenceOrganizationId: string, actorOrganizationId: string) {
     if (chunk.source_kind === 'MATERIAL') {
       if (!chunk.material_id) return false
-      const master = lluchCatalogueGlobalMasterMaterialById(chunk.material_id)
-      if (master && evidenceOrganizationId === GLOBAL_LIBRARY_ORGANIZATION_ID) {
-        return isLluchCatalogueMasterMaterial(master)
-      }
       const material = await this.env.DB.prepare(
         `SELECT library_scope, organization_id FROM material_records
          WHERE id = ? AND (
@@ -854,86 +811,6 @@ export class MaterialEvidenceRag {
     } catch (error) {
       await this.failJob(job, error)
       await this.audit(actor, 'material-evidence.job.failed', job.evidence_document_id, 'review').catch(() => undefined)
-    }
-  }
-
-  private async globalMasterQueueCursor() {
-    const row = await this.env.DB.prepare(
-      `SELECT metadata_value FROM persistence_metadata WHERE metadata_key = ?`,
-    ).bind(GLOBAL_MASTER_CURSOR_KEY).first<{ metadata_value: string }>()
-    const value = Number.parseInt(row?.metadata_value ?? '0', 10)
-    return Number.isSafeInteger(value) && value >= 0 ? value : 0
-  }
-
-  private async persistGlobalMasterQueueCursor(cursor: number) {
-    await this.env.DB.prepare(
-      `INSERT INTO persistence_metadata (metadata_key, metadata_value, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
-    ).bind(GLOBAL_MASTER_CURSOR_KEY, String(cursor), now()).run()
-  }
-
-  private async masterEvidenceNeedsQueue(material: Material) {
-    const sourceVersion = materialEvidenceSourceVersion(material)
-    const row = await this.env.DB.prepare(
-      `SELECT source_version, extraction_status, index_version
-       FROM material_evidence_documents
-       WHERE organization_id = ? AND source_kind = 'MATERIAL' AND material_id = ?
-       ORDER BY updated_at DESC LIMIT 1`,
-    ).bind(GLOBAL_LIBRARY_ORGANIZATION_ID, material.id).first<{
-      source_version: string
-      extraction_status: EvidenceState
-      index_version: number
-    }>()
-    if (!row) return true
-    if (row.source_version !== sourceVersion || row.index_version !== MATERIAL_EVIDENCE_INDEX_VERSION) return true
-    return !['QUEUED', 'READY', 'REVIEW_REQUIRED', 'NOT_CONFIGURED', 'FAILED'].includes(row.extraction_status)
-  }
-
-  private async queueMissingGlobalMasterMaterials(actor: MaterialEvidenceActor, limit: number) {
-    const masters = lluchCatalogueGlobalMasterMaterials()
-    if (masters.length === 0 || limit <= 0) return 0
-    const cursor = (await this.globalMasterQueueCursor()) % masters.length
-    const maxQueue = Math.min(Math.max(1, limit), GLOBAL_MASTER_QUEUE_LIMIT)
-    let queued = 0
-    let scanned = 0
-    while (scanned < Math.min(masters.length, GLOBAL_MASTER_SCAN_LIMIT) && queued < maxQueue) {
-      const material = masters[(cursor + scanned) % masters.length]!
-      scanned += 1
-      if (!(await this.masterEvidenceNeedsQueue(material))) continue
-      const sourceVersion = materialEvidenceSourceVersion(material)
-      await this.queueMaterial(actor, material.id, `global-master-material:${MATERIAL_EVIDENCE_INDEX_VERSION}:${sourceVersion}:${material.id}`)
-      queued += 1
-    }
-    await this.persistGlobalMasterQueueCursor((cursor + scanned) % masters.length)
-    return queued
-  }
-
-  async queueMissingGlobalMaterials(limit = 3) {
-    if (!this.configured) return { queued: 0, state: 'NOT_CONFIGURED' as const }
-    const rows = await this.env.DB.prepare(
-      `SELECT m.id
-       FROM material_records m
-       LEFT JOIN material_evidence_documents d
-         ON d.organization_id = ? AND d.source_kind = 'MATERIAL' AND d.material_id = m.id
-        AND d.extraction_status != 'INVALIDATED' AND d.index_version = ?
-       WHERE m.library_scope = 'GLOBAL' AND d.id IS NULL
-       ORDER BY m.name ASC LIMIT ?`,
-    ).bind(GLOBAL_LIBRARY_ORGANIZATION_ID, MATERIAL_EVIDENCE_INDEX_VERSION, Math.min(Math.max(1, limit), 8)).all<{ id: string }>()
-    const actor: MaterialEvidenceActor = {
-      organizationId: GLOBAL_LIBRARY_ORGANIZATION_ID,
-      userId: 'system:global-material-curator',
-      permissions: ['documents.view', 'documents.manage', 'materials.view'],
-    }
-    for (const material of rows.results ?? []) {
-      await this.queueMaterial(actor, material.id, `global-material-bootstrap:${MATERIAL_EVIDENCE_INDEX_VERSION}:${material.id}`)
-    }
-    const masterQueued = await this.queueMissingGlobalMasterMaterials(actor, GLOBAL_MASTER_QUEUE_LIMIT)
-    return {
-      queued: (rows.results?.length ?? 0) + masterQueued,
-      masterQueued,
-      masterTotal: lluchCatalogueGlobalMasterMaterials().length,
-      state: 'QUEUED' as const,
     }
   }
 

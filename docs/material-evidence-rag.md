@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Material Evidence is a retrieval layer for approved material profiles, reviewed
-SDS/CoA/IFRA/allergen documents, and explicitly tagged supplier catalogues. It
+Material Evidence is a retrieval layer for approved tenant material profiles and reviewed
+SDS/CoA/IFRA/allergen documents. It
 returns bounded citations; it does not make regulatory, formula, stock, or cost
 decisions. Those decisions remain in the deterministic domain services.
 
@@ -11,10 +11,8 @@ decisions. Those decisions remain in the deterministic domain services.
 
 - D1 stores tenant-scoped source metadata, review state, chunk excerpts, jobs,
   and audit evidence.
-- Curated `GLOBAL` material profiles are indexed once under the internal
-  curator organization. Customer queries may search those global material
-  vectors plus their own tenant vectors; global or cross-tenant documents are
-  never included in that shared scope.
+- Material profiles and documents are indexed only inside their owning
+  organization. There is no active shared supplier library during cleanup.
 - Private document content is read only inside the Worker from `DOCUMENTS`.
   Signed download URLs are never used for indexing.
 - Workers AI creates embeddings and converts text-bearing PDFs to Markdown.
@@ -30,8 +28,7 @@ decisions. Those decisions remain in the deterministic domain services.
 1. An eligible material profile can be queued for indexing by a user with
    `documents.manage`.
 2. An eligible document must be `APPROVED` or `SHARED`, have a clean scan, and
-   be SDS, CoA, IFRA, Allergen Declaration, or tagged `catalogue`/
-   `supplier-catalogue`.
+   be SDS, CoA, IFRA, or Allergen Declaration.
 3. A text-bearing PDF is extracted into a private review record. A manager must
    submit reviewed text before embeddings are made.
 4. Sources move through `QUEUED`, `REVIEW_REQUIRED`, `READY`, `NOT_INDEXED`,
@@ -43,11 +40,9 @@ decisions. Those decisions remain in the deterministic domain services.
 
 - Queries require both `materials.view` and `documents.view`.
 - Queue, extraction review, retry, and invalidation require `documents.manage`.
-- Formula Agent, Design Studio, and Optimizer call retrieval only with those
-  permissions and render `Not evaluated` when evidence is unavailable.
-- A customer tenant cannot index or mutate global material evidence. Only the
-  internal curator organization can queue global material profiles; Worker
-  cron incrementally queues missing curated profiles.
+- Future V2 workflows may call retrieval only with those permissions and must
+  render `Not evaluated` when evidence is unavailable. No current product
+  surface uses retrieval to make a formula or compliance decision.
 - Brand projections do not receive sensitive composition, cost, lot, CAS, raw
   compliance warnings, or document evidence.
 
@@ -72,10 +67,8 @@ npx.cmd wrangler vectorize create-metadata-index olfactoryops-material-evidence-
 
 Repeat metadata indexes for production. Add the `AI` and `RAG_INDEX` bindings
 in the matching Wrangler configuration, apply migration `0033` to the target
-D1 database, then deploy the Worker. Cron re-indexes curated global materials
-with `index_version=2`; D1 rejects stale v1 chunks during retrieval. Until both
-bindings exist, the API returns `Not configured` and does not produce synthetic
-citations.
+D1 database, then deploy the Worker. Until both bindings exist, the API returns
+`Not configured` and does not produce synthetic citations.
 
 ## Operational Limits
 

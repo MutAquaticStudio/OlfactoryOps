@@ -7,36 +7,12 @@ import {
   requestStripeForm,
   sendResendEmail,
 } from './provider-adapters.js'
-import {
-  AgentRuntimeStore,
-  agentModelProviderForRun,
-  actorFromService,
-  configuredAgentProvider,
-  ensureAgentReadAccess,
-  executeDeterministicAgentRun,
-  type AgentActor,
-} from './agent-runtime.js'
-import {
-  FormulaIntelligenceStore,
-  formulaIntelligenceMaterialCatalog,
-  auditFormulaIntelligence,
-  createDesignProjectRun,
-  createOptimizerRun,
-  executeFormulaIntelligenceRun,
-  purgeExpiredArchivedDesignProjects,
-} from './formula-intelligence.js'
+import { ensureAgentReadAccess } from './agent-context.js'
 import { MaterialEvidenceRag, type RagAiBinding, type RagVectorIndex } from './material-evidence-rag.js'
-import {
-  importLluchCatalogueForAllOrganizations,
-  importLluchCatalogueForOrganization,
-  organizationsMissingLluchCatalogueImportAudit,
-  searchLluchCatalogue,
-} from './lluch-catalogue-store.js'
 import {
   ConflictException,
   PayloadTooLargeException,
   ForbiddenException,
-  NotFoundException,
   TooManyRequestsException,
   UnprocessableEntityException,
   UnauthorizedException,
@@ -104,27 +80,22 @@ import {
   type StockTakeRecord,
   type StorageLocation,
   type SupplierRecord,
-  type SupplierMaterialProfile,
   type TenantSettingsRecord,
   type UserSettingsRecord,
   type WebhookRecord,
   type WebhookDeliveryRecord,
   type CustomerRecord,
-  type DataImportJobRecord,
   type DomainStatus,
   type LegalAcceptanceRecord,
   type PrivacyRequestRecord,
 } from '../src/data/northStar.js'
 import {
-  enrichMaterialFromLluchCatalogue,
-  lluchCatalogue2026Source,
-  lluchCatalogueGlobalMasterMaterials,
-} from '../src/data/lluch-catalogue-2026.js'
-import {
   isExactHttpsOriginForHostname,
   normalizeWorkspaceHostname,
   systemWorkspaceHostname,
 } from '../src/data/workspaceHostnames.js'
+import { isRemovedV1Path, removedV1RouteCode } from '../src/data/appRoutes.js'
+import { releaseHeaders, releaseMetadata, type ReleaseMetadata } from '../src/data/release.js'
 
 type Env = {
   DB: D1Database
@@ -155,6 +126,9 @@ type Env = {
   WORKERS_AI_FORMULA_AGENT_MODEL?: string
   AI?: RagAiBinding
   RAG_INDEX?: RagVectorIndex
+  RELEASE_GIT_SHA?: string
+  RELEASE_BUILD_TIMESTAMP_UTC?: string
+  RELEASE_ENVIRONMENT?: string
 }
 
 type RouteContext = {
@@ -228,7 +202,6 @@ type OperationIdempotencyRow = {
 type SnapshotKey =
   | 'materialRecords'
   | 'materialComplianceRecords'
-  | 'supplierMaterialProfileRecords'
   | 'moleculeRecords'
   | 'lots'
   | 'movements'
@@ -289,7 +262,6 @@ type SnapshotKey =
   | 'webhookDeliveryRecords'
   | 'auditExportRecords'
   | 'notificationRecords'
-  | 'importJobRecords'
   | 'legalAcceptanceRecords'
   | 'privacyRequestRecords'
   | 'customDomainRecords'
@@ -311,7 +283,6 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   rolePolicyRecords: RolePolicy[]
   materialRecords: Material[]
   materialComplianceRecords: MaterialComplianceProfile[]
-  supplierMaterialProfileRecords: SupplierMaterialProfile[]
   moleculeRecords: MoleculeComponent[]
   locationRecords: StorageLocation[]
   stockTakeRecords: StockTakeRecord[]
@@ -358,7 +329,6 @@ type ServiceState = Record<SnapshotKey, unknown> & {
   webhookDeliveryRecords: WebhookDeliveryRecord[]
   auditExportRecords: AuditExportJobRecord[]
   notificationRecords: AppNotificationRecord[]
-  importJobRecords: DataImportJobRecord[]
   legalAcceptanceRecords: LegalAcceptanceRecord[]
   privacyRequestRecords: PrivacyRequestRecord[]
   customDomainRecords: SaasCustomDomainRecord[]
@@ -415,7 +385,6 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'rolePolicyRecords',
   'materialRecords',
   'materialComplianceRecords',
-  'supplierMaterialProfileRecords',
   'moleculeRecords',
   'locationRecords',
   'stockTakeRecords',
@@ -458,7 +427,6 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
   'authCredentialRecords',
   'passwordResetRecords',
   'emailVerificationRecords',
-  'importJobRecords',
   'legalAcceptanceRecords',
   'privacyRequestRecords',
   'customDomainRecords',
@@ -478,7 +446,6 @@ const NORMALIZED_STATE_KEYS = new Set<SnapshotKey>([
 const SNAPSHOT_KEYS: SnapshotKey[] = [
   'materialRecords',
   'materialComplianceRecords',
-  'supplierMaterialProfileRecords',
   'moleculeRecords',
   'lots',
   'movements',
@@ -539,7 +506,6 @@ const SNAPSHOT_KEYS: SnapshotKey[] = [
   'webhookDeliveryRecords',
   'auditExportRecords',
   'notificationRecords',
-  'importJobRecords',
   'legalAcceptanceRecords',
   'privacyRequestRecords',
   'customDomainRecords',
@@ -570,7 +536,6 @@ const NORMALIZED_TABLES = [
   'platform_role_policies',
   'material_records',
   'material_compliance_profiles',
-  'supplier_material_profiles',
   'molecule_components',
   'storage_locations',
   'stock_take_records',
@@ -617,7 +582,6 @@ const NORMALIZED_TABLES = [
   'persistence_metadata',
   'auth_credentials',
   'password_reset_records',
-  'import_jobs',
   'legal_acceptance_records',
   'privacy_requests',
   'saas_custom_domains',
@@ -635,22 +599,16 @@ const NORMALIZED_TABLES = [
 ]
 
 const routes: Route[] = [
-  { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: () => ({ ok: true, service: 'olfactoryops-worker-api', version: '0.1.0-cloudflare-d1', timestamp: new Date().toISOString() }) },
-  // Status doubles as a safe, idempotent warm-up so a new deployment publishes
-  // the source-controlled global material library without waiting for cron.
-  { method: 'GET', pattern: '/status', public: true, handler: ({ env }) => publicStatus(env) },
-  { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: () => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX } }) },
+  { method: 'GET', pattern: '/health', public: true, hydrateState: false, handler: ({ env }) => ({ ok: true, service: 'olfactoryops-worker-api', release: apiReleaseMetadata(env), timestamp: new Date().toISOString() }) },
+  { method: 'GET', pattern: '/status', public: true, hydrateState: false, handler: ({ env }) => publicStatus(env) },
+  { method: 'GET', pattern: '/version', public: true, hydrateState: false, handler: ({ env }) => ({ data: { name: 'OlfactoryOps Cloudflare Worker API', stack: ['Cloudflare Workers', 'D1', 'TypeScript'], api: API_PREFIX, release: apiReleaseMetadata(env) } }) },
   { method: 'GET', pattern: '/persistence/status', handler: ({ service }) => service.persistenceStatus({ adapter: 'cloudflare-d1-normalized', snapshotKeys: SNAPSHOT_PERSIST_KEYS.length, snapshotTable: 'legacy-northstar_snapshots-cutover-only', normalizedTables: NORMALIZED_TABLES }) },
-  { method: 'GET', pattern: '/phases', handler: ({ service }) => service.phases() },
   { method: 'GET', pattern: '/domains', handler: ({ service }) => service.domains() },
   { method: 'GET', pattern: '/materials', handler: ({ service }) => service.materials() },
   { method: 'GET', pattern: '/materials/dedupe', handler: ({ service, query }) => service.materialDedupe(query.get('cas') ?? '') },
   { method: 'GET', pattern: '/materials/substitutions', handler: ({ service }) => service.approvedMaterialSubstitutions() },
   { method: 'POST', pattern: '/materials/substitutions', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.upsertApprovedMaterialSubstitution(body) },
   { method: 'POST', pattern: '/materials', mutates: true, limitKey: 'materials', handler: ({ service, body }) => service.createMaterial(body) },
-  { method: 'GET', pattern: '/materials/catalogues/lluch-2026', persistState: false, handler: (context) => listLluchCatalogue(context) },
-  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/import', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: (context) => importLluchCatalogue(context) },
-  { method: 'POST', pattern: '/materials/catalogues/lluch-2026/enrich', mutates: true, idempotent: true, rateLimit: sensitiveMutationRateLimit, handler: (context) => importLluchCatalogue(context) },
   { method: 'GET', pattern: '/materials/:id/evidence', persistState: false, handler: (context) => getMaterialEvidence(context) },
   { method: 'GET', pattern: '/materials/:id/evidence/sources', persistState: false, handler: (context) => getMaterialEvidenceSources(context) },
   { method: 'POST', pattern: '/materials/:id/evidence/index', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => indexMaterialEvidence(context) },
@@ -663,42 +621,7 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/materials/:id/molecules', handler: ({ service, params }) => service.materialMolecules(params.id) },
   { method: 'GET', pattern: '/materials/:id/provenance', handler: ({ service, params }) => service.materialProvenance(params.id) },
   { method: 'GET', pattern: '/materials/:id/price-history', handler: ({ service, params }) => service.materialPriceHistory(params.id) },
-  { method: 'POST', pattern: '/imports/preview', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, body }) => service.previewImport(body) },
-  { method: 'POST', pattern: '/imports/:id/commit', mutates: true, rateLimit: sensitiveMutationRateLimit, handler: ({ service, params }) => service.commitImport(params.id) },
   { method: 'GET', pattern: '/formulas', handler: ({ service }) => service.formulas() },
-  { method: 'GET', pattern: '/formula-intelligence/capabilities', persistState: false, handler: ({ service }) => formulaIntelligenceCapabilities(service) },
-  { method: 'GET', pattern: '/formula-intelligence/materials', persistState: false, handler: (context) => listFormulaIntelligenceMaterials(context) },
-  { method: 'GET', pattern: '/formula-intelligence/design-projects', persistState: false, handler: (context) => listDesignProjects(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createFormulaDesignProject(context) },
-  { method: 'DELETE', pattern: '/formula-intelligence/design-projects/:id', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => archiveFormulaDesignProject(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/restore', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restoreFormulaDesignProject(context) },
-  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id', persistState: false, handler: ({ service, env, params }) => getFormulaDesignProject(service, env, params.id) },
-  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/brief-versions', persistState: false, handler: ({ service, env, params }) => listFormulaDesignBriefVersions(service, env, params.id) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/brief-versions/compile', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => formulaDesignBriefCompilerStatus(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/brief-versions', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => saveFormulaDesignBriefVersion(context) },
-  { method: 'GET', pattern: '/formula-intelligence/design-projects/:id/recipients', persistState: false, handler: ({ service, env, params }) => listFormulaDesignRecipients(service, env, params.id) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/generate', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => generateFormulaDesignDirections(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/share', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => shareFormulaDesignDirection(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/shares/:recipientUserId/revoke', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => revokeFormulaDesignDirectionShare(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/feedback', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => submitFormulaDesignFeedback(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestFormulaDesignDraftSave(context) },
-  { method: 'POST', pattern: '/formula-intelligence/design-projects/:id/directions/:directionId/trial', mutates: true, idempotent: true, writeGate: false, handler: (context) => createFormulaDesignDirectionTrial(context) },
-  { method: 'POST', pattern: '/formula-intelligence/optimizer/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => startFormulaOptimizer(context) },
-  { method: 'POST', pattern: '/formula-intelligence/optimizer/runs/:id/candidates/:candidateId/save', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => requestOptimizerDraftSave(context) },
-  { method: 'GET', pattern: '/formula-intelligence/sensory-memory', handler: ({ service }) => service.workspaceSensoryMemory() },
-  { method: 'GET', pattern: '/formula-intelligence/operational-metrics', handler: ({ service }) => service.formulaIntelligenceOperationalMetrics() },
-  { method: 'POST', pattern: '/agent/runs', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => createAgentRun(context) },
-  { method: 'GET', pattern: '/agent/runs', persistState: false, handler: ({ service, env }) => new AgentRuntimeStore(env.DB).list(ensureAgentReadAccess(service)) },
-  { method: 'GET', pattern: '/agent/runs/:id', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).detail(ensureAgentReadAccess(service), params.id) },
-  { method: 'GET', pattern: '/agent/runs/:id/events', persistState: false, handler: ({ service, env, params, query }) => new AgentRuntimeStore(env.DB).events(ensureAgentReadAccess(service), params.id, readAgentSequence(query.get('afterSequence'))) },
-  { method: 'GET', pattern: '/agent/runs/:id/artifacts', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).artifacts(ensureAgentReadAccess(service), params.id) },
-  { method: 'GET', pattern: '/agent/runs/:id/artifacts/:artifactId', persistState: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).artifact(ensureAgentReadAccess(service), params.id, params.artifactId) },
-  { method: 'GET', pattern: '/agent/runs/:id/stream', persistState: false, handler: ({ service, env, params, query, request }) => new AgentRuntimeStore(env.DB).stream(ensureAgentReadAccess(service), params.id, readAgentStreamSequence(request, query)) },
-  { method: 'POST', pattern: '/agent/runs/:id/cancel', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: ({ service, env, params }) => new AgentRuntimeStore(env.DB).cancel(ensureAgentReadAccess(service), params.id) },
-  { method: 'POST', pattern: '/agent/runs/:id/resume', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resumeAgentRun(context) },
-  { method: 'POST', pattern: '/agent/runs/:id/nodes/:nodeId/retry', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => retryAgentNode(context) },
-  { method: 'POST', pattern: '/agent/runs/:id/confirmations/:confirmationId', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => resolveAgentConfirmation(context) },
-  { method: 'POST', pattern: '/agent/runs/:id/restart', mutates: true, idempotent: true, persistState: false, writeGate: false, handler: (context) => restartAgentRun(context) },
   { method: 'POST', pattern: '/formulas', mutates: true, limitKey: 'formulas', handler: ({ service, body }) => service.createFormulaDraft(body) },
   { method: 'POST', pattern: '/formulas/compose', mutates: true, idempotent: true, limitKey: 'formulas', handler: ({ service, body }) => service.composeFineFragrance(body) },
   { method: 'PATCH', pattern: '/formulas/:id', mutates: true, handler: ({ service, params, body }) => service.updateFormulaDraft(params.id, body) },
@@ -857,8 +780,6 @@ const routes: Route[] = [
   { method: 'GET', pattern: '/production/finished-goods', handler: ({ service }) => service.finishedGoodLots() },
   { method: 'GET', pattern: '/suppliers', handler: ({ service }) => service.suppliers() },
   { method: 'POST', pattern: '/suppliers', mutates: true, handler: ({ service, body }) => service.createSupplier(body) },
-  { method: 'GET', pattern: '/suppliers/:id/material-profiles', handler: ({ service, params }) => service.supplierMaterialProfiles(params.id) },
-  { method: 'PUT', pattern: '/suppliers/:id/material-profiles/:materialId', mutates: true, idempotent: true, handler: ({ service, params, body }) => service.upsertSupplierMaterialProfile(params.id, params.materialId, body) },
   { method: 'POST', pattern: '/procurement/rfq/compare', mutates: true, handler: ({ service, body }) => service.compareSupplierRfq(body) },
   { method: 'POST', pattern: '/procurement/rfq/award', mutates: true, handler: ({ service, body }) => service.awardSupplierRfq(body) },
   { method: 'GET', pattern: '/purchase-orders', handler: ({ service }) => service.purchaseOrders() },
@@ -940,23 +861,13 @@ const routes: Route[] = [
   { method: 'POST', pattern: '/audit/export', mutates: true, rateLimit: sensitiveMutationRateLimit, writeGate: false, handler: ({ service, body }) => service.auditExport(body) },
 ]
 
-function readAgentSequence(value: string | null) {
-  const parsed = Number(value ?? '0')
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0
-}
-
-function readAgentStreamSequence(request: Request, query: URLSearchParams) {
-  const header = request.headers.get('Last-Event-ID')
-  return readAgentSequence(header ?? query.get('afterSequence'))
-}
-
 function materialEvidenceActor(service: NorthStarService) {
   const agent = ensureAgentReadAccess(service)
   return { organizationId: agent.organizationId, userId: agent.userId, permissions: service.me().data.permissions }
 }
 
 function materialEvidenceIdempotencyKey(context: RouteContext) {
-  return formulaIntelligenceIdempotencyKey(context.request)
+  return requestIdempotencyKey(context.request)
 }
 
 async function getMaterialEvidence(context: RouteContext) {
@@ -1036,442 +947,12 @@ async function archiveDocumentWithEvidence(context: RouteContext) {
   return result
 }
 
-async function createAgentRun(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  const store = new AgentRuntimeStore(context.env.DB)
-  const result = await store.create(actor, context.body, configuredAgentProvider(context.env))
-  const runId = result.data.run.id
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, runId, context.env))
-  return result
-}
-
-async function resumeAgentRun(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  const store = new AgentRuntimeStore(context.env.DB)
-  const result = await store.resume(actor, context.params.id)
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id, context.env))
-  return result
-}
-
-async function retryAgentNode(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  const store = new AgentRuntimeStore(context.env.DB)
-  const result = await store.retryNode(actor, context.params.id, context.params.nodeId)
-  context.ctx.waitUntil(executeAgentRun(store, context.service, actor, context.params.id, context.env))
-  return result
-}
-
-async function restartAgentRun(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  const agentStore = new AgentRuntimeStore(context.env.DB)
-  const prior = await agentStore.detail(actor, context.params.id)
-  const result = await agentStore.create(actor, { brief: prior.data.run.input_brief }, configuredAgentProvider(context.env))
-  const intelligence = new FormulaIntelligenceStore(context.env.DB)
-  const mapped = await context.env.DB.prepare(
-    `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
-  ).bind(context.params.id, actor.organizationId, actor.userId).first()
-  if (mapped) {
-    const priorConfig = await intelligence.configForRun(actor, context.params.id)
-    await intelligence.createRunConfig(actor, result.data.run.id, priorConfig.config, formulaIntelligenceIdempotencyKey(context.request))
-  }
-  context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.data.run.id, context.env))
-  return { data: { previousRunId: context.params.id, run: result.data.run } }
-}
-
-async function executeAgentRun(store: AgentRuntimeStore, service: NorthStarService, actor: AgentActor, runId: string, env: Env) {
-  const mapped = await store.database.prepare(
-    `SELECT 1 FROM formula_intelligence_runs WHERE run_id = ? AND organization_id = ? AND created_by_user_id = ?`,
-  ).bind(runId, actor.organizationId, actor.userId).first()
-  const materialEvidence = new MaterialEvidenceRag(env)
-  const run = await store.runForActor(actor, runId)
-  const modelProvider = agentModelProviderForRun(env, run)
-  if (mapped) return executeFormulaIntelligenceRun(store, service, actor, runId, materialEvidence, modelProvider)
-  return executeDeterministicAgentRun(store, service, actor, runId, materialEvidence, modelProvider)
-}
-
-async function resolveAgentConfirmation(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  const store = new AgentRuntimeStore(context.env.DB)
-  const decision = typeof context.body.decision === 'string' ? context.body.decision : 'accept'
-  if (decision === 'reject') return store.rejectConfirmation(actor, context.params.id, context.params.confirmationId)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    ensureFormulaIntelligenceExecutionAccess(context.service)
-  } catch (error) {
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.access.denied', context.params.confirmationId, 'blocked')
-    throw error
-  }
-  let claimed: Awaited<ReturnType<AgentRuntimeStore['claimFormulaDraftSave']>>
-  try {
-    claimed = await store.claimFormulaDraftSave(actor, context.params.id, context.params.confirmationId)
-  } catch (error) {
-    if (error instanceof UnprocessableEntityException && error.message === 'FORMULA_INTELLIGENCE_CONFIRMATION_EXPIRED') {
-      await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.confirmation.expired', context.params.confirmationId, 'blocked')
-    }
-    throw error
-  }
-  if (claimed.completed) {
-    const formula = context.service.formulas().data.find((item) => item.id === claimed.formulaId)
-    return { data: { duplicate: true, formula, confirmationId: context.params.confirmationId, invariant: 'confirmation ID is idempotent; no additional formula draft was created' } }
-  }
-  try {
-    await new FormulaIntelligenceStore(context.env.DB).revalidateDraftSave(actor, context.params.id, claimed.proposal, context.service)
-    const created = context.service.createAgentFormulaDraft(context.params.confirmationId, {
-      name: claimed.proposal.name,
-      formulaType: claimed.proposal.formulaType,
-      targetGrams: claimed.proposal.targetGrams,
-      concentrationType: claimed.proposal.concentrationType,
-      finalProductConcentrationPercent: claimed.proposal.finalProductConcentrationPercent,
-      ifraCategory: claimed.proposal.ifraCategory,
-      requiresFinalProductContext: claimed.proposal.requiresFinalProductContext,
-      brief: claimed.proposal.brief,
-    }).data.formula
-    const materialNames = new Map(context.service.materials().data.map((material) => [material.id, material.name]))
-    const updated = context.service.updateFormulaDraft(created.id, {
-      expectedRevision: created.draftRevision,
-      lines: claimed.proposal.ingredients.map((ingredient, index) => ({
-        id: `agent-${index + 1}`,
-        label: materialNames.get(ingredient.materialId) ?? ingredient.materialId,
-        materialId: ingredient.materialId,
-        grams: Number((claimed.proposal.targetGrams * ingredient.percentage / 100).toFixed(4)),
-        concentration: ingredient.dilution ?? 100,
-        pyramidNote: ingredient.pyramidNote,
-      })),
-    }).data.formula
-    // Persist formula state before finalizing the confirmation mapping. A retry
-    // then resolves the same deterministic formula identity after interruption.
-    await persistSnapshots(context.env.DB, context.service)
-    await store.completeFormulaDraftSave(actor, context.params.id, context.params.confirmationId, updated.id, claimed.leaseToken!)
-    await new FormulaIntelligenceStore(context.env.DB).markSavedFormula(actor, context.params.id, updated.id)
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.draft.save.completed', updated.id)
-    return { data: { formula: updated, confirmationId: context.params.confirmationId, invariant: 'agent confirmation creates one editable draft and does not reserve or consume inventory' } }
-  } catch (error) {
-    await store.failFormulaDraftSave(actor, context.params.id, context.params.confirmationId, claimed.leaseToken!, 'validation_or_persistence_failed')
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.draft.save.denied', context.params.confirmationId, 'blocked')
-    throw error
-  }
-}
-
-function formulaIntelligenceIdempotencyKey(request: Request) {
+function requestIdempotencyKey(request: Request) {
   const key = request.headers.get('Idempotency-Key')?.trim() ?? ''
   if (key.length < 8 || key.length > 160) throw new UnprocessableEntityException('Idempotency-Key header must be between 8 and 160 characters')
   return key
 }
 
-function formulaIntelligenceCanEdit(service: NorthStarService) {
-  return service.me().data.permissions.includes('formulas.edit')
-}
-
-function formulaIntelligenceCanApproveBrief(service: NorthStarService) {
-  return service.me().data.permissions.includes('formulas.approve')
-}
-
-function formulaIntelligenceCanViewPrivate(service: NorthStarService) {
-  const granted = new Set(service.me().data.permissions)
-  return granted.has('formulas.viewSensitive') && granted.has('materials.view')
-}
-
-function formulaIntelligenceCanView(service: NorthStarService) {
-  return service.me().data.permissions.includes('formulas.view')
-}
-
-function formulaIntelligenceCapabilities(service: NorthStarService) {
-  const context = service.me().data
-  const granted = new Set(context.permissions)
-  const normalizedRole = context.session.role.trim().toLowerCase()
-  const canViewSensitiveComposition = granted.has('formulas.viewSensitive') && granted.has('materials.view')
-  const candidateGenerationEnabled = service.formulaIntelligenceFeatureEnabled('designStudioCandidateGeneration')
-  const optimizerEnabled = service.formulaIntelligenceFeatureEnabled('designStudioOptimizer')
-  const sensoryMemoryEnabled = service.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
-  const evidenceRetrievalEnabled = service.formulaIntelligenceFeatureEnabled('formulaIntelligenceRag')
-  return {
-    data: {
-      currentUserId: context.session.userId,
-      canArchiveAnyDesignProject: normalizedRole === 'owner' || normalizedRole === 'admin',
-      canCreateBrief: granted.has('formulas.view'),
-      canReviewBrief: granted.has('formulas.edit'),
-      canApproveBrief: granted.has('formulas.approve'),
-      canGenerateDirections: candidateGenerationEnabled && granted.has('formulas.edit') && canViewSensitiveComposition,
-      canRunOptimizer: optimizerEnabled && canViewSensitiveComposition,
-      canViewSensitiveComposition,
-      canViewCostEvidence: granted.has('costing.view'),
-      canViewInventoryEvidence: granted.has('inventory.view'),
-      canViewMaterialEvidence: evidenceRetrievalEnabled && granted.has('documents.view') && granted.has('materials.view'),
-      canSaveDraft: granted.has('formulas.edit') && canViewSensitiveComposition,
-      canPlanTrial: granted.has('trials.create') && granted.has('formulas.edit') && canViewSensitiveComposition,
-      canViewTrialEvidence: sensoryMemoryEnabled && canViewSensitiveComposition && granted.has('trials.view'),
-      formulaIntelligenceFeatures: {
-        candidateGenerationEnabled,
-        optimizerEnabled,
-        sensoryMemoryEnabled,
-        evidenceRetrievalEnabled,
-      },
-    },
-  }
-}
-
-function ensureFormulaIntelligencePermission(service: NorthStarService, permission: 'view' | 'edit') {
-  const allowed = permission === 'edit' ? formulaIntelligenceCanEdit(service) : formulaIntelligenceCanView(service)
-  if (!allowed) throw new ForbiddenException(`Formula Intelligence requires formulas.${permission}`)
-}
-
-function ensureFormulaIntelligenceExecutionAccess(service: NorthStarService) {
-  const granted = new Set(service.me().data.permissions)
-  for (const permission of ['formulas.viewSensitive', 'materials.view']) {
-    if (!granted.has(permission)) throw new ForbiddenException(`Formula Intelligence execution requires ${permission}`)
-  }
-}
-
-async function auditFormulaIntelligenceAccessFailure(context: RouteContext, actor: AgentActor, entity: string, error: unknown) {
-  if (error instanceof ForbiddenException || error instanceof NotFoundException) {
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.access.denied', entity, 'blocked')
-  }
-}
-
-async function listDesignProjects(context: RouteContext) {
-  ensureFormulaIntelligencePermission(context.service, 'view')
-  const actor = ensureAgentReadAccess(context.service)
-  const includeArchived = context.query.get('includeArchived') === 'true'
-  return { data: await new FormulaIntelligenceStore(context.env.DB).listDesignProjects(
-    actor,
-    formulaIntelligenceCanViewPrivate(context.service),
-    includeArchived,
-    formulaIntelligenceCanApproveBrief(context.service),
-  ) }
-}
-
-async function listFormulaIntelligenceMaterials(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    ensureFormulaIntelligenceExecutionAccess(context.service)
-    return { data: formulaIntelligenceMaterialCatalog(context.service) }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, 'design-material-catalog', error)
-    throw error
-  }
-}
-
-async function createFormulaDesignProject(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    const project = await new FormulaIntelligenceStore(context.env.DB).createDesignProject(
-      actor,
-      context.body,
-      formulaIntelligenceIdempotencyKey(context.request),
-      context.service.me().data.session.brandId,
-    )
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.project.create', project.id)
-    return { data: { project } }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, 'design-project', error)
-    throw error
-  }
-}
-
-async function archiveFormulaDesignProject(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    const result = await new FormulaIntelligenceStore(context.env.DB).archiveDesignProject(actor, context.params.id)
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
-    throw error
-  }
-}
-
-async function restoreFormulaDesignProject(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    const result = await new FormulaIntelligenceStore(context.env.DB).restoreDesignProject(actor, context.params.id)
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
-    throw error
-  }
-}
-
-async function getFormulaDesignProject(service: NorthStarService, env: Env, projectId: string) {
-  ensureFormulaIntelligencePermission(service, 'view')
-  const actor = ensureAgentReadAccess(service)
-  return { data: { project: await new FormulaIntelligenceStore(env.DB).designProject(
-    actor,
-    projectId,
-    formulaIntelligenceCanViewPrivate(service),
-    formulaIntelligenceCanApproveBrief(service),
-  ) } }
-}
-
-async function listFormulaDesignBriefVersions(service: NorthStarService, env: Env, projectId: string) {
-  ensureFormulaIntelligencePermission(service, 'view')
-  const actor = ensureAgentReadAccess(service)
-  return { data: await new FormulaIntelligenceStore(env.DB).briefVersions(
-    actor,
-    projectId,
-    formulaIntelligenceCanViewPrivate(service),
-    formulaIntelligenceCanApproveBrief(service),
-  ) }
-}
-
-async function formulaDesignBriefCompilerStatus(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    if (!context.service.formulaIntelligenceFeatureEnabled('designStudioBriefCompiler')) {
-      return { data: { mode: 'MANUAL', status: 'DISABLED', message: 'Brief compiler is disabled for this workspace. Review the structured brief manually.' } }
-    }
-    return { data: await new FormulaIntelligenceStore(context.env.DB).briefCompilerStatus(
-      actor,
-      context.params.id,
-      formulaIntelligenceCanViewPrivate(context.service),
-      formulaIntelligenceCanApproveBrief(context.service),
-    ) }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
-    throw error
-  }
-}
-
-async function saveFormulaDesignBriefVersion(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    const version = await new FormulaIntelligenceStore(context.env.DB).saveBriefVersion(context.service, actor, context.params.id, context.body, formulaIntelligenceIdempotencyKey(context.request))
-    return { data: { version } }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
-    throw error
-  }
-}
-
-async function listFormulaDesignRecipients(service: NorthStarService, env: Env, projectId: string) {
-  ensureFormulaIntelligencePermission(service, 'edit')
-  const actor = ensureAgentReadAccess(service)
-  return { data: await new FormulaIntelligenceStore(env.DB).eligibleRecipients(actor, projectId) }
-}
-
-async function generateFormulaDesignDirections(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    ensureFormulaIntelligenceExecutionAccess(context.service)
-    const provider = configuredAgentProvider(context.env)
-    const result = await createDesignProjectRun(context.env.DB, context.service, actor, context.params.id, formulaIntelligenceIdempotencyKey(context.request), provider)
-    context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, context.env))
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.id, error)
-    throw error
-  }
-}
-
-async function shareFormulaDesignDirection(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    const result = await new FormulaIntelligenceStore(context.env.DB).shareDirection(actor, context.params.id, context.params.directionId, context.body)
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.share', context.params.directionId)
-    return { data: { shared: true, ...result } }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
-    throw error
-  }
-}
-
-async function revokeFormulaDesignDirectionShare(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    await new FormulaIntelligenceStore(context.env.DB).revokeDirectionShare(actor, context.params.id, context.params.directionId, context.params.recipientUserId)
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.revoke', context.params.directionId)
-    return { data: { revoked: true } }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
-    throw error
-  }
-}
-
-async function submitFormulaDesignFeedback(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'view')
-    await new FormulaIntelligenceStore(context.env.DB).feedback(actor, context.params.id, context.params.directionId, context.body)
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.feedback.create', context.params.directionId)
-    return { data: { accepted: true } }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
-    throw error
-  }
-}
-
-async function requestFormulaDesignDraftSave(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    const result = await new FormulaIntelligenceStore(context.env.DB).requestDirectionDraftSave(
-      actor, context.params.id, context.params.directionId, new AgentRuntimeStore(context.env.DB),
-    )
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.save.requested', context.params.directionId)
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
-    throw error
-  }
-}
-
-async function createFormulaDesignDirectionTrial(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    ensureFormulaIntelligenceExecutionAccess(context.service)
-    const result = await new FormulaIntelligenceStore(context.env.DB).createTrialFromDesignDirection(
-      actor,
-      context.params.id,
-      context.params.directionId,
-      context.body,
-      context.service,
-    )
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.design.direction.trial.create', context.params.directionId)
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.directionId, error)
-    throw error
-  }
-}
-
-async function startFormulaOptimizer(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  try {
-    ensureFormulaIntelligenceExecutionAccess(context.service)
-    const provider = configuredAgentProvider(context.env)
-    const result = await createOptimizerRun(context.env.DB, context.service, actor, context.body, formulaIntelligenceIdempotencyKey(context.request), provider)
-    context.ctx.waitUntil(executeAgentRun(new AgentRuntimeStore(context.env.DB), context.service, actor, result.run.id, context.env))
-    return { data: result }
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, 'optimizer', error)
-    throw error
-  }
-}
-
-async function requestOptimizerDraftSave(context: RouteContext) {
-  const actor = ensureAgentReadAccess(context.service)
-  let result
-  try {
-    ensureFormulaIntelligencePermission(context.service, 'edit')
-    result = await new FormulaIntelligenceStore(context.env.DB).requestCandidateDraftSave(
-      actor, context.params.id, context.params.candidateId, new AgentRuntimeStore(context.env.DB), context.service,
-    )
-  } catch (error) {
-    await auditFormulaIntelligenceAccessFailure(context, actor, context.params.candidateId, error)
-    await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.optimizer.candidate.save.denied', context.params.candidateId, 'blocked')
-    throw error
-  }
-  await auditFormulaIntelligence(context.env.DB, actor, 'formula-intelligence.optimizer.candidate.save.requested', context.params.candidateId)
-  return { data: result }
-}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -1488,19 +969,33 @@ export default {
     let issuedSessionCredential: string | undefined
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: buildApiSecurityHeaders(corsHeaders) })
+      return withReleaseHeaders(new Response(null, { status: 204, headers: buildApiSecurityHeaders(corsHeaders) }), apiReleaseMetadata(env))
     }
 
     try {
       const url = new URL(request.url)
       const path = normalizeApiPath(url.pathname)
       if (!path) {
-        return json({ message: `Route ${url.pathname} was not found` }, 404, corsHeaders)
+        return withReleaseHeaders(json({ message: `Route ${url.pathname} was not found` }, 404, corsHeaders), apiReleaseMetadata(env))
+      }
+
+      if (isRemovedV1Path(path)) {
+        return withReleaseHeaders(
+          json(
+            {
+              code: removedV1RouteCode,
+              message: 'This V1 product surface is no longer active. Use the current workspace modules after the V2 hand-off.',
+            },
+            410,
+            corsHeaders,
+          ),
+          apiReleaseMetadata(env),
+        )
       }
 
       const match = matchRoute(request.method, path)
       if (!match) {
-        return json({ message: `Route ${request.method} ${path} was not found` }, 404, corsHeaders)
+        return withReleaseHeaders(json({ message: `Route ${request.method} ${path} was not found` }, 404, corsHeaders), apiReleaseMetadata(env))
       }
       routeLabel = `${request.method} ${match.route.pattern}`
       mfaVerificationRequest = match.route.persistScope === 'mfaVerification'
@@ -1608,7 +1103,7 @@ export default {
           requestHash,
         })
         if ('response' in claim) {
-          return json(claim.response, 200, buildResponseHeaders(corsHeaders, match.route, claim.response))
+          return withReleaseHeaders(json(claim.response, 200, buildResponseHeaders(corsHeaders, match.route, claim.response)), apiReleaseMetadata(env))
         }
         idempotencyClaim = claim
       }
@@ -1685,7 +1180,7 @@ export default {
       if (durationMs >= 1200) {
         ctx.waitUntil(recordRuntimeEvent(env.DB, { route: routeLabel, status: response.status, durationMs, category: 'latency' }))
       }
-      return response
+      return withReleaseHeaders(response, apiReleaseMetadata(env))
     } catch (error) {
       if (idempotencyClaim && !mutationPersisted) {
         await abandonOperationIdempotency(env.DB, idempotencyClaim).catch((idempotencyError) => console.error(idempotencyError))
@@ -1714,25 +1209,16 @@ export default {
           ]),
         )
       }
-      return errorJson(error, corsHeaders)
+      return withReleaseHeaders(errorJson(error, corsHeaders), apiReleaseMetadata(env))
     }
   },
   async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(Promise.all([
       runScheduledAnalytics(controller, env),
-      runScheduledAgentRecovery(env),
       runScheduledMaterialEvidence(env),
-      pruneFormulaIntelligenceRetention(env.DB),
-      purgeExpiredArchivedDesignProjects(env.DB),
       pruneCompletedOperationIdempotency(env.DB),
     ]))
   },
-}
-
-async function pruneFormulaIntelligenceRetention(db: D1Database) {
-  // Artifacts are intentionally short-lived. Audit-chain rows are preserved for
-  // at least one year and therefore are never pruned on this scheduled path.
-  await db.prepare(`DELETE FROM agent_artifacts WHERE created_at < ?`).bind(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()).run()
 }
 
 async function pruneCompletedOperationIdempotency(db: D1Database) {
@@ -1745,105 +1231,11 @@ async function pruneCompletedOperationIdempotency(db: D1Database) {
     .run()
 }
 
-async function runScheduledAgentRecovery(env: Env) {
-  const store = new AgentRuntimeStore(env.DB)
-  const reclaimed = await store.recoverExpiredJobs()
-  for (const job of reclaimed) {
-    const run = await env.DB.prepare(
-      `SELECT session_id FROM agent_runs WHERE id = ? AND organization_id = ?`,
-    ).bind(job.run_id, job.organization_id).first<{ session_id: string }>()
-    if (!run) continue
-    try {
-      const service = new NorthStarService({
-        authCredentials: seededAdminCredentialsForEnv(env),
-        mfaEncryptionKey: env.MFA_ENCRYPTION_KEY,
-        billingMode: billingModeFromEnv(env),
-      })
-      await hydrateSnapshots(env.DB, service, env)
-      service.authenticateSession(run.session_id)
-      const actor = actorFromService(service)
-      await executeAgentRun(store, service, actor, job.run_id, env)
-    } catch {
-      await store.cancelUnauthorizedRun(job.run_id, job.organization_id).catch(() => undefined)
-      console.error('Scheduled agent resume cancelled after authorization check')
-    }
-  }
-}
-
 async function runScheduledMaterialEvidence(env: Env) {
   const rag = new MaterialEvidenceRag(env)
-  await rag.queueMissingGlobalMaterials()
+  // Pre-V2 cleanup deliberately indexes only tenant-approved evidence. The
+  // Deprecated catalogue jobs are intentionally absent from the active cron.
   await rag.processDueJobs()
-}
-
-function applyScheduledMaterialCatalogueBackfill(service: NorthStarService) {
-  const serviceState = service as unknown as ServiceState
-  const changedOrganizations = new Set<string>()
-  const enrichedMaterials = serviceState.materialRecords.map((material) => {
-    const enrichment = enrichMaterialFromLluchCatalogue(material)
-    if (enrichment.changed) {
-      changedOrganizations.add(material.organizationId || SEEDED_ADMIN_ORGANIZATION_ID)
-    }
-    return enrichment.material
-  })
-  if (changedOrganizations.size === 0) {
-    return false
-  }
-
-  serviceState.materialRecords = enrichedMaterials
-  appendSystemCatalogueBackfillAudit(serviceState, [...changedOrganizations])
-  return true
-}
-
-function catalogueActor(service: NorthStarService, requiredPermission: 'materials.view' | 'materials.update') {
-  const me = service.me().data
-  if (!me.permissions.includes(requiredPermission)) {
-    throw new ForbiddenException(`Lluch catalogue requires ${requiredPermission}`)
-  }
-  return actorFromService(service)
-}
-
-async function listLluchCatalogue(context: RouteContext) {
-  const actor = catalogueActor(context.service, 'materials.view')
-  const result = await searchLluchCatalogue(context.env.DB, actor.organizationId, context.query.get('query'))
-  return { data: result }
-}
-
-async function importLluchCatalogue(context: RouteContext) {
-  const actor = catalogueActor(context.service, 'materials.update')
-  // Authorize the global-library mutation before writing supplier import rows.
-  const enrichment = context.service.enrichMaterialsFromLluchCatalogue().data
-  const catalogue = await importLluchCatalogueForOrganization(context.env.DB, actor.organizationId)
-  if (catalogue.imported) {
-    appendSystemCatalogueImportAudit(context.service as unknown as ServiceState, [actor.organizationId])
-  }
-  return {
-    data: {
-      ...enrichment,
-      catalogue,
-      invariant: 'Catalogue import preserves tenant-scoped evidence while a curator publishes matching metadata to the shared material library; it never creates inventory, procurement approvals, or compliance decisions.',
-    },
-  }
-}
-
-function appendSystemCatalogueBackfillAudit(serviceState: ServiceState, organizationIds: string[]) {
-  const at = new Date().toISOString()
-  const events: AuditEvent[] = organizationIds.sort().map((organizationId) => {
-    const counter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
-    serviceState.auditCounter = counter
-    return {
-      id: `AUD-TEN-${counter}`,
-      at,
-      actor: 'system:catalogue-backfill',
-      action: 'material.catalogue.backfill',
-      entity: `lluch:${lluchCatalogue2026Source.catalogueVersion}`,
-      requestId: `system_lluch_backfill_${organizationId}_${lluchCatalogue2026Source.catalogueVersion}`,
-      outcome: 'allowed' as const,
-      organizationId,
-      scope: 'tenant' as const,
-    }
-  })
-  serviceState.auditEvents = [...events, ...serviceState.auditEvents]
 }
 
 async function runScheduledAnalytics(controller: ScheduledController, env: Env) {
@@ -1856,21 +1248,10 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
       billingMode: billingModeFromEnv(env),
     })
     await hydrateSnapshots(env.DB, service, env)
-    const catalogueImports = await importLluchCatalogueForAllOrganizations(env.DB, async (catalogueImport) => {
-      const events = appendSystemCatalogueImportAudit(service as unknown as ServiceState, [catalogueImport.organizationId])
-      await persistAuditEvents(env.DB, events, new Date().toISOString(), service as unknown as ServiceState)
-    })
-    const importedOrganizations = catalogueImports.filter((result) => result.imported).map((result) => result.organizationId)
-    const missingImportAuditOrganizations = await organizationsMissingLluchCatalogueImportAudit(env.DB)
-    if (missingImportAuditOrganizations.length > 0) {
-      const events = appendSystemCatalogueImportAudit(service as unknown as ServiceState, missingImportAuditOrganizations)
-      await persistAuditEvents(env.DB, events, new Date().toISOString(), service as unknown as ServiceState)
-    }
-    const materialCatalogueChanged = applyScheduledMaterialCatalogueBackfill(service)
     const scheduledAt = new Date(controller.scheduledTime).toISOString()
     const result = service.runDueAnalyticsReports(scheduledAt)
     const emailDelivery = await deliverNotificationOutbox(service, env)
-    if (importedOrganizations.length > 0 || materialCatalogueChanged || result.data.reports.length > 0 || emailDelivery.changed) {
+    if (result.data.reports.length > 0 || emailDelivery.changed) {
       await persistSnapshots(env.DB, service)
       refreshCachedSnapshotState(service)
     }
@@ -1891,27 +1272,6 @@ async function runScheduledAnalytics(controller: ScheduledController, env: Env) 
   }
 }
 
-function appendSystemCatalogueImportAudit(serviceState: ServiceState, organizationIds: string[]) {
-  const at = new Date().toISOString()
-  const events: AuditEvent[] = organizationIds.sort().map((organizationId) => {
-    const counter = Math.max(Number(serviceState.auditCounter) || 0, maxAuditCounter(serviceState.auditEvents)) + 1
-    serviceState.auditCounter = counter
-    return {
-      id: `AUD-CAT-${counter}`,
-      at,
-      actor: 'system:catalogue-import',
-      action: 'material.catalogue.import',
-      entity: `lluch:${lluchCatalogue2026Source.catalogueVersion}`,
-      requestId: `system_lluch_import_${organizationId}_${lluchCatalogue2026Source.catalogueVersion}`,
-      outcome: 'allowed',
-      organizationId,
-      scope: 'tenant',
-    }
-  })
-  serviceState.auditEvents = [...events, ...serviceState.auditEvents]
-  return events
-}
-
 function billingModeFromEnv(env: Env) {
   return env.BILLING_MODE === 'self_service' ? 'self_service' : 'managed_beta'
 }
@@ -1927,25 +1287,36 @@ async function integrationReadiness(service: NorthStarService, env: Env) {
     betaHostnameReachable,
     workersAiConfigured: Boolean(env.AI),
     vectorizeConfigured: Boolean(env.RAG_INDEX),
-    formulaAgentProvider: configuredAgentProvider(env).provider,
   })
+}
+
+type PublicStatusTelemetry = { errorCount: number; slowCount: number; expiresAt: number }
+
+let publicStatusTelemetryCache: PublicStatusTelemetry | undefined
+
+export function apiReleaseMetadata(env: Pick<Env, 'RELEASE_GIT_SHA' | 'RELEASE_BUILD_TIMESTAMP_UTC' | 'RELEASE_ENVIRONMENT'>): ReleaseMetadata {
+  return releaseMetadata({
+    fullGitSha: env.RELEASE_GIT_SHA,
+    buildTimestampUtc: env.RELEASE_BUILD_TIMESTAMP_UTC,
+    environment: env.RELEASE_ENVIRONMENT,
+  })
+}
+
+export function withReleaseHeaders(response: Response, metadata: ReleaseMetadata) {
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(releaseHeaders(metadata))) headers.set(name, value)
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
 }
 
 async function publicStatus(env: Env) {
   const checkedAt = new Date().toISOString()
   try {
-    await env.DB.prepare('SELECT 1 AS healthy').first<{ healthy: number }>()
-    const telemetry = await env.DB
-      .prepare(
-        `SELECT
-          SUM(CASE WHEN category = 'error' THEN 1 ELSE 0 END) AS error_count,
-          SUM(CASE WHEN category = 'latency' THEN 1 ELSE 0 END) AS slow_count
-         FROM runtime_events
-         WHERE julianday(occurred_at) >= julianday('now', '-15 minutes')`,
-      )
-      .first<{ error_count: number | null; slow_count: number | null }>()
-    const errorCount = Number(telemetry?.error_count ?? 0)
-    const slowCount = Number(telemetry?.slow_count ?? 0)
+    const [readiness, telemetry] = await Promise.all([
+      env.DB.prepare('SELECT 1 AS healthy').first<{ healthy: number }>(),
+      cachedPublicStatusTelemetry(env.DB),
+    ])
+    if (readiness?.healthy !== 1) throw new Error('D1 readiness check did not return healthy')
+    const { errorCount, slowCount } = telemetry
     const apiStatus = errorCount > 0 ? 'degraded' : 'operational'
     return {
       data: {
@@ -1970,6 +1341,29 @@ async function publicStatus(env: Env) {
       },
     }
   }
+}
+
+async function cachedPublicStatusTelemetry(db: D1Database) {
+  if (publicStatusTelemetryCache && publicStatusTelemetryCache.expiresAt > Date.now()) {
+    return publicStatusTelemetryCache
+  }
+  const telemetry = await db
+    .prepare(
+      `SELECT
+        SUM(CASE WHEN category = 'error' THEN 1 ELSE 0 END) AS error_count,
+        SUM(CASE WHEN category = 'latency' THEN 1 ELSE 0 END) AS slow_count
+       FROM runtime_events
+       WHERE julianday(occurred_at) >= julianday('now', '-15 minutes')`,
+    )
+    .first<{ error_count: number | null; slow_count: number | null }>()
+  publicStatusTelemetryCache = {
+    errorCount: Number(telemetry?.error_count ?? 0),
+    slowCount: Number(telemetry?.slow_count ?? 0),
+    // Status is public and its aggregate is non-sensitive. A short isolate-local
+    // cache avoids repeating the telemetry scan while preserving D1 readiness.
+    expiresAt: Date.now() + 15_000,
+  }
+  return publicStatusTelemetryCache
 }
 
 async function deliverNotificationOutbox(service: NorthStarService, env: Env) {
@@ -3097,7 +2491,7 @@ async function hydrateSnapshots(db: D1Database, service: NorthStarService, env: 
 
 // Login needs identity data, not the entire operational graph. In particular,
 // avoid hydrating the shared Master Material library before password verification.
-async function hydrateLoginState(db: D1Database, service: NorthStarService, email: string | undefined) {
+export async function hydrateLoginState(db: D1Database, service: NorthStarService, email: string | undefined) {
   const normalizedEmail = email?.trim().toLowerCase() ?? ''
   const serviceState = service as unknown as ServiceState
   const [credential, membership, sessionRows, tenantAuditRows, platformAuditRows] = await Promise.all([
@@ -3145,12 +2539,29 @@ async function hydrateLoginState(db: D1Database, service: NorthStarService, emai
   if (!membership) {
     return
   }
-  const policyRows = await db.prepare(
-    `SELECT organization_id, role, 'organization' AS scope, mfa_required, permissions_json
-     FROM tenant_role_policies
-     WHERE organization_id = ?1
-     ORDER BY role ASC`,
-  ).bind(membership.organization_id).all<RolePolicyRow>()
+  const [organization, brandRows, policyRows] = await Promise.all([
+    db.prepare(
+      `SELECT id, name, slug, custom_domain, plan, status, primary_contact, created_at
+       FROM tenant_organizations
+       WHERE id = ?1`,
+    ).bind(membership.organization_id).first<OrganizationRow>(),
+    db.prepare(
+      `SELECT id, organization_id, name, status, default_currency
+       FROM tenant_brands
+       WHERE organization_id = ?1
+       ORDER BY id ASC`,
+    ).bind(membership.organization_id).all<BrandRow>(),
+    db.prepare(
+      `SELECT organization_id, role, 'organization' AS scope, mfa_required, permissions_json
+       FROM tenant_role_policies
+       WHERE organization_id = ?1
+       ORDER BY role ASC`,
+    ).bind(membership.organization_id).all<RolePolicyRow>(),
+  ])
+  // The login path deliberately avoids loading the operational graph, but it
+  // must load the tenant identity used to construct the canonical workspace URL.
+  serviceState.organizationRecords = organization ? [organizationFromRow(organization)] : []
+  serviceState.brandRecords = (brandRows.results ?? []).map(brandFromRow)
   serviceState.rolePolicyRecords = [
     ...serviceState.rolePolicyRecords.filter((policy) => policy.scope === 'platform'),
     ...(policyRows.results ?? []).map(rolePolicyFromRow),
@@ -3174,10 +2585,8 @@ function requiresFreshTrialMemory(path: string, mutates: boolean) {
   return path === '/trials'
     || path.startsWith('/trials/')
     || /^\/formulas\/[^/]+\/trial-evidence$/.test(path)
-    || path === '/formula-intelligence/sensory-memory'
     || path.startsWith('/lineage/')
     || (mutates && path.startsWith('/lab-usage'))
-    || (mutates && /^\/formula-intelligence\/design-projects\/[^/]+\/directions\/[^/]+\/trial$/.test(path))
 }
 
 async function hydrateWorkspaceBranding(db: D1Database, service: NorthStarService, sessionId: string) {
@@ -4476,11 +3885,10 @@ function requiredStringRecordField(record: Record<string, unknown>, field: strin
 }
 
 async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: ServiceState) {
-  const [credentialRows, resetRows, verificationRows, importRows, legalRows, privacyRows, domainRows, inventoryApprovalRows, operationApprovalRows] = await Promise.all([
+  const [credentialRows, resetRows, verificationRows, legalRows, privacyRows, domainRows, inventoryApprovalRows, operationApprovalRows] = await Promise.all([
     db.prepare('SELECT email, password_hash, password_set_at FROM auth_credentials ORDER BY email ASC').all<AuthCredentialRow>(),
     db.prepare('SELECT id, email, token_hash, created_at, expires_at, used_at FROM password_reset_records ORDER BY created_at DESC').all<PasswordResetRow>(),
     db.prepare('SELECT id, organization_id, user_id, email, token_hash, created_at, expires_at, verified_at, revoked_at FROM email_verification_records ORDER BY created_at DESC').all<EmailVerificationRow>(),
-    db.prepare('SELECT id, organization_id, record_json FROM import_jobs ORDER BY created_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM legal_acceptance_records ORDER BY accepted_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM privacy_requests ORDER BY created_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT id, organization_id, record_json FROM saas_custom_domains ORDER BY updated_at DESC').all<JsonStateRow>(),
@@ -4524,9 +3932,6 @@ async function hydrateEnterpriseGovernanceState(db: D1Database, serviceState: Se
   } else if (serviceState.emailVerificationRecords.length > 0) {
     await persistEmailVerificationRecords(db, serviceState.emailVerificationRecords, updatedAt)
   }
-  const hydratedImports = scopedJsonRecords(importRows.results ?? [])
-  if (hydratedImports.length > 0) serviceState.importJobRecords = hydratedImports as DataImportJobRecord[]
-  else if (serviceState.importJobRecords.length > 0) await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
   const hydratedLegal = scopedJsonRecords(legalRows.results ?? [])
   if (hydratedLegal.length > 0) serviceState.legalAcceptanceRecords = hydratedLegal as LegalAcceptanceRecord[]
   else if (serviceState.legalAcceptanceRecords.length > 0) await persistLegalAcceptances(db, serviceState.legalAcceptanceRecords)
@@ -4548,7 +3953,6 @@ async function persistEnterpriseGovernanceState(db: D1Database, serviceState: Se
   await persistAuthCredentialRecords(db, serviceState.authCredentialRecords, updatedAt)
   await persistPasswordResetRecords(db, serviceState.passwordResetRecords, updatedAt)
   await persistEmailVerificationRecords(db, serviceState.emailVerificationRecords, updatedAt)
-  await persistImportJobs(db, serviceState.importJobRecords, updatedAt)
   await persistLegalAcceptances(db, serviceState.legalAcceptanceRecords)
   await persistPrivacyRequests(db, serviceState.privacyRequestRecords, updatedAt)
   await persistCustomDomains(db, serviceState.customDomainRecords, updatedAt)
@@ -4626,25 +4030,6 @@ async function persistEmailVerificationRecords(db: D1Database, records: EmailVer
         updatedAt,
       ),
     ),
-  )
-}
-
-async function persistImportJobs(db: D1Database, records: DataImportJobRecord[], updatedAt: string) {
-  if (records.length === 0) return
-  await runStatementBatches(
-    db,
-    records.map((job) => {
-      const record = job as unknown as Record<string, unknown>
-      const organizationId = requiredStringRecordField(record, 'organizationId')
-      return db.prepare(
-        `INSERT INTO import_jobs (id, organization_id, status, idempotency_key, record_json, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(id) DO UPDATE SET status = excluded.status, record_json = excluded.record_json, updated_at = excluded.updated_at`,
-      ).bind(
-        requiredStringRecordField(record, 'id'), organizationId, requiredStringRecordField(record, 'status'),
-        requiredStringRecordField(record, 'idempotencyKey'), JSON.stringify(record), requiredStringRecordField(record, 'createdAt'), updatedAt,
-      )
-    }),
   )
 }
 
@@ -5367,7 +4752,6 @@ async function hydrateMaterialState(db: D1Database, serviceState: ServiceState) 
   } else if (Array.isArray(serviceState.materialRecords) && serviceState.materialRecords.length > 0) {
     await persistMaterials(db, serviceState.materialRecords, new Date().toISOString())
   }
-  await ensurePublishedLluchMasterMaterials(db, serviceState)
 
   const moleculeRows = await db
     .prepare('SELECT id, record_json FROM molecule_components ORDER BY material_id ASC, name ASC')
@@ -5413,104 +4797,9 @@ async function persistMaterialState(db: D1Database, serviceState: ServiceState, 
   await persistStockTakes(db, serviceState.stockTakeRecords, updatedAt)
 }
 
-const LLUCH_GLOBAL_PUBLICATION_KEY = `lluch:${lluchCatalogue2026Source.catalogueVersion}`
-
-function isLluchMasterId(id: string) {
-  return id.startsWith('mat-lluch-2026-')
-}
-
-function mergeMasterProvenance(existing: Material['provenance'], canonical: Material['provenance']) {
-  const seen = new Set<string>()
-  return [...canonical, ...existing].filter((entry) => {
-    const key = `${entry.field}|${entry.source}|${entry.version}|${entry.date}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-/** Persist the source-controlled global library once, never as tenant data. */
-async function ensurePublishedLluchMasterMaterials(db: D1Database, serviceState: ServiceState) {
-  const masters = lluchCatalogueGlobalMasterMaterials()
-  const currentMasters = serviceState.materialRecords.filter((material) => isLluchMasterId(material.id))
-  const publication = await db
-    .prepare(
-      `SELECT content_hash, material_count, status
-       FROM global_material_publications WHERE publication_key = ?1`,
-    )
-    .bind(LLUCH_GLOBAL_PUBLICATION_KEY)
-    .first<{ content_hash: string; material_count: number; status: string }>()
-  const isCurrent = publication?.status === 'PUBLISHED'
-    && publication.content_hash === lluchCatalogue2026Source.contentHash
-    && publication.material_count === masters.length
-    && currentMasters.length === masters.length
-  if (isCurrent) return
-
-  const byId = new Map(currentMasters.map((material) => [material.id, material]))
-  const published = masters.map((canonical) => {
-    const existing = byId.get(canonical.id)
-    return {
-      ...canonical,
-      ...existing,
-      libraryScope: 'GLOBAL' as const,
-      organizationId: undefined,
-      catalogueSource: { ...canonical.catalogueSource!, status: 'MASTER_APPROVED' as const },
-      catalogueEvidence: canonical.catalogueEvidence,
-      supplierCatalogueReferences: canonical.supplierCatalogueReferences,
-      provenance: mergeMasterProvenance(existing?.provenance ?? [], canonical.provenance),
-    }
-  })
-  serviceState.materialRecords = [
-    ...serviceState.materialRecords.filter((material) => !isLluchMasterId(material.id)),
-    ...published,
-  ]
-  const updatedAt = new Date().toISOString()
-  const auditReference = `material.global.publish:${LLUCH_GLOBAL_PUBLICATION_KEY}:${lluchCatalogue2026Source.contentHash.slice(0, 12)}`
-  await persistMaterials(db, published, updatedAt)
-  await db.batch([
-    db.prepare(
-      `INSERT INTO global_material_publications (
-        publication_key, supplier, catalogue, catalogue_version, content_hash,
-        material_count, status, published_at, published_by, audit_reference, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'PUBLISHED', ?7, 'system:global-material-curator', ?8, ?7)
-      ON CONFLICT(publication_key) DO UPDATE SET
-        supplier = excluded.supplier,
-        catalogue = excluded.catalogue,
-        catalogue_version = excluded.catalogue_version,
-        content_hash = excluded.content_hash,
-        material_count = excluded.material_count,
-        status = 'PUBLISHED',
-        published_at = excluded.published_at,
-        published_by = excluded.published_by,
-        audit_reference = excluded.audit_reference,
-        updated_at = excluded.updated_at`,
-    ).bind(
-      LLUCH_GLOBAL_PUBLICATION_KEY,
-      lluchCatalogue2026Source.supplier,
-      lluchCatalogue2026Source.catalogue,
-      lluchCatalogue2026Source.catalogueVersion,
-      lluchCatalogue2026Source.contentHash,
-      published.length,
-      updatedAt,
-      auditReference,
-    ),
-    db.prepare(
-      `INSERT OR IGNORE INTO platform_audit_events (
-        id, at, actor, action, entity, request_id, outcome, updated_at
-      ) VALUES (?1, ?2, 'system:global-material-curator', 'material.global.publish', ?3, ?4, 'allowed', ?2)`,
-    ).bind(
-      `AUD-GLM-${lluchCatalogue2026Source.contentHash.slice(0, 18)}`,
-      updatedAt,
-      LLUCH_GLOBAL_PUBLICATION_KEY,
-      auditReference,
-    ),
-  ])
-}
-
 async function hydrateOperationalP1State(db: D1Database, serviceState: ServiceState) {
   const rows = await Promise.all([
     db.prepare('SELECT record_json FROM material_compliance_profiles ORDER BY updated_at DESC').all<JsonStateRow>(),
-    db.prepare('SELECT record_json FROM supplier_material_profiles ORDER BY updated_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT record_json FROM procurement_receipts ORDER BY created_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT record_json FROM landed_cost_allocations ORDER BY updated_at DESC').all<JsonStateRow>(),
     db.prepare('SELECT record_json FROM production_qc_templates ORDER BY updated_at DESC').all<JsonStateRow>(),
@@ -5518,18 +4807,16 @@ async function hydrateOperationalP1State(db: D1Database, serviceState: ServiceSt
     db.prepare('SELECT record_json FROM production_yield_records ORDER BY updated_at DESC').all<JsonStateRow>(),
   ])
   serviceState.materialComplianceRecords = (rows[0].results ?? []).map((row) => parseJsonOptional<MaterialComplianceProfile>(row.record_json)).filter(isDefined)
-  serviceState.supplierMaterialProfileRecords = (rows[1].results ?? []).map((row) => parseJsonOptional<SupplierMaterialProfile>(row.record_json)).filter(isDefined)
-  serviceState.procurementReceiptRecords = (rows[2].results ?? []).map((row) => parseJsonOptional<ProcurementReceiptRecord>(row.record_json)).filter(isDefined)
-  serviceState.landedCostAllocationRecords = (rows[3].results ?? []).map((row) => parseJsonOptional<LandedCostAllocationRecord>(row.record_json)).filter(isDefined)
-  serviceState.productionQcTemplateRecords = (rows[4].results ?? []).map((row) => parseJsonOptional<ProductionQcTemplateRecord>(row.record_json)).filter(isDefined)
-  serviceState.productionQcResultRecords = (rows[5].results ?? []).map((row) => parseJsonOptional<ProductionQcResultRecord>(row.record_json)).filter(isDefined)
-  serviceState.productionYieldRecords = (rows[6].results ?? []).map((row) => parseJsonOptional<ProductionYieldRecord>(row.record_json)).filter(isDefined)
+  serviceState.procurementReceiptRecords = (rows[1].results ?? []).map((row) => parseJsonOptional<ProcurementReceiptRecord>(row.record_json)).filter(isDefined)
+  serviceState.landedCostAllocationRecords = (rows[2].results ?? []).map((row) => parseJsonOptional<LandedCostAllocationRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionQcTemplateRecords = (rows[3].results ?? []).map((row) => parseJsonOptional<ProductionQcTemplateRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionQcResultRecords = (rows[4].results ?? []).map((row) => parseJsonOptional<ProductionQcResultRecord>(row.record_json)).filter(isDefined)
+  serviceState.productionYieldRecords = (rows[5].results ?? []).map((row) => parseJsonOptional<ProductionYieldRecord>(row.record_json)).filter(isDefined)
 }
 
 async function persistOperationalP1State(db: D1Database, serviceState: ServiceState, updatedAt: string) {
   await Promise.all([
     persistOperationalP1RecordSet(db, 'material_compliance_profiles', serviceState.materialComplianceRecords, (record) => record.materialId, (record) => record.status, updatedAt, (record) => record.reviewedAt),
-    persistOperationalP1RecordSet(db, 'supplier_material_profiles', serviceState.supplierMaterialProfileRecords, (record) => `${record.supplierId}:${record.materialId}`, (record) => record.status, updatedAt, (record) => record.reviewedAt),
     persistOperationalP1RecordSet(db, 'procurement_receipts', serviceState.procurementReceiptRecords, (record) => record.purchaseOrderId, (record) => record.status, updatedAt, (record) => record.receivedAt),
     persistOperationalP1RecordSet(db, 'landed_cost_allocations', serviceState.landedCostAllocationRecords, (record) => record.receiptId, () => 'POSTED', updatedAt, (record) => record.postedAt),
     persistOperationalP1RecordSet(db, 'production_qc_templates', serviceState.productionQcTemplateRecords, (record) => record.formulaId ?? 'workspace', (record) => record.status, updatedAt, (record) => record.updatedAt),

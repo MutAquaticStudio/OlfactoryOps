@@ -6,15 +6,22 @@ import { chromium } from 'playwright'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const reportRoot = path.join(repoRoot, 'reports')
 
-const appUrl = stripTrailingSlash(process.env.FUNCTIONAL_APP_URL ?? 'https://labofscents.pages.dev')
-const apiBaseUrl = stripTrailingSlash(process.env.FUNCTIONAL_API_URL ?? 'https://api.labofscents.org/api/v1')
-const loginEmail = process.env.FUNCTIONAL_LOGIN_EMAIL ?? 'm.thuanwork@gmail.com'
+const functionalEnvironment = process.env.FUNCTIONAL_ENVIRONMENT
+if (functionalEnvironment !== 'test') {
+  throw new Error('Refusing functional mutations outside an isolated test environment. Set FUNCTIONAL_ENVIRONMENT=test plus explicit test URLs.')
+}
+const appUrl = stripTrailingSlash(requireEnvironmentValue('FUNCTIONAL_APP_URL'))
+const apiBaseUrl = stripTrailingSlash(requireEnvironmentValue('FUNCTIONAL_API_URL'))
+const loginEmail = requireEnvironmentValue('FUNCTIONAL_LOGIN_EMAIL')
 const loginPassword = requireEnvironmentSecret('FUNCTIONAL_LOGIN_PASSWORD')
-const documentId = process.env.FUNCTIONAL_DOCUMENT_ID ?? 'DOC-118'
+const expectedOrganizationId = requireEnvironmentValue('FUNCTIONAL_EXPECTED_ORGANIZATION_ID')
+const expectedRole = process.env.FUNCTIONAL_EXPECTED_ROLE?.trim() || 'Admin'
+const documentId = requireEnvironmentValue('FUNCTIONAL_DOCUMENT_ID')
+const productionFormulaId = process.env.FUNCTIONAL_FORMULA_ID?.trim() || null
 const browserFallbackReason =
   process.env.FUNCTIONAL_BROWSER_FALLBACK_REASON ??
   'Browser plugin invocation failed during setup with "Invalid or unexpected token"; regular Playwright was used.'
-const productionMutationEnabled = process.env.FUNCTIONAL_MUTATE_PRODUCTION === '1'
+const functionalMutationEnabled = process.env.FUNCTIONAL_ALLOW_MUTATIONS === 'true'
 
 const runStartedAt = new Date()
 const runStamp = stampForFile(runStartedAt)
@@ -95,7 +102,7 @@ const testCases = [
       'Call GET /me with the opaque bearer credential only for tooling compatibility.',
     ],
     assertions: [
-      'Login returns a session for org-nxl Admin.',
+      `Login returns a session for ${expectedOrganizationId} ${expectedRole}.`,
       'Set-Cookie includes HttpOnly, Secure, SameSite=None, and oo_session.',
       '/me works with cookie auth.',
       '/me works with the opaque bearer fallback, while the audit session ID is rejected as a credential.',
@@ -122,8 +129,8 @@ const testCases = [
       const session = login.json?.data?.session
       const sessionId = session?.id
       assert(session?.email === loginEmail, 'login session should match requested email')
-      assert(session?.organizationId === 'org-nxl', 'admin demo should be scoped to org-nxl')
-      assert(session?.role === 'Admin', 'admin demo should have Admin role')
+      assert(session?.organizationId === expectedOrganizationId, `session should be scoped to ${expectedOrganizationId}`)
+      assert(session?.role === expectedRole, `session should have ${expectedRole} role`)
       assert(sessionCredential !== sessionId, 'opaque cookie credential must not equal the audit session ID')
       csrfToken = login.json?.data?.csrfToken ?? null
       assert(csrfToken && csrfToken.startsWith('csrf_'), 'login should return a session-bound CSRF token')
@@ -153,12 +160,12 @@ const testCases = [
     objective: 'Verify server-side tenant isolation and role permission decisions for the active session.',
     steps: [
       'Call GET /security/tenant-console with admin cookie.',
-      'Call GET /security/tenant-probe?organizationId=org-other.',
+      'Call GET /security/tenant-probe with a different organization ID.',
       'Call GET /security/permission-probe for Viewer inventory.adjust.',
       'Call GET /security/permission-probe for Owner inventory.adjust.',
     ],
     assertions: [
-      'Tenant console only returns org-nxl memberships and brands.',
+      'Tenant console only returns memberships and brands from the configured QA organization.',
       'Cross-tenant probe returns 403.',
       'Viewer inventory.adjust returns 403.',
       'Owner inventory.adjust returns 200.',
@@ -167,14 +174,14 @@ const testCases = [
       const consoleResponse = await apiFetch('/security/tenant-console')
       assertStatus(consoleResponse, 200, 'tenant console should load for admin')
       const tenantData = consoleResponse.json?.data
-      assert(tenantData?.organization?.id === 'org-nxl', 'tenant console organization should be org-nxl')
+      assert(tenantData?.organization?.id === expectedOrganizationId, `tenant console organization should be ${expectedOrganizationId}`)
       assert(
-        tenantData.memberships.every((membership) => membership.organizationId === 'org-nxl'),
-        'tenant memberships should stay inside org-nxl',
+        tenantData.memberships.every((membership) => membership.organizationId === expectedOrganizationId),
+        'tenant memberships should stay inside the configured QA organization',
       )
       assert(
-        tenantData.brands.every((brand) => brand.organizationId === 'org-nxl'),
-        'tenant brands should stay inside org-nxl',
+        tenantData.brands.every((brand) => brand.organizationId === expectedOrganizationId),
+        'tenant brands should stay inside the configured QA organization',
       )
 
       const crossTenant = await apiFetch('/security/tenant-probe?organizationId=org-other')
@@ -317,7 +324,7 @@ const testCases = [
       let releasedBatch = batches.find(
         (batch) => batch.status === 'RELEASED' && batch.outputLot && batch.genealogy?.outputLotId,
       )
-      if (!releasedBatch && productionMutationEnabled) {
+      if (!releasedBatch && functionalMutationEnabled) {
         releasedBatch = await createReleasedProductionBatch()
       }
       const activeBatch = batches.find((batch) => batch.status !== 'RELEASED')
@@ -344,7 +351,7 @@ const testCases = [
     objective: 'Verify the deployed Pages app can authenticate with the cookie session, survive reload, and render customer-facing Production controls.',
     steps: [
       'Open the live Pages app in Chromium.',
-      'Login with m.thuanwork@gmail.com.',
+      `Login with the configured QA account ${loginEmail}.`,
       'Inspect localStorage and API-domain cookies.',
       'Reload and confirm the console restores from cookie.',
       'Open the Production module and capture screenshot evidence.',
@@ -444,12 +451,13 @@ if (failed.length > 0) {
 }
 
 async function createReleasedProductionBatch() {
+  assert(productionFormulaId, 'FUNCTIONAL_FORMULA_ID is required when the functional suite creates a production batch')
   const created = await apiFetch(
     '/production/batches',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ formulaId: 'frm-0421', targetGrams: 1 }),
+      body: JSON.stringify({ formulaId: productionFormulaId, targetGrams: 1 }),
     },
   )
   assertStatus(created, 200, 'production mutation setup should create a batch')
@@ -685,7 +693,10 @@ App URL: ${appUrl}
 API URL: ${apiBaseUrl}
 Browser path: Playwright fallback
 Fallback reason: ${browserFallbackReason}
-Production mutation mode: ${productionMutationEnabled ? 'enabled' : 'disabled'}
+Target environment: ${functionalEnvironment}
+Functional mutation mode: ${functionalMutationEnabled ? 'enabled' : 'disabled'}
+Expected organization: ${expectedOrganizationId}
+Expected role: ${expectedRole}
 
 ## Summary
 
@@ -752,6 +763,14 @@ function requireEnvironmentSecret(name) {
   const value = process.env[name]
   if (!value) {
     throw new Error(`${name} is required; provide it through the process environment`)
+  }
+  return value
+}
+
+function requireEnvironmentValue(name) {
+  const value = process.env[name]?.trim()
+  if (!value) {
+    throw new Error(`${name} must be configured explicitly for the isolated test environment`)
   }
   return value
 }

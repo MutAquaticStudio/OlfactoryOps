@@ -7,9 +7,6 @@ export type DomainKey =
   | 'customization'
   | 'materials'
   | 'formulas'
-  | 'formulaAgent'
-  | 'formulaDesignStudio'
-  | 'reformulationOptimizer'
   | 'inventory'
   | 'labUsage'
   | 'trials'
@@ -78,19 +75,6 @@ export interface Material {
   odor: string[]
   /** Curated sensory metadata. It is descriptive only and never compliance evidence. */
   olfactiveProfile?: MaterialOlfactiveProfile
-  /** Supplier catalogue references are traceable sourcing metadata, not an approved supplier designation. */
-  supplierCatalogueReferences?: MaterialSupplierCatalogueReference[]
-  /**
-   * Supplier-declared sensory and physical catalogue evidence. This is useful
-   * for research and material discovery, but never substitutes for a reviewed
-   * specification, IFRA certificate, allergen declaration, or compliance file.
-   */
-  catalogueEvidence?: MaterialCatalogueEvidence
-  /**
-   * A source-only material is discoverable in the material directory, but its
-   * technical and commercial fields still require a controlled review.
-   */
-  catalogueSource?: MaterialCatalogueSource
   provenance: MaterialProvenance[]
 }
 
@@ -108,54 +92,6 @@ export interface MaterialOlfactiveProfile {
   source: string
   version: string
   reviewedAt: string
-}
-
-export interface MaterialSupplierCatalogueReference {
-  sourceProductId?: string
-  supplier: string
-  catalogue: string
-  catalogueVersion: string
-  category: 'Synthetic aroma chemical' | 'Natural aroma chemical' | 'Natural product' | 'Organic product'
-  productName: string
-  productCas: string
-  einecs?: string
-  fema?: string
-  page: number
-  match: 'EXACT_PRODUCT' | 'CAS_EQUIVALENT' | 'RELATED_VARIANT'
-  note?: string
-}
-
-export interface MaterialCatalogueSource {
-  sourceProductId: string
-  supplier: string
-  catalogue: string
-  catalogueVersion: string
-  category: MaterialSupplierCatalogueReference['category']
-  page: number
-  /**
-   * MASTER_APPROVED means the platform curator has approved this supplier
-   * record for research and formula drafting only. It is not an operational
-   * compliance, procurement, or inventory approval.
-   */
-  status: 'SOURCE_ONLY' | 'REVIEW_REQUIRED' | 'MASTER_APPROVED'
-}
-
-export interface MaterialCatalogueEvidenceRange {
-  label: string
-  value?: string
-  min?: string
-  max?: string
-}
-
-export interface MaterialCatalogueEvidence {
-  source: string
-  version: string
-  declaredOdour: string[]
-  chemicalIdentification?: string
-  declaredUse?: string
-  appearance?: string
-  density?: MaterialCatalogueEvidenceRange
-  vaporPressure?: MaterialCatalogueEvidenceRange
 }
 
 export interface MaterialProvenance {
@@ -191,21 +127,6 @@ export interface MaterialComplianceProfile {
   reviewedAt: string
   reviewedBy: string
   note?: string
-}
-
-export interface SupplierMaterialProfile {
-  id: string
-  organizationId?: string
-  supplierId: string
-  materialId: string
-  status: 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
-  leadTimeDays: number
-  minimumOrderGrams: number
-  unitCost: number
-  currency: string
-  supplierMaterialCode?: string
-  reviewedAt: string
-  reviewedBy: string
 }
 
 export interface MoleculeComponent {
@@ -1658,7 +1579,7 @@ export type BillingMode = 'managed_beta' | 'self_service'
 export type IntegrationReadinessStatus = 'ready' | 'not_configured' | 'blocked'
 
 export interface IntegrationReadinessCheck {
-  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname' | 'workers_ai' | 'vectorize_rag' | 'formula_agent'
+  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname' | 'workers_ai' | 'vectorize_rag'
   label: string
   status: IntegrationReadinessStatus
   detail: string
@@ -1687,29 +1608,6 @@ export interface AppNotificationRecord {
   emailLastAttemptAt?: string
   emailNextAttemptAt?: string
   emailSentAt?: string
-}
-
-export interface DataImportIssue {
-  row: number
-  field?: string
-  message: string
-}
-
-export interface DataImportJobRecord {
-  id: string
-  organizationId: string
-  requestedBy: string
-  entity: 'materials' | 'lots'
-  fileName: string
-  idempotencyKey: string
-  status: 'DRAFT' | 'VALIDATED' | 'COMPLETED' | 'FAILED'
-  totalRows: number
-  validRows: number
-  invalidRows: number
-  errors: DataImportIssue[]
-  rows: Array<Record<string, unknown>>
-  createdAt: string
-  committedAt?: string
 }
 
 export type LegalDocumentKind = 'terms' | 'privacy' | 'cookies'
@@ -1942,23 +1840,6 @@ export interface TrialFormulaSnapshot {
   materialFamilies: string[]
 }
 
-/**
- * Immutable provenance for a trial planned from a reviewed Formula Intelligence
- * direction. It intentionally references only durable identifiers and hashes;
- * no prompt, provider output, cost, lot, or raw compliance payload is copied
- * into the operating-memory record.
- */
-export interface FormulaIntelligenceTrialSource {
-  kind: 'DESIGN_DIRECTION'
-  projectId: string
-  directionId: string
-  runId: string
-  briefVersionId: string
-  constraintSnapshotId: string
-  materialUniverseHash: string
-  evaluationHash: string
-}
-
 export interface TrialReleaseRecord {
   id: string
   releasedAt: string
@@ -2044,7 +1925,6 @@ export interface FragranceTrialRecord {
   title: string
   lifecycle: TrialLifecycle
   formulaSnapshot: TrialFormulaSnapshot
-  formulaIntelligenceSource?: FormulaIntelligenceTrialSource
   release?: TrialReleaseRecord
   usageLink?: TrialUsageLinkRecord
   decision?: TrialDecisionRecord
@@ -2101,7 +1981,7 @@ export interface WorkspacePreferenceProfile {
   createdAt: string
 }
 
-/** Human-reviewed substitution evidence. Formula Intelligence may only use an
+/** Human-reviewed substitution evidence. Research tooling may only use an
  * APPROVED record; material similarity alone is never enough. */
 export interface ApprovedMaterialSubstitutionRecord {
   id: string
@@ -2119,7 +1999,7 @@ export interface ApprovedMaterialSubstitutionRecord {
   updatedAt: string
 }
 
-export type OperationalLineageNodeType = 'FORMULA' | 'FORMULA_VERSION' | 'MATERIAL' | 'LOT' | 'TRIAL' | 'BATCH' | 'FINISHED_GOOD_LOT' | 'ORDER' | 'DOCUMENT' | 'DESIGN_DIRECTION'
+export type OperationalLineageNodeType = 'FORMULA' | 'FORMULA_VERSION' | 'MATERIAL' | 'LOT' | 'TRIAL' | 'BATCH' | 'FINISHED_GOOD_LOT' | 'ORDER' | 'DOCUMENT'
 
 export interface OperationalLineageEdge {
   id: string
@@ -2247,60 +2127,6 @@ export const domains: DomainModule[] = [
     permissions: ['formulas.view', 'formulas.viewSensitive', 'formulas.export'],
     screens: ['Formula table', 'Accord editor', 'Line controls', 'Resolve preview', 'Version history', 'Approval and export'],
     activity: 'FRM-0421 can snapshot, approve, export, and resolve accord leaves without stock movement',
-  },
-  {
-    key: 'formulaAgent',
-    phase: 'AI',
-    name: 'Formula Research Agent',
-    shortName: 'Formula Agent',
-    responsibility: 'Tenant-scoped research workflow that produces structured, reviewable formula proposals',
-    status: 'active',
-    health: 84,
-    risk: 'Workers AI may plan governed research; deterministic tools retain formula math, IFRA, inventory, costing, and save authority',
-    owner: 'Perfumer Team',
-    entities: ['AgentRun', 'WorkflowNode', 'ToolCall', 'Artifact', 'Confirmation'],
-    features: ['Brief analysis', 'Material search', 'Inventory advisory', 'Cost and IFRA preview', 'Explicit draft confirmation'],
-    invariants: ['Agent tools inherit tenant permissions', 'No arbitrary SQL or tools', 'Draft save is non-consuming', 'Confirmation is idempotent'],
-    apis: ['/api/v1/agent/runs', '/api/v1/agent/runs/:id/stream', '/api/v1/agent/runs/:id/confirmations/:confirmationId'],
-    permissions: ['formulas.view'],
-    screens: ['Formula research workspace', 'Workflow progress', 'Structured artifacts', 'Confirmation'],
-    activity: 'Research runs are persisted, replayable, and require confirmation before an editable formula draft is saved',
-  },
-  {
-    key: 'formulaDesignStudio',
-    phase: 'AI Design',
-    name: 'Formula Design Studio',
-    shortName: 'Design Studio',
-    responsibility: 'Brand briefs, deterministic fragrance directions, perfumer sharing, and explicit draft save',
-    status: 'active',
-    health: 88,
-    risk: 'Workers AI brief planning is bounded by schemas; generated directions still pass deterministic material, inventory, and compliance gates',
-    owner: 'Perfumer Team',
-    entities: ['DesignProject', 'CreativeBrief', 'Direction', 'BrandFeedback', 'AgentRun'],
-    features: ['Structured brand brief', 'Availability-first ranking', 'Creative directions', 'Safe sharing', 'Feedback', 'Explicit draft confirmation'],
-    invariants: ['Brand users cannot edit ratios or save formulas', 'Commercial evidence is capability-scoped', 'Draft save is non-consuming'],
-    apis: ['/api/v1/formula-intelligence/design-projects', '/api/v1/agent/runs/:id'],
-    permissions: ['formulas.view'],
-    screens: ['Brand brief', 'Direction review', 'Perfumer handoff', 'Draft confirmation'],
-    activity: 'Directions are generated from approved workspace materials and shared deliberately for brand review',
-  },
-  {
-    key: 'reformulationOptimizer',
-    phase: 'AI Optimize',
-    name: 'Reformulation Optimizer',
-    shortName: 'Optimizer',
-    responsibility: 'Immutable baseline comparisons for compliance, feasibility, cost, and composition change',
-    status: 'active',
-    health: 88,
-    risk: 'Candidate evidence is redacted without current cost or inventory permission',
-    owner: 'Perfumer Team',
-    entities: ['FormulaVersion', 'OptimizerRun', 'Candidate', 'Substitution', 'Confirmation'],
-    features: ['Immutable baseline', 'Compliance alternatives', 'Inventory recovery', 'Cost recovery', 'Candidate comparison', 'Explicit draft confirmation'],
-    invariants: ['No blocked materials in accepted candidates', 'Locked materials are preserved', 'No reservation or consumption on save'],
-    apis: ['/api/v1/formula-intelligence/optimizer/runs', '/api/v1/agent/runs/:id'],
-    permissions: ['formulas.viewSensitive'],
-    screens: ['Baseline selector', 'Candidate comparison', 'Evidence summary', 'Draft confirmation'],
-    activity: 'Candidates rank compliance feasibility, eligible availability, cost evidence, and composition change',
   },
   {
     key: 'inventory',
@@ -3270,7 +3096,9 @@ export const rolePolicies: RolePolicy[] = [
     role: 'Owner',
     scope: 'organization',
     mfaRequired: true,
-    permissions: customerOwnerPermissions,
+    // Workspace owners need read-only audit evidence to fulfill their
+    // stewardship obligations without becoming internal platform operators.
+    permissions: [...customerOwnerPermissions, 'audit.view'],
   },
   {
     role: 'Admin',
@@ -3581,11 +3409,6 @@ export const featureFlags: FeatureFlagRecord[] = [
   { organizationId: 'org-nxl', key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
   { organizationId: 'org-nxl', key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
   { organizationId: 'org-nxl', key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
-  { organizationId: 'org-nxl', key: 'designStudioBriefCompiler', label: 'Formula Intelligence brief compiler', enabled: true, phase: 6 },
-  { organizationId: 'org-nxl', key: 'designStudioCandidateGeneration', label: 'Formula Intelligence candidate generation', enabled: true, phase: 6 },
-  { organizationId: 'org-nxl', key: 'designStudioSensoryMemory', label: 'Private sensory learning', enabled: true, phase: 6 },
-  { organizationId: 'org-nxl', key: 'designStudioOptimizer', label: 'Formula Intelligence optimizer', enabled: true, phase: 8 },
-  { organizationId: 'org-nxl', key: 'formulaIntelligenceRag', label: 'Formula Intelligence evidence retrieval', enabled: true, phase: 9 },
 ]
 
 export const numberingSequences: NumberingSequenceRecord[] = [
@@ -4215,15 +4038,6 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
     { id: 'FRM-0421', label: 'Nocturne 17', status: 'active', amount: 'v12', owner: 'Perfumer' },
     { id: 'ACC-0007', label: 'Citrus Lift Accord', status: 'stable', amount: '4 leaves', owner: 'Perfumer' },
   ],
-  formulaAgent: [
-    { id: 'AGENT-RUN', label: 'Formula research workflow', status: 'active', amount: 'Structured artifacts', owner: 'Perfumer' },
-  ],
-  formulaDesignStudio: [
-    { id: 'DESIGN-BRIEF', label: 'Formula design project', status: 'active', amount: 'Brand to perfumer', owner: 'Perfumer' },
-  ],
-  reformulationOptimizer: [
-    { id: 'OPT-RUN', label: 'Reformulation candidate run', status: 'active', amount: 'Immutable baseline', owner: 'Perfumer' },
-  ],
   inventory: [
     { id: 'L-ISO-031', label: 'Iso E Super lot', status: 'stable', amount: '250g', owner: 'Inventory' },
     { id: 'L-ROX-005', label: 'Rose Oxide lot', status: 'review', amount: 'QC hold', owner: 'QC' },
@@ -4654,9 +4468,7 @@ export function evaluateFormulaIfra(
       const usageOfLimit = limitPercent > 0 ? (finalProductPercent / limitPercent) * 100 : 0
       const marginPercent = limitPercent - finalProductPercent
       const status: FormulaIfraRow['status'] =
-        material.catalogueSource?.status === 'SOURCE_ONLY'
-          ? 'BLOCKER'
-          : limitPercent <= 0
+        limitPercent <= 0
           ? 'NO_LIMIT'
           : marginPercent < -0.0001
             ? 'BLOCKER'
@@ -5391,13 +5203,6 @@ export function isLotEligibleForInventory(lot: InventoryLot, asOfDate = inventor
 
 export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
   return materialCatalog
-    .filter((material) => {
-      const globalResearchMaster = material.libraryScope === 'GLOBAL'
-        && material.catalogueSource?.status === 'MASTER_APPROVED'
-        && material.catalogueSource.supplier === 'Lluch Essence'
-      return (!globalResearchMaster && material.catalogueSource?.status !== 'SOURCE_ONLY')
-        || lots.some((lot) => lot.materialId === material.id)
-    })
     .map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)

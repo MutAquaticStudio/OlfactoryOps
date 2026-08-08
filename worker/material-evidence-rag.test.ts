@@ -7,13 +7,10 @@ import {
   MATERIAL_EVIDENCE_EMBEDDING_DIMENSIONS,
   MATERIAL_EVIDENCE_EMBEDDING_MODEL,
   MATERIAL_EVIDENCE_INDEX_VERSION,
-  materialEvidenceSourceVersion,
-  materialEvidenceText,
   materialEvidenceQuerySchema,
   materialEvidenceQueryScopes,
   safeEvidenceExcerpt,
 } from './material-evidence-rag.js'
-import { lluchCatalogueGlobalMasterMaterialById } from '../src/data/lluch-catalogue-2026.js'
 
 describe('controlled material evidence RAG', () => {
   it('uses the versioned multilingual BGE-M3 retrieval contract', () => {
@@ -31,7 +28,7 @@ describe('controlled material evidence RAG', () => {
     expect(chunks.at(-1)).toContain('Sentence 80')
   })
 
-  it('allows only approved clean compliance documents or explicitly tagged supplier catalogues', () => {
+  it('allows only approved clean compliance documents and material metadata', () => {
     expect(isEligibleEvidenceDocument({ type: 'SDS', status: 'APPROVED', scanStatus: 'CLEAN' })).toBe(true)
     expect(isEligibleEvidenceDocument({ type: 'Invoice', status: 'APPROVED', scanStatus: 'CLEAN', tags: ['supplier-catalogue'] })).toBe(true)
     expect(isEligibleEvidenceDocument({ type: 'SDS', status: 'REVIEW_REQUIRED', scanStatus: 'CLEAN' })).toBe(false)
@@ -79,7 +76,6 @@ describe('controlled material evidence RAG', () => {
   it('queries tenant-private evidence plus global material evidence without exposing global documents', () => {
     expect(materialEvidenceQueryScopes('org-customer', ['MATERIAL', 'DOCUMENT'])).toEqual([
       { organizationId: 'org-customer', sourceKinds: ['MATERIAL', 'DOCUMENT'] },
-      { organizationId: 'org-nxl', sourceKinds: ['MATERIAL'] },
     ])
     expect(materialEvidenceQueryScopes('org-customer', ['DOCUMENT'])).toEqual([
       { organizationId: 'org-customer', sourceKinds: ['DOCUMENT'] },
@@ -89,13 +85,4 @@ describe('controlled material evidence RAG', () => {
     ])
   })
 
-  it('prepares a bounded global master source record for RAG without manufacturing regulatory values', () => {
-    const master = lluchCatalogueGlobalMasterMaterialById('mat-lluch-2026-0104')
-    expect(master).toBeDefined()
-    expect(materialEvidenceSourceVersion(master!)).toContain('catalogue-master:2026-07-16')
-    expect(materialEvidenceText(master!)).toContain('Supplier-declared chemical identity:')
-    expect(materialEvidenceText(master!)).not.toContain('IFRA limit:')
-    expect(master?.ifraLimit).toBe(0)
-    expect(master?.catalogueSource?.status).toBe('MASTER_APPROVED')
-  })
 })

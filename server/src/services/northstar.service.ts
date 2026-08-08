@@ -6,14 +6,6 @@ import {
   UnprocessableEntityException,
 } from '../shared/http-error.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
-import { internalPhases } from '../data/internal-phases.js'
-import {
-  enrichMaterialFromLluchCatalogue,
-  isLluchCatalogueMasterMaterial,
-  lluchCatalogue2026Source,
-  lluchCatalogueMaterialDirectoryForOrganization,
-  searchLluchCatalogue2026,
-} from '../../../src/data/lluch-catalogue-2026.js'
 import {
   auditEvents,
   auditExportJobs,
@@ -115,8 +107,6 @@ import {
   type CustomerAddress,
   type CustomerRecord,
   type SaasCustomDomainRecord,
-  type DataImportIssue,
-  type DataImportJobRecord,
   type CustomFieldDefinition,
   type DocumentRecord,
   type DocumentScanStatus,
@@ -161,7 +151,6 @@ import {
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
-  type ResolvedLeaf,
   type MaterialComplianceProfile,
   type MaterialComplianceStatus,
   type MaterialIngestionRecord,
@@ -194,14 +183,12 @@ import {
   type StockTakeRecord,
   type StorageLocation,
   type SupplierRecord,
-  type SupplierMaterialProfile,
   type TenantSettingsRecord,
   type UserSettingsRecord,
   type GlobalSearchResult,
   type WebhookRecord,
   type WebhookDeliveryRecord,
 } from '../../../src/data/northStar.js'
-import { agentFormulaProposalSchema, type AgentFormulaProposal } from '../../../src/data/agentRuntime.js'
 import {
   isWorkspaceSlugEligibleForHostname,
   normalizeWorkspaceBaseDomain,
@@ -328,14 +315,6 @@ type MaterialComplianceBody = {
   note?: string
 }
 
-type SupplierMaterialProfileBody = {
-  status?: SupplierMaterialProfile['status']
-  leadTimeDays?: number
-  minimumOrderGrams?: number
-  unitCost?: number
-  currency?: string
-  supplierMaterialCode?: string
-}
 
 type ProcurementReceiptBody = {
   idempotencyKey?: string
@@ -465,7 +444,6 @@ export type IntegrationReadinessConfig = {
   betaHostnameReachable?: boolean
   workersAiConfigured?: boolean
   vectorizeConfigured?: boolean
-  formulaAgentProvider?: 'mock' | 'openai' | 'workers_ai'
 }
 
 type CreatePurchaseOrderBody = {
@@ -921,7 +899,6 @@ function normalizeFormulaLineMetadata(body: FormulaLineMutationBody, fallback?: 
 export class NorthStarService {
   private materialRecords: Material[] = structuredClone(materials)
   private materialComplianceRecords: MaterialComplianceProfile[] = []
-  private supplierMaterialProfileRecords: SupplierMaterialProfile[] = []
   private moleculeRecords: MoleculeComponent[] = structuredClone(moleculeComponents)
   private lots: InventoryLot[] = structuredClone(initialLots)
   private movements: InventoryMovement[] = structuredClone(initialMovements)
@@ -984,7 +961,6 @@ export class NorthStarService {
   private webhookDeliveryRecords: WebhookDeliveryRecord[] = structuredClone(webhookDeliveries)
   private auditExportRecords: AuditExportJobRecord[] = structuredClone(auditExportJobs)
   private notificationRecords: AppNotificationRecord[] = []
-  private importJobRecords: DataImportJobRecord[] = []
   private legalAcceptanceRecords: LegalAcceptanceRecord[] = []
   private privacyRequestRecords: PrivacyRequestRecord[] = []
   private customDomainRecords: SaasCustomDomainRecord[] = []
@@ -1018,12 +994,6 @@ export class NorthStarService {
     this.mfaEncryptionKey = configuredMfaKey
       ? createHash('sha256').update(`olfactoryops:mfa-encryption:v1:${configuredMfaKey}`).digest()
       : undefined
-  }
-
-  phases() {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'platform.view')
-    return { data: internalPhases }
   }
 
   domains() {
@@ -1147,7 +1117,8 @@ export class NorthStarService {
 
     const formulaType: FormulaType = body.formulaType === 'ACCORD' ? 'ACCORD' : 'FINE_FRAGRANCE'
     const sequence = this.consumeSequenceNumber('formula', session.userId).data
-    const code = formulaType === 'ACCORD' ? sequence.value.replace(/^FRM-/, 'ACC-') : sequence.value
+    const sequenceValue = formulaType === 'ACCORD' ? sequence.value.replace(/^FRM-/, 'ACC-') : sequence.value
+    const code = sequenceValue
     const defaultName = formulaType === 'ACCORD' ? 'Untitled Accord' : 'Untitled Fine Fragrance'
     const now = new Date().toISOString()
     const concentrationType =
@@ -1200,31 +1171,6 @@ export class NorthStarService {
     this.formulaRecords = [formula, ...this.formulaRecords]
     this.recordAudit('formula.create', formula.code, session.userId, 'allowed')
     return { data: { formula, invariant: 'formula draft creation does not create inventory movement' } }
-  }
-
-  /**
-   * Internal Formula Intelligence save path. The deterministic identity lets a
-   * retried confirmation restore the same draft after a Worker interruption.
-   */
-  createAgentFormulaDraft(confirmationId: string, body: FormulaDraftMutationBody & { formulaType?: FormulaType }) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'formulas.edit')
-    const normalizedConfirmationId = confirmationId.trim().toLowerCase()
-    if (!/^[0-9a-f-]{36}$/.test(normalizedConfirmationId)) {
-      throw new UnprocessableEntityException('Agent confirmation identifier is invalid')
-    }
-    const id = `agent-draft-${normalizedConfirmationId}`
-    const existing = this.formulaRecords.find((formula) => formula.id === id && (formula.organizationId || 'org-nxl') === session.organizationId)
-    if (existing) return { data: { formula: existing, invariant: 'agent confirmation draft is idempotent and non-consuming' } }
-    const created = this.createFormulaDraft(body).data.formula
-    const formula = {
-      ...created,
-      id,
-      code: `AGT-${normalizedConfirmationId.slice(0, 8).toUpperCase()}`,
-    }
-    this.formulaRecords = this.formulaRecords.map((item) => item.id === created.id ? formula : item)
-    this.recordAudit('formula.agentDraft.create', formula.code, session.userId, 'allowed')
-    return { data: { formula, invariant: 'agent confirmation draft is idempotent and non-consuming' } }
   }
 
   /**
@@ -1870,47 +1816,6 @@ export class NorthStarService {
     return { data: { material: updated, audit, invariant: 'material edits preserve field provenance' } }
   }
 
-  enrichMaterialsFromLluchCatalogue() {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'materials.update')
-    this.requireGlobalMaterialCurator(session)
-    let updated = 0
-    const enrichedMaterials: Material[] = []
-    this.materialRecords = this.materialRecords.map((material) => {
-      if ((material.organizationId || 'org-nxl') !== session.organizationId) {
-        return material
-      }
-      const enrichment = enrichMaterialFromLluchCatalogue(material)
-      if (!enrichment.changed) {
-        return material
-      }
-      updated += 1
-      enrichedMaterials.push(enrichment.material)
-      return enrichment.material
-    })
-    const audit = this.recordAudit('material.catalogue.enrich', `lluch:${lluchCatalogue2026Source.catalogueVersion}`, session.userId, 'allowed')
-    return {
-      data: {
-        updated,
-        materials: enrichedMaterials,
-        source: lluchCatalogue2026Source,
-        audit,
-        invariant: 'Catalogue enrichment is curator-controlled, globally shared, idempotent, and does not alter CAS, cost, IFRA, compliance, lots, or inventory movements',
-      },
-    }
-  }
-
-  lluchCatalogue(query: string) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'materials.view')
-    return {
-      data: {
-        source: { ...lluchCatalogue2026Source, status: 'READY', updatedAt: null },
-        products: searchLluchCatalogue2026(query),
-      },
-    }
-  }
-
   ingestMaterialDocument(id: string, body: MaterialIngestionBody) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.update')
@@ -2312,110 +2217,6 @@ export class NorthStarService {
     }
   }
 
-  /**
-   * Computes formula-agent evidence without creating a formula, reservation, or movement.
-   * The proposal contains only tenant material IDs and percentages; all derived values remain
-   * deterministic domain calculations.
-   */
-  previewFormulaIntelligence(proposalInput: AgentFormulaProposal) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'formulas.viewSensitive')
-    this.requirePermission(session.role, 'materials.view')
-    const proposal = agentFormulaProposalSchema.parse(proposalInput)
-    const materialCatalog = this.materialCatalogForSession(session)
-    const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
-    const totalPercent = proposal.ingredients.reduce((sum, ingredient) => sum + ingredient.percentage, 0)
-    if (Math.abs(totalPercent - 100) > 0.05) {
-      throw new UnprocessableEntityException('Agent formula percentages must total 100%')
-    }
-    const seen = new Set<string>()
-    const lines = proposal.ingredients.map((ingredient, index) => {
-      if (seen.has(ingredient.materialId)) {
-        throw new UnprocessableEntityException('Agent formula may include each material only once')
-      }
-      seen.add(ingredient.materialId)
-      const material = materialById.get(ingredient.materialId)
-      if (!material) {
-        throw new NotFoundException(`Material ${ingredient.materialId} was not found in this workspace`)
-      }
-      return {
-        id: `agent-line-${index + 1}`,
-        label: material.name,
-        materialId: material.id,
-        grams: Number(((proposal.targetGrams * ingredient.percentage) / 100).toFixed(4)),
-        concentration: ingredient.dilution ?? 100,
-        pyramidNote: ingredient.pyramidNote,
-      }
-    })
-    const now = new Date().toISOString()
-    const formula: Formula = {
-      id: 'agent-preview', code: 'AGENT-PREVIEW', name: proposal.name, formulaType: proposal.formulaType,
-      version: 'preview', organizationId: session.organizationId, brandId: session.brandId,
-      concentrationType: proposal.concentrationType, finalProductConcentrationPercent: proposal.finalProductConcentrationPercent,
-      targetMarkets: proposal.formulaType === 'ACCORD' ? ['GLOBAL'] : ['EU', 'US'], brief: proposal.brief,
-      inspiration: '', pyramidSummary: '', tags: ['agent-proposal'], project: '', collection: '', density: 1,
-      bottleVolumeMl: 50, bottleCount: 1, ifraCategory: proposal.ifraCategory, workflowStatus: 'DRAFT',
-      requiresFinalProductContext: proposal.formulaType === 'ACCORD' && proposal.requiresFinalProductContext,
-      draftRevision: 0, updatedAt: now, updatedBy: session.email, approvalHistory: [], status: 'draft',
-      targetGrams: proposal.targetGrams, owner: session.email, lines,
-    }
-    const formulas = [formula, ...this.formulaCatalogForSession(session)]
-    const lots = this.lotsForSession(session)
-    const leaves = resolveFormulaWithCatalog(formula.id, formulas, materialCatalog)
-    const canViewInventory = this.permissionDecision(session.role, 'inventory.view', session.organizationId).allowed
-    const canViewCost = this.permissionDecision(session.role, 'costing.view', session.organizationId).allowed
-    const cost = canViewCost
-      ? formulaCostReport(formula.id, formulas, materialCatalog, lots, this.priceHistoryForSession(session))
-      : undefined
-    const ifra = evaluateFormulaIfra(formula, leaves, materialCatalog)
-    const fullAvailability = leaves.map((leaf) => {
-      const eligibleLots = lots.filter((lot) => lot.materialId === leaf.materialId && isLotEligibleForInventory(lot))
-      const availableGrams = eligibleLots.reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
-      return {
-        materialId: leaf.materialId,
-        materialName: leaf.materialName,
-        requiredGrams: leaf.grams,
-        availableGrams: Number(availableGrams.toFixed(4)),
-        lotCount: eligibleLots.length,
-        status: availableGrams <= 0 ? 'UNAVAILABLE' as const : availableGrams + 0.0001 < leaf.grams ? 'SHORTFALL' as const : 'AVAILABLE' as const,
-      }
-    })
-    const profiles = proposal.ingredients.map((ingredient) => this.materialComplianceRecords.find(
-      (profile) => profile.materialId === ingredient.materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
-    ))
-    const blockedMaterialIds = profiles.filter((profile) => profile?.status === 'BLOCKED').map((profile) => profile!.materialId)
-    const reviewMaterialIds = profiles.flatMap((profile, index) => (
-      profile?.status === 'REVIEW_REQUIRED' || !profile ? [proposal.ingredients[index]!.materialId] : []
-    ))
-    return {
-      data: {
-        formula,
-        leaves,
-        ...(cost ? { cost } : {}),
-        ifra,
-        availability: canViewInventory ? fullAvailability : [],
-        availabilitySummary: canViewInventory
-          ? fullAvailability.map((item) => ({ materialId: item.materialId, status: item.status }))
-          : [],
-        visibility: { canViewInventory, canViewCost },
-        compliance: {
-          blockedMaterialIds, reviewMaterialIds,
-          status: blockedMaterialIds.length > 0 || ifra.blockerCount > 0
-            ? 'BLOCKED'
-            : formula.requiresFinalProductContext || reviewMaterialIds.length > 0 || ifra.nearLimitCount > 0 ? 'REVIEW_REQUIRED' : 'APPROVED',
-        },
-        invariant: 'agent preview is advisory only and never reserves or consumes inventory',
-      },
-    }
-  }
-
-  previewAgentFormula(proposalInput: AgentFormulaProposal) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'inventory.view')
-    this.requirePermission(session.role, 'costing.view')
-    return this.previewFormulaIntelligence(proposalInput)
-  }
-
   materialCompliance(id: string) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.view')
@@ -2488,64 +2289,6 @@ export class NorthStarService {
     }
   }
 
-  supplierMaterialProfiles(supplierId: string) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'procurement.view')
-    const supplier = this.suppliersForSession(session).find((item) => item.id === supplierId)
-    if (!supplier) {
-      throw new NotFoundException(`Supplier ${supplierId} was not found`)
-    }
-    return {
-      data: this.supplierMaterialProfileRecords.filter(
-        (profile) => profile.supplierId === supplierId && (profile.organizationId || 'org-nxl') === session.organizationId,
-      ),
-    }
-  }
-
-  upsertSupplierMaterialProfile(supplierId: string, materialId: string, body: SupplierMaterialProfileBody = {}) {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'procurement.manage')
-    const supplier = this.suppliersForSession(session).find((item) => item.id === supplierId)
-    if (!supplier) {
-      throw new NotFoundException(`Supplier ${supplierId} was not found`)
-    }
-    const material = this.materialForSession(materialId, session)
-    const leadTimeDays = Number(body.leadTimeDays ?? supplier.leadTimeDays)
-    const minimumOrderGrams = Number(body.minimumOrderGrams ?? 1)
-    const unitCost = Number(body.unitCost ?? material.costPerGram)
-    if (!Number.isFinite(leadTimeDays) || leadTimeDays < 0 || !Number.isFinite(minimumOrderGrams) || minimumOrderGrams <= 0 || !Number.isFinite(unitCost) || unitCost <= 0) {
-      throw new UnprocessableEntityException('Supplier material lead time, MOQ, and unit cost must be valid positive values')
-    }
-    const previous = this.supplierMaterialProfileRecords.find(
-      (profile) => profile.supplierId === supplierId && profile.materialId === materialId && (profile.organizationId || 'org-nxl') === session.organizationId,
-    )
-    const profile: SupplierMaterialProfile = {
-      id: previous?.id ?? `SMP-${session.organizationId}-${supplierId}-${materialId}`,
-      organizationId: session.organizationId,
-      supplierId,
-      materialId,
-      status: body.status ?? previous?.status ?? 'REVIEW_REQUIRED',
-      leadTimeDays: Math.round(leadTimeDays),
-      minimumOrderGrams: Number(minimumOrderGrams.toFixed(3)),
-      unitCost: Number(unitCost.toFixed(6)),
-      currency: body.currency?.trim().toUpperCase() || previous?.currency || 'USD',
-      supplierMaterialCode: body.supplierMaterialCode?.trim() || undefined,
-      reviewedAt: new Date().toISOString(),
-      reviewedBy: session.userId,
-    }
-    this.supplierMaterialProfileRecords = [
-      profile,
-      ...this.supplierMaterialProfileRecords.filter((item) => item.id !== profile.id),
-    ]
-    const audit = this.recordAudit('procurement.supplier-material.upsert', profile.id, session.userId, profile.status === 'BLOCKED' ? 'review' : 'allowed')
-    return {
-      data: {
-        profile,
-        audit,
-        invariant: 'supplier material approval is tenant-scoped and does not create a purchase order or stock movement',
-      },
-    }
-  }
 
   formulaScale(id: string, body: { targetGrams?: number; targetVolumeMl?: number; bottleCount?: number; incrementGrams?: number } = {}) {
     const session = this.currentSession()
@@ -2657,7 +2400,6 @@ export class NorthStarService {
         blockers: evidence.ifra.rows.filter((row) => row.status === 'BLOCKER'),
       })
     }
-    this.assertGlobalMasterApprovalEvidence(evidence.leaves, session)
     const rawVersion = this.formulaVersionRecords.find(
       (item) =>
         item.formulaId === id &&
@@ -3579,7 +3321,6 @@ export class NorthStarService {
       throw new NotFoundException('No material is available in this workspace')
     }
     const material = this.materialForSession(materialId, session)
-    this.assertMaterialCanEnterOperations(material, 'received into inventory')
 
     const quantityGrams = Number(body.quantityGrams ?? 0)
     if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
@@ -5100,6 +4841,20 @@ export class NorthStarService {
     return { data: { key, value, invariant: 'numbering increments through a single sequence service' } }
   }
 
+  /**
+   * Some legacy D1 tables still use a global primary key even though their
+   * business sequence is scoped to a tenant. Keep their local number readable
+   * while making the durable record key unique across workspaces.
+   */
+  private tenantScopedReference(value: string, organizationId: string) {
+    const tenantKey = organizationId
+      .replace(/^org-/i, '')
+      .replace(/[^a-z0-9]+/gi, '')
+      .slice(0, 16)
+      .toUpperCase() || 'WORKSPACE'
+    return `${value}-${tenantKey}`
+  }
+
   documents() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'documents.view')
@@ -5574,71 +5329,6 @@ export class NorthStarService {
     }
   }
 
-  formulaIntelligenceFeatureEnabled(key: string) {
-    const session = this.currentSession()
-    return this.featureFlagsForOrganization(session.organizationId).some((flag) => flag.key === key && flag.enabled)
-  }
-
-  workspaceSensoryMemory() {
-    const session = this.currentSession()
-    this.requirePermission(session.role, 'formulas.viewSensitive')
-    this.requirePermission(session.role, 'materials.view')
-    this.requirePermission(session.role, 'trials.view')
-    const enabled = this.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')
-    const profile = this.workspacePreferenceProfiles
-      .filter((item) => item.organizationId === session.organizationId)
-      .sort((left, right) => right.version - left.version)[0]
-    const evidenceCount = this.sensoryMemoryRecords.filter((item) => item.organizationId === session.organizationId).length
-    return {
-      data: {
-        enabled,
-        status: !enabled ? 'DISABLED' : profile?.confidence === 'INSUFFICIENT' || !profile ? 'NOT_ENOUGH_EVIDENCE' : 'READY',
-        evidenceCount,
-        profile,
-        invariant: 'private sensory memory is tenant-scoped, derived from decided trials, and never represents model training or an odor guarantee',
-      },
-    }
-  }
-
-  formulaIntelligenceOperationalMetrics() {
-    const session = this.currentSession()
-    if (session.role !== 'Owner' && session.role !== 'Admin') {
-      throw new ForbiddenException('Only workspace owners and admins can view Formula Intelligence operational metrics')
-    }
-    const trials = this.fragranceTrialRecords.filter((trial) => trial.organizationId === session.organizationId)
-    const decided = trials.filter((trial) => trial.decision)
-    const decisionCounts = decided.reduce<Record<'ACCEPT' | 'REVISE' | 'REJECT', number>>((counts, trial) => {
-      counts[trial.decision!.outcome] += 1
-      return counts
-    }, { ACCEPT: 0, REVISE: 0, REJECT: 0 })
-    const measuredCycles = decided
-      .filter((trial) => Number.isFinite(Date.parse(trial.createdAt)) && Number.isFinite(Date.parse(trial.decision!.decidedAt)))
-      .map((trial) => (Date.parse(trial.decision!.decidedAt) - Date.parse(trial.createdAt)) / 3_600_000)
-    const averageDecisionHours = measuredCycles.length
-      ? Number((measuredCycles.reduce((sum, hours) => sum + hours, 0) / measuredCycles.length).toFixed(2))
-      : undefined
-    const profile = this.workspacePreferenceProfiles
-      .filter((item) => item.organizationId === session.organizationId)
-      .sort((left, right) => right.version - left.version)[0]
-    return {
-      data: {
-        decidedTrials: decided.length,
-        decisionCounts,
-        averageDecisionHours,
-        privateMemory: {
-          evidenceCount: this.sensoryMemoryRecords.filter((item) => item.organizationId === session.organizationId).length,
-          profileVersion: profile?.version,
-          confidence: profile?.confidence ?? 'INSUFFICIENT',
-        },
-        executionTelemetry: {
-          status: 'NOT_EVALUATED',
-          reason: 'Durable Agent-run latency and failure metrics are measured from Worker D1 after the migration and hosted telemetry gate are active.',
-        },
-        invariant: 'metrics are tenant-scoped operational facts; unavailable telemetry is never replaced with a simulated success rate',
-      },
-    }
-  }
-
   approvedMaterialSubstitutions() {
     const session = this.currentSession()
     this.requirePermission(session.role, 'materials.view')
@@ -5691,13 +5381,13 @@ export class NorthStarService {
     }
     this.approvedMaterialSubstitutionRecords = [record, ...this.approvedMaterialSubstitutionRecords.filter((item) => item.id !== record.id)]
     const audit = this.recordAudit('material.substitution.upsert', record.id, session.userId, record.status === 'APPROVED' ? 'allowed' : 'review')
-    return { data: { substitution: record, audit, invariant: 'only a reviewer-approved substitution record can be used by the optimizer' } }
+    return { data: { substitution: record, audit, invariant: 'only a reviewer-approved substitution record can be used by deferred research tooling' } }
   }
 
   operationalLineage(subjectType: OperationalLineageNodeType, subjectId: string) {
     const session = this.currentSession()
     const normalizedType = subjectType.toUpperCase() as OperationalLineageNodeType
-    if (!['FORMULA', 'FORMULA_VERSION', 'MATERIAL', 'LOT', 'TRIAL', 'BATCH', 'FINISHED_GOOD_LOT', 'ORDER', 'DOCUMENT', 'DESIGN_DIRECTION'].includes(normalizedType)) {
+    if (!['FORMULA', 'FORMULA_VERSION', 'MATERIAL', 'LOT', 'TRIAL', 'BATCH', 'FINISHED_GOOD_LOT', 'ORDER', 'DOCUMENT'].includes(normalizedType)) {
       throw new UnprocessableEntityException('Unsupported lineage subject type')
     }
     this.assertLineageSubjectAccess(normalizedType, subjectId, session)
@@ -5744,12 +5434,7 @@ export class NorthStarService {
     return { data: projection }
   }
 
-  createTrialFromFormulaIntelligenceCandidate(body: TrialCreateBody, source: FragranceTrialRecord['formulaIntelligenceSource']) {
-    if (!source) throw new UnprocessableEntityException('Formula Intelligence trial lineage is required')
-    return this.createTrialWithSource(body, source)
-  }
-
-  private createTrialWithSource(body: TrialCreateBody = {}, formulaIntelligenceSource?: FragranceTrialRecord['formulaIntelligenceSource']) {
+  private createTrialWithSource(body: TrialCreateBody = {}) {
     const session = this.currentSession()
     this.requirePermission(session.role, 'trials.create')
     this.requirePermission(session.role, 'formulas.view')
@@ -5775,13 +5460,12 @@ export class NorthStarService {
       title: body.title?.trim().slice(0, 120) || `${formula.name} trial`,
       lifecycle: 'PLANNED',
       formulaSnapshot: this.trialFormulaSnapshot(formula, version, session),
-      ...(formulaIntelligenceSource ? { formulaIntelligenceSource } : {}),
       createdBy: session.userId,
       createdAt: now,
       updatedAt: now,
     }
     this.fragranceTrialRecords = [trial, ...this.fragranceTrialRecords]
-    const audit = this.recordAudit(formulaIntelligenceSource ? 'trial.create.formula-intelligence' : 'trial.create', trial.id, session.userId, 'allowed')
+    const audit = this.recordAudit('trial.create', trial.id, session.userId, 'allowed')
     return { data: { trial: this.projectTrialForSession(trial, session), audit, invariant: 'trial planning stores an immutable formula-version reference and creates no stock movement' } }
   }
 
@@ -5975,9 +5659,7 @@ export class NorthStarService {
     const updated = { ...trial, lifecycle: 'DECIDED' as const, decision, updatedAt: now }
     this.replaceTrial(updated)
     this.fragranceSensorySessionRecords = this.fragranceSensorySessionRecords.map((item) => item.organizationId === session.organizationId && item.trialId === id ? { ...item, status: 'CLOSED' as const, closesAt: now } : item)
-    if (this.formulaIntelligenceFeatureEnabled('designStudioSensoryMemory')) {
-      this.captureSensoryMemory(updated)
-    }
+    this.captureSensoryMemory(updated)
     const audit = this.recordAudit(`trial.decision.${outcome.toLowerCase()}`, id, session.userId, outcome === 'ACCEPT' ? 'allowed' : 'review')
     return { data: { trial: this.projectTrialForSession(updated, session), audit, invariant: 'trial evidence is retained without changing the accepted, revised, or rejected formula' } }
   }
@@ -6035,10 +5717,6 @@ export class NorthStarService {
       formulaId: trial.formulaSnapshot.formulaId,
       formulaVersion: trial.formulaSnapshot.formulaVersion,
       trialId: trial.id,
-      ...(trial.formulaIntelligenceSource ? {
-        briefVersionId: trial.formulaIntelligenceSource.briefVersionId,
-        candidateId: trial.formulaIntelligenceSource.directionId,
-      } : {}),
       descriptors,
       timepointScores,
       decision: trial.decision.outcome,
@@ -6137,9 +5815,7 @@ export class NorthStarService {
       return
     }
     this.requirePermission(session.role, 'formulas.viewSensitive')
-    if (!this.fragranceTrialRecords.some((trial) => trial.organizationId === session.organizationId && trial.formulaIntelligenceSource?.directionId === id)) {
-      throw new NotFoundException(`Design direction ${id} was not found`)
-    }
+    throw new NotFoundException(`${type} ${id} was not found`)
   }
 
   private operationalLineageEdges(session: AuthSession): OperationalLineageEdge[] {
@@ -6170,7 +5846,6 @@ export class NorthStarService {
     for (const trial of this.fragranceTrialRecords.filter((item) => item.organizationId === session.organizationId)) {
       const versionId = `${trial.formulaSnapshot.formulaId}@${trial.formulaSnapshot.formulaVersion}`
       add('TRIAL', trial.id, 'TRIAL_OF', 'FORMULA_VERSION', versionId, trial.createdAt, trial.formulaSnapshot.formulaVersion)
-      if (trial.formulaIntelligenceSource) add('DESIGN_DIRECTION', trial.formulaIntelligenceSource.directionId, 'GENERATED_FROM', 'TRIAL', trial.id, trial.createdAt)
       for (const allocation of trial.usageLink?.allocations ?? []) add('TRIAL', trial.id, 'CONSUMED_LOT', 'LOT', allocation.lotId, trial.usageLink?.linkedAt ?? trial.updatedAt)
     }
     for (const batch of this.productionBatchRecords.filter((item) => formulaIds.has(item.formulaId))) {
@@ -6568,7 +6243,7 @@ export class NorthStarService {
     if (!approvedVersion) {
       throw new UnprocessableEntityException(`Formula ${formula.code} must be approved before production`)
     }
-    const id = this.consumeSequenceNumber('batch', session.userId).data.value
+    const id = this.tenantScopedReference(this.consumeSequenceNumber('batch', session.userId).data.value, session.organizationId)
     const timestamp = new Date()
     const qcTemplate = this.activeProductionQcTemplate(formulaId, session)
     const batch: ProductionBatchRecord = {
@@ -7080,7 +6755,7 @@ export class NorthStarService {
     if (!supplier) {
       throw new NotFoundException(`Supplier ${body.supplierId ?? 'unknown'} was not found`)
     }
-    const id = this.consumeSequenceNumber('purchaseOrder', session.userId).data.value
+    const id = this.tenantScopedReference(this.consumeSequenceNumber('purchaseOrder', session.userId).data.value, session.organizationId)
     const requestedLines = body.lines?.length
       ? body.lines
       : [{ materialId: body.materialId, quantityGrams: body.quantityGrams, unitCost: body.unitCost }]
@@ -7096,18 +6771,11 @@ export class NorthStarService {
       seenMaterialIds.add(materialId)
       const material = this.materialForSession(materialId, session)
       this.assertMaterialCanBePurchased(material.id, session)
-      const supplierProfile = this.supplierMaterialProfileForSession(supplier.id, material.id, session)
-      if (supplierProfile?.status === 'BLOCKED') {
-        throw new UnprocessableEntityException(`Supplier ${supplier.name} is blocked for ${material.name}`)
-      }
       const quantityGrams = Number(line.quantityGrams ?? 0)
       if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) {
         throw new UnprocessableEntityException(`Purchase order quantity for ${material.name} must be greater than 0`)
       }
-      if (supplierProfile && quantityGrams + 0.0001 < supplierProfile.minimumOrderGrams) {
-        throw new UnprocessableEntityException(`Purchase order quantity for ${material.name} is below supplier MOQ`)
-      }
-      const unitCost = Number(line.unitCost ?? supplierProfile?.unitCost ?? material.costPerGram)
+      const unitCost = Number(line.unitCost ?? material.costPerGram)
       if (!Number.isFinite(unitCost) || unitCost <= 0) {
         throw new UnprocessableEntityException(`Purchase order unitCost for ${material.name} must be greater than 0`)
       }
@@ -8981,8 +8649,7 @@ export class NorthStarService {
     const canView = (permission: string) => this.permissionDecision(session.role, permission).allowed
 
     if (canView('materials.view')) {
-      this.materialRecords
-        .filter((material) => (material.organizationId || 'org-nxl') === session.organizationId)
+      this.materialCatalogForSession(session)
         .filter((material) => matches([material.name, material.cas, material.family, ...material.odor]))
         .forEach((material) => results.push({
           id: material.id,
@@ -9400,110 +9067,6 @@ export class NorthStarService {
     }
   }
 
-  previewImport(body: {
-    entity?: 'materials' | 'lots'
-    fileName?: string
-    idempotencyKey?: string
-    rows?: Array<Record<string, unknown>>
-  } = {}) {
-    const session = this.currentSession()
-    const entity = body.entity === 'lots' ? 'lots' : 'materials'
-    this.requirePermission(session.role, entity === 'materials' ? 'materials.create' : 'inventory.receive')
-    const rows = Array.isArray(body.rows) ? body.rows.slice(0, 500).map((row) => ({ ...row })) : []
-    if (rows.length === 0) {
-      throw new UnprocessableEntityException('Import must contain at least one mapped row')
-    }
-    if ((body.rows?.length ?? 0) > 500) {
-      throw new UnprocessableEntityException('Import is limited to 500 rows per job')
-    }
-    const fileName = body.fileName?.trim().slice(0, 160) || `${entity}.csv`
-    const idempotencyKey = body.idempotencyKey?.trim().slice(0, 160) || this.importChecksum(entity, rows)
-    const existing = this.importJobRecords.find(
-      (item) => item.organizationId === session.organizationId && item.idempotencyKey === idempotencyKey,
-    )
-    if (existing) {
-      return { data: { job: existing, idempotent: true } }
-    }
-    const errors = entity === 'materials'
-      ? this.materialImportIssues(rows, session)
-      : this.lotImportIssues(rows, session)
-    const invalidRows = new Set(errors.map((issue) => issue.row)).size
-    const now = new Date().toISOString()
-    const job: DataImportJobRecord = {
-      id: `IMP-${this.shortId()}`,
-      organizationId: session.organizationId,
-      requestedBy: session.userId,
-      entity,
-      fileName,
-      idempotencyKey,
-      status: errors.length > 0 ? 'DRAFT' : 'VALIDATED',
-      totalRows: rows.length,
-      validRows: rows.length - invalidRows,
-      invalidRows,
-      errors,
-      rows,
-      createdAt: now,
-    }
-    this.importJobRecords = [job, ...this.importJobRecords]
-    const audit = this.recordAudit('import.preview', `${entity}:${job.id}`, session.userId, errors.length ? 'review' : 'allowed')
-    return { data: { job, audit, idempotent: false } }
-  }
-
-  commitImport(id: string) {
-    const session = this.currentSession()
-    const job = this.importJobRecords.find((item) => item.id === id && item.organizationId === session.organizationId)
-    if (!job) {
-      throw new NotFoundException(`Import job ${id} was not found`)
-    }
-    this.requirePermission(session.role, job.entity === 'materials' ? 'materials.create' : 'inventory.receive')
-    if (job.status === 'COMPLETED') {
-      return { data: { job, created: 0, idempotent: true } }
-    }
-    const errors = job.entity === 'materials'
-      ? this.materialImportIssues(job.rows, session)
-      : this.lotImportIssues(job.rows, session)
-    if (errors.length > 0) {
-      const failed = { ...job, status: 'FAILED' as const, errors, invalidRows: new Set(errors.map((issue) => issue.row)).size }
-      this.upsertImportJob(failed)
-      throw new UnprocessableEntityException({ message: 'Import data changed since preview', errors })
-    }
-    let created = 0
-    for (const row of job.rows) {
-      if (job.entity === 'materials') {
-        this.createMaterial({
-          name: this.importString(row.name),
-          cas: this.importString(row.cas),
-          family: this.importString(row.family),
-          tier: this.importTier(row.tier),
-          ifraLimit: this.importNumber(row.ifraLimit, 100),
-          costPerGram: this.importNumber(row.costPerGram, 0.05),
-          odor: this.importString(row.odor).split(',').map((value) => value.trim()).filter(Boolean),
-          source: `Import ${job.fileName}`,
-          version: 'import-v1',
-        })
-      } else {
-        const material = this.importMaterialForLot(row, session)
-        if (!material) {
-          throw new UnprocessableEntityException('Imported lot material could not be matched')
-        }
-        this.receiveInventoryReceipt({
-          materialId: material.id,
-          lotNumber: this.importString(row.lotNumber),
-          quantityGrams: this.importNumber(row.quantityGrams, 0),
-          expiryDate: this.importString(row.expiryDate),
-          location: this.importString(row.location) || 'Lab A',
-          qualityStatus: this.importLotQualityStatus(row.qualityStatus),
-          supplierLotRef: this.importString(row.supplierLotRef),
-        })
-      }
-      created += 1
-    }
-    const completed = { ...job, status: 'COMPLETED' as const, committedAt: new Date().toISOString() }
-    this.upsertImportJob(completed)
-    this.queueNotification(session.organizationId, session.email, 'workspace', `${created} ${job.entity} imported`, `${job.fileName} was committed without duplicate rows.`, job.entity === 'materials' ? '/materials' : '/inventory', false)
-    const audit = this.recordAudit('import.commit', `${job.entity}:${job.id}`, session.userId, 'allowed')
-    return { data: { job: completed, created, audit, idempotent: false } }
-  }
 
   private queueNotification(
     organizationId: string,
@@ -9531,80 +9094,6 @@ export class NorthStarService {
     return notification
   }
 
-  private materialImportIssues(rows: Array<Record<string, unknown>>, session: AuthSession) {
-    const errors: DataImportIssue[] = []
-    const seenCas = new Set<string>()
-    const visibleMaterials = this.materialCatalogForSession(session)
-    rows.forEach((row, index) => {
-      const line = index + 2
-      const name = this.importString(row.name)
-      const cas = this.importString(row.cas)
-      if (!name) errors.push({ row: line, field: 'name', message: 'Material name is required' })
-      if (!cas || !/^[0-9-]+$/.test(cas)) errors.push({ row: line, field: 'cas', message: 'CAS must contain digits and hyphens' })
-      const normalizedCas = cas.toLowerCase()
-      if (normalizedCas && seenCas.has(normalizedCas)) errors.push({ row: line, field: 'cas', message: 'CAS is duplicated in this file' })
-      seenCas.add(normalizedCas)
-      if (visibleMaterials.some((material) => material.cas.toLowerCase() === normalizedCas)) {
-        errors.push({ row: line, field: 'cas', message: 'CAS already exists in this workspace' })
-      }
-      if (this.importNumber(row.costPerGram, -1) < 0) errors.push({ row: line, field: 'costPerGram', message: 'Cost per gram cannot be negative' })
-      if (this.importNumber(row.ifraLimit, 100) < 0 || this.importNumber(row.ifraLimit, 100) > 100) errors.push({ row: line, field: 'ifraLimit', message: 'IFRA limit must be between 0 and 100' })
-    })
-    return errors
-  }
-
-  private lotImportIssues(rows: Array<Record<string, unknown>>, session: AuthSession) {
-    const errors: DataImportIssue[] = []
-    const seenLots = new Set<string>()
-    rows.forEach((row, index) => {
-      const line = index + 2
-      const lotNumber = this.importString(row.lotNumber)
-      if (!lotNumber) errors.push({ row: line, field: 'lotNumber', message: 'Lot number is required' })
-      if (lotNumber && seenLots.has(lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number is duplicated in this file' })
-      seenLots.add(lotNumber.toLowerCase())
-      if (this.lotsForSession(session).some((lot) => lot.lotNumber.toLowerCase() === lotNumber.toLowerCase())) errors.push({ row: line, field: 'lotNumber', message: 'Lot number already exists in this workspace' })
-      if (!this.importMaterialForLot(row, session, false)) errors.push({ row: line, field: 'material', message: 'Material ID, CAS, or name could not be matched' })
-      if (this.importNumber(row.quantityGrams, 0) <= 0) errors.push({ row: line, field: 'quantityGrams', message: 'Quantity grams must be greater than 0' })
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(this.importString(row.expiryDate))) errors.push({ row: line, field: 'expiryDate', message: 'Expiry date must use YYYY-MM-DD' })
-    })
-    return errors
-  }
-
-  private importMaterialForLot(row: Record<string, unknown>, session: AuthSession, throwIfMissing = true) {
-    const materialId = this.importString(row.materialId)
-    const materialCas = this.importString(row.materialCas || row.cas)
-    const materialName = this.importString(row.materialName || row.material)
-    const material = this.materialCatalogForSession(session).find((candidate) =>
-      (candidate.id === materialId || candidate.cas.toLowerCase() === materialCas.toLowerCase() || candidate.name.toLowerCase() === materialName.toLowerCase()),
-    )
-    if (!material && throwIfMissing) throw new UnprocessableEntityException('Imported lot material could not be matched')
-    return material
-  }
-
-  private importString(value: unknown) {
-    return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
-  }
-
-  private importNumber(value: unknown, fallback: number) {
-    const number = Number(value)
-    return Number.isFinite(number) ? number : fallback
-  }
-
-  private importTier(value: unknown): Material['tier'] {
-    return value === 'Top' || value === 'Heart' || value === 'Base' ? value : 'Base'
-  }
-
-  private importLotQualityStatus(value: unknown): LotQualityStatus {
-    return value === 'QUARANTINE' || value === 'REJECTED' || value === 'APPROVED' ? value : 'QUARANTINE'
-  }
-
-  private importChecksum(entity: string, rows: Array<Record<string, unknown>>) {
-    return createHash('sha256').update(JSON.stringify({ entity, rows })).digest('hex')
-  }
-
-  private upsertImportJob(job: DataImportJobRecord) {
-    this.importJobRecords = [job, ...this.importJobRecords.filter((item) => item.id !== job.id)]
-  }
 
   billingPlan() {
     this.requireSelfServiceBilling()
@@ -9655,7 +9144,6 @@ export class NorthStarService {
     betaHostnameConfigured: false,
     workersAiConfigured: false,
     vectorizeConfigured: false,
-    formulaAgentProvider: 'mock',
   }): { data: IntegrationReadinessResponse } {
     const session = this.currentSession()
     if (!['Owner', 'Admin', 'Platform Admin'].includes(session.role)) {
@@ -9725,14 +9213,6 @@ export class NorthStarService {
             detail: config.workersAiConfigured && config.vectorizeConfigured
               ? 'Workers AI embeddings and the tenant-filtered Vectorize index are configured. Sources still require review and indexing before retrieval returns citations.'
               : 'Material evidence retrieval requires both Workers AI and Vectorize bindings.',
-          },
-          {
-            key: 'formula_agent',
-            label: 'Formula Intelligence model',
-            status: config.formulaAgentProvider === 'workers_ai' && config.workersAiConfigured ? 'ready' : 'not_configured',
-            detail: config.formulaAgentProvider === 'workers_ai' && config.workersAiConfigured
-              ? 'Cloudflare Workers AI creates bounded research plans; deterministic services retain formula math, IFRA, inventory, costing, and draft-save authority.'
-              : 'Formula Intelligence remains in deterministic mode until the Workers AI provider is explicitly enabled.',
           },
         ],
         checkedAt: new Date().toISOString(),
@@ -12877,13 +12357,7 @@ export class NorthStarService {
     const provenance: MaterialProvenance[] = trackedFields
       .filter((field) => body[field] !== undefined && JSON.stringify(next[field]) !== JSON.stringify(material[field]))
       .map((field) => ({ field: String(field), source, version, date }))
-    return {
-      ...next,
-      catalogueSource: material.catalogueSource?.status === 'SOURCE_ONLY'
-        ? { ...material.catalogueSource, status: 'REVIEW_REQUIRED' }
-        : material.catalogueSource,
-      provenance: [...provenance, ...material.provenance],
-    }
+    return { ...next, provenance: [...provenance, ...material.provenance] }
   }
 
   private pubchemProfile(material: Material) {
@@ -13047,17 +12521,7 @@ export class NorthStarService {
     )
   }
 
-  private supplierMaterialProfileForSession(supplierId: string, materialId: string, session: AuthSession) {
-    return this.supplierMaterialProfileRecords.find(
-      (profile) =>
-        profile.supplierId === supplierId &&
-        profile.materialId === materialId &&
-        (profile.organizationId || 'org-nxl') === session.organizationId,
-    )
-  }
-
   private assertMaterialCanBePurchased(materialId: string, session: AuthSession) {
-    this.assertMaterialCanEnterOperations(this.materialForSession(materialId, session), 'purchased')
     const compliance = this.materialComplianceForSession(materialId, session)
     if (compliance?.status === 'BLOCKED') {
       throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be purchased`)
@@ -13065,31 +12529,9 @@ export class NorthStarService {
   }
 
   private assertMaterialCanBeConsumed(materialId: string, session: AuthSession) {
-    this.assertMaterialCanEnterOperations(this.materialForSession(materialId, session), 'consumed')
     const compliance = this.materialComplianceForSession(materialId, session)
     if (compliance?.status === 'BLOCKED') {
       throw new UnprocessableEntityException(`Material ${materialId} is blocked by its compliance profile and cannot be consumed`)
-    }
-  }
-
-  private assertMaterialCanEnterOperations(material: Material, action: string) {
-    if (isLluchCatalogueMasterMaterial(material)) {
-      throw new UnprocessableEntityException(
-        `Global Master Material ${material.name} is R&D-ready only and cannot be ${action}. Create a tenant-private operational material with approved supplier, compliance, and lot evidence first`,
-      )
-    }
-  }
-
-  private assertGlobalMasterApprovalEvidence(leaves: ResolvedLeaf[], session: AuthSession) {
-    const materialById = new Map(this.materialCatalogForSession(session).map((material) => [material.id, material]))
-    const missingEvidence = leaves
-      .map((leaf) => materialById.get(leaf.materialId))
-      .filter((material): material is Material => Boolean(material && isLluchCatalogueMasterMaterial(material)))
-      .find((material) => this.materialComplianceForSession(material.id, session)?.status !== 'APPROVED')
-    if (missingEvidence) {
-      throw new UnprocessableEntityException(
-        `Global Master Material ${missingEvidence.name} needs tenant-specific approved compliance evidence before formula approval`,
-      )
     }
   }
 
@@ -13257,10 +12699,7 @@ export class NorthStarService {
     const workspaceMaterials = this.materialRecords.filter(
       (material) => !material.organizationId || material.organizationId === session.organizationId,
     ).map((material) => this.normalizeMaterialLibraryScope(material))
-    const persistedIds = new Set(workspaceMaterials.map((material) => material.id))
-    const catalogueDirectory = lluchCatalogueMaterialDirectoryForOrganization(session.organizationId)
-      .filter((material) => !persistedIds.has(material.id))
-    return [...workspaceMaterials, ...catalogueDirectory]
+    return workspaceMaterials
   }
 
   private materialForSession(id: string, session: AuthSession) {

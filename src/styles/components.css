@@ -52,8 +52,7 @@ small,
   background: transparent;
 }
 
-.lead,
-.formula-intelligence-copy {
+.lead {
   color: var(--text-2);
   font-size: 0.95rem;
   line-height: 1.65;
@@ -324,14 +323,12 @@ small,
 .resolved-table,
 .lot-table,
 .weighing-table,
-.formula-scale-table,
-.agent-formula-table {
+.formula-scale-table {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
 }
 
-.formula-intelligence-actions,
 .hero-actions,
 .popup-actions,
 .legal-actions {
@@ -771,4 +768,12 @@ small,
   .workspace-dialog {
     animation: none;
   }
+}
+.section-eyebrow {
+  display: inline-block;
+  color: var(--text-muted, #8f9a99);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }

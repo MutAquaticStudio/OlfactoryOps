@@ -2,7 +2,6 @@ import { createHash, createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ForbiddenException, UnauthorizedException, UnprocessableEntityException } from '../shared/http-error'
 import { NorthStarService } from './northstar.service'
-import { materials, type Material } from '../../../src/data/northStar'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
 const adminEmail = 'm.thuanwork@gmail.com'
@@ -311,25 +310,6 @@ describe('NorthStarService', () => {
     expect(reverse.usage.status).toBe('REVERSED')
     expect(reverse.movements.every((movement) => movement.direction === 'IN')).toBe(true)
     expect(reverse.invariant).toContain('reverse by compensation')
-  })
-
-  it('marks a proposal with no material compliance profile as review required', () => {
-    const service = createAuthenticatedService()
-
-    const preview = service.previewFormulaIntelligence({
-      name: 'Unreviewed material preview',
-      formulaType: 'ACCORD',
-      targetGrams: 100,
-      concentrationType: 'OTHER',
-      finalProductConcentrationPercent: 100,
-      ifraCategory: '4',
-      requiresFinalProductContext: false,
-      brief: 'Verify that missing compliance evidence is never treated as approved.',
-      ingredients: [{ materialId: 'mat-ambroxan', percentage: 100, pyramidNote: 'Base' }],
-    }).data
-
-    expect(preview.compliance.status).toBe('REVIEW_REQUIRED')
-    expect(preview.compliance.reviewMaterialIds).toEqual(['mat-ambroxan'])
   })
 
   it('partially reverses a selected lot before completing the remaining compensation', () => {
@@ -654,13 +634,6 @@ describe('NorthStarService', () => {
       libraryScope: 'GLOBAL',
     })).toThrow(ForbiddenException)
     const updatedOwnMaterial = service.updateMaterial(ownMaterial.id, { family: 'Tenant-owned citrus' }).data.material
-    const privateImport = service.previewImport({
-      entity: 'materials',
-      fileName: 'tenant-private-materials.csv',
-      rows: [{ name: 'Tenant Imported Material', cas: '67890-12-5', family: 'Private floral', costPerGram: 0.1, ifraLimit: 100 }],
-    }).data.job
-    service.commitImport(privateImport.id)
-    const importedPrivateMaterial = service.materials().data.find((material) => material.cas === '67890-12-5')
     service.createSupplier({
       name: 'Scope Tenant Supplier',
       country: 'TH',
@@ -674,10 +647,6 @@ describe('NorthStarService', () => {
       libraryScope: 'TENANT',
       organizationId: signup.organization.id,
       family: 'Tenant-owned citrus',
-    })
-    expect(importedPrivateMaterial).toMatchObject({
-      libraryScope: 'TENANT',
-      organizationId: signup.organization.id,
     })
     expect(service.materialDedupe('67890-12-3').data.matches).toHaveLength(1)
     expect(comparison.materialId).toBe(ownMaterial.id)
@@ -1552,122 +1521,6 @@ describe('NorthStarService', () => {
     )
   })
 
-  it('enriches only tenant-visible materials from the Lluch catalogue without changing controlled data', () => {
-    const service = createAuthenticatedService()
-    const before = service.material('mat-bergamot').data
-
-    const result = service.enrichMaterialsFromLluchCatalogue().data
-    const bergamot = service.material('mat-bergamot').data
-    const vanillin = service.material('mat-vanillin').data
-
-    expect(result.updated).toBeGreaterThan(0)
-    expect(result.source.catalogueVersion).toBe('2026-07-16')
-    expect(result.source.productCount).toBe(1986)
-    expect(bergamot.cas).toBe(before.cas)
-    expect(bergamot.ifraLimit).toBe(before.ifraLimit)
-    expect(bergamot.costPerGram).toBe(before.costPerGram)
-    expect(bergamot.supplierCatalogueReferences?.[0]?.productName).toContain('BERGAMOT FUROC./FREE')
-    expect(bergamot.olfactiveProfile?.status).toBe('REVIEW_REQUIRED')
-    expect(bergamot.olfactiveProfile?.strength).toBe('Strong')
-    expect(bergamot.olfactiveProfile?.diffusion).toBe('High')
-    expect(bergamot.olfactiveProfile?.formulaRole).toBe('Citrus opening and lift')
-    expect(vanillin.supplierCatalogueReferences?.[0]?.match).toBe('EXACT_PRODUCT')
-
-    const internals = service as unknown as { materialRecords: Material[] }
-    const legacyProfile = { ...bergamot.olfactiveProfile! } as Partial<NonNullable<Material['olfactiveProfile']>>
-    delete legacyProfile.strength
-    delete legacyProfile.diffusion
-    delete legacyProfile.tenacity
-    delete legacyProfile.volatility
-    delete legacyProfile.formulaRole
-    internals.materialRecords = internals.materialRecords.map((material) =>
-      material.id === bergamot.id
-        ? { ...material, olfactiveProfile: legacyProfile as Material['olfactiveProfile'] }
-        : material,
-    )
-    expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(1)
-    expect(service.material('mat-bergamot').data.olfactiveProfile?.tenacity).toBe('Short')
-    expect(service.enrichMaterialsFromLluchCatalogue().data.updated).toBe(0)
-  })
-
-  it('returns the full Lluch catalogue through the tenant-scoped local development API projection', () => {
-    const service = createAuthenticatedService()
-    const result = service.lluchCatalogue('bergamot').data
-
-    expect(result.source.status).toBe('READY')
-    expect(result.source.productCount).toBe(1986)
-    expect(result.products.some((product) => product.productName.includes('BERGAMOT'))).toBe(true)
-  })
-
-  it('includes R&D-ready Lluch masters in the directory while keeping them out of inventory', () => {
-    const service = createAuthenticatedService()
-    const directory = service.materials().data
-    const astrolide = directory.find((material) => material.name === 'ASTROLIDE PURE')
-    const inventory = service.inventorySummary().data
-
-    expect(directory).toHaveLength(1986 + materials.length)
-    expect(astrolide?.libraryScope).toBe('GLOBAL')
-    expect(astrolide?.organizationId).toBeUndefined()
-    expect(astrolide?.catalogueSource?.status).toBe('MASTER_APPROVED')
-    expect(astrolide?.supplierCatalogueReferences?.[0]?.supplier).toBe('Lluch Essence')
-    expect(inventory.some((summary) => summary.material.id === astrolide?.id)).toBe(false)
-  })
-
-  it('keeps a global Lluch master out of inventory operations', () => {
-    const service = createAuthenticatedService()
-
-    expect(() => service.receiveInventoryReceipt({
-      materialId: 'mat-lluch-2026-0104',
-      quantityGrams: 25,
-      lotNumber: 'L-MASTER-001',
-    })).toThrow('R&D-ready only')
-  })
-
-  it('allows a Global Master in an R&D draft but blocks approval until operational evidence exists', () => {
-    const service = createAuthenticatedService()
-    const draft = service.createFormulaDraft({
-      name: 'Global Master R&D draft',
-      targetGrams: 100,
-      finalProductConcentrationPercent: 20,
-      targetMarkets: ['EU'],
-      assignedReviewer: adminEmail,
-    }).data.formula
-
-    service.addFormulaLine(draft.id, { materialId: 'mat-lluch-2026-0104', grams: 100 })
-    service.submitFormulaForReview(draft.id, { reviewer: adminEmail })
-
-    expect(() => service.approveFormula(draft.id)).toThrow('needs tenant-specific approved compliance evidence')
-  })
-
-  it('allows a tenant-private operational material to share a CAS with a Global Master', () => {
-    const service = createAuthenticatedService()
-    const created = service.createMaterial({
-      name: 'ASTROLIDE PURE - tenant approved grade',
-      cas: '1222-05-5',
-      family: 'Musk',
-      libraryScope: 'TENANT',
-    }).data.material
-
-    expect(created.libraryScope).toBe('TENANT')
-    expect(created.organizationId).toBeTruthy()
-    expect(service.materials().data.filter((material) => material.cas === '1222-05-5')).toHaveLength(2)
-  })
-
-  it('allows a curator to enrich a global Lluch master without creating stock', () => {
-    const service = createAuthenticatedService()
-    const beforeInventoryRows = service.inventorySummary().data.length
-    const updated = service.updateMaterial('mat-lluch-2026-0104', {
-      family: 'Musk',
-      odor: ['musk', 'clean'],
-      source: 'Material technical review',
-      version: 'review-1',
-    }).data.material
-
-    expect(updated.catalogueSource?.status).toBe('MASTER_APPROVED')
-    expect(service.material('mat-lluch-2026-0104').data.family).toBe('Musk')
-    expect(service.inventorySummary().data.length).toBe(beforeInventoryRows)
-  })
-
   it('allows Manager role to update material metadata', () => {
     const service = createTestService()
     service.login(adminEmail, adminPassword)
@@ -1826,37 +1679,6 @@ describe('NorthStarService', () => {
     expect(deleted.formula.lines[0]?.id).toBe(secondLine.id)
     expect(deleted.invariant).toContain('does not create inventory movement')
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
-  })
-
-  it('calculates tenant-scoped agent preview evidence without reserving or consuming inventory', () => {
-    const service = createAuthenticatedService()
-    const beforeMovements = service.inventoryMovements().data.length
-    const preview = service.previewAgentFormula({
-      name: 'Agent preview',
-      formulaType: 'FINE_FRAGRANCE',
-      targetGrams: 100,
-      concentrationType: 'EDP',
-      finalProductConcentrationPercent: 20,
-      ifraCategory: '4',
-      requiresFinalProductContext: false,
-      brief: 'Marine woody research brief',
-      ingredients: [
-        { materialId: 'mat-bergamot', percentage: 40, pyramidNote: 'Top' },
-        { materialId: 'mat-hedione', percentage: 35, pyramidNote: 'Middle' },
-        { materialId: 'mat-iso', percentage: 25, pyramidNote: 'Base' },
-      ],
-    }).data
-    expect(preview.cost).toBeDefined()
-    if (!preview.cost) throw new Error('Expected legacy agent preview to include cost evidence')
-    expect(preview.formula.lines).toHaveLength(3)
-    expect(preview.availability).toHaveLength(3)
-    expect(preview.cost.totalCost).toBeGreaterThan(0)
-    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
-    expect(() => service.previewAgentFormula({
-      name: 'Invalid agent preview', formulaType: 'ACCORD', targetGrams: 10, concentrationType: 'OTHER',
-      finalProductConcentrationPercent: 100, ifraCategory: '4', requiresFinalProductContext: false, brief: 'invalid total',
-      ingredients: [{ materialId: 'mat-iso', percentage: 80 }],
-    })).toThrow(UnprocessableEntityException)
   })
 
   it('adjusts and reverses inventory when a consumed formula line changes', () => {
@@ -2054,35 +1876,6 @@ describe('NorthStarService', () => {
     expect(service.trialDetail(planned.id).data.trial.usageLink?.reversedAt).toBeTruthy()
   })
 
-  it('preserves immutable Formula Intelligence lineage when an approved direction enters trial planning', () => {
-    const service = createAuthenticatedService()
-    const beforeMovements = service.inventoryMovements().data.length
-    const draft = service.createFormulaDraft({ name: 'Direction-to-trial accord', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
-    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
-    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
-    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Direction passed normal review.' })
-    const approval = service.approveFormula(draft.id, { comment: 'Approved immutable version for trial planning.' }).data
-
-    const planned = service.createTrialFromFormulaIntelligenceCandidate({
-      formulaId: draft.id,
-      formulaVersion: approval.version.version,
-      sampleCode: 'TRL-DIRECTION-001',
-    }, {
-      kind: 'DESIGN_DIRECTION',
-      projectId: 'project-direction-001',
-      directionId: 'direction-001',
-      runId: 'run-direction-001',
-      briefVersionId: 'brief-001',
-      constraintSnapshotId: 'constraint-001',
-      materialUniverseHash: 'universe-hash-001',
-      evaluationHash: 'evaluation-hash-001',
-    }).data.trial
-
-    expect(planned.formulaIntelligenceSource).toMatchObject({ directionId: 'direction-001', evaluationHash: 'evaluation-hash-001' })
-    expect(planned.formulaSnapshot.formulaVersion).toBe(approval.version.version)
-    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
-  })
-
   it('returns only completed tenant-scoped sensory history for an immutable formula version', () => {
     const service = createAuthenticatedService()
     const draft = service.createFormulaDraft({ name: 'Comparable sensory baseline', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
@@ -2112,16 +1905,6 @@ describe('NorthStarService', () => {
     expect(evidence.evidence.sampleCount).toBe(3)
     expect(evidence.evidence.averages.OVERALL).toBe(8)
     expect(evidence.evidence.trialIds).toHaveLength(3)
-    const memory = service.workspaceSensoryMemory().data
-    expect(memory.status).toBe('READY')
-    expect(memory.profile?.evidenceCount).toBe(3)
-    expect(memory.profile?.preferredDescriptors).toContain('bright')
-    expect(service.formulaIntelligenceOperationalMetrics().data).toMatchObject({
-      decidedTrials: 3,
-      decisionCounts: { ACCEPT: 3, REVISE: 0, REJECT: 0 },
-      privateMemory: { evidenceCount: 3 },
-      executionTelemetry: { status: 'NOT_EVALUATED' },
-    })
     const lineage = service.operationalLineage('FORMULA', draft.id).data
     expect(lineage.impact.trials).toBe(3)
     expect(lineage.impact.lots).toBeGreaterThan(0)
@@ -2576,7 +2359,7 @@ describe('NorthStarService', () => {
     expect(receipt.invariant).toContain('creates lot and IN movement')
   })
 
-  it('keeps material compliance and supplier material approval tenant-scoped', () => {
+  it('keeps material compliance tenant-scoped', () => {
     const service = createAuthenticatedService()
     const compliance = service.upsertMaterialCompliance('mat-vanillin', {
       status: 'BLOCKED',
@@ -2596,20 +2379,6 @@ describe('NorthStarService', () => {
       unitCost: 0.12,
     })).toThrow(/blocked by its compliance profile/)
 
-    const supplierProfile = service.upsertSupplierMaterialProfile('SUP-003', 'mat-bergamot', {
-      status: 'APPROVED',
-      leadTimeDays: 14,
-      minimumOrderGrams: 50,
-      unitCost: 0.14,
-      currency: 'USD',
-    }).data.profile
-    expect(service.supplierMaterialProfiles('SUP-003').data).toEqual(expect.arrayContaining([supplierProfile]))
-    expect(() => service.createPurchaseOrder({
-      supplierId: 'SUP-003',
-      materialId: 'mat-bergamot',
-      quantityGrams: 10,
-      unitCost: 0.14,
-    })).toThrow(/below supplier MOQ/)
   })
 
   it('runs procurement supplier, PO state, partial receipt, and price history workflow', () => {
@@ -3252,7 +3021,7 @@ describe('NorthStarService', () => {
     expect(consoleState.webhookDeliveries.find((delivery) => delivery.id === 'WHD-0002')?.attempts).toBe(3)
   })
 
-  it('supports tenant-scoped search, legal requests, and idempotent material imports', () => {
+  it('supports tenant-scoped search and privacy requests', () => {
     const service = createAuthenticatedService()
 
     const search = service.globalSearch('Bergamot').data
@@ -3270,55 +3039,10 @@ describe('NorthStarService', () => {
     expect(privacyExport.export.subject.email).toBe(adminEmail)
     expect(JSON.stringify(privacyExport.export)).not.toContain(adminPassword)
 
-    const importBody = {
-      entity: 'materials' as const,
-      fileName: 'materials.xlsx',
-      idempotencyKey: 'import-material-test-1',
-      rows: [
-        {
-          name: 'Test Import Material',
-          cas: '9000-00-1',
-          family: 'Test family',
-          tier: 'Base',
-          ifraLimit: 85,
-          costPerGram: 0.42,
-          odor: 'clean, test',
-        },
-      ],
-    }
-    const preview = service.previewImport(importBody).data
-    expect(preview.job.status).toBe('VALIDATED')
-    expect(service.previewImport(importBody).data.idempotent).toBe(true)
-
-    const commit = service.commitImport(preview.job.id).data
-    expect(commit.created).toBe(1)
-    expect(service.commitImport(preview.job.id).data.idempotent).toBe(true)
-    const importedMaterial = service.materials().data.find((material) => material.cas === '9000-00-1')
-    expect(importedMaterial?.libraryScope).toBe('GLOBAL')
-    expect(importedMaterial?.organizationId).toBeUndefined()
   })
 
-  it('dry-runs lot imports and activates a custom hostname only after provider confirmation', () => {
+  it('activates a custom hostname only after provider confirmation', () => {
     const service = createAuthenticatedService()
-    const importedLot = {
-      entity: 'lots' as const,
-      fileName: 'inventory-lots.xlsx',
-      idempotencyKey: 'import-lot-test-1',
-      rows: [{
-        materialCas: '8007-75-8',
-        lotNumber: 'L-BER-IMPORT-01',
-        quantityGrams: 24.5,
-        expiryDate: '2028-12-31',
-        location: 'Lab A',
-        qualityStatus: 'QUARANTINE',
-        supplierLotRef: 'SUP-BER-01',
-      }],
-    }
-    const preview = service.previewImport(importedLot).data
-    expect(preview.job.status).toBe('VALIDATED')
-    expect(service.commitImport(preview.job.id).data.created).toBe(1)
-    expect(service.globalSearch('L-BER-IMPORT-01').data.results.some((result) => result.kind === 'lot')).toBe(true)
-
     const provisioned = service.completeCloudflareSaasProvisioning(
       'app.example-perfume.test',
       'cf-custom-hostname-1',
@@ -3414,12 +3138,10 @@ describe('NorthStarService', () => {
       betaHostnameReachable: false,
       workersAiConfigured: true,
       vectorizeConfigured: true,
-      formulaAgentProvider: 'workers_ai',
     }).data
     expect(readiness.checks.find((check) => check.key === 'beta_hostname')?.status).toBe('blocked')
     expect(readiness.checks.find((check) => check.key === 'workers_ai')?.status).toBe('ready')
     expect(readiness.checks.find((check) => check.key === 'vectorize_rag')?.status).toBe('ready')
-    expect(readiness.checks.find((check) => check.key === 'formula_agent')?.status).toBe('ready')
     expect(JSON.stringify(readiness)).not.toContain('STRIPE_SECRET_KEY')
   })
 

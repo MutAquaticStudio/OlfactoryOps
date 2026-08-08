@@ -43,6 +43,16 @@ test('public landing is responsive, accessible, and language-aware', async ({ pa
   await expect(page.getByRole('heading', { level: 1 })).toContainText('He dieu hanh cho doi ngu nuoc hoa')
 })
 
+test('public sign-in always starts at the central identity route', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'desktop-1280', 'Desktop navigation exposes the dedicated sign-in action.')
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole('heading', { name: 'Sign in to your lab workspace' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await expectNoSeriousAccessibilityViolations(page)
+})
+
 test('signup creates a workspace before a custom domain is connected', async ({ page }) => {
   await page.goto('/signup')
   await expect(page.getByRole('heading', { name: 'Create your lab workspace' })).toBeVisible()
@@ -54,90 +64,6 @@ test('signup creates a workspace before a custom domain is connected', async ({ 
   await expectNoSeriousAccessibilityViolations(page)
 })
 
-test('Design Studio restores its route and keeps key actions usable', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated role flow runs once and checks both desktop and mobile viewports in the same session.')
-  await signIn(page)
-  for (const viewport of [{ name: 'desktop-1280', width: 1280, height: 900 }, { name: 'mobile-390', width: 390, height: 844 }]) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height })
-    await page.goto('/ai/formula-design-studio')
-    await expect(page).toHaveURL(/\/ai\/formula-design-studio$/)
-    await expect(page.getByRole('heading', { name: 'Formula Design Studio' })).toBeVisible()
-    await expectNoHorizontalOverflow(page)
-
-    const primaryAction = page.getByTestId('formula-design-primary-action')
-    if (await primaryAction.isVisible()) {
-      const box = await primaryAction.boundingBox()
-      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
-    }
-
-    const reviewButton = page.getByRole('button', { name: 'Review brief' }).first()
-    if (!(await reviewButton.isVisible())) {
-      await page.getByLabel('Project name').fill('Marine woods visual QA')
-      await page.getByLabel('Creative request').fill('A bright bergamot opening, mineral floral heart, long amber trail, and no powdery character.')
-      await primaryAction.click()
-    } else {
-      await reviewButton.click()
-    }
-    const generateButtons = page.getByRole('button', { name: 'Generate directions' })
-    expect(await generateButtons.count()).toBeGreaterThan(0)
-    const dialog = page.getByTestId('workspace-dialog')
-    await expect(dialog).toBeVisible()
-    await page.waitForTimeout(250)
-    await expect(dialog.getByLabel('Product type')).toHaveCSS('min-height', '44px')
-    await expectNoHorizontalOverflow(page)
-    await expectNoSeriousAccessibilityViolations(page)
-    await expect(page).toHaveScreenshot(`design-studio-brief-dialog-${viewport.name}.png`)
-    if (viewport.name === 'desktop-1280') {
-      const productType = dialog.getByLabel('Product type')
-      const currentProductType = await productType.inputValue()
-      const alternateProductType = await productType.locator('option').evaluateAll(
-        (options, current) => options.map((option) => (option as HTMLOptionElement).value).find((value) => value && value !== current),
-        currentProductType,
-      )
-      expect(alternateProductType).toBeTruthy()
-      await productType.selectOption(alternateProductType!)
-      let dismissMessage = ''
-      page.once('dialog', async (prompt) => {
-        dismissMessage = prompt.message()
-        await prompt.dismiss()
-      })
-      await page.keyboard.press('Escape')
-      expect(dismissMessage).toContain('Discard the changes')
-      await expect(dialog).toBeVisible()
-      page.once('dialog', async (prompt) => prompt.accept())
-      await page.keyboard.press('Escape')
-      await expect(dialog).toBeHidden()
-    } else {
-      await page.getByTestId('workspace-dialog-close').click()
-    }
-  }
-})
-
-test('Reformulation Optimizer resolves a baseline and renders governed candidates', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated optimizer flow runs once, then checks the restored mobile layout.')
-  await signIn(page)
-  await page.goto('/ai/reformulation-optimizer')
-  await expect(page).toHaveURL(/\/ai\/reformulation-optimizer$/)
-  await expect(page.getByRole('heading', { name: 'Reformulation Optimizer' })).toBeVisible()
-  await expectNoHorizontalOverflow(page)
-
-  await page.getByLabel('Formula').selectOption('frm-0421')
-  const version = page.getByLabel('Immutable version')
-  await expect(version).toHaveValue('v12')
-  await expect(page.getByText('No materials are available.')).toHaveCount(0)
-
-  const analyze = page.getByTestId('formula-optimizer-primary-action')
-  await expect(analyze).toBeEnabled()
-  await analyze.click()
-  await expect(page.getByRole('heading', { name: 'Ranked candidates' })).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.optimizer-comparison')).toBeVisible()
-  await expectNoSeriousAccessibilityViolations(page)
-
-  await page.setViewportSize({ width: 390, height: 844 })
-  await expectNoHorizontalOverflow(page)
-  await expect(page.getByTestId('formula-optimizer-controls')).toBeVisible()
-  await expect(page.getByTestId('formula-optimizer-results')).toBeVisible()
-})
 
 test('Orders exposes responsive detail history and domestic shipping choices', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop-1280', 'Authenticated role flow runs once and checks desktop and mobile in the same session.')

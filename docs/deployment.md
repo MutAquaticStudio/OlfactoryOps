@@ -70,9 +70,12 @@ Do not place the verifier in `[vars]`, `.env`, source files, or deployment logs.
 
 On the first API request after a changed secret is deployed, the Worker persists the new verifier, revokes every active administrator session, and records an audit event. The administrator must log in again with the new password.
 
-### Configure Formula Approval MFA Encryption
+### Configure MFA Security Features
 
-Formula approval requires a per-session TOTP step-up. Store the server-side encryption key as a Worker secret before deploying code that uses `mfa_enrollments`:
+Formula approval does not require MFA. Approval is authorized server-side by the
+existing Owner, Admin, Manager, or `production.qc` role policy. TOTP remains an
+optional account-security feature; it can be configured independently when the
+workspace enables MFA:
 
 ```bash
 npx wrangler secret put MFA_ENCRYPTION_KEY --config wrangler.test.toml
@@ -86,11 +89,18 @@ npx wrangler secret put MFA_ENCRYPTION_KEY --config wrangler.toml
 
 Use a cryptographically random value of at least 32 bytes. Never place this key in `[vars]`, frontend environment variables, source control, reports, or logs. Local Worker development may use an ignored `.dev.vars` file.
 
-Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP secrets are stored as AES-256-GCM ciphertext and recovery codes are stored only as hashes. A recovery code can verify a fresh session only after TOTP enrollment is complete, and its hash is removed atomically after the first successful use.
+Apply `migrations/0015_mfa_enrollments.sql` before enabling the optional MFA
+feature. TOTP secrets are stored as AES-256-GCM ciphertext and recovery codes
+are stored only as hashes. A recovery code can verify a fresh session only
+after TOTP enrollment is complete, and its hash is removed atomically after the
+first successful use.
 
 ### Configure Billing, Transactional Email, And Cloudflare For SaaS
 
-Apply every migration, including `migrations/0019_billing_provider_events.sql`, `migrations/0020_runtime_observability.sql`, `migrations/0022_phase10_procurement_po_lines.sql`, `migrations/0023_procurement_tenant_scope.sql`, `migrations/0024_notification_outbox.sql`, `migrations/0025_enterprise_persistence_audit_chain.sql`, `migrations/0026_finished_goods_operational_trace.sql`, `migrations/0027_operational_p1_enterprise.sql`, `migrations/0028_auth_session_credentials.sql`, and `migrations/0033_material_evidence_rag.sql` before enabling the corresponding Worker capabilities. For the test Worker:
+Apply the complete ordered migration chain from `0001_northstar_snapshots.sql`
+through `0044_email_verification.sql` before enabling Worker capabilities. The
+release gate verifies this repository head automatically; never pick a subset
+from this list. For the test Worker:
 
 ```bash
 npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
@@ -266,7 +276,56 @@ Run before pushing or deploying:
 
 ```bash
 npm run deploy:check
+npm run release:identity:check
+npm run release:migrations:verify
+npm run release:docs:check
+npm run release:manifest:generate
+npm run release:manifest:validate
 ```
+
+## 6. Release Candidate And Provenance
+
+The current candidate is `0.1.0-rc.1`. It is not a production release and must
+not be tagged or promoted until the release gate is complete. The authoritative
+identity is `src/data/release.ts`; `package.json`, API `/api/v1/version`, API
+response headers, tenant-router response headers, and Pages `release.json` are
+checked against it.
+
+Each build writes a non-sensitive Pages `release.json`. API and router deploys
+must receive `RELEASE_GIT_SHA`, `RELEASE_BUILD_TIMESTAMP_UTC`, and
+`RELEASE_ENVIRONMENT` through Wrangler deployment variables. Do not put a
+secret in any release metadata. The required commands are:
+
+```bash
+npm run release:manifest:generate
+npm run release:manifest:validate
+npm run release:provenance:verify
+```
+
+`release:provenance:verify` is intentionally strict in release mode: it
+requires a clean checkout, tag `v<version>`, artifact hashes, component
+deployment IDs, a test-candidate deployment ID, and a rollback target. A dirty
+checkout or placeholder deployment evidence is a release blocker.
+
+The manual GitHub Action `Release candidate` deploys only to the isolated test
+Worker/D1/Pages/router configuration. It requires protected environment secrets
+`CLOUDFLARE_API_TOKEN` and `QA_ROLE_STORAGE_STATES`. It does not run from a
+normal push or pull request and must never point at production D1 or customer
+data. The workflow deliberately fails before promotion until reviewed deploy
+outputs are bound into its manifest step.
+
+## 7. Rollback And Production Smoke
+
+Record the previous approved Pages, API Worker, and tenant-router deployment IDs
+in the release manifest before promotion. Prefer a rollback deployment over a
+schema rollback: migrations may be irreversible and must be assessed before
+release. Take an approved D1 backup/export before a production migration.
+
+Production smoke is read-only and requires an untracked dedicated QA account,
+an explicit hostname allowlist, and mutation mode disabled. It may check login,
+session restore, `/api/v1/health`, `/api/v1/status`, `/api/v1/version`,
+workspace navigation, global material reads, and logout. It must not create a
+tenant, send mail, create a domain, or change operational data.
 
 This validates:
 
@@ -291,7 +350,9 @@ The harness fails closed when `FUNCTIONAL_LOGIN_PASSWORD` is absent. Keep that v
 
 The functional report verifies API security headers and CORS denial, protected D1 persistence status, cookie auth, authentication throttling with `Retry-After`, CSRF rejection on missing write token, tenant permission probes, core read models, signed document URLs, and the customer-facing Production lifecycle UI.
 
-For the complete Formula workflow, including inventory-linked materials, final-product IFRA, evaporation, centered approval dialog, TOTP setup, fresh-session recovery-code redemption, immutable approval, reload persistence, and mobile overflow checks:
+For the complete Formula workflow, including inventory-linked materials,
+final-product IFRA, evaporation, centered approval dialog, role-authorized
+immutable approval, reload persistence, and mobile overflow checks:
 
 ```powershell
 $credential = Get-Credential -Message 'OlfactoryOps Formula test account'
@@ -304,7 +365,8 @@ Remove-Item Env:FORMULA_TEST_PASSWORD
 Remove-Item Env:FORMULA_TEST_URL
 ```
 
-Use a disposable test-tenant owner with MFA not yet enrolled. The harness never writes the TOTP setup key or recovery codes to its JSON report.
+Use a disposable test-tenant owner. The harness never writes an account secret,
+session credential, or password verifier to its JSON report.
 
 ## Beta: Pages Frontend With Cloudflare API
 

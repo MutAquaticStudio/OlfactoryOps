@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import router, {
   activeSystemWorkspaceForHostname,
   proxiedPagesRequest,
+  tenantRouterReleaseHeaders,
   tenantRouterHostname,
   tenantRouterNotFound,
 } from './tenant-app-router'
@@ -27,5 +28,17 @@ describe('tenant app router', () => {
     expect(proxied.url).toBe('https://labofscents.pages.dev/workspace/materials?view=list')
     expect(proxied.headers.get('X-OlfactoryOps-Workspace-Host')).toBe('atelier.labofscents.org')
     expect(proxied.headers.get('Host')).toBeNull()
+  })
+
+  it('adds only non-sensitive release provenance to proxied responses', () => {
+    expect(tenantRouterReleaseHeaders({
+      RELEASE_GIT_SHA: '356b4e078247dcb6bed6a8a7a9b6e64de6afa141',
+      RELEASE_BUILD_TIMESTAMP_UTC: '2026-08-05T00:00:00Z',
+      RELEASE_ENVIRONMENT: 'test',
+    })).toEqual({
+      'X-OlfactoryOps-Version': '0.1.0-rc.1',
+      'X-OlfactoryOps-Git-SHA': '356b4e078247dcb6bed6a8a7a9b6e64de6afa141',
+      'X-OlfactoryOps-Environment': 'test',
+    })
   })
 })
