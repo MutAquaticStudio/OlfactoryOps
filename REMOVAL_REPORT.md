@@ -34,6 +34,6 @@ The cleanup intentionally leaves historical migrations and all real tenant/custo
 ## Finalization status (2026-08-08)
 
 - Isolated role fixtures were generated in local Worker/D1 persistence only; no production credentials, tenant, or customer data were used.
-- The authenticated matrix passed individually for Owner, Admin, Perfumer, Lab Manager, SENSORY_PANELIST, Brand, Finance, and Viewer. Each role was checked for session restoration, projected navigation, protected and denied routes, tenant-scoped permissions, sensitive-data capability boundaries, costing/inventory/trial visibility, and absence of removed V1 Formula Agent UI at the required responsive widths.
+- The authenticated matrix passed individually for Owner, Admin, Perfumer, Lab Manager, SENSORY_PANELIST, Brand, Finance, and Viewer in the isolated local Worker/D1 run `role-fixtures-9da79078-bfde-4cee-b4eb-e5ca089f9f9e`. Each role was checked for session restoration, projected navigation, protected and denied routes, tenant-scoped permissions, sensitive-data capability boundaries, costing/inventory/trial visibility, and absence of removed V1 Formula Agent UI at the required responsive widths.
 - Remote D1 verification, production smoke, external provider checks, and deployment are `NOT_APPLICABLE` for this transition baseline. No production release is being performed.
 - The repository is ready for the cleanup checkpoint commit/tag once the final diff review is complete. V2 remains explicitly out of scope.

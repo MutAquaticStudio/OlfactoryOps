@@ -13,7 +13,9 @@ const roleRoutes: Record<QaRole, string> = {
   Perfumer: '/workspace/formulas',
   'Lab Manager': '/workspace/production',
   SENSORY_PANELIST: '/trials',
-  Brand: '/workspace/formulas',
+  // Brand users can enter the workspace shell to review explicitly shared
+  // artifacts, but cannot open the formula editor route directly.
+  Brand: '/workspace',
   Finance: '/workspace/costing',
   Viewer: '/workspace',
 }

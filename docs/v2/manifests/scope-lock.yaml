@@ -1,0 +1,78 @@
+version: "0.4"
+date: "2026-08-07"
+default_workspace_domain: "<workspace-slug>.olfactoryops.com"
+reference:
+  repo: "MutAquaticStudio/OlfactoryOps"
+  branch: "codex/formula-intelligence-hardening"
+  mode: "historical_reference"
+
+keep_harden:
+  - multi_tenant_saas
+  - rbac_role_policies
+  - csrf
+  - tenant_branding
+  - managed_billing
+  - en_vi_locale
+  - pwa
+  - inventory_lots
+  - immutable_movement_ledger
+  - fefo
+  - orders_fulfillment
+  - reservation
+  - shipping_fulfillment
+  - operational_lineage
+
+rebuild:
+  - opaque_hashed_sessions
+  - cloudflare_for_saas_custom_domains
+  - email_verification
+  - profile_email_password
+  - push_notifications
+  - legal_consent_data_export
+  - owner_observability
+  - global_material_intelligence_empty
+  - material_compliance_facet
+  - supplier_profile
+  - formula_domain
+  - lab_weighing_consumption
+  - procurement
+  - production
+  - ai_formula_agent
+  - formula_design_studio
+  - trials_sensory
+  - private_sensory_memory
+  - material_evidence_rag
+  - external_llm
+
+delete_no_migrate:
+  - lluch_supplier_catalogue
+  - old_1986_global_master_materials
+  - old_global_material_data
+  - legacy_formula_rd_logic_data
+  - legacy_scientific_generation_assumptions
+
+planning_only:
+  - csv_xlsx_import
+  - reformulation_optimizer
+  - vexo_enterprise_activation
+
+new_scientific_core:
+  - rdkit
+  - bcfp
+  - molftp
+  - osmordred
+  - kgcnn
+  - transformer_cnn
+  - feature_fusion
+  - molecular_embedding
+  - odor_embedding
+  - odor_prediction
+  - similarity
+  - explainability
+
+legacy_removal_gate:
+  required_prompt: "PROMPT_REMOVE_LEGACY_FEATURES.md"
+  required_outputs:
+    - "REMOVAL_INVENTORY.md"
+    - "REMOVAL_REPORT.md"
+    - "LEGACY_REFERENCE_SCAN.md"

@@ -25,7 +25,7 @@
 |---|---|---|
 | Historical migrations preserved | PASS | `npm run release:migrations:verify` reports head `0044`, count `44`, valid inventory hash; no migration diff was introduced. |
 | Tenant/customer IP protected | PASS | No D1 delete, destructive migration, or customer-data mutation was executed. |
-| Tenant isolation / RBAC / CSRF / ledger / FEFO local regression | PASS | `npm test -- --run`: 16 files, 191 tests passed. |
+| Tenant isolation / RBAC / CSRF / ledger / FEFO local regression | PASS | `npm.cmd test`: 23 files, 206 tests passed, including Phase 0 contract tests. |
 | Client secret scan | PASS | `npm run security:client-bundle` passed. |
 | Dependency audit | PASS | `npm audit --omit=dev --audit-level=high` reported 0 vulnerabilities. |
 
@@ -49,7 +49,7 @@
 | Gate | Status | Evidence |
 |---|---|---|
 | Public responsive/accessibility smoke | PASS | `npm run test:ux`: 17 passed across 320/375/390/768/1024/1280/1440/1920px; public landing, auth routing, signup shell and overflow/critical Axe checks passed. |
-| Authenticated role matrix | PASS | Isolated local Worker/D1 fixture run `role-final7`: Owner, Admin, Perfumer, Lab Manager, SENSORY_PANELIST, Brand, Finance, and Viewer each passed session restore, navigation projection, protected-route access, denied costing projection, tenant-scoped `/me` permissions, sensitive permission checks, and removed Formula Agent absence across 320/375/390/768/1024/1280/1440/1920px. Eight role workflows performed 64 responsive viewport assertions; the 56 non-matrix Playwright project entries were intentionally skipped by the dedicated desktop matrix guard. No production credential or tenant was used. |
+| Authenticated role matrix | PASS | Isolated local Worker/D1 fixture run `role-fixtures-9da79078-bfde-4cee-b4eb-e5ca089f9f9e`: Owner, Admin, Perfumer, Lab Manager, SENSORY_PANELIST, Brand, Finance, and Viewer each passed session restore, navigation projection, protected-route access, denied costing projection, tenant-scoped `/me` permissions, sensitive permission checks, and removed Formula Agent absence across 320/375/390/768/1024/1280/1440/1920px. Eight role workflows passed; the 56 non-matrix Playwright project entries were intentionally skipped by the dedicated desktop matrix guard. No production credential or tenant was used. |
 | Remote D1 migration verification | NOT_APPLICABLE | The cleaned legacy repository is being frozen as the transition baseline for OlfactoryOps V2. No legacy production release is being performed. |
 | Production smoke / external integrations | NOT_APPLICABLE | The cleaned legacy repository is being frozen as the transition baseline for OlfactoryOps V2. No legacy production release is being performed. |
 

@@ -39,7 +39,7 @@ The complete repository file inventory was completed before archival (215 reposi
 
 ## Finalization re-scan
 
-- The active-tree search was repeated after the authenticated role harness changes.
+- The active-tree search was repeated after the authenticated role harness and Phase 0 contract changes.
 - Zero unexplained active references were found for the removed Formula Agent/Design Studio/Optimizer product surfaces, Lluch runtime/source projections, supplier-profile product route, catalogue/import jobs, or internal phase roadmap.
 - The only remaining matches are the explained compatibility boundaries, preserved Lab Usage/ledger terminology, historical migrations, archive material, and audit/planning documents listed above.
 - `git diff --check` remains clean; no migration from `0001` through `0044` was modified.
