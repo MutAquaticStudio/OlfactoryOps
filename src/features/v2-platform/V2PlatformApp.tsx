@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { PublicSensoryFeedback, TrialsSensoryWorkspace } from '../v2-trials-sensory'
 
 type Locale = 'en-US' | 'vi-VN'
 type V2Session = { user: { email: string; displayName: string; verified: boolean }; membership: { organizationName: string; organizationSlug: string; role: string }; capabilities: Record<string, boolean> }
@@ -8,6 +9,7 @@ type V2Invitation = { id: string; email: string; role: string; status: string; e
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/api\/v1\/?$/, '/api/v1/v2/platform')
 const labApiBase = apiBase.replace(/\/platform$/, '/lab')
 const formulaApiBase = apiBase.replace(/\/platform$/, '/formula-intelligence')
+const trialsApiBase = apiBase.replace(/\/platform$/, '/trials')
 
 const copy = {
   'en-US': {
@@ -20,7 +22,24 @@ const copy = {
 type PlatformCopy = { [K in keyof typeof copy['en-US']]: string }
 
 function currentLocale(): Locale { return window.localStorage.getItem('olfactoryops.locale') === 'vi-VN' ? 'vi-VN' : 'en-US' }
-function pathMode() { const path = window.location.pathname; if (path === '/v2/signup') return 'signup'; if (path === '/v2/login') return 'login'; if (path === '/v2/invitations/accept') return 'accept'; return 'workspace' }
+function pathMode() { const path = window.location.pathname; if (path === '/v2/signup') return 'signup'; if (path === '/v2/login') return 'login'; if (path === '/v2/invitations/accept') return 'accept'; if (path.startsWith('/v2/public/sensory/')) return 'public-sensory'; return 'workspace' }
+function workspaceSection() {
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const workspaceIndex = segments.indexOf('workspace')
+  return workspaceIndex >= 0 ? segments[workspaceIndex + 1] || 'workspace' : 'workspace'
+}
+function trialRouteId() {
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const trialIndex = segments.indexOf('trials')
+  if (trialIndex < 0) return undefined
+  const candidate = segments[trialIndex + 1]
+  return candidate && candidate !== 'sessions' ? decodeURIComponent(candidate) : undefined
+}
+function publicSensoryToken() {
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const sensoryIndex = segments.lastIndexOf('sensory')
+  return sensoryIndex >= 0 ? decodeURIComponent(segments[sensoryIndex + 1] ?? '') : ''
+}
 function navigate(path: string) { window.history.pushState({}, '', path); window.dispatchEvent(new PopStateEvent('popstate')) }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,6 +74,7 @@ export function V2PlatformApp() {
   const toggleLocale = () => { const next = locale === 'en-US' ? 'vi-VN' : 'en-US'; window.localStorage.setItem('olfactoryops.locale', next); setLocale(next) }
   if (mode === 'login' || mode === 'signup') return <AuthView mode={mode} text={text} onLocale={toggleLocale} onNavigate={navigate} />
   if (mode === 'accept') return <InvitationAcceptView text={text} onLocale={toggleLocale} onNavigate={navigate} />
+  if (mode === 'public-sensory') return <PublicSensoryFeedback token={publicSensoryToken()} />
   return <WorkspaceView text={text} onLocale={toggleLocale} onNavigate={navigate} />
 }
 
@@ -73,16 +93,33 @@ function AuthView({ mode, text, onLocale, onNavigate }: { mode: 'login' | 'signu
 }
 
 function WorkspaceView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
-  const [session, setSession] = useState<V2Session | null>(null); const [busy, setBusy] = useState(true); const [error, setError] = useState<string | null>(null); const [active, setActive] = useState(window.location.pathname.split('/').at(-1) || 'workspace')
+  const [session, setSession] = useState<V2Session | null>(null); const [busy, setBusy] = useState(true); const [error, setError] = useState<string | null>(null); const [active, setActive] = useState(workspaceSection)
+  useEffect(() => { const onPop = () => setActive(workspaceSection()); window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop) }, [])
   useEffect(() => { void request<V2Session>('/me').then(setSession).catch((err) => { setError(err instanceof Error ? err.message : text.unavailable); onNavigate('/v2/login') }).finally(() => setBusy(false)) }, [onNavigate, text.unavailable])
-  const items = useMemo(() => [{ key: 'workspace', label: text.status, permission: 'tenant.view' }, { key: 'materials', label: 'Materials', permission: 'materials.view' }, { key: 'formulas', label: 'Formulas', permission: 'formula.view' }, { key: 'design-studio', label: 'Design Studio', permission: 'formula.edit' }, { key: 'suppliers', label: 'Suppliers', permission: 'suppliers.view' }, { key: 'inventory', label: 'Inventory', permission: 'inventory.view' }, { key: 'procurement', label: 'Procurement', permission: 'procurement.view' }, { key: 'security', label: text.security, permission: 'security.sessions.view' }, { key: 'members', label: text.members, permission: 'members.view' }, { key: 'domains', label: text.domains, permission: 'domains.view' }, { key: 'billing', label: text.billing, permission: 'billing.capabilities' }, { key: 'notifications', label: text.notifications, permission: 'notifications.view' }, { key: 'privacy', label: text.privacy, permission: 'security.profile.view' }, { key: 'observability', label: text.observability, permission: 'observability.view' }].filter((item) => session?.capabilities?.[item.permission] === true), [session, text])
+  const items = useMemo(() => [
+    { key: 'workspace', label: text.status, permissions: ['tenant.view'] },
+    { key: 'materials', label: 'Materials', permissions: ['materials.view'] },
+    { key: 'formulas', label: 'Formulas', permissions: ['formula.view'] },
+    { key: 'design-studio', label: 'Design Studio', permissions: ['formula.edit'] },
+    { key: 'trials', label: 'Trials & Sensory', permissions: ['trials.viewAll', 'trials.viewAssigned'] },
+    { key: 'suppliers', label: 'Suppliers', permissions: ['suppliers.view'] },
+    { key: 'inventory', label: 'Inventory', permissions: ['inventory.view'] },
+    { key: 'procurement', label: 'Procurement', permissions: ['procurement.view'] },
+    { key: 'security', label: text.security, permissions: ['security.sessions.view'] },
+    { key: 'members', label: text.members, permissions: ['members.view'] },
+    { key: 'domains', label: text.domains, permissions: ['domains.view'] },
+    { key: 'billing', label: text.billing, permissions: ['billing.capabilities'] },
+    { key: 'notifications', label: text.notifications, permissions: ['notifications.view'] },
+    { key: 'privacy', label: text.privacy, permissions: ['security.profile.view'] },
+    { key: 'observability', label: text.observability, permissions: ['observability.view'] },
+  ].filter((item) => item.permissions.some((permission) => session?.capabilities?.[permission] === true)), [session, text])
   if (busy) return <main className="v2-platform-page"><div className="v2-loading">{text.loading}</div></main>
   if (error && !session) return <main className="v2-platform-page"><div className="v2-auth-card"><div className="v2-alert is-error">{error}</div></div></main>
   const signOut = async () => { await request('/auth/logout', { method: 'POST' }).catch(() => undefined); onNavigate('/v2/login') }
-  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{session?.membership.organizationName || text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => void signOut()}>{text.signOut}</button></div></div><div className="v2-workspace-layout"><aside className="v2-workspace-nav" aria-label="V2 workspace navigation">{items.map((item) => <button type="button" key={item.key} className={active === item.key ? 'is-active' : ''} onClick={() => { setActive(item.key); onNavigate(`/v2/workspace${item.key === 'workspace' ? '' : `/${item.key}`}`) }}>{item.label}</button>)}</aside><section className="v2-workspace-content" data-testid="v2-workspace"><span className="v2-eyebrow">{text.status}</span><h1>{session?.membership.organizationName}</h1><p className="v2-muted">{session?.user.email}</p><div className="v2-metric-grid"><div><span>{text.role}</span><strong>{session?.membership.role}</strong></div><div><span>{text.address}</span><strong>{session?.membership.organizationSlug}.olfactoryops.com</strong></div><div><span>{text.session}</span><strong>Protected</strong></div></div><V2Section active={active} text={text} session={session} /> </section></div></main>
+  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{session?.membership.organizationName || text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => void signOut()}>{text.signOut}</button></div></div><div className="v2-workspace-layout"><aside className="v2-workspace-nav" aria-label="V2 workspace navigation">{items.map((item) => <button type="button" key={item.key} className={active === item.key ? 'is-active' : ''} onClick={() => { setActive(item.key); onNavigate(`/v2/workspace${item.key === 'workspace' ? '' : `/${item.key}`}`) }}>{item.label}</button>)}</aside><section className="v2-workspace-content" data-testid="v2-workspace"><span className="v2-eyebrow">{text.status}</span><h1>{session?.membership.organizationName}</h1><p className="v2-muted">{session?.user.email}</p><div className="v2-metric-grid"><div><span>{text.role}</span><strong>{session?.membership.role}</strong></div><div><span>{text.address}</span><strong>{session?.membership.organizationSlug}.olfactoryops.com</strong></div><div><span>{text.session}</span><strong>Protected</strong></div></div><V2Section active={active} text={text} session={session} onNavigate={onNavigate} /> </section></div></main>
 }
 
-function V2Section({ active, text, session }: { active: string; text: PlatformCopy; session: V2Session | null }) {
+function V2Section({ active, text, session, onNavigate }: { active: string; text: PlatformCopy; session: V2Session | null; onNavigate: (path: string) => void }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [members, setMembers] = useState<Array<{ displayName: string; email: string; role: string; status: string }>>([])
   const [invitations, setInvitations] = useState<V2Invitation[]>([])
@@ -94,10 +131,11 @@ function V2Section({ active, text, session }: { active: string; text: PlatformCo
     if (active === 'members') void Promise.all([request<{ members: typeof members }>('/workspace/members'), request<{ invitations: V2Invitation[] }>('/workspace/invitations')]).then(([memberPayload, invitationPayload]) => { setMembers(memberPayload.members); setInvitations(invitationPayload.invitations) }).catch((error) => setNotice(error instanceof Error ? error.message : text.noAccess))
   }, [active, text.noAccess])
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Request failed') } }
-  const requiredPermission: Record<string, string> = { materials: 'materials.view', formulas: 'formula.view', 'design-studio': 'formula.edit', suppliers: 'suppliers.view', inventory: 'inventory.view', procurement: 'procurement.view', security: 'security.sessions.view', members: 'members.view', domains: 'domains.view', billing: 'billing.capabilities', notifications: 'notifications.view', observability: 'observability.view', workspace: 'tenant.view' }
-  if (requiredPermission[active] && session?.capabilities?.[requiredPermission[active]] !== true) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
+  const requiredPermissions: Record<string, string[]> = { materials: ['materials.view'], formulas: ['formula.view'], 'design-studio': ['formula.edit'], trials: ['trials.viewAll', 'trials.viewAssigned'], suppliers: ['suppliers.view'], inventory: ['inventory.view'], procurement: ['procurement.view'], security: ['security.sessions.view'], members: ['members.view'], domains: ['domains.view'], billing: ['billing.capabilities'], notifications: ['notifications.view'], observability: ['observability.view'], workspace: ['tenant.view'] }
+  if (requiredPermissions[active] && !requiredPermissions[active].some((permission) => session?.capabilities?.[permission] === true)) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
   if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
   if (active === 'formulas' || active === 'design-studio') return <FormulaIntelligencePanel active={active} />
+  if (active === 'trials') return <TrialsSensoryWorkspace apiBase={trialsApiBase} capabilities={session?.capabilities ?? {}} initialTrialId={trialRouteId()} onNavigate={onNavigate} />
   if (active === 'billing') return <div className="v2-panel"><h2>{text.billing}</h2><p>Self-service billing is disabled during managed beta. Workspace access and capability limits remain enforced server-side.</p></div>
   if (active === 'security') return <div className="v2-panel"><h2>{text.security}</h2><p>Sessions are opaque, rotated, hash-only, and protected by CSRF for unsafe requests.</p><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/password', passwords); setPasswords({ currentPassword: '', newPassword: '' }) }}><label>Current password<input type="password" required value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} /></label><label>New password<input type="password" required minLength={12} value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change password</button></form><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/email', emailForm); setEmailForm({ currentPassword: '', newEmail: '' }) }}><label>New email<input type="email" required value={emailForm.newEmail} onChange={(event) => setEmailForm({ ...emailForm, newEmail: event.target.value })} /></label><label>Current password<input type="password" required value={emailForm.currentPassword} onChange={(event) => setEmailForm({ ...emailForm, currentPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change email</button></form>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
   if (active === 'privacy') return <div className="v2-panel"><h2>{text.privacy}</h2><p>Personal export and workspace export are separate authorization boundaries.</p><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/exports/privacy')}>{text.export}</button><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/consents', { purpose: 'PRIVACY', policyVersion: 'v2-2026-08' })}>{text.consent}</button>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>

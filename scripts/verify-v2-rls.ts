@@ -11,6 +11,7 @@ import { ConsumerIntelligenceService } from '../services/sentiment/src/consumer-
 import { FormulaService } from '../services/formula/src/formula-service.js'
 import { MaterialEvidenceService } from '../services/rag/src/material-evidence-service.js'
 import { DurableAgentService } from '../services/agent-runtime/src/durable-agent-service.js'
+import { TrialSensoryService } from '../services/trials-sensory/src/service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -67,6 +68,14 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0008_phase6_formula_design_studio.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0009_phase4_6_completion_records.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0010_phase4_6_tenant_fk_hardening.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0011_phase7_trials_sensory.sql')
+}
+
+function resetDisposableSchema() {
+  // This verifier is deliberately destructive only after its loopback and
+  // explicit V2_QA_ENVIRONMENT=test gates above. A clean schema proves the
+  // full V2 migration chain rather than inheriting an earlier local run.
+  executePrisma(databaseUrl, 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -81,6 +90,7 @@ let firstUserId: string | undefined
 let secondUserId: string | undefined
 let restrictedUserId: string | undefined
 let brandUserId: string | undefined
+let panelistUserId: string | undefined
 
 async function configureApplicationRole() {
   if (!adminClient) throw new Error('V2_RLS=FAIL disposable database was not initialized.')
@@ -98,6 +108,7 @@ async function configureApplicationRole() {
   await adminClient.$executeRawUnsafe('GRANT USAGE ON SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
+  await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
   const roles = await adminClient.$queryRawUnsafe<Array<{ rolbypassrls: boolean; rolsuper: boolean }>>("SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'v2_app'")
   if (roles.length !== 1 || roles[0].rolbypassrls || roles[0].rolsuper) throw new Error('V2_RLS=FAIL application role is not constrained by RLS.')
 }
@@ -118,7 +129,7 @@ async function removeTestFixtures() {
     try {
       if (secondOrganizationId) await tx.organization.deleteMany({ where: { id: secondOrganizationId } })
       if (firstOrganizationId) await tx.organization.deleteMany({ where: { id: firstOrganizationId } })
-      const userIds = [firstUserId, secondUserId, restrictedUserId, brandUserId].filter((value): value is string => Boolean(value))
+      const userIds = [firstUserId, secondUserId, restrictedUserId, brandUserId, panelistUserId].filter((value): value is string => Boolean(value))
       if (userIds.length) await tx.user.deleteMany({ where: { id: { in: userIds } } })
     } finally {
       await tx.$executeRawUnsafe('ALTER TABLE v2_audit_events ENABLE TRIGGER v2_audit_append_only')
@@ -127,6 +138,7 @@ async function removeTestFixtures() {
 }
 
 try {
+  resetDisposableSchema()
   applyMigrations()
   adminClient = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
   appClient = new PrismaClient({ datasources: { db: { url: applicationUrl.toString() } } })
@@ -141,6 +153,7 @@ try {
   const formula = new FormulaService(appClient, service)
   const evidence = new MaterialEvidenceService(appClient, service)
   const agent = new DurableAgentService(appClient, service)
+  const trials = new TrialSensoryService(appClient, service, lab)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -158,6 +171,11 @@ try {
   await adminClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', brandUserId!, `${brandUserId}@example.test`, 'Brand QA', 'not-a-login')
     await tx.$executeRawUnsafe('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', `mem_${brandUserId}`, firstOrganizationId!, brandUserId!, 'Brand', 'ACTIVE')
+  })
+  panelistUserId = `usr_panelist_${suffix.replace(/[^a-z0-9]/gi, '')}`
+  await adminClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', panelistUserId!, `${panelistUserId}@example.test`, 'Panelist QA', 'not-a-login')
+    await tx.$executeRawUnsafe('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', `mem_${panelistUserId}`, firstOrganizationId!, panelistUserId!, 'Sensory Panelist', 'ACTIVE')
   })
 
   let crossTenantDenied = false
@@ -301,6 +319,69 @@ try {
   const concurrentInspectionDenied = inspections.some((result) => result.status === 'rejected' && result.reason instanceof Error && 'code' in result.reason && (result.reason as { code?: string }).code === 'INSPECTION_ALREADY_DECIDED')
   if (!accepted) throw new Error('V2_RLS=FAIL concurrent receipt inspection did not produce an accepted disposition')
   const transfer = await lab.transferLot(context.context, receipt.lines[0].lotId, { location: 'QA available shelf', reason: 'inspection release location' }, `rls-transfer-${suffix}`)
+  const trial = await trials.createTrial(context.context, { title: 'RLS Trial', sourceKind: 'FORMULA_VERSION', formulaVersionId: approvedFormula.id, plannedMassGrams: 100 }, `rls-trial-create-${suffix}`)
+  const unassignedTrial = await trials.createTrial(context.context, { title: 'Unassigned blind-review control', sourceKind: 'MANUAL_EXPERIMENT', manualSource: 'Isolated access-control regression fixture.', plannedMassGrams: 10 }, `rls-trial-unassigned-${suffix}`)
+  const plannedTrial = await trials.planTrial(context.context, trial.id, { notes: 'Isolated Trial plan.' }, `rls-trial-plan-${suffix}`)
+  const releasedTrial = await trials.releaseTrial(context.context, trial.id, { rationale: 'Isolated deterministic Trial release review.' }, `rls-trial-release-${suffix}`)
+  const trialWeighing = await trials.startPreparation(context.context, trial.id, { lines: [{ materialId: material.id, requestedGrams: 100, toleranceGrams: 0 }] }, `rls-trial-weigh-${suffix}`)
+  const confirmedTrialPreparation = await trials.confirmPreparation(context.context, trial.id, trialWeighing.id, { lines: [{ lineId: trialWeighing.lines[0]!.id, lotId: receipt.lines[0].lotId, actualGrams: 100 }] }, `rls-trial-weigh-confirm-${suffix}`)
+  const duplicateTrialPreparation = await trials.confirmPreparation(context.context, trial.id, trialWeighing.id, { lines: [{ lineId: trialWeighing.lines[0]!.id, lotId: receipt.lines[0].lotId, actualGrams: 100 }] }, `rls-trial-weigh-confirm-${suffix}`)
+  const trialPreparationDetail = await trials.preparationDetail(context.context, trial.id, trialWeighing.id)
+  const trialSample = await trials.createSample(context.context, trial.id, { sampleCode: `RLS-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12).toUpperCase()}` }, `rls-trial-sample-${suffix}`)
+  const secondTrialSample = await trials.createSample(context.context, trial.id, { sampleCode: `RLS-2-${suffix.replace(/[^a-z0-9]/gi, '').slice(-10).toUpperCase()}` }, `rls-trial-sample-second-${suffix}`)
+  const trialEvidence = await trials.attachEvidence(context.context, trial.id, { evidenceKind: 'STABILITY', objectRef: `test://trials/${trial.id}/stability`, contentHash: 'a'.repeat(64), sampleId: trialSample.id }, `rls-trial-evidence-${suffix}`)
+  const sensoryForm = await trials.createSensoryForm(context.context, {
+    name: 'RLS Sensory Form', versionLabel: 'qa-1', timepoints: ['T0'],
+    dimensions: [{ key: 'overall', label: 'Overall', kind: 'RATING', minimum: 1, maximum: 10, required: true, options: [] }],
+    descriptorVocabulary: ['woody', 'fresh'], minimumEvidenceCount: 3,
+  }, `rls-sensory-form-${suffix}`)
+  const sensorySession = await trials.createSensorySession(context.context, trial.id, { formVersionId: sensoryForm.id, title: 'RLS Blind Session', blindMode: true, allowPeerResultsAfterClose: false }, `rls-sensory-session-${suffix}`)
+  const panel = await trials.assignPanelist(context.context, sensorySession.id, { userId: panelistUserId! }, `rls-sensory-panel-${suffix}`)
+  const assignedSample = await trials.assignSample(context.context, sensorySession.id, { sampleId: trialSample.id, blindCode: 'QA71' }, `rls-sensory-sample-${suffix}`)
+  const publicLink = await trials.createPublicLink(context.context, sensorySession.id, { sampleAssignmentId: assignedSample.assignmentIds[0]!, presentationMode: 'BLIND', expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), maxSubmissions: 3 }, `rls-sensory-link-${suffix}`)
+  const managedPanelists = await trials.sensoryPanelists(context.context, sensorySession.id)
+  const managedPublicLinks = await trials.publicLinks(context.context, sensorySession.id)
+  await trials.transitionSession(context.context, sensorySession.id, 'OPEN', {}, `rls-sensory-open-${suffix}`)
+  const publicPresentation = await trials.publicPresentation(publicLink.token)
+  const publicEvaluation = await trials.submitPublicEvaluation(publicLink.token, { timepoint: 'T0', ratings: { overall: 6 }, descriptors: ['woody'], observation: 'Public blind scorecard.', final: true }, `public-evaluation-${suffix}`)
+  const panelContext = { ...context.context, userId: panelistUserId!, role: 'Sensory Panelist' as const, sessionId: `ses_${panelistUserId}` }
+  const panelTrials = await trials.listTrials(panelContext)
+  const panelScorecard = await trials.sensoryAssignmentsForCurrent(panelContext, sensorySession.id)
+  const panelEvaluation = await trials.submitEvaluation(panelContext, sensorySession.id, { sampleAssignmentId: assignedSample.assignmentIds.find((id) => id !== assignedSample.assignmentIds[0])!, timepoint: 'T0', ratings: { overall: 7 }, descriptors: ['woody'], observation: 'Internal blind scorecard.', final: true }, `rls-sensory-evaluation-${suffix}`)
+  const duplicatePublicEvaluation = await trials.submitPublicEvaluation(publicLink.token, { timepoint: 'T0', ratings: { overall: 6 }, descriptors: ['woody'], observation: 'Public blind scorecard.', final: true }, `public-evaluation-${suffix}`)
+  const revokedPublicLink = await trials.revokePublicLink(context.context, publicLink.id, `rls-sensory-link-revoke-${suffix}`)
+  let revokedPublicLinkDenied = false
+  try { await trials.publicPresentation(publicLink.token) } catch (error) { revokedPublicLinkDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'PUBLIC_LINK_INVALID' }
+  if (duplicatePublicEvaluation.id !== publicEvaluation.id) throw new Error('V2_RLS=FAIL duplicate public evaluation created a distinct result')
+  if (panelScorecard.assignments.length !== 1 || panelScorecard.assignments[0]?.blindCode !== 'QA71') throw new Error('V2_RLS=FAIL panelist assignment projection is not safely scoped')
+  if (trialPreparationDetail.lines.length !== 1 || trialPreparationDetail.lines[0]?.actualGrams !== 100) throw new Error('V2_RLS=FAIL trial preparation recovery projection is incomplete')
+  if (managedPanelists.length !== 1 || managedPublicLinks.length !== 1 || 'token' in (managedPublicLinks[0] ?? {})) throw new Error(`V2_RLS=FAIL sensory manager projection is unsafe or incomplete (panelists=${managedPanelists.length}, links=${managedPublicLinks.length}, keys=${Object.keys(managedPublicLinks[0] ?? {}).join(',')})`)
+  if (revokedPublicLink.status !== 'REVOKED' || !revokedPublicLinkDenied) throw new Error('V2_RLS=FAIL public scorecard revocation did not invalidate the opaque link')
+  await trials.transitionSession(context.context, sensorySession.id, 'CLOSED', {}, `rls-sensory-close-${suffix}`)
+  const unblinded = await trials.unblindSample(context.context, sensorySession.id, panel.id ? assignedSample.assignmentIds.find((id) => id !== assignedSample.assignmentIds[0])! : assignedSample.assignmentIds[0]!, { rationale: 'Controlled QA unblinding after closure.' }, `rls-sensory-unblind-${suffix}`)
+  const trialDecision = await trials.decideTrial(context.context, trial.id, { decision: 'RETEST', rationale: 'Two independent scorecards are retained as insufficient sensory evidence.' }, `rls-trial-decision-${suffix}`)
+  const trialMemory = await trials.retrieveTrialMemory(context.context, approvedFormula.id)
+  let directTrialReversalDenied = false
+  try { await lab.reverseMovement(context.context, confirmedTrialPreparation.lines[0]!.movementId, `rls-trial-direct-reversal-${suffix}`) } catch (error) { directTrialReversalDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TRIAL_REVERSAL_WORKFLOW_REQUIRED' }
+  const trialReversal = await trials.reversePreparationConsumption(context.context, trial.id, confirmedTrialPreparation.lines[0]!.movementId, `rls-trial-reversal-${suffix}`)
+  const reversedTrialUsage = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ status: string; reversalMovementId: string | null }>>('SELECT status, reversal_movement_id AS "reversalMovementId" FROM v2_trial_usage_links WHERE organization_id = $1 AND trial_id = $2', firstOrganizationId!, trial.id)
+  })
+  const panelTrialDetail = await trials.detail(panelContext, trial.id)
+  let panelUnassignedTrialDenied = false
+  try {
+    await trials.detail(panelContext, unassignedTrial.id)
+  } catch (error) {
+    panelUnassignedTrialDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED'
+  }
+  let brandTrialDetailDenied = false
+  try {
+    await trials.detail({ ...context.context, userId: brandUserId!, role: 'Brand', sessionId: `ses_${brandUserId}` }, trial.id)
+  } catch (error) {
+    brandTrialDetailDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED'
+  }
   const fefo = await lab.fefo(context.context, material.id, 150)
   const weighing = await lab.createWeighingSession(context.context, { contextType: 'AD_HOC', lines: [{ materialId: material.id, requestedGrams: 100, toleranceGrams: 0 }] }, `rls-weigh-${suffix}`)
   const confirmed = await lab.confirmWeighing(context.context, weighing.id, [{ lineId: weighing.lines[0].id, lotId: receipt.lines[0].lotId, actualGrams: 100 }], `rls-weigh-confirm-${suffix}`)
@@ -367,6 +448,7 @@ try {
   const crossTenantSentimentDenied = await deniedCode(() => consumer.invalidateSource(secondContext.context, sentimentSource.id, { reasonCode: 'CROSS_TENANT' }, `rls-cross-sentiment-${suffix}`), 'FEEDBACK_SOURCE_NOT_FOUND')
   const crossTenantFormulaDenied = await deniedCode(() => formula.projectDetail(secondContext.context, formulaProject.id), 'FORMULA_PROJECT_NOT_FOUND')
   const crossTenantAgentDenied = await deniedCode(() => agent.detail(secondContext.context, agentRun.id), 'AGENT_RUN_NOT_FOUND')
+  const crossTenantTrialDenied = await deniedCode(() => trials.detail(secondContext.context, trial.id), 'TRIAL_NOT_FOUND')
   const crossTenantEvidence = await evidence.retrieve(secondContext.context, { materialId: material.id, query: 'woody', limit: 3 })
   const invalidation = await consumer.invalidateSource(context.context, sentimentSource.id, { reasonCode: 'CONSENT_REVOKED' }, `rls-sentiment-invalidate-${suffix}`)
   const invalidatedPreference = await consumer.latestPreference(context.context, 'qa-project')
@@ -507,9 +589,39 @@ try {
     && crossTenantFormulaDenied
     && crossTenantAgentDenied
     && crossTenantEvidence.citations.length === 0
+  const phase7Pass = plannedTrial.status === 'PLANNED'
+    && releasedTrial.status === 'READY'
+    && releasedTrial.compliance.status === 'REVIEW_REQUIRED'
+    && confirmedTrialPreparation.status === 'CONFIRMED'
+    && duplicateTrialPreparation.status === 'CONFIRMED'
+    && trialSample.status === 'AVAILABLE'
+    && trialEvidence.status === 'ACTIVE'
+    && publicPresentation.presentationMode === 'BLIND'
+    && publicPresentation.title === 'Blind sensory sample'
+    && publicPresentation.sampleCode === 'QA71'
+    && publicEvaluation.final
+    && panelEvaluation.final
+    && unblinded.status === 'UNBLINDED'
+    && trialDecision.status === 'CLOSED'
+    && trialDecision.evidence.confidence === 'NOT_ENOUGH_EVIDENCE'
+    && trialMemory[0]?.evidence.confidence === 'NOT_ENOUGH_EVIDENCE'
+    && directTrialReversalDenied
+    && trialReversal.integration?.status === 'REVERSED'
+    && reversedTrialUsage[0]?.status === 'REVERSED'
+    && Boolean(reversedTrialUsage[0]?.reversalMovementId)
+    && !('formula' in panelTrialDetail.trial && panelTrialDetail.trial.formula !== undefined)
+    && panelTrialDetail.usages.length === 0
+    && panelTrialDetail.preparations.length === 0
+    && panelTrialDetail.samples.length === 0
+    && panelTrialDetail.evidence.length === 0
+    && panelTrials.length === 1
+    && panelTrials[0]?.id === trial.id
+    && panelTrials[0]?.title === 'Assigned sensory evaluation'
+    && panelUnassignedTrialDenied
+    && crossTenantTrialDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 2 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2Pass, phase3Pass, phase4Pass, phase5bPass, phase6Pass, crossTenantFormulaDenied, crossTenantAgentDenied, crossTenantEvidenceCount: crossTenantEvidence.citations.length })}`)
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass) {
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2Pass, phase3Pass, phase4Pass, phase5bPass, phase6Pass, phase7Pass, crossTenantFormulaDenied, crossTenantAgentDenied, crossTenantTrialDenied, crossTenantEvidenceCount: crossTenantEvidence.citations.length })}`)
   }
 
   console.log(JSON.stringify({
@@ -616,6 +728,28 @@ try {
       crossTenantFormulaDenied,
       crossTenantAgentDenied,
       crossTenantEvidenceCount: crossTenantEvidence.citations.length,
+    },
+    phase7: {
+      trial: trial.id,
+      released: releasedTrial.compliance.status,
+      preparation: confirmedTrialPreparation.status,
+      duplicatePreparation: duplicateTrialPreparation.status,
+      recoveredPreparationLines: trialPreparationDetail.lines.length,
+      sample: trialSample.status,
+      secondSample: secondTrialSample.status,
+      publicPresentation: publicPresentation.sampleCode,
+      publicEvaluation: publicEvaluation.final,
+      publicLinkRevoked: revokedPublicLinkDenied,
+      panelEvaluation: panelEvaluation.final,
+      panelAssignmentScope: panelTrials.length === 1 && panelUnassignedTrialDenied,
+      decision: trialDecision.decision,
+      memoryConfidence: trialDecision.evidence.confidence,
+      reversal: reversedTrialUsage[0]?.status,
+      directReversalDenied: directTrialReversalDenied,
+      managedPanelistCount: managedPanelists.length,
+      managedPublicLinkCount: managedPublicLinks.length,
+      brandTrialDetailDenied,
+      crossTenantTrialDenied,
     },
   }))
 } finally {

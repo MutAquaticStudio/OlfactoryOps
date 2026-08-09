@@ -74,6 +74,18 @@ lease fencing; agent van chi doc, khong tu tao Formula Draft hay dong kho. LLM
 provider dang `NOT_CONFIGURED`, khong co ket qua gia. Xem
 [`docs/v2/phase-6`](docs/v2/phase-6/).
 
+## Trang thai V2 Phase 7
+
+Phase 7 Trials, Sensory Sessions va Private Sensory Memory da co source V2 cho
+Trial version/release, Lab Weighing lien ket immutable inventory ledger,
+sensory form/session/scorecard, public link token-hash va private memory co
+nguong evidence. `npm.cmd run v2:postgres:verify` va
+`npm.cmd run v2:postgres:rls`, unit/regression, lint/build, secret/dependency
+scan va browser E2E 12 role da `PASS` tren disposable loopback PostgreSQL.
+Panelist chi thay blind assignment cua minh; operational reader moi co broad
+Trial read. `PHASE_7_READY = YES` cho checkpoint local. Xem [`docs/v2/phase-7`](docs/v2/phase-7/) va
+[`PHASE_7_IMPLEMENTATION_REPORT.md`](docs/v2/phase-7/PHASE_7_IMPLEMENTATION_REPORT.md).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

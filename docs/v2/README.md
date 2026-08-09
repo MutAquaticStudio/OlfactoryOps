@@ -79,3 +79,15 @@ bounded evidence retrieval and durable research runs. Agent confirmation is
 durable, expires safely, can retry only within its ceiling and is lease-fenced;
 it remains read-only. The server-only LLM gateway truthfully reports
 `NOT_CONFIGURED`; no provider completion is faked. See `phase-6/`.
+
+## Trang thai Phase 7
+
+Phase 7 Trials, Sensory Sessions va Private Sensory Memory co migration,
+contract, service va controller V2 trong working tree. Tai lieu Phase 7 ghi
+ro Trial/sensory state machine, Phase 2 immutable-ledger integration, tenant
+RLS, redaction, token-scoped public scorecard link va private-memory threshold.
+`v2:postgres:verify`, `v2:postgres:rls`, contract/regression, lint/build,
+secret/dependency scan va ma tran browser 12 role deu `PASS` tren disposable
+loopback PostgreSQL. Panelist chi co assignment-scoped blind access qua
+`trials.viewAssigned`; operational readers dung `trials.viewAll`. Xem
+`phase-7/` va `phase-7/PHASE_7_IMPLEMENTATION_REPORT.md`.

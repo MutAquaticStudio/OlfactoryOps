@@ -16,6 +16,7 @@ const migrations = [
   'infra/postgres/migrations/0008_phase6_formula_design_studio.sql',
   'infra/postgres/migrations/0009_phase4_6_completion_records.sql',
   'infra/postgres/migrations/0010_phase4_6_tenant_fk_hardening.sql',
+  'infra/postgres/migrations/0011_phase7_trials_sensory.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -84,6 +85,30 @@ try {
       if (!pin || row.repository !== pin.repository || row.license !== pin.license || row.license_evidence_status !== pin.licenseEvidenceStatus || row.upstream_ref !== pin.upstreamRef || row.upstream_commit !== pin.upstreamCommit || row.adapter_version !== pin.adapterVersion || row.patch_status !== pin.patchStatus || row.compatibility_test !== pin.compatibilityTest || row.manifest_hash !== componentHash(pin)) {
         throw new Error(`Model component registry diverged for ${row.component_key}`)
       }
+    }
+    const phase7Tables = [
+      'v2_trials', 'v2_trial_versions', 'v2_trial_releases', 'v2_trial_preparations', 'v2_trial_usage_links', 'v2_trial_material_usages', 'v2_trial_samples', 'v2_trial_evidence',
+  'v2_sensory_form_versions', 'v2_sensory_sessions', 'v2_sensory_panel_assignments', 'v2_sensory_sample_assignments', 'v2_sensory_public_links', 'v2_sensory_evaluations', 'v2_sensory_public_submission_requests', 'v2_trial_decisions',
+      'v2_private_sensory_memories', 'v2_private_sensory_memory_versions', 'v2_private_sensory_memory_sources', 'v2_sensory_memory_jobs',
+    ]
+    const phase7Rls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, phase7Tables)
+    if (phase7Rls.length !== phase7Tables.length || phase7Rls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Phase 7 table or forced RLS policy is missing')
+    }
+    const resolver = await client.$queryRawUnsafe(`
+      SELECT p.prosecdef AS security_definer
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'v2_resolve_sensory_public_link'
+        AND pg_get_function_identity_arguments(p.oid) = 'p_token_hash text'
+    `)
+    if (resolver.length !== 1 || !resolver[0].security_definer) {
+      throw new Error('Phase 7 public sensory link resolver is missing or not SECURITY DEFINER')
     }
   } finally {
     await client.$disconnect()

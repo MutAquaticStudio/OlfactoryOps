@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const V2_PERMISSION_REGISTRY_VERSION = '2.0.0'
+export const V2_PERMISSION_REGISTRY_VERSION = '2.2.0'
 
 export const permissionGroupSchema = z.enum([
   'tenant', 'security', 'members', 'materials', 'suppliers', 'inventory', 'procurement', 'formula', 'trials', 'sensory',
@@ -57,13 +57,16 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('formula.edit', 'formula', 'Edit formula drafts', true),
   definition('formula.review', 'formula', 'Review formula versions', true),
   definition('formula.approve', 'formula', 'Approve a formula version', true, true),
-  definition('trials.view', 'trials', 'View trials and decisions'),
+  definition('trials.view', 'trials', 'Legacy Trial read capability retained for policy migration compatibility'),
+  definition('trials.viewAll', 'trials', 'View all tenant Trial records and evidence'),
+  definition('trials.viewAssigned', 'trials', 'View only sensory Trial presentations explicitly assigned to the current member'),
   definition('trials.create', 'trials', 'Create and plan a trial', true),
   definition('trials.release', 'trials', 'Release a trial for execution', true, true),
   definition('trials.decide', 'trials', 'Close a trial decision', true, true),
   definition('sensory.view', 'sensory', 'View authorized sensory evidence'),
   definition('sensory.evaluate', 'sensory', 'Submit a sensory evaluation', true),
   definition('sensory.manage', 'sensory', 'Manage sensory sessions and panelists', true, true),
+  definition('sensory.unblind', 'sensory', 'Unblind a controlled sensory assignment with an audit reason', true, true),
   definition('production.view', 'production', 'View production work'),
   definition('production.weigh', 'production', 'Execute production weighing', true),
   definition('production.qc', 'production', 'Record or approve QC evidence', true, true),

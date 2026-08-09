@@ -10,7 +10,8 @@ import { allocateLandedCost, selectFefo } from './ledger.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
 
-type Transaction = Prisma.TransactionClient
+export type LabOperationsTransaction = Prisma.TransactionClient
+type Transaction = LabOperationsTransaction
 type JsonRecord = Record<string, unknown>
 type IdempotencyRow = { requestHash: string; response: unknown }
 type LotRow = {
@@ -19,6 +20,33 @@ type LotRow = {
 }
 
 const EPSILON = 0.000001
+
+export type LabWeighingSessionInput = {
+  contextType: 'FORMULA' | 'TRIAL' | 'PRODUCTION' | 'AD_HOC'
+  contextId?: string
+  lines: Array<{ materialId: string; requestedGrams: number; lotId?: string; reservationId?: string; actualGrams?: number; toleranceGrams: number }>
+}
+
+export type LabWeighingSessionRecord = { id: string; contextType: LabWeighingSessionInput['contextType']; contextId: string | null; status: string }
+export type LabWeighingCreatedLine = { id: string; materialId: string; requestedGrams: number }
+export type LabWeighingConfirmedLine = { lineId: string; materialId: string; lotId: string; actualGrams: number; movementId: string; landedUnitCost: number | null; currency: string | null }
+
+/**
+ * Domain modules attach their own immutable lineage inside the same inventory
+ * transaction. This avoids a successful consumption without its Trial or
+ * Production evidence when a process is interrupted between writes.
+ */
+export type LabWeighingCreateHook = {
+  beforeCreate?: (tx: LabOperationsTransaction, session: Omit<LabWeighingSessionRecord, 'status'>, input: LabWeighingSessionInput) => Promise<void>
+  afterCreate?: (tx: LabOperationsTransaction, session: LabWeighingSessionRecord, lines: LabWeighingCreatedLine[]) => Promise<unknown>
+}
+export type LabWeighingConfirmationHook = {
+  beforeConfirm?: (tx: LabOperationsTransaction, session: LabWeighingSessionRecord, lines: Array<{ id: string; materialId: string; requestedGrams: number; toleranceGrams: number }>) => Promise<void>
+  afterConfirm?: (tx: LabOperationsTransaction, session: LabWeighingSessionRecord, lines: LabWeighingConfirmedLine[]) => Promise<unknown>
+}
+export type LabMovementReversalHook = {
+  afterReverse?: (tx: LabOperationsTransaction, original: { id: string; lotId: string; materialId: string; movementType: string }, reversal: { id: string; reversalOfId: string }) => Promise<unknown>
+}
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
@@ -658,10 +686,13 @@ export class LabOperationsService {
     })
   }
 
-  async createWeighingSession(context: PlatformContext, input: { contextType: 'FORMULA' | 'TRIAL' | 'PRODUCTION' | 'AD_HOC'; contextId?: string; lines: Array<{ materialId: string; requestedGrams: number; lotId?: string; reservationId?: string; actualGrams?: number; toleranceGrams: number }> }, idempotencyKey?: string) {
+  async createWeighingSession(context: PlatformContext, input: LabWeighingSessionInput, idempotencyKey?: string, hook?: LabWeighingCreateHook) {
     await this.require(context, 'inventory.consume')
+    if (input.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_WEIGHING_WORKFLOW_REQUIRED', 'Trial weighing must be started from the Trial workflow.', 409)
     return this.idempotent(context, 'inventory.weighing.create', idempotencyKey, input, async (tx) => {
       const id = identifier('weigh')
+      const session = { id, contextType: input.contextType, contextId: input.contextId ?? null }
+      await hook?.beforeCreate?.(tx, session, input)
       await tx.$executeRaw`INSERT INTO v2_lab_weighing_sessions (id, organization_id, context_type, context_id, created_by) VALUES (${id}, ${context.organizationId}, ${input.contextType}, ${input.contextId ?? null}, ${context.userId})`
       const lines: Array<{ id: string; materialId: string; requestedGrams: number }> = []
       for (const line of input.lines) {
@@ -680,21 +711,26 @@ export class LabOperationsService {
         await tx.$executeRaw`INSERT INTO v2_lab_weighing_lines (id, organization_id, session_id, material_id, lot_id, reservation_id, requested_g, actual_g, tolerance_g) VALUES (${lineId}, ${context.organizationId}, ${id}, ${line.materialId}, ${line.lotId ?? null}, ${line.reservationId ?? null}, ${line.requestedGrams}, ${line.actualGrams ?? null}, ${line.toleranceGrams})`
         lines.push({ id: lineId, materialId: line.materialId, requestedGrams: line.requestedGrams })
       }
+      const integration = await hook?.afterCreate?.(tx, { ...session, status: 'PLANNED' }, lines)
       await this.audit(tx, context, 'lab_ops.weighing.create', 'allowed', 'weighing_session', id, input)
-      return { id, status: 'PLANNED', lines }
+      return { id, status: 'PLANNED', lines, integration }
     })
   }
 
-  async confirmWeighing(context: PlatformContext, sessionId: string, lines: Array<{ lineId: string; lotId: string; actualGrams: number }>, idempotencyKey?: string) {
+  async confirmWeighing(context: PlatformContext, sessionId: string, lines: Array<{ lineId: string; lotId: string; actualGrams: number }>, idempotencyKey?: string, hook?: LabWeighingConfirmationHook) {
     await this.require(context, 'inventory.consume')
     return this.idempotent(context, 'inventory.weighing.confirm', idempotencyKey, { sessionId, lines }, async (tx) => {
-      const sessions = await tx.$queryRaw<Array<{ id: string; status: string }>>`SELECT id, status FROM v2_lab_weighing_sessions WHERE id = ${sessionId} AND organization_id = ${context.organizationId} FOR UPDATE`
+      const sessions = await tx.$queryRaw<Array<{ id: string; status: string; contextType: LabWeighingSessionInput['contextType']; contextId: string | null }>>`SELECT id, status, context_type AS "contextType", context_id AS "contextId" FROM v2_lab_weighing_sessions WHERE id = ${sessionId} AND organization_id = ${context.organizationId} FOR UPDATE`
       if (!sessions.length) throw new PlatformError('WEIGHING_NOT_FOUND', 'The weighing session is not available in this workspace.', 404)
       if (sessions[0].status !== 'PLANNED' && sessions[0].status !== 'IN_PROGRESS') throw new PlatformError('WEIGHING_ALREADY_CONFIRMED', 'This weighing session cannot be confirmed again.', 409)
+      const session: LabWeighingSessionRecord = sessions[0]
+      if (session.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_WEIGHING_WORKFLOW_REQUIRED', 'Trial weighing must be confirmed from the Trial workflow.', 409)
       const sessionLines = await tx.$queryRaw<Array<{ id: string; materialId: string; reservationId: string | null; requestedGrams: Prisma.Decimal; toleranceGrams: Prisma.Decimal }>>`
         SELECT id, material_id AS "materialId", reservation_id AS "reservationId", requested_g AS "requestedGrams", tolerance_g AS "toleranceGrams" FROM v2_lab_weighing_lines WHERE session_id = ${sessionId} AND organization_id = ${context.organizationId}
       `
       if (sessionLines.length !== lines.length) throw new PlatformError('WEIGHING_LINES_MISMATCH', 'Provide one actual amount for every weighing line.', 422)
+      await hook?.beforeConfirm?.(tx, session, sessionLines.map((line) => ({ id: line.id, materialId: line.materialId, requestedGrams: asNumber(line.requestedGrams), toleranceGrams: asNumber(line.toleranceGrams) })))
+      const confirmedLines: LabWeighingConfirmedLine[] = []
       for (const confirmed of lines) {
         const line = sessionLines.find((candidate) => candidate.id === confirmed.lineId)
         if (!line) throw new PlatformError('WEIGHING_LINES_MISMATCH', 'The weighing line is not part of this session.', 422)
@@ -723,12 +759,14 @@ export class LabOperationsService {
         const movementId = identifier('move')
         await tx.$executeRaw`INSERT INTO v2_inventory_movements (id, organization_id, lot_id, material_id, movement_type, quantity_delta_g, reference_type, reference_id, idempotency_key, actor_user_id) VALUES (${movementId}, ${context.organizationId}, ${lot.id}, ${line.materialId}, 'CONSUMPTION', ${-confirmed.actualGrams}, 'LAB_WEIGHING', ${sessionId}, ${`${idempotencyKey}:${confirmed.lineId}`}, ${context.userId})`
         await tx.$executeRaw`UPDATE v2_lab_weighing_lines SET lot_id = ${lot.id}, actual_g = ${confirmed.actualGrams}, consumption_movement_id = ${movementId} WHERE id = ${line.id} AND organization_id = ${context.organizationId}`
+        confirmedLines.push({ lineId: line.id, materialId: line.materialId, lotId: lot.id, actualGrams: confirmed.actualGrams, movementId, landedUnitCost: lot.landedUnitCost === null ? null : asNumber(lot.landedUnitCost), currency: lot.currency })
         const after = await this.lotProjection(tx, context, lot.id)
         if (after.onHandGrams <= EPSILON) await tx.$executeRaw`UPDATE v2_inventory_lots SET status = 'EXHAUSTED', updated_at = now() WHERE id = ${lot.id} AND organization_id = ${context.organizationId}`
       }
       await tx.$executeRaw`UPDATE v2_lab_weighing_sessions SET status = 'CONFIRMED', confirmed_by = ${context.userId}, confirmed_at = now(), updated_at = now() WHERE id = ${sessionId} AND organization_id = ${context.organizationId}`
+      const integration = await hook?.afterConfirm?.(tx, { ...session, status: 'CONFIRMED' }, confirmedLines)
       await this.audit(tx, context, 'lab_ops.weighing.confirm', 'allowed', 'weighing_session', sessionId, { lines })
-      return { id: sessionId, status: 'CONFIRMED' }
+      return { id: sessionId, status: 'CONFIRMED', lines: confirmedLines, integration }
     })
   }
 
@@ -824,15 +862,19 @@ export class LabOperationsService {
     catch { throw new PlatformError('LOT_NOT_ELIGIBLE', 'No eligible quality-approved lot can satisfy the requested quantity.', 409) }
   }
 
-  async reverseMovement(context: PlatformContext, movementId: string, idempotencyKey?: string) {
+  async reverseMovement(context: PlatformContext, movementId: string, idempotencyKey?: string, hook?: LabMovementReversalHook) {
     await this.require(context, 'inventory.reverse')
     return this.idempotent(context, 'inventory.movements.reverse', idempotencyKey, { movementId }, async (tx) => {
-      const rows = await tx.$queryRaw<Array<{ id: string; lotId: string; materialId: string; movementType: string; quantityDelta: Prisma.Decimal; reversalOfId: string | null }>>`
-        SELECT id, lot_id AS "lotId", material_id AS "materialId", movement_type AS "movementType", quantity_delta_g AS "quantityDelta", reversal_of_id AS "reversalOfId"
+      const rows = await tx.$queryRaw<Array<{ id: string; lotId: string; materialId: string; movementType: string; quantityDelta: Prisma.Decimal; reversalOfId: string | null; referenceId: string | null }>>`
+        SELECT id, lot_id AS "lotId", material_id AS "materialId", movement_type AS "movementType", quantity_delta_g AS "quantityDelta", reversal_of_id AS "reversalOfId", reference_id AS "referenceId"
         FROM v2_inventory_movements WHERE id = ${movementId} AND organization_id = ${context.organizationId} FOR UPDATE
       `
       const original = rows[0]
       if (!original || original.reversalOfId || ['RESERVE', 'RELEASE_RESERVATION'].includes(original.movementType)) throw new PlatformError('MOVEMENT_NOT_REVERSIBLE', 'Only stock movements may be corrected with a compensating entry.', 409)
+      if (original.referenceId) {
+        const sessions = await tx.$queryRaw<Array<{ contextType: string }>>`SELECT context_type AS "contextType" FROM v2_lab_weighing_sessions WHERE id = ${original.referenceId} AND organization_id = ${context.organizationId}`
+        if (sessions[0]?.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_REVERSAL_WORKFLOW_REQUIRED', 'Reverse Trial consumption through its controlled Trial workflow.', 409)
+      }
       const reversed = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_inventory_movements WHERE organization_id = ${context.organizationId} AND reversal_of_id = ${movementId}`
       if (reversed.length) throw new PlatformError('MOVEMENT_ALREADY_REVERSED', 'This movement already has a compensating reversal.', 409)
       await this.lot(tx, context, original.lotId, true)
@@ -843,8 +885,9 @@ export class LabOperationsService {
       }
       const id = identifier('move')
       await tx.$executeRaw`INSERT INTO v2_inventory_movements (id, organization_id, lot_id, material_id, movement_type, quantity_delta_g, reference_type, reference_id, idempotency_key, actor_user_id, reversal_of_id) VALUES (${id}, ${context.organizationId}, ${original.lotId}, ${original.materialId}, 'ADJUSTMENT', ${reversalDelta}, 'MOVEMENT_REVERSAL', ${movementId}, ${idempotencyKey}, ${context.userId}, ${movementId})`
+      const integration = hook?.afterReverse ? await hook.afterReverse(tx, original, { id, reversalOfId: movementId }) : undefined
       await this.audit(tx, context, 'lab_ops.inventory.movement.reverse', 'allowed', 'inventory_movement', movementId, { reversalId: id })
-      return { id, reversalOfId: movementId }
+      return { id, reversalOfId: movementId, ...(integration === undefined ? {} : { integration }) }
     })
   }
 }

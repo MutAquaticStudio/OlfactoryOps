@@ -15,5 +15,6 @@ import { PlatformService } from '../../../services/platform/src/service.js'
       useFactory: (platform: PlatformService) => new LabOperationsService(new PrismaClient(), platform),
     },
   ],
+  exports: [LabOperationsService],
 })
 export class V2LabOperationsModule {}

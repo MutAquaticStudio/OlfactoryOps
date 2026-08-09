@@ -209,27 +209,7 @@ export class V2PlatformController {
 
   private async mutateGuard(request: FastifyRequest, context: PlatformContext, csrfToken?: string) { if (!requestOriginAllowed(request)) throw new PlatformError('ORIGIN_DENIED', 'Request origin is not allowed.', 403); await this.platform.assertCsrf(context, cookieValue(request, this.platform.cookieName) ?? '', csrfToken) }
   private async platformCapabilities(context: PlatformContext) {
-    const result: Record<string, boolean> = {}
-    const permissions = [
-      'tenant.view',
-      'security.sessions.view', 'security.profile.view', 'security.sessions.revoke',
-      'members.view', 'members.invite', 'members.manageRoles',
-      'domains.view', 'domains.manage',
-      'billing.capabilities', 'notifications.view', 'notifications.manage',
-      'privacy.export.self', 'workspace.export.request', 'observability.view',
-      'materials.view', 'materials.viewSensitive', 'materials.edit', 'materials.approve',
-      'inventory.view', 'inventory.receive', 'inventory.reserve', 'inventory.consume', 'inventory.adjust', 'inventory.transfer', 'inventory.reverse',
-      'formula.view', 'formula.edit',
-      'trials.view', 'sensory.view', 'sensory.evaluate',
-      'scientific_ai.use', 'rag.view',
-      'suppliers.view', 'suppliers.edit', 'suppliers.approve', 'procurement.view', 'procurement.create', 'procurement.approve', 'procurement.receive', 'procurement.inspect',
-      'production.view', 'production.qc',
-      'costing.view', 'costing.viewMargin', 'finance.viewMargin'
-    ]
-    for (const permission of permissions) {
-      try { await this.platform.requirePermission(context, permission); result[permission] = true } catch { result[permission] = false }
-    }
-    return result
+    return this.platform.capabilityProjection(context)
   }
   private normalize(error: unknown) { if (error instanceof PlatformError) return error; if (error instanceof Error && error.message === 'V2_DATABASE_NOT_CONFIGURED') return new PlatformError('V2_DATABASE_NOT_CONFIGURED', 'V2 platform database is not configured for this environment.', 503); return new PlatformError('NOT_CONFIGURED', 'The platform request could not be completed.', 503) }
 }

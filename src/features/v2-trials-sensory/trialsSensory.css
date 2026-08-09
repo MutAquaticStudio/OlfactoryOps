@@ -1,0 +1,717 @@
+.v2-trials-workspace {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.v2-trials-heading,
+.v2-trials-panel-heading,
+.v2-trials-list-toolbar,
+.v2-sensory-scorecard-header,
+.v2-public-sensory-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.v2-trials-heading h2,
+.v2-public-sensory-header h1 {
+  margin: 7px 0 8px;
+  color: #f2f0e8;
+  font-size: 1.85rem;
+  line-height: 1.14;
+}
+
+.v2-trials-heading p,
+.v2-trials-panel-heading p,
+.v2-trials-list-toolbar p,
+.v2-trials-session p,
+.v2-public-sensory-header p {
+  margin: 0;
+  color: #aab8af;
+  line-height: 1.5;
+}
+
+.v2-trials-heading-actions,
+.v2-trials-actions,
+.v2-trials-session-actions,
+.v2-sensory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.v2-trials-heading-actions .v2-secondary-button,
+.v2-trials-heading-actions .v2-primary-button,
+.v2-trials-actions .v2-secondary-button,
+.v2-trials-actions .v2-primary-button,
+.v2-trials-session-actions .v2-secondary-button,
+.v2-trials-session-actions .v2-primary-button,
+.v2-sensory-actions .v2-secondary-button,
+.v2-sensory-actions .v2-primary-button {
+  margin: 0;
+}
+
+.v2-trials-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.v2-trials-summary-grid > div {
+  min-width: 0;
+  border-bottom: 1px solid #2c3b34;
+  padding: 0 0 13px;
+}
+
+.v2-trials-summary-grid span {
+  display: block;
+  margin-bottom: 5px;
+  color: #8fa096;
+  font-size: .75rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.v2-trials-summary-grid strong {
+  color: #f2f0e8;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.v2-trials-panel {
+  min-width: 0;
+  border: 1px solid #2c3b34;
+  border-radius: 8px;
+  background: #151b18;
+  padding: 18px;
+}
+
+.v2-trials-panel h3,
+.v2-trials-panel h4,
+.v2-sensory-scorecard h3 {
+  margin: 0;
+  color: #f2f0e8;
+}
+
+.v2-trials-panel h3 {
+  font-size: 1.08rem;
+}
+
+.v2-trials-panel h4 {
+  font-size: .9rem;
+}
+
+.v2-trials-create-form,
+.v2-trials-panel > .v2-alert,
+.v2-trials-panel > .v2-trials-form-grid,
+.v2-trials-panel > .v2-trials-inline-form,
+.v2-trials-panel > .v2-trials-record-grid,
+.v2-trials-panel > .v2-trials-session-list,
+.v2-trials-panel > .v2-trials-usage-list,
+.v2-trials-panel > .v2-trials-assignment-picker {
+  margin-top: 18px;
+}
+
+.v2-trials-form-grid,
+.v2-trials-inline-form,
+.v2-sensory-dimensions,
+.v2-sensory-notes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.v2-trials-inline-form {
+  align-items: end;
+}
+
+.v2-trials-form-grid label,
+.v2-trials-inline-form label,
+.v2-trials-list-toolbar label,
+.v2-trials-assignment-picker,
+.v2-sensory-timepoint,
+.v2-sensory-notes label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #d5ddd7;
+  font-size: .82rem;
+}
+
+.v2-trials-form-grid input,
+.v2-trials-form-grid select,
+.v2-trials-form-grid textarea,
+.v2-trials-inline-form input,
+.v2-trials-inline-form select,
+.v2-trials-list-toolbar select,
+.v2-trials-assignment-picker select,
+.v2-sensory-scorecard input:not([type='checkbox']):not([type='radio']),
+.v2-sensory-scorecard select,
+.v2-sensory-scorecard textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #35483e;
+  border-radius: 6px;
+  background: #0e1311;
+  color: #f2f0e8;
+  padding: 10px 11px;
+  font: inherit;
+}
+
+.v2-trials-form-grid textarea,
+.v2-sensory-scorecard textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.v2-trials-form-grid input:focus-visible,
+.v2-trials-form-grid select:focus-visible,
+.v2-trials-form-grid textarea:focus-visible,
+.v2-trials-inline-form input:focus-visible,
+.v2-trials-inline-form select:focus-visible,
+.v2-trials-list-toolbar select:focus-visible,
+.v2-trials-assignment-picker select:focus-visible,
+.v2-sensory-scorecard input:focus-visible,
+.v2-sensory-scorecard select:focus-visible,
+.v2-sensory-scorecard textarea:focus-visible {
+  outline: 2px solid #7eb49d;
+  outline-offset: 2px;
+  border-color: #7eb49d;
+}
+
+.v2-trials-span-all {
+  grid-column: 1 / -1;
+}
+
+.v2-trials-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+  min-height: 42px;
+}
+
+.v2-trials-checkbox input {
+  inline-size: 16px;
+  block-size: 16px;
+  accent-color: #7eb49d;
+}
+
+.v2-trials-list-toolbar {
+  align-items: end;
+  margin-bottom: 14px;
+}
+
+.v2-trials-list-toolbar h3 {
+  margin-bottom: 5px;
+}
+
+.v2-trials-list {
+  display: grid;
+  gap: 7px;
+}
+
+.v2-trial-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.45fr) minmax(90px, .55fr) minmax(120px, .8fr) minmax(150px, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  background: transparent;
+  color: #cbd5ce;
+  padding: 12px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.v2-trial-row:hover {
+  border-color: #527361;
+  background: #18211d;
+}
+
+.v2-trial-row:focus-visible {
+  outline: 2px solid #7eb49d;
+  outline-offset: 2px;
+}
+
+.v2-trial-row > span:not(.v2-trial-row-title) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #aab8af;
+  font-size: .82rem;
+}
+
+.v2-trial-row-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.v2-trial-row-title strong {
+  overflow-wrap: anywhere;
+}
+
+.v2-trial-row-title small {
+  color: #8fa096;
+}
+
+.v2-trial-status {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border: 1px solid #41594c;
+  border-radius: 999px;
+  background: #17221d;
+  color: #c2e5ce;
+  padding: 4px 8px;
+  font-size: .73rem;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.v2-trial-status.is-cancelled,
+.v2-trial-status.is-voided {
+  border-color: #854c4c;
+  background: #2c1717;
+  color: #f2c9c9;
+}
+
+.v2-trial-status.is-draft,
+.v2-trial-status.is-planned,
+.v2-trial-status.is-scheduled {
+  border-color: #7d6939;
+  background: #292312;
+  color: #eadb9b;
+}
+
+.v2-trials-record-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.v2-trials-record-grid > div,
+.v2-trials-usage-list {
+  min-width: 0;
+}
+
+.v2-trials-record-grid h4,
+.v2-trials-usage-list h4 {
+  margin: 0 0 9px;
+}
+
+.v2-trials-record {
+  display: grid;
+  grid-template-columns: minmax(100px, .8fr) minmax(120px, 1fr) minmax(100px, .8fr) minmax(100px, .8fr);
+  gap: 9px;
+  align-items: center;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding: 10px 0;
+  min-width: 0;
+}
+
+.v2-trials-record span,
+.v2-trials-record strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.v2-trials-record span {
+  color: #aab8af;
+  font-size: .8rem;
+}
+
+.v2-trials-session-list {
+  display: grid;
+  gap: 10px;
+}
+
+.v2-trials-session {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid rgb(255 255 255 / 11%);
+  padding-top: 13px;
+}
+
+.v2-trials-session h4 {
+  margin: 5px 0;
+}
+
+.v2-trials-session-actions {
+  justify-content: flex-end;
+}
+
+.v2-trials-session-actions .v2-secondary-button,
+.v2-trials-session-actions .v2-primary-button {
+  min-height: 38px;
+}
+
+.v2-trials-loading,
+.v2-public-sensory-state {
+  display: grid;
+  min-height: 140px;
+  place-items: center;
+  color: #b8c6bd;
+}
+
+.v2-trials-back {
+  justify-self: start;
+  padding-left: 0;
+}
+
+.v2-sensory-scorecard {
+  display: grid;
+  gap: 18px;
+}
+
+.v2-sensory-scorecard-header {
+  align-items: end;
+  border-bottom: 1px solid #2c3b34;
+  padding-bottom: 14px;
+}
+
+.v2-sensory-scorecard-header h3 {
+  margin-top: 5px;
+  font-size: 1.18rem;
+}
+
+.v2-sensory-timepoint {
+  min-width: min(100%, 170px);
+}
+
+.v2-sensory-dimensions {
+  align-items: start;
+}
+
+.v2-sensory-field {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+  border: 1px solid #314238;
+  border-radius: 6px;
+  padding: 13px;
+}
+
+.v2-sensory-field > span,
+.v2-sensory-field legend {
+  color: #dfe8e0;
+  font-size: .86rem;
+}
+
+.v2-sensory-field legend {
+  padding: 0 4px;
+}
+
+.v2-sensory-field em {
+  margin-left: 8px;
+  color: #8dc9ab;
+  font-size: .7rem;
+  font-style: normal;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.v2-sensory-field small {
+  color: #8fa096;
+  font-size: .75rem;
+}
+
+.v2-sensory-option-list,
+.v2-sensory-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.v2-sensory-option-list label,
+.v2-sensory-chip-list label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid #41594c;
+  border-radius: 6px;
+  color: #cbd5ce;
+  padding: 4px 8px;
+  font-size: .8rem;
+}
+
+.v2-sensory-option-list input,
+.v2-sensory-chip-list input {
+  inline-size: 15px;
+  block-size: 15px;
+  margin: 0;
+  accent-color: #7eb49d;
+}
+
+.v2-sensory-chip-list label.is-selected {
+  border-color: #7eb49d;
+  background: #1b2922;
+  color: #f2f0e8;
+}
+
+.v2-sensory-notes {
+  align-items: start;
+}
+
+.v2-sensory-notes label:last-child {
+  grid-column: 1 / -1;
+  max-width: 180px;
+}
+
+.v2-public-sensory-page {
+  min-height: 100dvh;
+  background: #0c0f0e;
+  color: #f2f0e8;
+  padding: 24px;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.v2-public-sensory-shell {
+  display: grid;
+  width: min(100%, 840px);
+  gap: 22px;
+  margin: 0 auto;
+}
+
+.v2-public-sensory-header {
+  padding: 16px 0;
+}
+
+.v2-public-sensory-shell > .v2-sensory-scorecard {
+  border: 1px solid #2c3b34;
+  border-radius: 8px;
+  background: #151b18;
+  padding: 22px;
+}
+
+.v2-trials-preparation-form,
+.v2-trials-confirmation,
+.v2-trials-sensory-form,
+.v2-trials-public-link-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.v2-trials-operations-note {
+  border-left: 3px solid #7eb49d;
+  color: #cbd5ce;
+  padding: 9px 11px;
+}
+
+.v2-trials-preparation-lines,
+.v2-trials-confirmation-lines,
+.v2-trials-dimension-list,
+.v2-trials-manager-session-list,
+.v2-trials-manager-records,
+.v2-trials-preparation-history {
+  display: grid;
+  gap: 10px;
+}
+
+.v2-trials-preparation-history,
+.v2-trials-confirmation,
+.v2-trials-manager-session-list {
+  margin-top: 18px;
+}
+
+.v2-trials-preparation-line {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.15fr) repeat(4, minmax(110px, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding-top: 11px;
+}
+
+.v2-trials-confirmation-lines .v2-trials-preparation-line {
+  grid-template-columns: minmax(150px, 1.3fr) minmax(150px, 1fr) minmax(120px, .7fr);
+}
+
+.v2-trials-preparation-line > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.v2-trials-preparation-line small {
+  color: #8fa096;
+  font-size: .76rem;
+}
+
+.v2-trials-preparation-line label,
+.v2-trials-dimension-row label,
+.v2-trials-issued-link {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #d5ddd7;
+  font-size: .82rem;
+}
+
+.v2-trials-preparation-line input,
+.v2-trials-preparation-line select,
+.v2-trials-dimension-row input,
+.v2-trials-dimension-row select,
+.v2-trials-issued-link input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #35483e;
+  border-radius: 6px;
+  background: #0e1311;
+  color: #f2f0e8;
+  padding: 10px 11px;
+  font: inherit;
+}
+
+.v2-trials-preparation-line input:focus-visible,
+.v2-trials-preparation-line select:focus-visible,
+.v2-trials-dimension-row input:focus-visible,
+.v2-trials-dimension-row select:focus-visible,
+.v2-trials-issued-link input:focus-visible {
+  outline: 2px solid #7eb49d;
+  outline-offset: 2px;
+  border-color: #7eb49d;
+}
+
+.v2-trials-evidence-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.v2-trials-evidence-threshold {
+  display: grid;
+  gap: 4px;
+  border-left: 3px solid #7eb49d;
+  color: #cbd5ce;
+  padding: 10px 12px;
+}
+
+.v2-trials-evidence-threshold.is-insufficient {
+  border-left-color: #d7b864;
+}
+
+.v2-trials-evidence-threshold span {
+  color: #aab8af;
+  font-size: .82rem;
+}
+
+.v2-trials-dimension-list h4,
+.v2-trials-manager-records h5,
+.v2-trials-public-link-form h5,
+.v2-trials-preparation-history h4 {
+  margin: 0;
+  color: #f2f0e8;
+}
+
+.v2-trials-dimension-row {
+  display: grid;
+  grid-template-columns: minmax(105px, .8fr) minmax(140px, 1fr) minmax(120px, .9fr) repeat(2, minmax(85px, .55fr)) minmax(130px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding-top: 11px;
+}
+
+.v2-trials-manager-session {
+  border-top: 1px solid rgb(255 255 255 / 11%);
+  padding-top: 14px;
+}
+
+.v2-trials-manager-session h4 {
+  margin: 4px 0 5px;
+}
+
+.v2-trials-manager-body {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.v2-trials-manager-records .v2-trials-record {
+  grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(100px, .8fr));
+}
+
+.v2-trials-issued-link {
+  gap: 8px;
+  border: 1px solid #41594c;
+  border-radius: 6px;
+  background: #121a16;
+  padding: 12px;
+}
+
+.v2-trials-issued-link > div {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.v2-trials-issued-link small {
+  color: #8fa096;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .v2-trials-heading,
+  .v2-trials-panel-heading,
+  .v2-trials-list-toolbar,
+  .v2-sensory-scorecard-header,
+  .v2-public-sensory-header,
+  .v2-trials-session {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .v2-trials-summary-grid,
+  .v2-trials-form-grid,
+  .v2-trials-inline-form,
+  .v2-trials-record-grid,
+  .v2-sensory-dimensions,
+  .v2-sensory-notes,
+  .v2-trials-preparation-line,
+  .v2-trials-confirmation-lines .v2-trials-preparation-line,
+  .v2-trials-dimension-row,
+  .v2-trials-manager-records .v2-trials-record {
+    grid-template-columns: 1fr;
+  }
+
+  .v2-trials-span-all,
+  .v2-sensory-notes label:last-child {
+    grid-column: auto;
+    max-width: none;
+  }
+
+  .v2-trial-row,
+  .v2-trials-record {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .v2-trials-session-actions {
+    justify-content: flex-start;
+  }
+
+  .v2-public-sensory-page {
+    padding: 16px;
+  }
+
+  .v2-public-sensory-shell > .v2-sensory-scorecard {
+    padding: 16px;
+  }
+
+  .v2-trials-issued-link > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

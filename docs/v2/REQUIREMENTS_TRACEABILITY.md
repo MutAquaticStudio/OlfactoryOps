@@ -137,3 +137,18 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-RAG-* | Approved-source material evidence indexing and bounded tenant-scoped citation retrieval | PASS |
 | Provider live smoke | No server-side test credential is configured | BLOCKED |
 | Remote migration and production deploy | Local checkpoint only | NOT_APPLICABLE |
+
+## Phase 7 evidence (2026-08-09)
+
+| Requirement family | Phase 7 implementation surface | Status |
+|---|---|---|
+| FR-TRIAL-* | Trial source/version/release/preparation, multi-sample, evidence/decision, Formula snapshot and deterministic Phase 2 weighing bridge; disposable RLS workflow | PASS |
+| FR-SENS-* | Versioned form, session/panel/sample assignment, blinded evaluation, controlled unblind, panelist `/assignments/me` and public scorecard idempotency; disposable RLS workflow | PASS |
+| FR-MEM-* | Tenant-private versioned sensory memory, source-set provenance and minimum independent-evidence threshold; disposable RLS workflow | PASS |
+| Tenant isolation, redaction and public access | Forced RLS, composite tenant FKs, Brand Trial-detail denial, panelist `trials.viewAssigned` scope, operational `trials.viewAll` scope, token-hash `SECURITY DEFINER` resolver, public submission idempotency and revoke/expiry/count guard; migration/RLS checks | PASS |
+| Phase 7 local release gate | Contract/regression, lint/build, migration/RLS, client secret/dependency scans and independent 12-role browser matrix | PASS |
+| Remote migration and production deployment | Outside this local documentation update | NOT_APPLICABLE |
+
+Trong bang nay, `BLOCKED` nghia la chua co bang chung command runtime dinh kem,
+khong phai la ket luan implementation that bai. Chi doi sang `PASS` sau khi
+gate tuong ung chay thanh cong tren source/migration hien tai.
