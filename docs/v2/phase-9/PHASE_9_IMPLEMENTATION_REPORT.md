@@ -2,7 +2,7 @@
 
 ## Local Acceptance Position
 
-Phase 9 documents the active V2 governed-agent implementation: versioned definitions, workflows, tools and policies; durable execution evidence; governed domain adapters; persisted replay; confirmation; and evaluation boundaries. It is not a remote migration, production deployment, enabled external-provider, or Commerce-backed result statement.
+Phase 9 documents the active V2 governed-agent implementation: versioned definitions, workflows, tools and policies; durable execution evidence; governed domain adapters; persisted replay; confirmation; and evaluation boundaries. It is not a remote migration, production deployment, or enabled external-provider statement. Phase 10 later connected the existing read-only `commerce.status` tool to the tenant-scoped Commerce domain service.
 
 The current local evidence set is scoped: the focused Phase 9 Vitest selection passed 15 files and 62 tests, and `npm.cmd run typecheck:v2`, `npm.cmd run v2:postgres:verify`, and `npm.cmd run v2:postgres:rls` passed on the current tree. That evidence covers contracts, registry/domain controls, controller/client edge controls, disposable migration checks, and disposable application-role RLS/workflow checks. Disposable PostgreSQL confirmation checks also verify the fenced effect claim, Formula-origin unique-draft invariant, and terminal failure with quota release for invalid candidate/project input. They verify both cancel/approve race outcomes: cancel-first leaves the run and confirmation `CANCELLED` with no Formula draft, while a staged `APPROVE` makes cancel return `AGENT_CONFIRMATION_PROCESSING` and the approval completes `SUCCEEDED`. Phase 9 local acceptance is `PASS` for that repository-local scope. This evidence does not replace an authenticated live HTTP/SSE or browser acceptance run.
 
@@ -20,8 +20,8 @@ The current local evidence set is scoped: the focused Phase 9 Vitest selection p
 | FR-AG-010 | Durable job lease/fencing, cancellation, quota reservation, and bounded retry controls | PASS |
 | FR-AG-011 | Governed non-generic tool boundary; generic SQL, database-write, shell, URL, HTTP, MCP, and unregistered-tool paths are absent | PASS |
 | Credential-backed outbound provider completion and usage | Default provider is `NOT_CONFIGURED`; no credential-backed outbound adapter is configured | BLOCKED |
-| Commerce-backed order or fulfillment result | `commerce.status` truthfully returns `NOT_CONFIGURED` because Phase 10 Commerce records do not exist | BLOCKED |
-| Authenticated HTTP/SSE and browser acceptance | No current live sessioned API/SSE or browser evidence is included in this checkpoint | BLOCKED |
+| Commerce-backed order status result | Phase 10 connects `commerce.status` to `CommerceService.listOrders`; its bounded, redacted tenant-scoped projection is covered by focused tests and the Owner role-browser run | PASS |
+| Authenticated Commerce-Agent browser acceptance | The isolated Owner fixture starts and executes the read-only Commerce run in `test:v2:role-e2e` | PASS |
 | Remote PostgreSQL migration | No remote target is part of this checkpoint | NOT_APPLICABLE |
 | Production deployment | No deployment is part of this checkpoint | NOT_APPLICABLE |
 

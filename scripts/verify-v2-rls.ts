@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { PrismaPlatformRepository } from '../services/platform/src/prisma-repository.js'
@@ -14,6 +14,7 @@ import { DurableAgentService } from '../services/agent-runtime/src/durable-agent
 import type { CompiledAgentToolRegistry } from '../services/agent-runtime/src/tool-registry.js'
 import { TrialSensoryService } from '../services/trials-sensory/src/service.js'
 import { ProductionService } from '../services/production/src/production-service.js'
+import { CommerceService } from '../services/commerce/src/commerce-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -75,6 +76,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql')
 }
 
 function resetDisposableSchema() {
@@ -319,6 +321,7 @@ try {
   const agent = new DurableAgentService(appClient, service)
   const trials = new TrialSensoryService(appClient, service, lab)
   const production = new ProductionService(appClient, service, lab)
+  const commerce = new CommerceService(appClient, service)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -1001,6 +1004,238 @@ try {
     rationale: 'All rework release gates are freshly satisfied.',
     documentSnapshotIds: [p8ReworkDocument.id],
   }, `rls-p8-fg-rerelease-${suffix}`)
+
+  // Phase 10 uses the re-released finished-good lot, never a raw material lot
+  // or an inbound procurement shipment. This covers a complete commercial
+  // chain and leaves the returned quantity in quarantine for QC.
+  const commerceRawMovementCountBefore = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_inventory_movements WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const commerceCustomer = await commerce.createCustomer(context.context, {
+    name: 'Isolated Commerce Customer', code: `CUS-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12).toUpperCase()}`,
+    paymentTerms: 'Net 30', commercialNotes: 'Isolated Phase 10 verifier customer.',
+  }, `rls-p10-customer-${suffix}`)
+  const commerceAddress = await commerce.addCustomerAddress(context.context, commerceCustomer.id, {
+    kind: 'SHIPPING', label: 'QA receiving dock', recipientName: 'Commerce QA', line1: '10 Test Street', city: 'Verification City', countryCode: 'US', primary: true,
+  }, `rls-p10-address-${suffix}`)
+  const commerceProduct = await commerce.createProduct(context.context, {
+    name: 'Isolated Eau de Parfum 50 g', sku: `EDP-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+    kind: 'FINISHED_GOOD', status: 'ACTIVE', formulaVersionId: approvedFormula.id, packSizeGrams: 50, packLabel: '50 g', availabilityPolicy: 'RELEASED_LOTS_ONLY',
+  }, `rls-p10-product-${suffix}`)
+  const commercePrice = await commerce.setProductPrice(context.context, commerceProduct.id, {
+    currency: 'USD', unitPrice: 75,
+  }, `rls-p10-price-${suffix}`)
+  const commerceQuote = await commerce.createQuote(context.context, {
+    customerId: commerceCustomer.id, currency: 'USD', validUntil: new Date(Date.now() + 86_400_000).toISOString(), paymentTerms: 'Net 30',
+    lines: [{ productId: commerceProduct.id, quantity: 1 }],
+  }, `rls-p10-quote-${suffix}`)
+  const commerceQuoteSent = await commerce.transitionQuote(context.context, commerceQuote.id, 'SEND', { rationale: 'Customer-ready quotation.' }, `rls-p10-quote-send-${suffix}`)
+  const commerceQuoteAccepted = await commerce.transitionQuote(context.context, commerceQuote.id, 'ACCEPT', { rationale: 'Customer accepted the quoted commercial terms.' }, `rls-p10-quote-accept-${suffix}`)
+  const commerceOrder = await commerce.createOrder(context.context, {
+    customerId: commerceCustomer.id, quoteId: commerceQuote.id, currency: 'USD', shippingAddressId: commerceAddress.id,
+  }, `rls-p10-order-${suffix}`)
+  const commerceOrderConfirmed = await commerce.confirmOrder(context.context, commerceOrder.id, `rls-p10-order-confirm-${suffix}`)
+  const commerceSuggestions = await commerce.allocationSuggestions(context.context, commerceOrder.id)
+  const commerceSuggestion = commerceSuggestions[0] as { orderLineId?: string; finishedGoodLotId?: string; suggestedQuantityGrams?: number } | undefined
+  if (!commerceSuggestion?.orderLineId || !commerceSuggestion.finishedGoodLotId || !commerceSuggestion.suggestedQuantityGrams) throw new Error('V2_RLS=FAIL Commerce did not find an eligible released finished-good suggestion')
+  const commerceAllocation = await commerce.allocateOrder(context.context, commerceOrder.id, {
+    lines: [{ orderLineId: commerceSuggestion.orderLineId, finishedGoodLotId: commerceSuggestion.finishedGoodLotId, quantityGrams: commerceSuggestion.suggestedQuantityGrams }],
+  }, `rls-p10-allocate-${suffix}`)
+  const commerceReservation = commerceAllocation.reservations[0] as { id?: string } | undefined
+  if (!commerceReservation?.id) throw new Error('V2_RLS=FAIL Commerce did not persist a finished-good reservation')
+  const commerceFulfillment = await commerce.createFulfillment(context.context, commerceOrder.id, {
+    carrier: 'QA Carrier', service: 'Ground', trackingNumber: `QA-${suffix}`, lines: [{ reservationId: commerceReservation.id, quantityGrams: commerceSuggestion.suggestedQuantityGrams }],
+  }, `rls-p10-fulfillment-${suffix}`)
+  let duplicateOpenFulfillmentDenied = false
+  try {
+    await commerce.createFulfillment(context.context, commerceOrder.id, {
+      carrier: 'QA Carrier', lines: [{ reservationId: commerceReservation.id, quantityGrams: commerceSuggestion.suggestedQuantityGrams }],
+    }, `rls-p10-fulfillment-duplicate-${suffix}`)
+  } catch (error) {
+    duplicateOpenFulfillmentDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'SALES_RESERVATION_ALREADY_IN_FULFILLMENT'
+  }
+  const commercePicking = await commerce.transitionFulfillment(context.context, commerceFulfillment.id, 'START_PICKING', {}, `rls-p10-pick-${suffix}`)
+  const commercePacked = await commerce.transitionFulfillment(context.context, commerceFulfillment.id, 'PACK', {}, `rls-p10-pack-${suffix}`)
+  const commerceShipped = await commerce.transitionFulfillment(context.context, commerceFulfillment.id, 'SHIP', { trackingNumber: `QA-${suffix}` }, `rls-p10-ship-${suffix}`)
+  const commerceDelivered = await commerce.transitionFulfillment(context.context, commerceFulfillment.id, 'DELIVER', {}, `rls-p10-deliver-${suffix}`)
+  const commerceReturn = await commerce.createReturn(context.context, {
+    orderId: commerceOrder.id, reason: 'Isolated customer return for controlled quarantine intake.', lines: [{ orderLineId: commerceSuggestion.orderLineId, quantityGrams: 10 }],
+  }, `rls-p10-return-${suffix}`)
+  const commerceReturnAuthorized = await commerce.authorizeReturn(context.context, commerceReturn.id, { rationale: 'Return is authorized for isolated QC intake.' }, `rls-p10-return-authorize-${suffix}`)
+  const commerceReturnLine = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT id FROM v2_sales_return_lines WHERE organization_id = $1 AND return_request_id = $2', firstOrganizationId!, commerceReturn.id)
+  })
+  if (!commerceReturnLine[0]?.id) throw new Error('V2_RLS=FAIL Commerce return line is missing')
+  const commerceReturnPartiallyReceived = await commerce.receiveReturn(context.context, commerceReturn.id, {
+    lines: [{ returnLineId: commerceReturnLine[0].id, finishedGoodLotId: p8ReRelease.finishedGoodLot.id, quantityGrams: 4 }],
+    inspectionNotes: 'First parcel received into quarantine; further authorized quantity remains in transit.',
+  }, `rls-p10-return-receive-first-${suffix}`)
+  let commercePartialDispositionDenied = false
+  try {
+    await commerce.disposeReturn(context.context, commerceReturn.id, {
+      disposition: 'HOLD_FOR_QUALITY',
+      rationale: 'The workflow must not permit a partial return quality disposition.',
+      evidenceDocumentSnapshotIds: [`comdoc_partial_${suffix}`],
+    }, `rls-p10-return-disposition-partial-${suffix}`)
+  } catch (error) {
+    commercePartialDispositionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'RETURN_DISPOSITION_STATE_INVALID'
+  }
+  const commerceReturnReceived = await commerce.receiveReturn(context.context, commerceReturn.id, {
+    lines: [{ returnLineId: commerceReturnLine[0].id, finishedGoodLotId: p8ReRelease.finishedGoodLot.id, quantityGrams: 6 }],
+    inspectionNotes: 'Final parcel received into quarantine; no automatic restock is permitted.',
+  }, `rls-p10-return-receive-final-${suffix}`)
+  const commerceReturnReceipts = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ id: string; quantity: Prisma.Decimal; disposition: string; toBucket: string | null }>>(`
+      SELECT receipt.id, receipt.quantity_g AS quantity, receipt.disposition, ledger.to_bucket AS "toBucket"
+      FROM v2_sales_return_receipts receipt
+      JOIN v2_finished_good_ledger_entries ledger
+        ON ledger.organization_id = receipt.organization_id AND ledger.id = receipt.return_ledger_entry_id
+      WHERE receipt.organization_id = $1 AND receipt.return_line_id = $2
+    `, firstOrganizationId!, commerceReturnLine[0].id)
+  })
+  const commerceReturnReceipt = commerceReturnReceipts[0]
+  const commerceReturnReceiptQuantity = commerceReturnReceipts.reduce((total, receipt) => total + Number(receipt.quantity), 0)
+  const commerceReturnReceiptAppendOnlyDenied = commerceReturnReceipt
+    ? await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'UPDATE v2_sales_return_receipts SET quantity_g = quantity_g WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, commerceReturnReceipt.id], 'commerce append-only evidence cannot be updated or deleted')
+    : false
+  const commerceDocument = await commerce.attachDocument(context.context, {
+    documentKind: 'ORDER_CONFIRMATION', objectRef: `test://commerce/${commerceOrder.id}/confirmation`, contentHash: 'd'.repeat(64), subjectType: 'ORDER', subjectId: commerceOrder.id,
+  }, `rls-p10-document-${suffix}`)
+  const commerceReturnQcDocument = await commerce.attachDocument(context.context, {
+    documentKind: 'RETURN_QC', objectRef: `test://commerce/${commerceReturn.id}/return-qc`, contentHash: 'e'.repeat(64), subjectType: 'RETURN', subjectId: commerceReturn.id,
+  }, `rls-p10-return-qc-document-${suffix}`)
+  const commerceReturnDispositionResult = await commerce.disposeReturn(context.context, commerceReturn.id, {
+    disposition: 'RELEASE_TO_AVAILABLE',
+    rationale: 'Controlled return QC evidence confirms the released finished-good lot remains eligible for saleable inventory.',
+    evidenceDocumentSnapshotIds: [commerceReturnQcDocument.id],
+  }, `rls-p10-return-disposition-${suffix}`)
+  const commerceReturnDispositionRows = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ id: string; disposition: string; movementType: string; fromBucket: string | null; toBucket: string | null }>>( `
+      SELECT disposition.id, disposition.disposition, ledger.movement_type AS "movementType", ledger.from_bucket AS "fromBucket", ledger.to_bucket AS "toBucket"
+      FROM v2_sales_return_dispositions disposition
+      LEFT JOIN v2_finished_good_ledger_entries ledger
+        ON ledger.organization_id = disposition.organization_id
+       AND ledger.reference_type = 'SALES_RETURN_DISPOSITION'
+       AND ledger.reference_id = disposition.id
+      WHERE disposition.organization_id = $1 AND disposition.return_request_id = $2
+    `, firstOrganizationId!, commerceReturn.id)
+  })
+  const commerceReturnDisposition = commerceReturnDispositionRows[0]
+  const commerceReturnDispositionAppendOnlyDenied = commerceReturnDisposition
+    ? await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'UPDATE v2_sales_return_dispositions SET rationale = rationale WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, commerceReturnDisposition.id], 'commerce append-only evidence cannot be updated or deleted')
+    : false
+  const commerceReturnClosed = await commerce.closeReturn(context.context, commerceReturn.id, {
+    rationale: 'The return disposition is recorded and the controlled return workflow can close.',
+  }, `rls-p10-return-close-${suffix}`)
+  const commerceHeldReturn = await commerce.createReturn(context.context, {
+    orderId: commerceOrder.id,
+    reason: 'Controlled returned quantity kept in Quality quarantine pending a later review.',
+    lines: [{ orderLineId: commerceSuggestion.orderLineId, quantityGrams: 5 }],
+  }, `rls-p10-return-hold-${suffix}`)
+  const commerceHeldReturnAuthorized = await commerce.authorizeReturn(context.context, commerceHeldReturn.id, {
+    rationale: 'Hold-path return is authorized for controlled Quality custody.',
+  }, `rls-p10-return-hold-authorize-${suffix}`)
+  const commerceHeldReturnLine = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT id FROM v2_sales_return_lines WHERE organization_id = $1 AND return_request_id = $2', firstOrganizationId!, commerceHeldReturn.id)
+  })
+  if (!commerceHeldReturnLine[0]?.id) throw new Error('V2_RLS=FAIL Commerce hold-path return line is missing')
+  const commerceHeldReturnReceived = await commerce.receiveReturn(context.context, commerceHeldReturn.id, {
+    lines: [{ returnLineId: commerceHeldReturnLine[0].id, finishedGoodLotId: p8ReRelease.finishedGoodLot.id, quantityGrams: 5 }],
+    inspectionNotes: 'Hold-path receipt entered Quality quarantine.',
+  }, `rls-p10-return-hold-receive-${suffix}`)
+  const commerceHoldQcDocument = await commerce.attachDocument(context.context, {
+    documentKind: 'RETURN_QC', objectRef: `test://commerce/${commerceHeldReturn.id}/return-qc`, contentHash: 'f'.repeat(64), subjectType: 'RETURN', subjectId: commerceHeldReturn.id,
+  }, `rls-p10-return-hold-document-${suffix}`)
+  const commerceHoldDisposition = await commerce.disposeReturn(context.context, commerceHeldReturn.id, {
+    disposition: 'HOLD_FOR_QUALITY',
+    rationale: 'Evidence supports retaining this quantity in Quality quarantine.',
+    evidenceDocumentSnapshotIds: [commerceHoldQcDocument.id],
+  }, `rls-p10-return-hold-disposition-${suffix}`)
+  const commerceHoldLedgerCount = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>(`
+      SELECT count(*)::bigint AS count
+      FROM v2_finished_good_ledger_entries
+      WHERE organization_id = $1 AND reference_type = 'SALES_RETURN_DISPOSITION' AND reference_id = $2
+    `, firstOrganizationId!, commerceHoldDisposition.disposition.id)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const commerceHeldReturnClosed = await commerce.closeReturn(context.context, commerceHeldReturn.id, {
+    rationale: 'The retained Quality quarantine decision is documented and closed.',
+  }, `rls-p10-return-hold-close-${suffix}`)
+  const commerceRejectedReturn = await commerce.createReturn(context.context, {
+    orderId: commerceOrder.id,
+    reason: 'Controlled returned quantity rejected to waste after Quality review.',
+    lines: [{ orderLineId: commerceSuggestion.orderLineId, quantityGrams: 5 }],
+  }, `rls-p10-return-reject-${suffix}`)
+  const commerceRejectedReturnAuthorized = await commerce.authorizeReturn(context.context, commerceRejectedReturn.id, {
+    rationale: 'Reject-path return is authorized for controlled Quality custody.',
+  }, `rls-p10-return-reject-authorize-${suffix}`)
+  const commerceRejectedReturnLine = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ id: string }>>('SELECT id FROM v2_sales_return_lines WHERE organization_id = $1 AND return_request_id = $2', firstOrganizationId!, commerceRejectedReturn.id)
+  })
+  if (!commerceRejectedReturnLine[0]?.id) throw new Error('V2_RLS=FAIL Commerce reject-path return line is missing')
+  const commerceRejectedReturnReceived = await commerce.receiveReturn(context.context, commerceRejectedReturn.id, {
+    lines: [{ returnLineId: commerceRejectedReturnLine[0].id, finishedGoodLotId: p8ReRelease.finishedGoodLot.id, quantityGrams: 5 }],
+    inspectionNotes: 'Reject-path receipt entered Quality quarantine.',
+  }, `rls-p10-return-reject-receive-${suffix}`)
+  const commerceRejectQcDocument = await commerce.attachDocument(context.context, {
+    documentKind: 'RETURN_QC', objectRef: `test://commerce/${commerceRejectedReturn.id}/return-qc`, contentHash: 'a'.repeat(64), subjectType: 'RETURN', subjectId: commerceRejectedReturn.id,
+  }, `rls-p10-return-reject-document-${suffix}`)
+  const commerceRejectDisposition = await commerce.disposeReturn(context.context, commerceRejectedReturn.id, {
+    disposition: 'REJECT_TO_WASTE',
+    rationale: 'Evidence confirms this returned quantity is not eligible for saleable inventory.',
+    evidenceDocumentSnapshotIds: [commerceRejectQcDocument.id],
+  }, `rls-p10-return-reject-disposition-${suffix}`)
+  const commerceRejectDispositionRows = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    return tx.$queryRawUnsafe<Array<{ movementType: string; fromBucket: string | null; toBucket: string | null }>>( `
+      SELECT movement_type AS "movementType", from_bucket AS "fromBucket", to_bucket AS "toBucket"
+      FROM v2_finished_good_ledger_entries
+      WHERE organization_id = $1 AND reference_type = 'SALES_RETURN_DISPOSITION' AND reference_id = $2
+    `, firstOrganizationId!, commerceRejectDisposition.disposition.id)
+  })
+  const commerceRejectedReturnClosed = await commerce.closeReturn(context.context, commerceRejectedReturn.id, {
+    rationale: 'The waste disposition is recorded and the controlled return workflow can close.',
+  }, `rls-p10-return-reject-close-${suffix}`)
+  const commerceDetail = await commerce.detail(context.context, commerceOrder.id)
+  const concurrentCommerceOrders = await Promise.all([
+    commerce.createOrder(context.context, { customerId: commerceCustomer.id, currency: 'USD', lines: [{ productId: commerceProduct.id, quantity: 1 }] }, `rls-p10-concurrent-order-a-${suffix}`),
+    commerce.createOrder(context.context, { customerId: commerceCustomer.id, currency: 'USD', lines: [{ productId: commerceProduct.id, quantity: 1 }] }, `rls-p10-concurrent-order-b-${suffix}`),
+  ])
+  await Promise.all(concurrentCommerceOrders.map((order, index) => commerce.confirmOrder(context.context, order.id, `rls-p10-concurrent-confirm-${index}-${suffix}`)))
+  const concurrentCommerceDetails = await Promise.all(concurrentCommerceOrders.map((order) => commerce.detail(context.context, order.id)))
+  const concurrentCommerceAllocations = await Promise.allSettled(concurrentCommerceDetails.map((detail, index) => commerce.allocateOrder(context.context, concurrentCommerceOrders[index]!.id, {
+    lines: [{ orderLineId: detail.lines[0]!.id, finishedGoodLotId: p8ReRelease.finishedGoodLot.id, quantityGrams: 50 }],
+  }, `rls-p10-concurrent-allocate-${index}-${suffix}`)))
+  const concurrentCommerceSuccesses = concurrentCommerceAllocations.filter((result): result is PromiseFulfilledResult<{ orderId: string; reservations: Record<string, unknown>[] }> => result.status === 'fulfilled')
+  const concurrentCommerceFailures = concurrentCommerceAllocations.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+  const concurrentCommerceWinner = concurrentCommerceSuccesses[0]?.value.orderId
+  const concurrentCommerceCancellation = concurrentCommerceWinner
+    ? await commerce.cancelOrder(context.context, concurrentCommerceWinner, { rationale: 'Release the isolated competing reservation after the concurrency assertion.' }, `rls-p10-concurrent-cancel-${suffix}`)
+    : null
+  const commerceRawMovementCountAfter = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_inventory_movements WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const brandCommerceDetail = await commerce.detail({ ...context.context, userId: brandUserId!, role: 'Brand', sessionId: `ses_brand_commerce_${brandUserId}` }, commerceOrder.id)
   const p8FinishedGoods = await production.listFinishedGoodLots(context.context)
   const p8ClosedOrder = await production.closeOrder(context.context, p8Order.id, { rationale: 'Batch record archived after final rework release.' }, `rls-p8-close-${suffix}`)
 
@@ -1169,6 +1404,13 @@ try {
   const crossTenantTrialDenied = await deniedCode(() => trials.detail(secondContext.context, trial.id), 'TRIAL_NOT_FOUND')
   crossTenantProductionDenied = await deniedCode(() => production.detail(secondContext.context, p8Order.id), 'PRODUCTION_ORDER_NOT_FOUND')
   crossTenantFinishedGoodDenied = await deniedCode(() => production.finishedGoodGenealogy(secondContext.context, p8Release.finishedGoodLot.id), 'FINISHED_GOOD_LOT_NOT_FOUND')
+  const crossTenantCommerceDenied = await deniedCode(() => commerce.detail(secondContext.context, commerceOrder.id), 'SALES_ORDER_NOT_FOUND')
+  const commerceRowsVisibleFromSecondTenant = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", secondOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", secondContext.context.userId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_sales_orders WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
   const crossTenantEvidence = await evidence.retrieve(secondContext.context, { materialId: material.id, query: 'woody', limit: 3 })
   const invalidation = await consumer.invalidateSource(context.context, sentimentSource.id, { reasonCode: 'CONSENT_REVOKED' }, `rls-sentiment-invalidate-${suffix}`)
   const invalidatedPreference = await consumer.latestPreference(context.context, 'qa-project')
@@ -1220,6 +1462,21 @@ try {
   const scientificPermissionDenied = await deniedCode(() => scientific.materialArtifacts({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_science_${restrictedUserId}` }, material.id), 'TENANT_ACCESS_DENIED')
   const modelRegistryPermissionDenied = await deniedCode(() => modelDataset.createDataset({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_model_${restrictedUserId}` }, { key: `denied-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Denied', task: 'Denied' }, `rls-model-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
   const sentimentPermissionDenied = await deniedCode(() => consumer.createSource({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_sentiment_${restrictedUserId}` }, { key: `denied-sentiment-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)}`, type: 'SURVEY', sourceScope: 'qa-project', storageRef: 'test://denied', purpose: 'Denied fixture', consentRequired: false, retentionDays: 30 }, `rls-sentiment-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
+  await adminClient!.$executeRawUnsafe(
+    'UPDATE v2_role_policies SET permissions = $1::jsonb, version = version + 1, updated_at = now() WHERE organization_id = $2 AND role_key = $3',
+    JSON.stringify(['orders.fulfill', 'production.qc.approve']), firstOrganizationId!, 'Perfumer',
+  )
+  const fulfillmentOnlyReturnDetail = await commerce.returnDetail({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_fulfillment_only_${restrictedUserId}` }, commerceReturn.id)
+  const returnDocumentProjectionRedacted = fulfillmentOnlyReturnDetail.documents.length === 0
+    && fulfillmentOnlyReturnDetail.disposition !== null
+    && !('evidenceDocumentSnapshotIds' in fulfillmentOnlyReturnDetail.disposition)
+    && !('outcomeSnapshot' in fulfillmentOnlyReturnDetail.disposition)
+  const returnDispositionDocumentPermissionDenied = await deniedCode(() => commerce.disposeReturn(
+    { ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_fulfillment_only_${restrictedUserId}` },
+    commerceReturn.id,
+    { disposition: 'HOLD_FOR_QUALITY', rationale: 'A Quality disposition must not be possible without document visibility.', evidenceDocumentSnapshotIds: [commerceReturnQcDocument.id] },
+    `rls-p10-return-document-denied-${suffix}`,
+  ), 'TENANT_ACCESS_DENIED')
 
   const projection = firstLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
   const reservedProjection = reservedLots.find((lot) => lot.id === receipt.lines[0].lotId)?.projection
@@ -1479,7 +1736,64 @@ try {
     && crossTenantPhase9EvidenceDenied
     && crossTenantPhase9EvaluationDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass) {
+  const brandCommerceLine = brandCommerceDetail.lines[0]
+  const phase10Pass = commercePrice.status === 'ACTIVE'
+    && commerceQuoteSent.status === 'SENT'
+    && commerceQuoteAccepted.status === 'ACCEPTED'
+    && commerceOrderConfirmed.status === 'CONFIRMED'
+    && commerceAllocation.status === 'ALLOCATED'
+    && commercePicking.status === 'PICKING'
+    && commercePacked.status === 'PACKED'
+    && commerceShipped.status === 'SHIPPED'
+    && commerceDelivered.status === 'DELIVERED'
+    && duplicateOpenFulfillmentDenied
+    && commerceReturnAuthorized.status === 'AUTHORIZED'
+    && commerceReturnPartiallyReceived.status === 'AUTHORIZED'
+    && commercePartialDispositionDenied
+    && commerceReturnReceived.status === 'INSPECTING'
+    && commerceReturnReceipts.length === 2
+    && commerceReturnReceiptQuantity === 10
+    && commerceReturnReceipts.every((receipt) => receipt.disposition === 'QUARANTINE' && receipt.toBucket === 'QUARANTINE')
+    && commerceReturnReceiptAppendOnlyDenied
+    && commerceReturnQcDocument.status === 'ACTIVE'
+    && commerceReturnDispositionResult.status === 'DISPOSITIONED'
+    && commerceReturnDisposition?.disposition === 'RELEASE_TO_AVAILABLE'
+    && commerceReturnDisposition?.movementType === 'QUALITY_RELEASE'
+    && commerceReturnDisposition?.fromBucket === 'QUARANTINE'
+    && commerceReturnDisposition?.toBucket === 'AVAILABLE'
+    && commerceReturnDispositionAppendOnlyDenied
+    && commerceReturnClosed.status === 'CLOSED'
+    && commerceHeldReturnAuthorized.status === 'AUTHORIZED'
+    && commerceHeldReturnReceived.status === 'INSPECTING'
+    && commerceHoldDisposition.status === 'DISPOSITIONED'
+    && commerceHoldLedgerCount === 0
+    && commerceHeldReturnClosed.status === 'CLOSED'
+    && commerceRejectedReturnAuthorized.status === 'AUTHORIZED'
+    && commerceRejectedReturnReceived.status === 'INSPECTING'
+    && commerceRejectDisposition.status === 'REJECTED'
+    && commerceRejectDispositionRows.length === 1
+    && commerceRejectDispositionRows[0]?.movementType === 'WASTE'
+    && commerceRejectDispositionRows[0]?.fromBucket === 'QUARANTINE'
+    && commerceRejectDispositionRows[0]?.toBucket === null
+    && commerceRejectedReturnClosed.status === 'CLOSED'
+    && commerceDocument.status === 'ACTIVE'
+    && commerceDetail.order.status === 'FULFILLED'
+    && commerceDetail.reservations.length === 1
+    && commerceDetail.documents.length === 1
+    && commerceDetail.traceability.length >= 4
+    && brandCommerceDetail.reservations.length === 0
+    && brandCommerceDetail.traceability.length === 0
+    && !('formulaVersionId' in (brandCommerceLine?.productSnapshot ?? {}))
+    && returnDocumentProjectionRedacted
+    && returnDispositionDocumentPermissionDenied
+    && concurrentCommerceSuccesses.length === 1
+    && concurrentCommerceFailures.length === 1
+    && commerceRawMovementCountBefore === commerceRawMovementCountAfter
+    && concurrentCommerceCancellation?.status === 'CANCELLED'
+    && crossTenantCommerceDenied
+    && commerceRowsVisibleFromSecondTenant === 0
+
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass || !phase10Pass) {
     throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({
       crossTenantDenied,
       unscopedMemberships,
@@ -1493,6 +1807,7 @@ try {
       phase7Pass,
       phase8Pass,
       phase9Pass,
+      phase10Pass,
       phase8Diagnostic: {
         plan: p8Plan.status,
         allocation: p8AllocationIntegration?.status,
@@ -1556,6 +1871,29 @@ try {
         rowsInFirstTenant: phase9RowsInFirstTenant,
         rowsVisibleFromSecondTenant: phase9RowsVisibleFromSecondTenant,
         crossTenant: { run: crossTenantPhase9RunDenied, evidence: crossTenantPhase9EvidenceDenied, evaluation: crossTenantPhase9EvaluationDenied },
+      },
+      phase10Diagnostic: {
+        quote: { sent: commerceQuoteSent.status, accepted: commerceQuoteAccepted.status },
+        order: { confirmed: commerceOrderConfirmed.status, allocated: commerceAllocation.status, detail: commerceDetail.order.status },
+        fulfillment: { picking: commercePicking.status, packed: commercePacked.status, shipped: commerceShipped.status, delivered: commerceDelivered.status, duplicateOpenDenied: duplicateOpenFulfillmentDenied },
+        return: {
+          authorized: commerceReturnAuthorized.status,
+          partiallyReceived: commerceReturnPartiallyReceived.status,
+          received: commerceReturnReceived.status,
+          receipt: { count: commerceReturnReceipts.length, quantity: commerceReturnReceiptQuantity, allQuarantined: commerceReturnReceipts.every((receipt) => receipt.disposition === 'QUARANTINE' && receipt.toBucket === 'QUARANTINE'), appendOnly: commerceReturnReceiptAppendOnlyDenied },
+          disposition: { status: commerceReturnDispositionResult.status, action: commerceReturnDisposition?.disposition ?? null, movement: commerceReturnDisposition?.movementType ?? null, appendOnly: commerceReturnDispositionAppendOnlyDenied },
+          closed: commerceReturnClosed.status,
+          hold: { received: commerceHeldReturnReceived.status, disposition: commerceHoldDisposition.status, dispositionLedgerCount: commerceHoldLedgerCount, closed: commerceHeldReturnClosed.status },
+          reject: { received: commerceRejectedReturnReceived.status, disposition: commerceRejectDisposition.status, movement: commerceRejectDispositionRows[0]?.movementType ?? null, closed: commerceRejectedReturnClosed.status },
+        },
+        document: commerceDocument.status,
+        brandRedaction: { reservations: brandCommerceDetail.reservations.length, traceability: brandCommerceDetail.traceability.length, hasFormulaReference: 'formulaVersionId' in (brandCommerceLine?.productSnapshot ?? {}) },
+        returnDocumentProjectionRedacted,
+        returnDispositionDocumentPermissionDenied,
+        concurrentAllocation: { successCount: concurrentCommerceSuccesses.length, failureCount: concurrentCommerceFailures.length, winnerCancelled: concurrentCommerceCancellation?.status ?? null },
+        rawInventoryMovementChanged: commerceRawMovementCountBefore !== commerceRawMovementCountAfter,
+        crossTenantCommerceDenied,
+        crossTenantRows: commerceRowsVisibleFromSecondTenant,
       },
       crossTenantEvidenceCount: crossTenantEvidence.citations.length,
     })}`)
@@ -1732,6 +2070,33 @@ try {
       rowsInFirstTenant: phase9RowsInFirstTenant,
       rowsVisibleFromSecondTenant: phase9RowsVisibleFromSecondTenant,
       crossTenant: { run: crossTenantPhase9RunDenied, evidence: crossTenantPhase9EvidenceDenied, evaluation: crossTenantPhase9EvaluationDenied },
+    },
+    phase10: {
+      customer: commerceCustomer.id,
+      product: commerceProduct.id,
+      price: commercePrice.status,
+      quote: { sent: commerceQuoteSent.status, accepted: commerceQuoteAccepted.status },
+      order: { id: commerceOrder.id, confirmed: commerceOrderConfirmed.status, allocated: commerceAllocation.status, status: commerceDetail.order.status },
+      fulfillment: { picking: commercePicking.status, packed: commercePacked.status, shipped: commerceShipped.status, delivered: commerceDelivered.status, duplicateOpenDenied: duplicateOpenFulfillmentDenied },
+      return: {
+        requested: commerceReturn.status,
+        authorized: commerceReturnAuthorized.status,
+        partiallyReceived: commerceReturnPartiallyReceived.status,
+        received: commerceReturnReceived.status,
+        receipt: { count: commerceReturnReceipts.length, quantity: commerceReturnReceiptQuantity, allQuarantined: commerceReturnReceipts.every((receipt) => receipt.disposition === 'QUARANTINE' && receipt.toBucket === 'QUARANTINE'), appendOnly: commerceReturnReceiptAppendOnlyDenied },
+        disposition: { status: commerceReturnDispositionResult.status, action: commerceReturnDisposition?.disposition ?? null, movement: commerceReturnDisposition?.movementType ?? null, appendOnly: commerceReturnDispositionAppendOnlyDenied },
+        closed: commerceReturnClosed.status,
+        hold: { received: commerceHeldReturnReceived.status, disposition: commerceHoldDisposition.status, dispositionLedgerCount: commerceHoldLedgerCount, closed: commerceHeldReturnClosed.status },
+        reject: { received: commerceRejectedReturnReceived.status, disposition: commerceRejectDisposition.status, movement: commerceRejectDispositionRows[0]?.movementType ?? null, closed: commerceRejectedReturnClosed.status },
+      },
+      document: commerceDocument.status,
+      brandRedaction: { reservations: brandCommerceDetail.reservations.length, traceability: brandCommerceDetail.traceability.length, formulaReferenceRedacted: !('formulaVersionId' in (brandCommerceLine?.productSnapshot ?? {})) },
+      returnDocumentProjectionRedacted,
+      returnDispositionDocumentPermissionDenied,
+      concurrentAllocation: { successCount: concurrentCommerceSuccesses.length, failureCount: concurrentCommerceFailures.length, winnerCancelled: concurrentCommerceCancellation?.status ?? null },
+      rawInventoryMovementsChanged: commerceRawMovementCountBefore !== commerceRawMovementCountAfter,
+      crossTenantCommerceDenied,
+      crossTenantRows: commerceRowsVisibleFromSecondTenant,
     },
   }))
 } finally {

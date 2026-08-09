@@ -21,6 +21,7 @@ const migrations = [
   'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql',
   'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql',
   'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql',
+  'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -302,11 +303,82 @@ try {
     if (phase9EvidenceGuard.length !== 1 || !phase9EvidenceGuard[0].definition.includes("'agent-runtime/v1'")) {
       throw new Error('Phase 9 protocol-scoped append-only evidence guard is missing')
     }
+    const phase10Tables = [
+      'v2_customers', 'v2_customer_contacts', 'v2_customer_addresses', 'v2_commerce_products',
+      'v2_commerce_product_prices', 'v2_quotes', 'v2_quote_versions', 'v2_quote_lines',
+      'v2_sales_orders', 'v2_sales_order_lines', 'v2_sales_order_events',
+      'v2_sales_finished_good_reservations', 'v2_sales_fulfillments', 'v2_sales_fulfillment_lines',
+      'v2_sales_shipments', 'v2_sales_return_requests', 'v2_sales_return_lines', 'v2_sales_return_receipts', 'v2_sales_return_dispositions',
+      'v2_commerce_documents', 'v2_commerce_traceability_edges',
+    ]
+    const phase10Rls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, phase10Tables)
+    if (phase10Rls.length !== phase10Tables.length || phase10Rls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Phase 10 table or forced RLS policy is missing')
+    }
+    const phase10Constraints = await client.$queryRawUnsafe(`
+      SELECT conname
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `, [
+      'v2_commerce_product_formula_tenant_fk',
+      'v2_commerce_product_pack_check',
+      'v2_sales_reservation_lot_tenant_fk',
+      'v2_sales_reservation_ledger_tenant_fk',
+      'v2_sales_fulfillment_line_ledger_tenant_fk',
+      'v2_sales_return_receipt_line_tenant_fk',
+      'v2_sales_return_receipt_lot_tenant_fk',
+      'v2_sales_return_receipt_ledger_tenant_fk',
+      'v2_sales_return_disposition_request_tenant_fk',
+      'v2_sales_return_disposition_request_unique',
+      'v2_sales_shipment_fulfillment_unique',
+      'v2_commerce_document_content_unique',
+      'v2_commerce_traceability_order_tenant_fk',
+    ])
+    if (phase10Constraints.length !== 13) throw new Error('Phase 10 commercial, finished-good, return-disposition, or document tenant constraints are missing')
+    const phase10ReturnQcDocumentConstraint = await client.$queryRawUnsafe(`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'v2_commerce_documents'::regclass
+        AND conname = 'v2_commerce_documents_document_kind_check'
+    `)
+    if (phase10ReturnQcDocumentConstraint.length !== 1 || !phase10ReturnQcDocumentConstraint[0].definition.includes("'RETURN_QC'")) {
+      throw new Error('Phase 10 return QC document type is not enforced by the database contract')
+    }
+    const phase10ReturnDispositionTraceConstraint = await client.$queryRawUnsafe(`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'v2_commerce_traceability_edges'::regclass
+        AND conname = 'v2_commerce_traceability_edges_edge_type_check'
+    `)
+    if (phase10ReturnDispositionTraceConstraint.length !== 1
+      || !phase10ReturnDispositionTraceConstraint[0].definition.includes("'RETURN_RELEASED_TO_AVAILABLE'")
+      || !phase10ReturnDispositionTraceConstraint[0].definition.includes("'RETURN_REJECTED_TO_WASTE'")) {
+      throw new Error('Phase 10 return disposition trace edge types are not enforced by the database contract')
+    }
+    const phase10Triggers = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+    `, ['v2_sales_order_events_append_only', 'v2_commerce_traceability_append_only', 'v2_sales_return_receipts_append_only', 'v2_sales_return_dispositions_append_only'])
+    if (phase10Triggers.length !== 4) throw new Error('Phase 10 append-only order, return, disposition, or traceability evidence trigger is missing')
+    const phase10ForbiddenReferences = await client.$queryRawUnsafe(`
+      SELECT conrelid::regclass::text AS table_name, pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid::regclass::text = ANY($1::text[])
+        AND contype = 'f'
+        AND (pg_get_constraintdef(oid) ILIKE '%v2_shipments%' OR pg_get_constraintdef(oid) ILIKE '%v2_inventory_reservations%')
+    `, phase10Tables.map((table) => `public.${table}`))
+    if (phase10ForbiddenReferences.length) throw new Error('Phase 10 must not reuse procurement shipments or raw inventory reservations')
   } finally {
     await client.$disconnect()
   }
   console.log('V2_POSTGRES=PASS migration executed against configured database')
-} catch {
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
   console.error('V2_POSTGRES=FAIL migration execution')
   process.exit(1)
 }

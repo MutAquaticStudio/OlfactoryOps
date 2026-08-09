@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { FormulaService } from '../../formula/src/formula-service.js'
 import { LabOperationsService } from '../../lab-ops/src/service.js'
 import { ProductionService } from '../../production/src/production-service.js'
+import { CommerceService } from '../../commerce/src/commerce-service.js'
 import { MaterialEvidenceService } from '../../rag/src/material-evidence-service.js'
 import { TrialSensoryService } from '../../trials-sensory/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
@@ -74,6 +75,7 @@ export class DefaultAgentDomainTools implements AgentDomainTools {
   private readonly formula: FormulaService
   private readonly trials: TrialSensoryService
   private readonly production: ProductionService
+  private readonly commerce: CommerceService
 
   constructor(client: ConstructorParameters<typeof LabOperationsService>[0], platform: PlatformService) {
     this.lab = new LabOperationsService(client, platform)
@@ -81,6 +83,7 @@ export class DefaultAgentDomainTools implements AgentDomainTools {
     this.formula = new FormulaService(client, platform)
     this.trials = new TrialSensoryService(client, platform, this.lab)
     this.production = new ProductionService(client, platform, this.lab)
+    this.commerce = new CommerceService(client, platform)
   }
 
   async searchMaterials(context: PlatformContext, input: AgentToolInput) {
@@ -176,10 +179,26 @@ export class DefaultAgentDomainTools implements AgentDomainTools {
     }
   }
 
-  async commerceStatus(_context: PlatformContext, _input: AgentToolInput) {
-    // Phase 10 owns Commerce. The assistant produces a truthful state, rather
-    // than inventing an order result or falling through to a generic database tool.
-    return { state: 'NOT_CONFIGURED', reason: 'Commerce records are not available in this phase.' }
+  async commerceStatus(context: PlatformContext, input: AgentToolInput) {
+    // Commerce remains the domain authority for read authorization and tenant
+    // scope. The agent gets a bounded status projection only: never customer
+    // contacts, addresses, pricing, margin, allocation, or fulfillment data.
+    const query = input.query?.toLocaleLowerCase() ?? ''
+    const orders = await this.commerce.listOrders(context)
+    const selected = orders
+      .filter((order) => !query || [order.id, order.orderNumber, order.status].some((value) => value.toLocaleLowerCase().includes(query)))
+      .slice(0, 20)
+    return {
+      state: selected.length ? 'VERIFIED' : 'NOT_ENOUGH_EVIDENCE',
+      resultCount: selected.length,
+      orders: selected.map((order) => ({
+        id: safeString(order.id, 160),
+        orderNumber: safeString(order.orderNumber, 100),
+        status: safeString(order.status, 40),
+        currencyCode: safeString(order.currencyCode, 8),
+        createdAt: safeString(order.createdAt, 80),
+      })),
+    }
   }
 
   async traceability(context: PlatformContext, input: AgentToolInput) {

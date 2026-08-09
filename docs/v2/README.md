@@ -114,10 +114,11 @@ QC/deviation work but cannot release under the default policy.
 
 The production genealogy covers raw inputs through finished goods, controlled
 deviation evidence, and active document snapshots. It requires both
-finished-good and document-view permissions. Its downstream Order/Shipment
-segment is `BLOCKED` pending Commerce integration. Remote migration and
-production deployment are `NOT_APPLICABLE` for this local checkpoint. See
-`phase-8/`.
+finished-good and document-view permissions. Phase 10 now owns the downstream
+Order/Shipment segment through a separate commerce traceability boundary;
+neither Phase 8 nor Phase 10 reuses raw inventory or inbound shipment records.
+Remote migration and production deployment are `NOT_APPLICABLE` for this local
+checkpoint. See `phase-8/` and `phase-10/`.
 
 ## Phase 9 status
 
@@ -136,14 +137,32 @@ Run routes are under `/api/v1/v2/agent-runs`; catalog, evaluation, and
 observability routes are under `/api/v1/v2/agent-runtime`. The server-only
 provider gateway makes no outbound call by default and returns
 `NOT_CONFIGURED`; the runtime may persist that truthful status but cannot
-fabricate a completion, token/cost totals, or artifact. The read-only Commerce
-tool also returns `NOT_CONFIGURED` until Phase 10 supplies Commerce records.
+fabricate a completion, token/cost totals, or artifact. Phase 10 supplies the
+read-only Commerce adapter through `CommerceService`, which returns only a
+bounded tenant-scoped order-status projection.
 
 Focused Phase 9 contract/controller/client tests, service/package typecheck,
 and disposable PostgreSQL migration/RLS gates are `PASS`. The disposable
 confirmation checks verify the fenced effect claim, Formula-origin unique-draft
 invariant, and invalid candidate/project terminal handling with quota release;
-the repository-local Phase 9 acceptance is `PASS`. Credential-backed provider
-execution, Commerce-backed results, and authenticated HTTP/SSE plus browser
-acceptance are `BLOCKED`. Remote migration and production deployment are
-`NOT_APPLICABLE`. See `phase-9/`.
+the repository-local Phase 9 acceptance is `PASS`. The Phase 10 Commerce
+adapter has focused projection tests and participates in the authenticated
+role-browser flow. Credential-backed provider execution remains `BLOCKED`.
+Remote migration and production deployment are `NOT_APPLICABLE`. See
+`phase-9/` and `phase-10/`.
+
+## Phase 10 status
+
+Phase 10 Commerce / Orders / Fulfillment is `PASS` for the local repository
+checkpoint. It provides tenant-scoped customers, SKUs, quote versions, sales
+orders, released finished-good reservation, partial fulfillment, shipment
+metadata, cancellation, evidence-backed return disposition, customer-safe
+documents, and commercial traceability. `v2_sales_return_receipts` are
+immutable physical custody evidence, and every receipt creates a
+finished-good `RETURN -> QUARANTINE` ledger movement. A return remains
+`AUTHORIZED` while partially received, then requires `RETURN_QC` evidence and
+separate Quality authorization for hold, waste, or controlled release back to
+available stock. The disposable migration/RLS workflow and the independent
+12-role browser matrix pass. A live shipping carrier is
+`BLOCKED`; remote migration and production deployment are `NOT_APPLICABLE`.
+See `phase-10/`.

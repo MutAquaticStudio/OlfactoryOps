@@ -106,8 +106,8 @@ It also requires the latest passed required QC revision and active pre-release
 document evidence. Lab Manager may plan, execute, approve QC, manage deviations,
 cancel, and close, but cannot release a finished-good lot under the default
 policy. A released lot can only enter hold through the documented, full-lot
-finished-good ledger workflow. The downstream Order/Shipment portion of BR-081
-is `BLOCKED` pending Commerce integration.
+finished-good ledger workflow. Phase 10 now owns the downstream
+Order/Shipment segment through its separate Commerce traceability boundary.
 
 Remote migration and production deployment are `NOT_APPLICABLE`: no remote
 database or deployment was attempted. See [`docs/v2/phase-8`](docs/v2/phase-8/)
@@ -131,17 +131,32 @@ resync tu persisted state. Run route la `/api/v1/v2/agent-runs`; catalog,
 evaluation va observability route la `/api/v1/v2/agent-runtime`. Provider
 gateway server-only mac dinh `NOT_CONFIGURED`, khong outbound call; runtime co
 the luu status trung thuc nay nhung khong tao completion, token/cost hay
-artifact gia. `commerce.status` cung `NOT_CONFIGURED` cho den Phase 10 khi
-Commerce records ton tai.
+artifact gia. Phase 10 da ket noi `commerce.status` vao CommerceService
+tenant-scoped va chi tra projection trang thai don hang gioi han, khong mo
+quyen ghi cho agent.
 
 Focused Phase 9 contract/controller/client tests, service/package typecheck va
 PostgreSQL migration/RLS disposable deu `PASS`. Disposable confirmation checks
 da verify fenced effect claim, Formula-origin unique-draft invariant, va
 invalid candidate/project terminal handling kem quota release; Phase 9 local
-acceptance la `PASS`. Credential-backed provider, Commerce-backed result, va
-authenticated HTTP/SSE + browser acceptance deu `BLOCKED`. Remote migration va
+acceptance la `PASS`. Credential-backed provider van `BLOCKED`. Phase 10 da
+co Commerce-backed result va isolated browser evidence. Remote migration va
 production deployment la `NOT_APPLICABLE`. Xem
 [`docs/v2/phase-9`](docs/v2/phase-9/).
+
+## Trang thai V2 Phase 10
+
+Phase 10 Commerce / Orders / Fulfillment da `PASS` cho local checkpoint.
+Domain nay co customer, SKU, quote version, sales order, reservation tren
+finished-good lot da release, fulfillment tung phan, shipment metadata,
+cancel, return, customer-safe document va traceability. Return receipt la
+immutable evidence va luon ghi `RETURN -> QUARANTINE`. Return nhan mot phan
+van o `AUTHORIZED`; khi nhan du thi can `RETURN_QC` evidence va quyen Quality
+tach biet de hold, reject-to-waste, hoac release co kiem soat ve available.
+Commerce khong tu dong restock hang tra ve. PostgreSQL RLS workflow va ma
+tran browser 12 role da `PASS`. Live shipping provider la `BLOCKED`; remote
+migration va production deployment la `NOT_APPLICABLE`. Xem
+[`docs/v2/phase-10`](docs/v2/phase-10/).
 
 ## Purpose
 

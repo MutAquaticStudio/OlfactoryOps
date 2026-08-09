@@ -158,7 +158,7 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-PROD-006..007 | Reconciled yield, controlled rework, release revision, separate finished-good lot, and append-only finished-good ledger with full-lot quality hold and re-release; disposable RLS workflow | PASS |
 | Post-release `CONTINUE` and `REJECT` dispositions | Guarded source defines `QUALITY_RELEASE` and held-lot `WASTE` ledger paths with deviation evidence, but no separate focused integration result is supplied | BLOCKED |
 | FR-PROD-008, raw-to-finished-good segment | Formula/raw lot/usage/process/QC/deviation/evidence/yield/release/finished-good/active-document genealogy; dual-capability genealogy authorization | PASS |
-| BR-081, downstream Order/Shipment segment | Commerce-owned Order/Shipment links are not written by Phase 8; P8 genealogy has no Sales Order, SKU, or Shipment entity type, and `v2_shipments` is not used as a finished-good ledger | BLOCKED |
+| BR-081, downstream Order/Shipment segment | Phase 10 owns `finished_good_lot -> sales reservation -> fulfillment -> sales shipment -> return` traceability edges. It does not reuse raw inventory or inbound `v2_shipments` records | PASS |
 | BR-082 and Phase 8 authorization | Server-authoritative release requires a human principal holding `production.release` and `production.qc.approve` (Owner/Admin by default); 12 isolated role browser matrix covers mutation and genealogy boundaries | PASS |
 | Tenant isolation at persistence layer | Forced RLS on all 19 P8 tenant tables, 51 composite tenant foreign keys, legacy policy backfill, and cross-tenant production/finished-good denial on disposable PostgreSQL | PASS |
 | Phase 8 local release gate | Focused 28-test suite, `typecheck:v2`, API/frontend builds, migration verifier, RLS workflow, and 12-role browser matrix | PASS |
@@ -182,6 +182,19 @@ gate tuong ung chay thanh cong tren source/migration hien tai.
 | Service/package typecheck and disposable PostgreSQL migration/RLS gates | `typecheck:v2`, `v2:postgres:verify`, and `v2:postgres:rls` passed | PASS |
 | Phase 9 confirmation-saga effect claim, unique draft, invalid-input recovery, and cancel/approve race acceptance | Cancel-first leaves no Formula draft; staged approval blocks cancel and then completes, verified on disposable PostgreSQL | PASS |
 | Credential-backed outbound provider completion and usage | Default provider state is `NOT_CONFIGURED`; no credential-backed outbound provider adapter is enabled | BLOCKED |
-| Commerce-backed order or fulfillment result | `commerce.status` returns `NOT_CONFIGURED` until Phase 10 Commerce records are available | BLOCKED |
-| Authenticated HTTP/SSE and browser acceptance | No current live sessioned API/SSE or browser evidence is included in this checkpoint | BLOCKED |
+| Commerce-backed order status result | Phase 10 `commerce.status` reuses tenant-scoped `CommerceService.listOrders` with a bounded redacted projection; focused adapter and role-browser execution pass | PASS |
+| Authenticated browser Commerce-Agent route | `test:v2:role-e2e` creates and executes the Owner read-only Commerce run under an isolated cookie-authenticated fixture | PASS |
 | Remote migration and production deployment | Outside this local documentation checkpoint | NOT_APPLICABLE |
+
+## Phase 10 evidence (2026-08-10)
+
+| Requirement family | Phase 10 evidence boundary | Status |
+|---|---|---|
+| BR-090 / FR-COM-* | Tenant-scoped customers, contacts, addresses, SKUs, prices, quote versions, customer-safe documents, audit, and disclosure projection | PASS |
+| BR-091 / FR-ORD-* | Order lifecycle, dedicated finished-good reservation, FEFO allocation, partial fulfillment, shipment status, cancellation, and closure | PASS |
+| Return custody and disposition | Authorized and partial receipt, immutable receipt, shipped-lot quantity check, append-only `RETURN -> QUARANTINE` ledger, required `RETURN_QC` evidence, Quality hold/waste/release decisions, and no automatic restock | PASS |
+| Cost and sensitive evidence | Server-side cost/margin, Formula, finished-good, document, and traceability permission projections | PASS |
+| Cross-module production traceability | Released finished-good lot -> sales reservation -> fulfillment -> shipment -> return, without raw inventory/inbound shipment reuse | PASS |
+| Tenant isolation/RBAC/idempotency | Forced RLS, composite tenant foreign keys, operation idempotency, cross-tenant denial, and independent 12-role browser matrix | PASS |
+| Live carrier integration | Provider-neutral carrier/service/tracking boundary only; no configured test credential | BLOCKED |
+| Remote migration and production deployment | No remote target or deployment is part of this local checkpoint | NOT_APPLICABLE |

@@ -24,6 +24,20 @@ const productionPermissions = [
   'production.documents.manage',
 ] as const
 type ProductionPermission = (typeof productionPermissions)[number]
+const commercePermissions = [
+  'commerce.view',
+  'commerce.manage',
+  'orders.view',
+  'orders.create',
+  'orders.reserve',
+  'orders.fulfill',
+  'costing.view',
+  'costing.viewMargin',
+  'costing.manage',
+  'documents.view',
+  'documents.manage',
+] as const
+type CommercePermission = (typeof commercePermissions)[number]
 const agentPermissions = ['agent.execute', 'agent.view', 'agent.observe', 'agent.evaluate', 'agent.confirmWrite', 'agent.manageTools'] as const
 type AgentPermission = (typeof agentPermissions)[number]
 const agentAllowed: Record<Role, readonly AgentPermission[]> = {
@@ -52,6 +66,20 @@ const productionAllowed: Record<Role, readonly ProductionPermission[]> = {
   Brand: [],
   Supplier: [],
   Finance: [],
+  Viewer: [],
+}
+const commerceAllowed: Record<Role, readonly CommercePermission[]> = {
+  Owner: commercePermissions,
+  Admin: commercePermissions,
+  'Lab Manager': ['commerce.view', 'orders.view', 'orders.reserve', 'orders.fulfill', 'documents.view'],
+  Perfumer: [],
+  'R&D Scientist': [],
+  'Lab Technician': [],
+  Procurement: [],
+  'Sensory Panelist': [],
+  Brand: ['commerce.view', 'orders.view', 'documents.view'],
+  Supplier: [],
+  Finance: ['commerce.view', 'orders.view', 'costing.view', 'costing.viewMargin', 'documents.view'],
   Viewer: [],
 }
 const expected: Record<Role, { required: string[]; forbidden: string[] }> = {
@@ -84,11 +112,18 @@ for (const role of roles) {
       for (const permission of expected[role].required) expect(payload.capabilities[permission], `${role} must receive ${permission}`).toBe(true)
       for (const permission of expected[role].forbidden) expect(payload.capabilities[permission], `${role} must not receive ${permission}`).toBe(false)
       for (const permission of productionPermissions) expect(payload.capabilities[permission], `${role} production capability ${permission}`).toBe(productionAllowed[role].includes(permission))
+      for (const permission of commercePermissions) expect(payload.capabilities[permission], `${role} commerce capability ${permission}`).toBe(commerceAllowed[role].includes(permission))
       for (const permission of agentPermissions) expect(payload.capabilities[permission], `${role} agent capability ${permission}`).toBe(agentAllowed[role].includes(permission))
 
       const canViewProduction = productionAllowed[role].includes('production.view')
       const production = await page.request.get('/api/v1/v2/production')
       expect(production.status(), `${role} production order projection`).toBe(canViewProduction ? 200 : 403)
+      const canViewCommerce = payload.capabilities['commerce.view'] === true
+      const canViewOrders = payload.capabilities['orders.view'] === true
+      const commerceDashboard = await page.request.get('/api/v1/v2/commerce/dashboard')
+      expect(commerceDashboard.status(), `${role} commerce dashboard projection`).toBe(canViewCommerce ? 200 : 403)
+      const commerceOrders = await page.request.get('/api/v1/v2/commerce/orders')
+      expect(commerceOrders.status(), `${role} commerce order projection`).toBe(canViewOrders ? 200 : 403)
 
       await page.goto('/v2/workspace')
       await expect(page.locator('[data-testid="v2-workspace"]')).toBeVisible()
@@ -100,6 +135,12 @@ for (const role of roles) {
         Origin: 'http://127.0.0.1:4173',
         'X-CSRF-Token': csrfToken,
         'Idempotency-Key': `p9-role-boundary-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${label}`,
+      })
+      const commerceProbeId = `p10-role-probe-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+      const commerceHeaders = (label: string) => ({
+        Origin: 'http://127.0.0.1:4173',
+        'X-CSRF-Token': csrfToken,
+        'Idempotency-Key': `p10-role-boundary-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${label}`,
       })
       const expectAgentProbe = (response: { status(): number }, permission: AgentPermission, label: string, permitted: readonly number[]) => {
         // Probe IDs and bodies are deliberately invalid/non-persistent. A role
@@ -180,6 +221,44 @@ for (const role of roles) {
         // create or mutate a production record in the isolated fixture.
         expect(response.status(), `${role} ${probe.label} authorization boundary`).toBe(permitted ? 422 : 403)
       }
+      const commerceMutationProbes = [
+        { label: 'create customer', permissions: ['commerce.manage'], path: 'customers' },
+        { label: 'create product', permissions: ['commerce.manage'], path: 'products' },
+        { label: 'set price', permissions: ['commerce.manage', 'costing.manage'], path: `products/${commerceProbeId}/prices` },
+        { label: 'create quote', permissions: ['commerce.manage'], path: 'quotes' },
+        { label: 'create order', permissions: ['orders.create'], path: 'orders' },
+        { label: 'allocate order', permissions: ['orders.reserve'], path: `orders/${commerceProbeId}/allocations` },
+        { label: 'create fulfillment', permissions: ['orders.fulfill'], path: `orders/${commerceProbeId}/fulfillments` },
+        { label: 'create return', permissions: ['orders.fulfill'], path: 'returns' },
+        { label: 'authorize return', permissions: ['orders.fulfill'], path: `returns/${commerceProbeId}/authorize` },
+        { label: 'receive return', permissions: ['orders.fulfill'], path: `returns/${commerceProbeId}/receive` },
+        {
+          label: 'hold return for quality',
+          permissions: ['orders.fulfill', 'production.qc.approve', 'documents.view'],
+          path: `returns/${commerceProbeId}/disposition`,
+          data: { disposition: 'HOLD_FOR_QUALITY', rationale: 'Role-boundary disposition probe.', evidenceDocumentSnapshotIds: [commerceProbeId] },
+          allowedStatus: 404,
+        },
+        {
+          label: 'release returned good',
+          permissions: ['orders.fulfill', 'production.qc.approve', 'production.release', 'documents.view'],
+          path: `returns/${commerceProbeId}/disposition`,
+          data: { disposition: 'RELEASE_TO_AVAILABLE', rationale: 'Role-boundary release probe.', evidenceDocumentSnapshotIds: [commerceProbeId] },
+          allowedStatus: 404,
+        },
+        { label: 'close return', permissions: ['commerce.manage'], path: `returns/${commerceProbeId}/close` },
+        { label: 'attach document', permissions: ['documents.manage'], path: 'documents' },
+      ] as const
+      for (const probe of commerceMutationProbes) {
+        const response = await page.request.post(`/api/v1/v2/commerce/${probe.path}`, {
+          data: 'data' in probe ? probe.data : {},
+          headers: commerceHeaders(probe.label.replace(/[^a-z0-9]+/gi, '-')),
+        })
+        const permitted = probe.permissions.every((permission) => payload.capabilities[permission] === true)
+        // Requests either use an invalid body or a non-existent fixture ID, so
+        // the role matrix can prove authorization without persisting Commerce data.
+        expect(response.status(), `${role} ${probe.label} authorization boundary`).toBe(permitted ? ('allowedStatus' in probe ? probe.allowedStatus : 422) : 403)
+      }
       const genealogy = await page.request.get(`/api/v1/v2/production/finished-goods/${probeId}/genealogy`)
       const canViewFinishedGoodGenealogy = payload.capabilities['production.finishedGoods.view'] === true && payload.capabilities['production.documents.view'] === true
       expect(genealogy.status(), `${role} finished-good genealogy authorization boundary`).toBe(canViewFinishedGoodGenealogy ? 404 : 403)
@@ -221,6 +300,16 @@ for (const role of roles) {
         await page.setViewportSize(viewport)
         expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${role} production route has horizontal overflow at ${viewport.width}px`).toBe(true)
       }
+      const commerceNavigation = page.locator('.v2-workspace-nav').getByRole('button', { name: 'Commerce', exact: true })
+      if (canViewCommerce || canViewOrders) await expect(commerceNavigation).toBeVisible()
+      else await expect(commerceNavigation).toHaveCount(0)
+      await page.goto('/v2/workspace/commerce')
+      if (canViewCommerce || canViewOrders) await expect(page.getByTestId('v2-commerce-dashboard')).toBeVisible()
+      else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
+      for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {
+        await page.setViewportSize(viewport)
+        expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${role} commerce route has horizontal overflow at ${viewport.width}px`).toBe(true)
+      }
       const canAccessAgentConsole = agentAllowed[role].length > 0
       const agentNavigation = page.locator('.v2-workspace-nav').getByRole('button', { name: 'Agent Console', exact: true })
       if (canAccessAgentConsole) await expect(agentNavigation).toBeVisible()
@@ -229,8 +318,8 @@ for (const role of roles) {
       if (canAccessAgentConsole) await expect(page.getByTestId('v2-agent-runtime')).toBeVisible()
       else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
       if (role === 'Owner') {
-        // `commerce-assistant` is the fixture-safe Phase 9 path: it is
-        // read-only and reports Commerce as NOT_CONFIGURED until Phase 10.
+        // `commerce-assistant` is the fixture-safe governed Commerce path:
+        // it reads tenant-scoped order status only and never writes Commerce.
         await expect(page.locator('#agent-run-definition')).toBeVisible()
         await page.locator('#agent-run-definition').selectOption('commerce-assistant')
         await page.getByLabel('Run input JSON').fill('{}')

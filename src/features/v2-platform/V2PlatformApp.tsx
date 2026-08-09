@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { PublicSensoryFeedback, TrialsSensoryWorkspace } from '../v2-trials-sensory'
 import { ProductionWorkspace } from '../v2-production'
 import { AgentRuntimeWorkspace } from '../v2-agent-runtime'
+import { CommerceWorkspace } from '../v2-commerce'
 
 type Locale = 'en-US' | 'vi-VN'
 type V2Session = { user: { email: string; displayName: string; verified: boolean }; membership: { organizationName: string; organizationSlug: string; role: string }; capabilities: Record<string, boolean> }
@@ -14,6 +15,7 @@ const formulaApiBase = apiBase.replace(/\/platform$/, '/formula-intelligence')
 const trialsApiBase = apiBase.replace(/\/platform$/, '/trials')
 const productionApiBase = apiBase.replace(/\/platform$/, '/production')
 const agentRuntimeApiBase = apiBase.replace(/\/platform$/, '/agent-runtime')
+const commerceApiBase = apiBase.replace(/\/platform$/, '/commerce')
 
 const copy = {
   'en-US': {
@@ -44,6 +46,13 @@ function productionRouteId() {
   const productionIndex = segments.indexOf('production')
   if (productionIndex < 0) return undefined
   const candidate = segments[productionIndex + 1]
+  return candidate ? decodeURIComponent(candidate) : undefined
+}
+function commerceRouteId() {
+  const segments = window.location.pathname.split('/').filter(Boolean)
+  const commerceIndex = segments.indexOf('commerce')
+  if (commerceIndex < 0) return undefined
+  const candidate = segments[commerceIndex + 1]
   return candidate ? decodeURIComponent(candidate) : undefined
 }
 function publicSensoryToken() {
@@ -114,6 +123,7 @@ function WorkspaceView({ text, onLocale, onNavigate }: { text: PlatformCopy; onL
     { key: 'design-studio', label: 'Design Studio', permissions: ['formula.edit'] },
     { key: 'trials', label: 'Trials & Sensory', permissions: ['trials.viewAll', 'trials.viewAssigned'] },
     { key: 'production', label: 'Production', permissions: ['production.view'] },
+    { key: 'commerce', label: 'Commerce', permissions: ['commerce.view', 'orders.view'] },
     { key: 'agents', label: 'Agent Console', permissions: ['agent.view', 'agent.execute', 'agent.manageTools', 'agent.confirmWrite', 'agent.evaluate', 'agent.observe'] },
     { key: 'suppliers', label: 'Suppliers', permissions: ['suppliers.view'] },
     { key: 'inventory', label: 'Inventory', permissions: ['inventory.view'] },
@@ -144,12 +154,13 @@ function V2Section({ active, text, session, onNavigate }: { active: string; text
     if (active === 'members') void Promise.all([request<{ members: typeof members }>('/workspace/members'), request<{ invitations: V2Invitation[] }>('/workspace/invitations')]).then(([memberPayload, invitationPayload]) => { setMembers(memberPayload.members); setInvitations(invitationPayload.invitations) }).catch((error) => setNotice(error instanceof Error ? error.message : text.noAccess))
   }, [active, text.noAccess])
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Request failed') } }
-  const requiredPermissions: Record<string, string[]> = { materials: ['materials.view'], formulas: ['formula.view'], 'design-studio': ['formula.edit'], trials: ['trials.viewAll', 'trials.viewAssigned'], production: ['production.view'], agents: ['agent.view', 'agent.execute', 'agent.manageTools', 'agent.confirmWrite', 'agent.evaluate', 'agent.observe'], suppliers: ['suppliers.view'], inventory: ['inventory.view'], procurement: ['procurement.view'], security: ['security.sessions.view'], members: ['members.view'], domains: ['domains.view'], billing: ['billing.capabilities'], notifications: ['notifications.view'], observability: ['observability.view'], workspace: ['tenant.view'] }
+  const requiredPermissions: Record<string, string[]> = { materials: ['materials.view'], formulas: ['formula.view'], 'design-studio': ['formula.edit'], trials: ['trials.viewAll', 'trials.viewAssigned'], production: ['production.view'], commerce: ['commerce.view', 'orders.view'], agents: ['agent.view', 'agent.execute', 'agent.manageTools', 'agent.confirmWrite', 'agent.evaluate', 'agent.observe'], suppliers: ['suppliers.view'], inventory: ['inventory.view'], procurement: ['procurement.view'], security: ['security.sessions.view'], members: ['members.view'], domains: ['domains.view'], billing: ['billing.capabilities'], notifications: ['notifications.view'], observability: ['observability.view'], workspace: ['tenant.view'] }
   if (requiredPermissions[active] && !requiredPermissions[active].some((permission) => session?.capabilities?.[permission] === true)) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
   if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
   if (active === 'formulas' || active === 'design-studio') return <FormulaIntelligencePanel active={active} />
   if (active === 'trials') return <TrialsSensoryWorkspace apiBase={trialsApiBase} capabilities={session?.capabilities ?? {}} initialTrialId={trialRouteId()} onNavigate={onNavigate} />
   if (active === 'production') return <ProductionWorkspace apiBase={productionApiBase} capabilities={session?.capabilities ?? {}} initialOrderId={productionRouteId()} onNavigate={onNavigate} />
+  if (active === 'commerce') return <CommerceWorkspace apiBase={commerceApiBase} capabilities={session?.capabilities ?? {}} initialOrderId={commerceRouteId()} onNavigate={onNavigate} />
   if (active === 'agents') return <AgentRuntimeWorkspace apiBase={agentRuntimeApiBase} capabilities={session?.capabilities ?? {}} />
   if (active === 'billing') return <div className="v2-panel"><h2>{text.billing}</h2><p>Self-service billing is disabled during managed beta. Workspace access and capability limits remain enforced server-side.</p></div>
   if (active === 'security') return <div className="v2-panel"><h2>{text.security}</h2><p>Sessions are opaque, rotated, hash-only, and protected by CSRF for unsafe requests.</p><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/password', passwords); setPasswords({ currentPassword: '', newPassword: '' }) }}><label>Current password<input type="password" required value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} /></label><label>New password<input type="password" required minLength={12} value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change password</button></form><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/email', emailForm); setEmailForm({ currentPassword: '', newEmail: '' }) }}><label>New email<input type="email" required value={emailForm.newEmail} onChange={(event) => setEmailForm({ ...emailForm, newEmail: event.target.value })} /></label><label>Current password<input type="password" required value={emailForm.currentPassword} onChange={(event) => setEmailForm({ ...emailForm, currentPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change email</button></form>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
