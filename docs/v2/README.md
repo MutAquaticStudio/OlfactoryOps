@@ -91,3 +91,30 @@ secret/dependency scan va ma tran browser 12 role deu `PASS` tren disposable
 loopback PostgreSQL. Panelist chi co assignment-scoped blind access qua
 `trials.viewAssigned`; operational readers dung `trials.viewAll`. Xem
 `phase-7/` va `phase-7/PHASE_7_IMPLEMENTATION_REPORT.md`.
+
+## Phase 8 status
+
+Phase 8 Production Manufacturing is `PASS` for the local repository checkpoint.
+The focused production suite has 28 passing tests; `typecheck:v2`, API and
+frontend builds, the disposable PostgreSQL migration verifier, the
+application-role RLS workflow, and the 12-role browser matrix also pass on the
+current source. The database chain now includes `0012` through `0014` for
+production, QC/release revisions, and post-release finished-good hold/rework.
+
+Raw material remains in the Phase 2 inventory reservation/movement ledger.
+Finished-good lots and their append-only ledger are separate Phase 8 records
+and do not use `v2_inventory_*` or `v2_shipments` as a finished-good ledger.
+Migrations `0012` through `0014` cover all 19 P8 tenant tables with forced RLS
+and 51 composite tenant foreign keys. Release evaluates `production.release`
+and `production.qc.approve`; current default policies grant both only to
+Owner/Admin. It also requires the latest required QC revisions to pass and
+active pre-release document evidence; generated release documents do not
+substitute for that gate. Lab Manager can perform the operational and
+QC/deviation work but cannot release under the default policy.
+
+The production genealogy covers raw inputs through finished goods, controlled
+deviation evidence, and active document snapshots. It requires both
+finished-good and document-view permissions. Its downstream Order/Shipment
+segment is `BLOCKED` pending Commerce integration. Remote migration and
+production deployment are `NOT_APPLICABLE` for this local checkpoint. See
+`phase-8/`.

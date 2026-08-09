@@ -14,9 +14,10 @@ import { V2FormulaIntelligenceModule } from './v2-formula-intelligence.module.js
 import { V2MaterialEvidenceModule } from './v2-material-evidence.module.js'
 import { V2AgentRuntimeModule } from './v2-agent-runtime.module.js'
 import { V2TrialsSensoryModule } from './v2-trials-sensory.module.js'
+import { V2ProductionModule } from './v2-production.module.js'
 
 @Module({
-  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule, V2ConsumerIntelligenceModule, V2FormulaIntelligenceModule, V2MaterialEvidenceModule, V2AgentRuntimeModule, V2TrialsSensoryModule],
+  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule, V2ConsumerIntelligenceModule, V2FormulaIntelligenceModule, V2MaterialEvidenceModule, V2AgentRuntimeModule, V2TrialsSensoryModule, V2ProductionModule],
   controllers: [HealthController, NorthStarController],
   providers: [
     MutationIdempotencyService,

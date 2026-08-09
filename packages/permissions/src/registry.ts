@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const V2_PERMISSION_REGISTRY_VERSION = '2.2.0'
+export const V2_PERMISSION_REGISTRY_VERSION = '2.4.0'
 
 export const permissionGroupSchema = z.enum([
   'tenant', 'security', 'members', 'materials', 'suppliers', 'inventory', 'procurement', 'formula', 'trials', 'sensory',
@@ -68,9 +68,21 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('sensory.manage', 'sensory', 'Manage sensory sessions and panelists', true, true),
   definition('sensory.unblind', 'sensory', 'Unblind a controlled sensory assignment with an audit reason', true, true),
   definition('production.view', 'production', 'View production work'),
+  definition('production.create', 'production', 'Create a production order from an approved Formula Version', true),
+  definition('production.plan', 'production', 'Plan production requirements and schedule controlled stages', true),
+  definition('production.allocate', 'production', 'Allocate eligible material lots to production', true),
   definition('production.weigh', 'production', 'Execute production weighing', true),
+  definition('production.process', 'production', 'Record controlled compounding, conditioning, filtration, and filling work', true),
   definition('production.qc', 'production', 'Record or approve QC evidence', true, true),
+  definition('production.qc.record', 'production', 'Record controlled production QC observations', true),
+  definition('production.qc.approve', 'production', 'Approve a required production QC disposition', true, true),
+  definition('production.deviation.manage', 'production', 'Manage production deviations, nonconformances, and CAPA actions', true, true),
   definition('production.release', 'production', 'Release a finished-good lot', true, true),
+  definition('production.cancel', 'production', 'Cancel a pre-consumption production order', true, true),
+  definition('production.close', 'production', 'Close a released or rejected production order', true, true),
+  definition('production.finishedGoods.view', 'production', 'View released finished-good lots and their genealogy'),
+  definition('production.documents.view', 'production', 'View controlled production and genealogy records'),
+  definition('production.documents.manage', 'production', 'Capture controlled production document references', true, true),
   definition('commerce.view', 'commerce', 'View enabled commerce records'),
   definition('commerce.manage', 'commerce', 'Manage workspace commerce settings', true, true),
   definition('orders.view', 'orders', 'View orders and fulfillment'),

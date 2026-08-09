@@ -48,6 +48,28 @@ export type LabMovementReversalHook = {
   afterReverse?: (tx: LabOperationsTransaction, original: { id: string; lotId: string; materialId: string; movementType: string }, reversal: { id: string; reversalOfId: string }) => Promise<unknown>
 }
 
+/**
+ * Production chooses lots through its controlled allocation workflow. Lab
+ * Operations remains the inventory authority: it validates exact lots and
+ * writes both reservations and their zero-quantity ledger evidence in one
+ * transaction, while the Production hook writes its linked allocation rows.
+ */
+export type LabProductionReservationInput = {
+  contextType: 'PRODUCTION'
+  contextId: string
+  lines: Array<{ materialId: string; lotId: string; quantityGrams: number }>
+  expiresAt?: string
+}
+export type LabProductionReservation = { id: string; materialId: string; lotId: string; quantityGrams: number }
+export type LabProductionReservationHook = {
+  beforeReserve?: (tx: LabOperationsTransaction, input: LabProductionReservationInput) => Promise<void>
+  afterReserve?: (tx: LabOperationsTransaction, reservations: LabProductionReservation[]) => Promise<unknown>
+}
+export type LabProductionReservationReleaseHook = {
+  beforeRelease?: (tx: LabOperationsTransaction, reservations: LabProductionReservation[]) => Promise<void>
+  afterRelease?: (tx: LabOperationsTransaction, reservations: LabProductionReservation[]) => Promise<unknown>
+}
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
   if (value && typeof value === 'object') {
@@ -689,6 +711,7 @@ export class LabOperationsService {
   async createWeighingSession(context: PlatformContext, input: LabWeighingSessionInput, idempotencyKey?: string, hook?: LabWeighingCreateHook) {
     await this.require(context, 'inventory.consume')
     if (input.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_WEIGHING_WORKFLOW_REQUIRED', 'Trial weighing must be started from the Trial workflow.', 409)
+    if (input.contextType === 'PRODUCTION' && !hook) throw new PlatformError('PRODUCTION_WEIGHING_WORKFLOW_REQUIRED', 'Production weighing must be started from the controlled Production workflow.', 409)
     return this.idempotent(context, 'inventory.weighing.create', idempotencyKey, input, async (tx) => {
       const id = identifier('weigh')
       const session = { id, contextType: input.contextType, contextId: input.contextId ?? null }
@@ -725,6 +748,7 @@ export class LabOperationsService {
       if (sessions[0].status !== 'PLANNED' && sessions[0].status !== 'IN_PROGRESS') throw new PlatformError('WEIGHING_ALREADY_CONFIRMED', 'This weighing session cannot be confirmed again.', 409)
       const session: LabWeighingSessionRecord = sessions[0]
       if (session.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_WEIGHING_WORKFLOW_REQUIRED', 'Trial weighing must be confirmed from the Trial workflow.', 409)
+      if (session.contextType === 'PRODUCTION' && !hook) throw new PlatformError('PRODUCTION_WEIGHING_WORKFLOW_REQUIRED', 'Production weighing must be confirmed from the controlled Production workflow.', 409)
       const sessionLines = await tx.$queryRaw<Array<{ id: string; materialId: string; reservationId: string | null; requestedGrams: Prisma.Decimal; toleranceGrams: Prisma.Decimal }>>`
         SELECT id, material_id AS "materialId", reservation_id AS "reservationId", requested_g AS "requestedGrams", tolerance_g AS "toleranceGrams" FROM v2_lab_weighing_lines WHERE session_id = ${sessionId} AND organization_id = ${context.organizationId}
       `
@@ -788,6 +812,84 @@ export class LabOperationsService {
       }
       await this.audit(tx, context, 'lab_ops.inventory.reserve', 'allowed', 'reservation', input.contextId, input)
       return { reservations }
+    })
+  }
+
+  /**
+   * Internal bridge for Production only. It intentionally has no standalone
+   * HTTP route: production allocations must have a linked Production Order,
+   * capability checks, lineage, and idempotency receipt from their caller.
+   */
+  async reserveProductionLots(context: PlatformContext, input: LabProductionReservationInput, idempotencyKey?: string, hook?: LabProductionReservationHook) {
+    await this.require(context, 'inventory.reserve')
+    if (!hook || input.contextType !== 'PRODUCTION') throw new PlatformError('PRODUCTION_RESERVATION_WORKFLOW_REQUIRED', 'Production lots must be reserved from the controlled Production workflow.', 409)
+    if (!input.contextId || input.lines.length === 0 || input.lines.length > 500) throw new PlatformError('PRODUCTION_RESERVATION_INVALID', 'Provide a bounded controlled production reservation.', 422)
+    return this.idempotent(context, 'inventory.reservations.production', idempotencyKey, input, async (tx) => {
+      await hook.beforeReserve?.(tx, input)
+      const seen = new Set<string>()
+      const reservations: LabProductionReservation[] = []
+      for (const line of input.lines) {
+        if (!Number.isFinite(line.quantityGrams) || line.quantityGrams <= 0) throw new PlatformError('PRODUCTION_RESERVATION_INVALID', 'Every reserved production quantity must be positive.', 422)
+        const identity = `${line.materialId}:${line.lotId}`
+        if (seen.has(identity)) throw new PlatformError('PRODUCTION_RESERVATION_DUPLICATE_LOT', 'A material lot may appear only once in a controlled production reservation.', 422)
+        seen.add(identity)
+        await this.material(tx, context, line.materialId, true)
+        const lot = await this.lot(tx, context, line.lotId, true)
+        if (lot.materialId !== line.materialId || lot.status !== 'AVAILABLE' || lot.qualityStatus !== 'PASSED' || (lot.expiresAt && lot.expiresAt.getTime() <= Date.now())) {
+          throw new PlatformError('LOT_NOT_ELIGIBLE', 'A selected production lot is not available, quality-approved, and unexpired.', 409)
+        }
+        const projection = await this.lotProjection(tx, context, lot.id)
+        if (projection.availableGrams + EPSILON < line.quantityGrams) throw new PlatformError('LOT_INSUFFICIENT_STOCK', 'A selected production lot no longer has sufficient available stock.', 409)
+        const id = identifier('reserve')
+        await tx.$executeRaw`
+          INSERT INTO v2_inventory_reservations (id, organization_id, lot_id, material_id, quantity_g, context_type, context_id, expires_at, created_by)
+          VALUES (${id}, ${context.organizationId}, ${lot.id}, ${line.materialId}, ${line.quantityGrams}, 'PRODUCTION', ${input.contextId}, ${input.expiresAt ? new Date(input.expiresAt) : null}, ${context.userId})
+        `
+        await tx.$executeRaw`
+          INSERT INTO v2_inventory_movements (id, organization_id, lot_id, material_id, movement_type, quantity_delta_g, reference_type, reference_id, idempotency_key, actor_user_id)
+          VALUES (${identifier('move')}, ${context.organizationId}, ${lot.id}, ${line.materialId}, 'RESERVE', 0, 'PRODUCTION', ${input.contextId}, ${`${idempotencyKey}:${id}`}, ${context.userId})
+        `
+        reservations.push({ id, materialId: line.materialId, lotId: lot.id, quantityGrams: line.quantityGrams })
+      }
+      const integration = await hook.afterReserve?.(tx, reservations)
+      await this.audit(tx, context, 'lab_ops.inventory.reserve.production', 'allowed', 'reservation', input.contextId, { reservationCount: reservations.length })
+      return { reservations, integration }
+    })
+  }
+
+  /**
+   * Matches the controlled production allocation bridge above. Cancellation
+   * releases every selected raw-material reservation in the same transaction
+   * as the Production Order state transition, so a cancelled order cannot keep
+   * stock silently reserved.
+   */
+  async releaseProductionReservations(context: PlatformContext, input: { contextId: string; reservationIds: string[] }, idempotencyKey?: string, hook?: LabProductionReservationReleaseHook) {
+    await this.require(context, 'inventory.reserve')
+    if (!hook || !input.contextId || input.reservationIds.length === 0 || input.reservationIds.length > 500) throw new PlatformError('PRODUCTION_RESERVATION_RELEASE_INVALID', 'Provide a bounded controlled production reservation release.', 422)
+    const uniqueIds = [...new Set(input.reservationIds)]
+    if (uniqueIds.length !== input.reservationIds.length) throw new PlatformError('PRODUCTION_RESERVATION_RELEASE_INVALID', 'A production reservation may be released only once per request.', 422)
+    return this.idempotent(context, 'inventory.reservations.production.release', idempotencyKey, { ...input, reservationIds: uniqueIds }, async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ id: string; materialId: string; lotId: string; quantityGrams: Prisma.Decimal; contextType: string; contextId: string; status: string }>>`
+        SELECT id, material_id AS "materialId", lot_id AS "lotId", quantity_g AS "quantityGrams", context_type AS "contextType", context_id AS "contextId", status
+        FROM v2_inventory_reservations
+        WHERE organization_id = ${context.organizationId} AND id IN (${Prisma.join(uniqueIds)})
+        ORDER BY id ASC FOR UPDATE
+      `
+      if (rows.length !== uniqueIds.length || rows.some((row) => row.contextType !== 'PRODUCTION' || row.contextId !== input.contextId || row.status !== 'ACTIVE')) {
+        throw new PlatformError('PRODUCTION_RESERVATION_RELEASE_INVALID', 'Only active reservations belonging to this Production Order can be released.', 409)
+      }
+      const reservations: LabProductionReservation[] = rows.map((row) => ({ id: row.id, materialId: row.materialId, lotId: row.lotId, quantityGrams: asNumber(row.quantityGrams) }))
+      await hook.beforeRelease?.(tx, reservations)
+      for (const reservation of reservations) {
+        await tx.$executeRaw`UPDATE v2_inventory_reservations SET status = 'RELEASED', released_at = now() WHERE id = ${reservation.id} AND organization_id = ${context.organizationId} AND status = 'ACTIVE'`
+        await tx.$executeRaw`
+          INSERT INTO v2_inventory_movements (id, organization_id, lot_id, material_id, movement_type, quantity_delta_g, reference_type, reference_id, idempotency_key, actor_user_id)
+          VALUES (${identifier('move')}, ${context.organizationId}, ${reservation.lotId}, ${reservation.materialId}, 'RELEASE_RESERVATION', 0, 'PRODUCTION', ${input.contextId}, ${`${idempotencyKey}:${reservation.id}`}, ${context.userId})
+        `
+      }
+      const integration = await hook.afterRelease?.(tx, reservations)
+      await this.audit(tx, context, 'lab_ops.inventory.reserve.production.release', 'allowed', 'reservation', input.contextId, { reservationCount: reservations.length })
+      return { reservations, integration }
     })
   }
 
@@ -874,6 +976,7 @@ export class LabOperationsService {
       if (original.referenceId) {
         const sessions = await tx.$queryRaw<Array<{ contextType: string }>>`SELECT context_type AS "contextType" FROM v2_lab_weighing_sessions WHERE id = ${original.referenceId} AND organization_id = ${context.organizationId}`
         if (sessions[0]?.contextType === 'TRIAL' && !hook) throw new PlatformError('TRIAL_REVERSAL_WORKFLOW_REQUIRED', 'Reverse Trial consumption through its controlled Trial workflow.', 409)
+        if (sessions[0]?.contextType === 'PRODUCTION' && !hook) throw new PlatformError('PRODUCTION_REVERSAL_WORKFLOW_REQUIRED', 'Reverse Production consumption through its controlled Production workflow.', 409)
       }
       const reversed = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_inventory_movements WHERE organization_id = ${context.organizationId} AND reversal_of_id = ${movementId}`
       if (reversed.length) throw new PlatformError('MOVEMENT_ALREADY_REVERSED', 'This movement already has a compensating reversal.', 409)
@@ -885,6 +988,33 @@ export class LabOperationsService {
       }
       const id = identifier('move')
       await tx.$executeRaw`INSERT INTO v2_inventory_movements (id, organization_id, lot_id, material_id, movement_type, quantity_delta_g, reference_type, reference_id, idempotency_key, actor_user_id, reversal_of_id) VALUES (${id}, ${context.organizationId}, ${original.lotId}, ${original.materialId}, 'ADJUSTMENT', ${reversalDelta}, 'MOVEMENT_REVERSAL', ${movementId}, ${idempotencyKey}, ${context.userId}, ${movementId})`
+      // Consumption can be backed by a reservation. A compensating movement
+      // must restore that reservation's remaining capacity before a controlled
+      // Trial or Production correction can be weighed again.
+      const consumedLines = await tx.$queryRaw<Array<{ reservationId: string | null; actualGrams: Prisma.Decimal | null }>>`
+        SELECT reservation_id AS "reservationId", actual_g AS "actualGrams"
+        FROM v2_lab_weighing_lines
+        WHERE organization_id = ${context.organizationId} AND consumption_movement_id = ${movementId}
+        LIMIT 1 FOR UPDATE
+      `
+      const consumedLine = consumedLines[0]
+      if (consumedLine?.reservationId && consumedLine.actualGrams !== null) {
+        const reservations = await tx.$queryRaw<Array<{ id: string; quantityGrams: Prisma.Decimal; consumedGrams: Prisma.Decimal; status: string }>>`
+          SELECT id, quantity_g AS "quantityGrams", consumed_quantity_g AS "consumedGrams", status
+          FROM v2_inventory_reservations
+          WHERE id = ${consumedLine.reservationId} AND organization_id = ${context.organizationId}
+          FOR UPDATE
+        `
+        const reservation = reservations[0]
+        if (reservation && ['ACTIVE', 'CONSUMED'].includes(reservation.status)) {
+          const nextConsumed = Math.max(0, asNumber(reservation.consumedGrams) - asNumber(consumedLine.actualGrams))
+          await tx.$executeRaw`
+            UPDATE v2_inventory_reservations
+            SET consumed_quantity_g = ${nextConsumed}, status = ${nextConsumed + EPSILON >= asNumber(reservation.quantityGrams) ? 'CONSUMED' : 'ACTIVE'}
+            WHERE id = ${reservation.id} AND organization_id = ${context.organizationId}
+          `
+        }
+      }
       const integration = hook?.afterReverse ? await hook.afterReverse(tx, original, { id, reversalOfId: movementId }) : undefined
       await this.audit(tx, context, 'lab_ops.inventory.movement.reverse', 'allowed', 'inventory_movement', movementId, { reversalId: id })
       return { id, reversalOfId: movementId, ...(integration === undefined ? {} : { integration }) }

@@ -149,6 +149,21 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | Phase 7 local release gate | Contract/regression, lint/build, migration/RLS, client secret/dependency scans and independent 12-role browser matrix | PASS |
 | Remote migration and production deployment | Outside this local documentation update | NOT_APPLICABLE |
 
+## Phase 8 evidence (2026-08-09)
+
+| Requirement family | Phase 8 evidence boundary | Status |
+|---|---|---|
+| BR-080 / FR-PROD-001..004 | Approved Formula Version snapshot, reservation-backed requirements/allocation/weighing/usage, controlled correction boundary, and four-stage process state machine with hold/rework routes; focused suite plus disposable RLS workflow | PASS |
+| FR-PROD-005 | Active QC specification, latest-revision QC result approval, deviation/CAPA resolution, active pre-release document evidence, and deterministic release gate; focused suite plus disposable RLS workflow | PASS |
+| FR-PROD-006..007 | Reconciled yield, controlled rework, release revision, separate finished-good lot, and append-only finished-good ledger with full-lot quality hold and re-release; disposable RLS workflow | PASS |
+| Post-release `CONTINUE` and `REJECT` dispositions | Guarded source defines `QUALITY_RELEASE` and held-lot `WASTE` ledger paths with deviation evidence, but no separate focused integration result is supplied | BLOCKED |
+| FR-PROD-008, raw-to-finished-good segment | Formula/raw lot/usage/process/QC/deviation/evidence/yield/release/finished-good/active-document genealogy; dual-capability genealogy authorization | PASS |
+| BR-081, downstream Order/Shipment segment | Commerce-owned Order/Shipment links are not written by Phase 8; P8 genealogy has no Sales Order, SKU, or Shipment entity type, and `v2_shipments` is not used as a finished-good ledger | BLOCKED |
+| BR-082 and Phase 8 authorization | Server-authoritative release requires a human principal holding `production.release` and `production.qc.approve` (Owner/Admin by default); 12 isolated role browser matrix covers mutation and genealogy boundaries | PASS |
+| Tenant isolation at persistence layer | Forced RLS on all 19 P8 tenant tables, 51 composite tenant foreign keys, legacy policy backfill, and cross-tenant production/finished-good denial on disposable PostgreSQL | PASS |
+| Phase 8 local release gate | Focused 28-test suite, `typecheck:v2`, API/frontend builds, migration verifier, RLS workflow, and 12-role browser matrix | PASS |
+| Remote migration and production deployment | No remote database or deployment is in this local checkpoint | NOT_APPLICABLE |
+
 Trong bang nay, `BLOCKED` nghia la chua co bang chung command runtime dinh kem,
 khong phai la ket luan implementation that bai. Chi doi sang `PASS` sau khi
 gate tuong ung chay thanh cong tren source/migration hien tai.

@@ -12,6 +12,7 @@ import { FormulaService } from '../services/formula/src/formula-service.js'
 import { MaterialEvidenceService } from '../services/rag/src/material-evidence-service.js'
 import { DurableAgentService } from '../services/agent-runtime/src/durable-agent-service.js'
 import { TrialSensoryService } from '../services/trials-sensory/src/service.js'
+import { ProductionService } from '../services/production/src/production-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -69,6 +70,9 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0009_phase4_6_completion_records.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0010_phase4_6_tenant_fk_hardening.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0011_phase7_trials_sensory.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0012_phase8_production_manufacturing.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
 }
 
 function resetDisposableSchema() {
@@ -87,7 +91,6 @@ let appClient: PrismaClient | undefined
 let firstOrganizationId: string | undefined
 let secondOrganizationId: string | undefined
 let firstUserId: string | undefined
-let secondUserId: string | undefined
 let restrictedUserId: string | undefined
 let brandUserId: string | undefined
 let panelistUserId: string | undefined
@@ -122,19 +125,68 @@ async function scopedMembershipCount(organizationId?: string, userId?: string) {
   })
 }
 
-async function removeTestFixtures() {
-  if (!adminClient) return
+/**
+ * New signups get the current registry defaults, but production migrations
+ * must also repair pre-Phase-8 authoritative policy documents. Re-run 0014
+ * against a controlled legacy fixture to prove it preserves custom grants and
+ * bumps the policy version exactly once.
+ */
+async function verifyLegacyProductionPolicyBackfill() {
+  if (!adminClient) throw new Error('V2_RLS=FAIL administrative test client is unavailable.')
+  const fixture = `legacy-p8-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const organizationId = `org_${fixture}`
+  const userId = `usr_${fixture}`
+  const ownerAdminPermissions = [
+    'production.view', 'production.create', 'production.plan', 'production.allocate', 'production.weigh', 'production.process',
+    'production.qc', 'production.qc.record', 'production.qc.approve', 'production.deviation.manage', 'production.release',
+    'production.cancel', 'production.close', 'production.finishedGoods.view', 'production.documents.view', 'production.documents.manage',
+  ]
+  const labManagerPermissions = [
+    'production.view', 'production.create', 'production.plan', 'production.allocate', 'production.weigh', 'production.process',
+    'production.qc.record', 'production.qc.approve', 'production.deviation.manage', 'production.cancel', 'production.close',
+    'production.documents.view', 'production.documents.manage', 'production.finishedGoods.view',
+  ]
+  const labTechnicianPermissions = [
+    'production.view', 'production.weigh', 'production.process', 'production.qc.record', 'production.documents.view', 'production.finishedGoods.view',
+  ]
   await adminClient.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('ALTER TABLE v2_audit_events DISABLE TRIGGER v2_audit_append_only')
-    try {
-      if (secondOrganizationId) await tx.organization.deleteMany({ where: { id: secondOrganizationId } })
-      if (firstOrganizationId) await tx.organization.deleteMany({ where: { id: firstOrganizationId } })
-      const userIds = [firstUserId, secondUserId, restrictedUserId, brandUserId, panelistUserId].filter((value): value is string => Boolean(value))
-      if (userIds.length) await tx.user.deleteMany({ where: { id: { in: userIds } } })
-    } finally {
-      await tx.$executeRawUnsafe('ALTER TABLE v2_audit_events ENABLE TRIGGER v2_audit_append_only')
+    await tx.$executeRawUnsafe('INSERT INTO v2_organizations (id, slug, name) VALUES ($1, $2, $3)', organizationId, fixture.slice(0, 60), 'Legacy policy fixture')
+    await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', userId, `${fixture}@example.test`, 'Legacy policy fixture', 'not-a-login')
+    for (const roleKey of ['Owner', 'Admin', 'Lab Manager', 'Lab Technician']) {
+      await tx.$executeRawUnsafe(
+        'INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by) VALUES ($1, $2, $3, $4::jsonb, $5, $6)',
+        `policy_${fixture}_${roleKey.replaceAll(' ', '_')}`, organizationId, roleKey, JSON.stringify(['tenant.view', `legacy.${roleKey.toLowerCase().replaceAll(' ', '')}`]), 7, userId,
+      )
     }
   })
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0012_phase8_production_manufacturing.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
+  const afterFirst = await adminClient.$queryRawUnsafe<Array<{ roleKey: string; permissions: unknown; version: number }>>(
+    'SELECT role_key AS "roleKey", permissions, version FROM v2_role_policies WHERE organization_id = $1 ORDER BY role_key ASC', organizationId,
+  )
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0012_phase8_production_manufacturing.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
+  const afterSecond = await adminClient.$queryRawUnsafe<Array<{ roleKey: string; permissions: unknown; version: number }>>(
+    'SELECT role_key AS "roleKey", permissions, version FROM v2_role_policies WHERE organization_id = $1 ORDER BY role_key ASC', organizationId,
+  )
+  const expectedByRole = new Map([
+    ['Owner', { version: 8, permissions: ownerAdminPermissions, denied: [] }],
+    ['Admin', { version: 8, permissions: ownerAdminPermissions, denied: [] }],
+    ['Lab Manager', { version: 9, permissions: labManagerPermissions, denied: ['production.release'] }],
+    ['Lab Technician', { version: 8, permissions: labTechnicianPermissions, denied: ['production.qc.approve', 'production.release'] }],
+  ])
+  const valid = (rows: Array<{ roleKey: string; permissions: unknown; version: number }>) => rows.length === expectedByRole.size
+    && rows.every((row) => {
+      const expected = expectedByRole.get(row.roleKey)
+      return Boolean(expected)
+        && Array.isArray(row.permissions)
+        && row.version === expected.version
+        && row.permissions.includes('tenant.view')
+        && row.permissions.includes(`legacy.${row.roleKey.toLowerCase().replaceAll(' ', '')}`)
+        && expected.permissions.every((permission) => row.permissions.includes(permission))
+        && expected.denied.every((permission) => !row.permissions.includes(permission))
+    })
+  return valid(afterFirst) && valid(afterSecond)
 }
 
 try {
@@ -143,6 +195,7 @@ try {
   adminClient = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
   appClient = new PrismaClient({ datasources: { db: { url: applicationUrl.toString() } } })
   await configureApplicationRole()
+  const legacyProductionPolicyBackfill = await verifyLegacyProductionPolicyBackfill()
   const repository = new PrismaPlatformRepository(appClient)
   const service = new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'rls-session', passwordPepper: 'rls-password' })
   const lab = new LabOperationsService(appClient, service)
@@ -154,6 +207,7 @@ try {
   const evidence = new MaterialEvidenceService(appClient, service)
   const agent = new DurableAgentService(appClient, service)
   const trials = new TrialSensoryService(appClient, service, lab)
+  const production = new ProductionService(appClient, service, lab)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -165,7 +219,6 @@ try {
   const context = await service.contextFromToken(login.rawSessionToken, `${slug}.olfactoryops.com`)
   const second = await service.signup({ organizationName: 'RLS Second', workspaceSlug: secondSlug, email: `${secondSlug}@example.test`, displayName: 'RLS Second', password: 'Correct Horse Battery 12!' })
   secondOrganizationId = second.membership.organizationId
-  secondUserId = second.user.id
   await service.verifyEmail(second.verificationToken)
   brandUserId = `usr_brand_${suffix.replace(/[^a-z0-9]/gi, '')}`
   await adminClient!.$transaction(async (tx) => {
@@ -382,6 +435,268 @@ try {
   } catch (error) {
     brandTrialDetailDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED'
   }
+
+  // Phase 8 is intentionally exercised through ProductionService. Direct Lab
+  // Operations calls with a PRODUCTION context must remain blocked so raw
+  // consumption, reversal, genealogy, and release gates cannot be bypassed.
+  // Keep the manufacturing fixture on its own accepted lot. Phase 2 asserts
+  // the opening-lot ledger independently, so sharing that lot here would make
+  // a valid production consumption look like a Phase 2 regression.
+  const productionReceipt = await lab.receiveGoods(context.context, {
+    freightCost: 0,
+    dutyCost: 0,
+    insuranceCost: 0,
+    currency: 'USD',
+    lines: [{ materialId: material.id, supplierOfferId: offer.id, quantity: 1, unit: 'KG', location: 'QA production shelf', unitPrice: 0.02 }],
+  }, `rls-p8-receipt-${suffix}`)
+  const productionInspection = await lab.inspectReceiptLine(context.context, productionReceipt.id, productionReceipt.lines[0]!.id, {
+    disposition: 'ACCEPT',
+    findings: { qa: 'approved for isolated production fixture' },
+  }, `rls-p8-receipt-inspection-${suffix}`)
+  if (productionInspection.lotStatus !== 'AVAILABLE') throw new Error('V2_RLS=FAIL production fixture lot is not available')
+  const productionLotId = productionReceipt.lines[0]!.lotId
+  const p8OrderCode = `MFG-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`
+  const p8Order = await production.createOrder(context.context, {
+    formulaVersionId: approvedFormula.id,
+    targetBulkGrams: 100,
+    orderNumber: p8OrderCode,
+    notes: 'Isolated production genealogy verification.',
+  }, `rls-p8-order-${suffix}`)
+  const p8Specification = await production.createQcSpecification(context.context, p8Order.id, {
+    name: `QA appearance ${suffix}`,
+    versionLabel: 'qa-1',
+    checks: [{ key: 'appearance', label: 'Appearance accepted', kind: 'BOOLEAN', required: true }],
+  }, `rls-p8-spec-${suffix}`)
+  const p8Plan = await production.planOrder(context.context, p8Order.id, { equipmentRef: 'QA-pilot-vessel' }, `rls-p8-plan-${suffix}`)
+  const p8PlanDetail = await production.detail(context.context, p8Order.id)
+  const p8Requirement = p8PlanDetail.requirements[0]
+  if (!p8Requirement) throw new Error('V2_RLS=FAIL production planning did not create a material requirement')
+  const p8Allocations = await production.allocateMaterials(context.context, p8Order.id, {
+    allocations: [{ requirementId: p8Requirement.id, lotId: productionLotId, allocatedGrams: 100 }],
+  }, `rls-p8-allocate-${suffix}`)
+  const p8AllocatedDetail = await production.detail(context.context, p8Order.id)
+  const p8Allocation = p8AllocatedDetail.allocations[0]
+  if (!p8Allocation) throw new Error('V2_RLS=FAIL production allocation did not persist')
+  let directProductionWeighingDenied = false
+  try {
+    await lab.createWeighingSession(context.context, {
+      contextType: 'PRODUCTION', contextId: p8Order.id,
+      lines: [{ materialId: material.id, lotId: productionLotId, requestedGrams: 100, toleranceGrams: 0 }],
+    }, `rls-p8-direct-weigh-${suffix}`)
+  } catch (error) {
+    directProductionWeighingDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'PRODUCTION_WEIGHING_WORKFLOW_REQUIRED'
+  }
+  const p8StartedWeighing = await production.startWeighing(context.context, p8Order.id, {
+    lines: [{ allocationId: p8Allocation.id, requestedGrams: 100, toleranceGrams: 0 }],
+  }, `rls-p8-weigh-start-${suffix}`)
+  const p8StartedDetail = await production.detail(context.context, p8Order.id)
+  const p8WeighingSession = p8StartedDetail.weighing.find((item) => item.status === 'IN_PROGRESS')
+  if (!p8WeighingSession) throw new Error('V2_RLS=FAIL production weighing did not open')
+  const p8WeighingLine = p8StartedDetail.weighingLines.find((item) => item.productionWeighingSessionId === p8WeighingSession.id)
+  if (!p8WeighingLine) throw new Error('V2_RLS=FAIL production weighing lines are missing')
+  const p8ConfirmedWeighing = await production.confirmWeighing(context.context, p8Order.id, p8WeighingSession.labWeighingSessionId, {
+    lines: [{ lineId: p8WeighingLine.lineId, lotId: productionLotId, actualGrams: 100 }],
+  }, `rls-p8-weigh-confirm-${suffix}`)
+  const p8Document = await production.createDocumentSnapshot(context.context, p8Order.id, {
+    documentKind: 'PROCESS_RECORD',
+    objectRef: `test://production/${p8Order.id}/batch-record`,
+    contentHash: 'b'.repeat(64),
+    versionLabel: 'qa-1',
+    metadata: { fixture: 'phase8' },
+  }, `rls-p8-document-${suffix}`)
+  for (const stage of ['COMPOUNDING', 'CONDITIONING', 'FILTRATION', 'FILLING'] as const) {
+    await production.startStage(context.context, p8Order.id, stage, { actualParameters: { fixture: 'phase8', stage } }, `rls-p8-${stage.toLowerCase()}-start-${suffix}`)
+    await production.completeStage(context.context, p8Order.id, stage, { actualParameters: { fixture: 'phase8', stage, completed: true } }, `rls-p8-${stage.toLowerCase()}-complete-${suffix}`)
+  }
+  const p8Yield = await production.recordYield(context.context, p8Order.id, {
+    bulkOutputGrams: 100,
+    filledOutputGrams: 100,
+    wasteGrams: 0,
+    reworkGrams: 0,
+    expectedLossGrams: 0,
+    rationale: 'Isolated mass reconciliation.',
+  }, `rls-p8-yield-${suffix}`)
+  const p8QcResult = await production.recordQcResult(context.context, p8Order.id, {
+    qcSpecificationId: p8Specification.id,
+    checkKey: 'appearance',
+    observedValue: true,
+    notes: 'Visual release inspection passed.',
+  }, `rls-p8-qc-result-${suffix}`)
+  const p8QcApproval = await production.approveQcResult(context.context, p8Order.id, p8QcResult.id, {
+    decision: 'APPROVE', rationale: 'Independent QA approval.',
+  }, `rls-p8-qc-approve-${suffix}`)
+  const p8Release = await production.releaseOrder(context.context, p8Order.id, {
+    finishedGoodLotNumber: `FG-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+    location: 'QA finished goods shelf',
+    rationale: 'All deterministic production release gates are satisfied.',
+    documentSnapshotIds: [p8Document.id],
+  }, `rls-p8-release-${suffix}`)
+  const duplicateP8Release = await production.releaseOrder(context.context, p8Order.id, {
+    finishedGoodLotNumber: `FG-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+    location: 'QA finished goods shelf',
+    rationale: 'All deterministic production release gates are satisfied.',
+    documentSnapshotIds: [p8Document.id],
+  }, `rls-p8-release-${suffix}`)
+  const p8Genealogy = await production.finishedGoodGenealogy(context.context, p8Release.finishedGoodLot.id)
+  const p8Hold = await production.holdFinishedGoodLot(context.context, p8Release.finishedGoodLot.id, {
+    rationale: 'Controlled post-release quality review requires the full lot to be held.',
+    evidenceDocumentSnapshotIds: [p8Document.id],
+  }, `rls-p8-fg-hold-${suffix}`)
+  const duplicateP8Hold = await production.holdFinishedGoodLot(context.context, p8Release.finishedGoodLot.id, {
+    rationale: 'Controlled post-release quality review requires the full lot to be held.',
+    evidenceDocumentSnapshotIds: [p8Document.id],
+  }, `rls-p8-fg-hold-${suffix}`)
+  const p8FinishedGoodReworkResolution = await production.resolveDeviation(context.context, p8Order.id, p8Hold.deviationId, {
+    disposition: 'REWORK',
+    reworkTargetStage: 'FILLING',
+    rationale: 'Repeat controlled filling before a new release decision.',
+  }, `rls-p8-fg-rework-resolve-${suffix}`)
+  const p8FinishedGoodRework = await production.startRework(context.context, p8Order.id, {
+    deviationId: p8Hold.deviationId,
+    sourceKind: 'FINISHED_GOOD_LOT',
+    sourceFinishedGoodLotId: p8Release.finishedGoodLot.id,
+    quantityGrams: p8Hold.heldQuantityGrams,
+    targetStage: 'FILLING',
+    reason: 'Controlled post-release rework of the held finished-good lot.',
+  }, `rls-p8-fg-rework-start-${suffix}`)
+  await production.startStage(context.context, p8Order.id, 'FILLING', { actualParameters: { fixture: 'phase8-fg-rework' } }, `rls-p8-fg-rework-fill-start-${suffix}`)
+  await production.completeStage(context.context, p8Order.id, 'FILLING', { actualParameters: { fixture: 'phase8-fg-rework', completed: true } }, `rls-p8-fg-rework-fill-complete-${suffix}`)
+  const p8FinishedGoodReworkComplete = await production.completeRework(context.context, p8Order.id, p8FinishedGoodRework.id, { actualParameters: { fixture: 'phase8-fg-rework', closed: true } }, `rls-p8-fg-rework-complete-${suffix}`)
+  let p8ReworkReleaseBlocked = false
+  try {
+    await production.releaseOrder(context.context, p8Order.id, {
+      finishedGoodLotNumber: `FG-RW-BLOCK-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12).toUpperCase()}`,
+      location: 'QA finished goods shelf',
+      rationale: 'This release must be blocked until rework evidence is regenerated.',
+      documentSnapshotIds: [p8Document.id],
+    }, `rls-p8-fg-rework-release-blocked-${suffix}`)
+  } catch (error) {
+    p8ReworkReleaseBlocked = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'PRODUCTION_RELEASE_GATE_BLOCKED'
+  }
+  const p8ReworkDocument = await production.createDocumentSnapshot(context.context, p8Order.id, {
+    documentKind: 'PROCESS_RECORD',
+    objectRef: `test://production/${p8Order.id}/rework-record`,
+    contentHash: 'c'.repeat(64),
+    versionLabel: 'qa-rework-1',
+    metadata: { fixture: 'phase8-finished-good-rework' },
+  }, `rls-p8-fg-rework-document-${suffix}`)
+  const p8ReworkYield = await production.recordYield(context.context, p8Order.id, {
+    bulkOutputGrams: 100,
+    filledOutputGrams: 100,
+    wasteGrams: 0,
+    reworkGrams: 0,
+    expectedLossGrams: 0,
+    rationale: 'Fresh reconciliation after controlled finished-good rework.',
+  }, `rls-p8-fg-rework-yield-${suffix}`)
+  const p8ReworkQcResult = await production.recordQcResult(context.context, p8Order.id, {
+    qcSpecificationId: p8Specification.id,
+    checkKey: 'appearance',
+    observedValue: true,
+    notes: 'Fresh appearance review after controlled rework.',
+  }, `rls-p8-fg-rework-qc-record-${suffix}`)
+  const p8ReworkQcApproval = await production.approveQcResult(context.context, p8Order.id, p8ReworkQcResult.id, {
+    decision: 'APPROVE',
+    rationale: 'Independent QA approval after controlled rework.',
+  }, `rls-p8-fg-rework-qc-approve-${suffix}`)
+  const p8ReRelease = await production.releaseOrder(context.context, p8Order.id, {
+    finishedGoodLotNumber: `FG-RW-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+    location: 'QA finished goods shelf',
+    rationale: 'All rework release gates are freshly satisfied.',
+    documentSnapshotIds: [p8ReworkDocument.id],
+  }, `rls-p8-fg-rerelease-${suffix}`)
+  const p8FinishedGoods = await production.listFinishedGoodLots(context.context)
+  const p8ClosedOrder = await production.closeOrder(context.context, p8Order.id, { rationale: 'Batch record archived after final rework release.' }, `rls-p8-close-${suffix}`)
+
+  const p8CancelledOrder = await production.createOrder(context.context, {
+    formulaVersionId: approvedFormula.id,
+    targetBulkGrams: 10,
+    orderNumber: `CAN-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+  }, `rls-p8-cancel-order-${suffix}`)
+  const p8Cancellation = await production.cancelOrder(context.context, p8CancelledOrder.id, { rationale: 'No longer required before material consumption.' }, `rls-p8-cancel-${suffix}`)
+
+  const p8CorrectionOrder = await production.createOrder(context.context, {
+    formulaVersionId: approvedFormula.id,
+    targetBulkGrams: 100,
+    orderNumber: `COR-${suffix.replace(/[^a-z0-9]/gi, '').slice(-16).toUpperCase()}`,
+  }, `rls-p8-correction-order-${suffix}`)
+  const p8CorrectionSpecification = await production.createQcSpecification(context.context, p8CorrectionOrder.id, {
+    name: `QA correction ${suffix}`,
+    versionLabel: 'qa-1',
+    checks: [{ key: 'appearance', label: 'Appearance accepted', kind: 'BOOLEAN', required: true }],
+  }, `rls-p8-correction-spec-${suffix}`)
+  await production.planOrder(context.context, p8CorrectionOrder.id, { equipmentRef: 'QA-correction-vessel' }, `rls-p8-correction-plan-${suffix}`)
+  const p8CorrectionPlan = await production.detail(context.context, p8CorrectionOrder.id)
+  const p8CorrectionRequirement = p8CorrectionPlan.requirements[0]
+  if (!p8CorrectionRequirement) throw new Error('V2_RLS=FAIL correction order is missing its requirement')
+  await production.allocateMaterials(context.context, p8CorrectionOrder.id, {
+    allocations: [{ requirementId: p8CorrectionRequirement.id, lotId: productionLotId, allocatedGrams: 100 }],
+  }, `rls-p8-correction-allocate-${suffix}`)
+  const p8CorrectionAllocated = await production.detail(context.context, p8CorrectionOrder.id)
+  const p8CorrectionAllocation = p8CorrectionAllocated.allocations[0]
+  if (!p8CorrectionAllocation) throw new Error('V2_RLS=FAIL correction allocation is missing')
+  await production.startWeighing(context.context, p8CorrectionOrder.id, {
+    lines: [{ allocationId: p8CorrectionAllocation.id, requestedGrams: 100, toleranceGrams: 0 }],
+  }, `rls-p8-correction-weigh-start-${suffix}`)
+  const p8CorrectionStarted = await production.detail(context.context, p8CorrectionOrder.id)
+  const p8CorrectionSession = p8CorrectionStarted.weighing.find((item) => item.status === 'IN_PROGRESS')
+  const p8CorrectionLine = p8CorrectionSession ? p8CorrectionStarted.weighingLines.find((item) => item.productionWeighingSessionId === p8CorrectionSession.id) : undefined
+  if (!p8CorrectionSession || !p8CorrectionLine) throw new Error('V2_RLS=FAIL correction weighing did not open')
+  await production.confirmWeighing(context.context, p8CorrectionOrder.id, p8CorrectionSession.labWeighingSessionId, {
+    lines: [{ lineId: p8CorrectionLine.lineId, lotId: productionLotId, actualGrams: 100 }],
+  }, `rls-p8-correction-weigh-confirm-${suffix}`)
+  const p8CorrectionDetail = await production.detail(context.context, p8CorrectionOrder.id)
+  const p8CorrectionUsage = p8CorrectionDetail.materialUsages[0]
+  if (!p8CorrectionUsage) throw new Error('V2_RLS=FAIL correction usage is missing')
+  let directProductionReversalDenied = false
+  try { await lab.reverseMovement(context.context, p8CorrectionUsage.inventoryMovementId, `rls-p8-direct-reverse-${suffix}`) } catch (error) {
+    directProductionReversalDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'PRODUCTION_REVERSAL_WORKFLOW_REQUIRED'
+  }
+  const p8Correction = await production.reverseMaterialUsage(context.context, p8CorrectionOrder.id, p8CorrectionUsage.id, {
+    reason: 'The controlled lot selection needs a documented correction before processing.',
+  }, `rls-p8-correction-reverse-${suffix}`)
+  const duplicateP8Correction = await production.reverseMaterialUsage(context.context, p8CorrectionOrder.id, p8CorrectionUsage.id, {
+    reason: 'The controlled lot selection needs a documented correction before processing.',
+  }, `rls-p8-correction-reverse-${suffix}`)
+  const p8CorrectionIntegration = p8Correction.production as { deviationId?: string; status?: string } | null
+  if (!p8CorrectionIntegration?.deviationId) throw new Error('V2_RLS=FAIL controlled production correction did not create a deviation')
+  let p8CorrectionIdempotencyConflict = false
+  try {
+    await production.reverseMaterialUsage(context.context, p8CorrectionOrder.id, p8CorrectionUsage.id, {
+      reason: 'A different correction reason must conflict with the existing idempotency key.',
+    }, `rls-p8-correction-reverse-${suffix}`)
+  } catch (error) {
+    p8CorrectionIdempotencyConflict = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'IDEMPOTENCY_CONFLICT'
+  }
+  const p8CorrectionResolution = await production.resolveDeviation(context.context, p8CorrectionOrder.id, p8CorrectionIntegration.deviationId, {
+    disposition: 'CONTINUE', rationale: 'The compensating inventory movement is verified and the batch can be reweighed.',
+  }, `rls-p8-correction-resolve-${suffix}`)
+  const p8CorrectionResume = await production.resumeFromHold(context.context, p8CorrectionOrder.id, { targetStatus: 'READY_FOR_WEIGHING' }, `rls-p8-correction-resume-${suffix}`)
+  const p8RestartWeighing = await production.startWeighing(context.context, p8CorrectionOrder.id, {
+    lines: [{ allocationId: p8CorrectionAllocation.id, requestedGrams: 100, toleranceGrams: 0 }],
+  }, `rls-p8-correction-restart-${suffix}`)
+  const p8RestartedDetail = await production.detail(context.context, p8CorrectionOrder.id)
+  const p8RestartedSession = p8RestartedDetail.weighing.find((item) => item.status === 'IN_PROGRESS')
+  const p8RestartedLine = p8RestartedSession ? p8RestartedDetail.weighingLines.find((item) => item.productionWeighingSessionId === p8RestartedSession.id) : undefined
+  if (!p8RestartedSession || !p8RestartedLine) throw new Error('V2_RLS=FAIL corrected production weighing did not restart')
+  const p8RestartConfirmation = await production.confirmWeighing(context.context, p8CorrectionOrder.id, p8RestartedSession.labWeighingSessionId, {
+    lines: [{ lineId: p8RestartedLine.lineId, lotId: productionLotId, actualGrams: 100 }],
+  }, `rls-p8-correction-restart-confirm-${suffix}`)
+  const p8ReworkDeviation = await production.recordDeviation(context.context, p8CorrectionOrder.id, {
+    category: 'PROCESS', severity: 'HIGH', description: 'A controlled compounding rework is required for the isolated fixture.', immediateAction: 'Hold the batch before process start.',
+  }, `rls-p8-rework-deviation-${suffix}`)
+  const p8ReworkResolution = await production.resolveDeviation(context.context, p8CorrectionOrder.id, p8ReworkDeviation.id, {
+    disposition: 'REWORK', reworkTargetStage: 'COMPOUNDING', rationale: 'Repeat the approved compounding stage with a documented rework record.',
+  }, `rls-p8-rework-resolve-${suffix}`)
+  const p8Rework = await production.startRework(context.context, p8CorrectionOrder.id, {
+    deviationId: p8ReworkDeviation.id, sourceKind: 'IN_PROCESS', quantityGrams: 5, targetStage: 'COMPOUNDING', reason: 'Controlled rework of the in-process batch.',
+  }, `rls-p8-rework-start-${suffix}`)
+  for (const stage of ['COMPOUNDING', 'CONDITIONING', 'FILTRATION', 'FILLING'] as const) {
+    await production.startStage(context.context, p8CorrectionOrder.id, stage, { actualParameters: { rework: true, stage } }, `rls-p8-rework-${stage.toLowerCase()}-start-${suffix}`)
+    await production.completeStage(context.context, p8CorrectionOrder.id, stage, { actualParameters: { rework: true, stage, completed: true } }, `rls-p8-rework-${stage.toLowerCase()}-complete-${suffix}`)
+  }
+  const p8CompletedRework = await production.completeRework(context.context, p8CorrectionOrder.id, p8Rework.id, { actualParameters: { rework: true, closed: true } }, `rls-p8-rework-complete-${suffix}`)
+  let crossTenantProductionDenied = false
+  let crossTenantFinishedGoodDenied = false
   const fefo = await lab.fefo(context.context, material.id, 150)
   const weighing = await lab.createWeighingSession(context.context, { contextType: 'AD_HOC', lines: [{ materialId: material.id, requestedGrams: 100, toleranceGrams: 0 }] }, `rls-weigh-${suffix}`)
   const confirmed = await lab.confirmWeighing(context.context, weighing.id, [{ lineId: weighing.lines[0].id, lotId: receipt.lines[0].lotId, actualGrams: 100 }], `rls-weigh-confirm-${suffix}`)
@@ -449,6 +764,8 @@ try {
   const crossTenantFormulaDenied = await deniedCode(() => formula.projectDetail(secondContext.context, formulaProject.id), 'FORMULA_PROJECT_NOT_FOUND')
   const crossTenantAgentDenied = await deniedCode(() => agent.detail(secondContext.context, agentRun.id), 'AGENT_RUN_NOT_FOUND')
   const crossTenantTrialDenied = await deniedCode(() => trials.detail(secondContext.context, trial.id), 'TRIAL_NOT_FOUND')
+  crossTenantProductionDenied = await deniedCode(() => production.detail(secondContext.context, p8Order.id), 'PRODUCTION_ORDER_NOT_FOUND')
+  crossTenantFinishedGoodDenied = await deniedCode(() => production.finishedGoodGenealogy(secondContext.context, p8Release.finishedGoodLot.id), 'FINISHED_GOOD_LOT_NOT_FOUND')
   const crossTenantEvidence = await evidence.retrieve(secondContext.context, { materialId: material.id, query: 'woody', limit: 3 })
   const invalidation = await consumer.invalidateSource(context.context, sentimentSource.id, { reasonCode: 'CONSENT_REVOKED' }, `rls-sentiment-invalidate-${suffix}`)
   const invalidatedPreference = await consumer.latestPreference(context.context, 'qa-project')
@@ -483,11 +800,20 @@ try {
   await adminClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', restrictedUserId!, `${restrictedUserId}@example.test`, 'Restricted QA', 'not-a-login')
     await tx.$executeRawUnsafe('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', `mem_${restrictedUserId}`, firstOrganizationId!, restrictedUserId!, 'Perfumer', 'ACTIVE')
+    // This role intentionally receives document visibility but not finished-good
+    // visibility, proving that deep genealogy does not leak through its evidence
+    // permission alone.
+    await tx.$executeRawUnsafe(
+      'UPDATE v2_role_policies SET permissions = $1::jsonb, version = version + 1, updated_at = now() WHERE organization_id = $2 AND role_key = $3',
+      JSON.stringify(['production.view', 'production.documents.view']), firstOrganizationId!, 'Perfumer',
+    )
   })
+  const documentsOnlyProductionContext = { ...context.context, userId: restrictedUserId!, role: 'Perfumer' as const, sessionId: `ses_documents_only_${restrictedUserId}` }
   let permissionDenied = false
   try {
     await lab.receiveGoods({ ...context.context, userId: restrictedUserId, role: 'Perfumer', sessionId: `ses_${restrictedUserId}` }, { freightCost: 0, dutyCost: 0, insuranceCost: 0, currency: 'USD', lines: [{ materialId: material.id, quantity: 1, unit: 'G', location: 'denied' }] }, `rls-denied-${suffix}`)
   } catch (error) { permissionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'TENANT_ACCESS_DENIED' }
+  const finishedGoodGenealogyPermissionDenied = await deniedCode(() => production.finishedGoodGenealogy(documentsOnlyProductionContext, p8Release.finishedGoodLot.id), 'TENANT_ACCESS_DENIED')
   const scientificPermissionDenied = await deniedCode(() => scientific.materialArtifacts({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_science_${restrictedUserId}` }, material.id), 'TENANT_ACCESS_DENIED')
   const modelRegistryPermissionDenied = await deniedCode(() => modelDataset.createDataset({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_model_${restrictedUserId}` }, { key: `denied-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Denied', task: 'Denied' }, `rls-model-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
   const sentimentPermissionDenied = await deniedCode(() => consumer.createSource({ ...context.context, userId: restrictedUserId!, role: 'Perfumer', sessionId: `ses_sentiment_${restrictedUserId}` }, { key: `denied-sentiment-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)}`, type: 'SURVEY', sourceScope: 'qa-project', storageRef: 'test://denied', purpose: 'Denied fixture', consentRequired: false, retentionDays: 30 }, `rls-sentiment-denied-${suffix}`), 'TENANT_ACCESS_DENIED')
@@ -620,8 +946,118 @@ try {
     && panelUnassignedTrialDenied
     && crossTenantTrialDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2Pass, phase3Pass, phase4Pass, phase5bPass, phase6Pass, phase7Pass, crossTenantFormulaDenied, crossTenantAgentDenied, crossTenantTrialDenied, crossTenantEvidenceCount: crossTenantEvidence.citations.length })}`)
+  const p8StartedIntegration = p8StartedWeighing.production as { status?: string } | null
+  const p8ConfirmedIntegration = p8ConfirmedWeighing.production as { status?: string } | null
+  const p8AllocationIntegration = p8Allocations.production as { status?: string; reservationState?: string } | null
+  const p8DuplicateCorrectionIntegration = duplicateP8Correction.production as { deviationId?: string; status?: string } | null
+  const p8RestartIntegration = p8RestartWeighing.production as { status?: string } | null
+  const p8RestartConfirmedIntegration = p8RestartConfirmation.production as { status?: string } | null
+  const phase8Pass = p8Plan.status === 'PLANNED'
+    && p8Specification.status === 'ACTIVE'
+    && p8AllocationIntegration?.status === 'READY_FOR_WEIGHING'
+    && p8AllocationIntegration?.reservationState === 'RESERVED'
+    && directProductionWeighingDenied
+    && p8StartedIntegration?.status === 'IN_PROGRESS'
+    && p8ConfirmedIntegration?.status === 'CONFIRMED'
+    && p8Yield.status === 'RECONCILED'
+    && p8QcResult.status === 'PENDING'
+    && p8QcApproval.status === 'PASSED'
+    && p8Release.status === 'RELEASED'
+    && duplicateP8Release.id === p8Release.id
+    && p8Genealogy.rawMaterialUsages.length === 1
+    && p8Genealogy.edges.some((edge) => edge.toEntityId === p8Release.finishedGoodLot.id)
+    && p8Hold.status === 'HOLD'
+    && p8Hold.heldQuantityGrams === 100
+    && duplicateP8Hold.deviationId === p8Hold.deviationId
+    && p8FinishedGoodReworkResolution.status === 'CLOSED'
+    && p8FinishedGoodRework.status === 'PLANNED'
+    && p8FinishedGoodReworkComplete.status === 'COMPLETED'
+    && p8ReworkReleaseBlocked
+    && p8ReworkYield.status === 'RECONCILED'
+    && p8ReworkQcResult.revision === 2
+    && p8ReworkQcApproval.status === 'PASSED'
+    && p8ReRelease.status === 'RELEASED'
+    && p8ReRelease.revision === p8Release.revision + 1
+    && p8ReRelease.supersedesReleaseId === p8Release.id
+    && p8FinishedGoods.some((lot) => lot.id === p8Release.finishedGoodLot.id && lot.status === 'REWORK')
+    && p8FinishedGoods.some((lot) => lot.id === p8ReRelease.finishedGoodLot.id && lot.status === 'RELEASED')
+    && finishedGoodGenealogyPermissionDenied
+    && p8ClosedOrder.status === 'CLOSED'
+    && p8Cancellation.status === 'CANCELLED'
+    && p8CorrectionSpecification.status === 'ACTIVE'
+    && directProductionReversalDenied
+    && p8CorrectionIntegration?.status === 'REVERSED'
+    && p8DuplicateCorrectionIntegration?.deviationId === p8CorrectionIntegration?.deviationId
+    && p8CorrectionIdempotencyConflict
+    && p8CorrectionResolution.status === 'CLOSED'
+    && p8CorrectionResume.status === 'READY_FOR_WEIGHING'
+    && p8RestartIntegration?.status === 'IN_PROGRESS'
+    && p8RestartConfirmedIntegration?.status === 'CONFIRMED'
+    && p8ReworkResolution.status === 'CLOSED'
+    && p8Rework.status === 'PLANNED'
+    && p8CompletedRework.status === 'COMPLETED'
+    && legacyProductionPolicyBackfill
+    && crossTenantProductionDenied
+    && crossTenantFinishedGoodDenied
+
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass) {
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({
+      crossTenantDenied,
+      unscopedMemberships,
+      firstTenantMemberships,
+      secondTenantVisibleFromFirstContext,
+      phase2Pass,
+      phase3Pass,
+      phase4Pass,
+      phase5bPass,
+      phase6Pass,
+      phase7Pass,
+      phase8Pass,
+      phase8Diagnostic: {
+        plan: p8Plan.status,
+        allocation: p8AllocationIntegration?.status,
+        allocationReservationState: p8AllocationIntegration?.reservationState,
+        directProductionWeighingDenied,
+        started: p8StartedIntegration?.status,
+        confirmed: p8ConfirmedIntegration?.status,
+        yield: p8Yield.status,
+        qcResult: p8QcResult.status,
+        qcApproval: p8QcApproval.status,
+        release: { status: p8Release.status, revision: p8Release.revision },
+        duplicateRelease: duplicateP8Release.id === p8Release.id,
+        genealogyUsageCount: p8Genealogy.rawMaterialUsages.length,
+        genealogyHasFinishedGood: p8Genealogy.edges.some((edge) => edge.toEntityId === p8Release.finishedGoodLot.id),
+        hold: { status: p8Hold.status, grams: p8Hold.heldQuantityGrams, duplicate: duplicateP8Hold.deviationId === p8Hold.deviationId },
+        finishedGoodRework: { resolution: p8FinishedGoodReworkResolution.status, started: p8FinishedGoodRework.status, complete: p8FinishedGoodReworkComplete.status },
+        reworkReleaseBlocked: p8ReworkReleaseBlocked,
+        reworkYield: p8ReworkYield.status,
+        reworkQc: { revision: p8ReworkQcResult.revision, approval: p8ReworkQcApproval.status },
+        rerelease: { status: p8ReRelease.status, revision: p8ReRelease.revision, supersedes: p8ReRelease.supersedesReleaseId === p8Release.id },
+        finishedGoodStatuses: p8FinishedGoods.map((lot) => ({ id: lot.id, status: lot.status })),
+        genealogyPermissionDenied: finishedGoodGenealogyPermissionDenied,
+        close: p8ClosedOrder.status,
+        cancellation: p8Cancellation.status,
+        correction: { specification: p8CorrectionSpecification.status, directDenied: directProductionReversalDenied, status: p8CorrectionIntegration?.status, duplicate: p8DuplicateCorrectionIntegration?.deviationId === p8CorrectionIntegration?.deviationId, conflict: p8CorrectionIdempotencyConflict, resolution: p8CorrectionResolution.status, resume: p8CorrectionResume.status, restart: p8RestartIntegration?.status, restartConfirm: p8RestartConfirmedIntegration?.status },
+        inProcessRework: { resolution: p8ReworkResolution.status, started: p8Rework.status, complete: p8CompletedRework.status },
+        legacyProductionPolicyBackfill,
+        crossTenantProductionDenied,
+        crossTenantFinishedGoodDenied,
+      },
+      phase2Diagnostic: {
+        accepted: accepted.lotStatus,
+        reservedProjection,
+        shipment: shipment.status,
+        transfer: transfer.location,
+        fefo: fefo[0]?.allocatedGrams,
+        projection,
+      },
+      crossTenantFormulaDenied,
+      crossTenantAgentDenied,
+      crossTenantTrialDenied,
+      crossTenantProductionDenied,
+      crossTenantFinishedGoodDenied,
+      crossTenantEvidenceCount: crossTenantEvidence.citations.length,
+    })}`)
   }
 
   console.log(JSON.stringify({
@@ -751,9 +1187,35 @@ try {
       brandTrialDetailDenied,
       crossTenantTrialDenied,
     },
+    phase8: {
+      order: p8Order.id,
+      planned: p8Plan.status,
+      allocation: p8Allocations.status,
+      directProductionWeighingDenied,
+      weighing: p8ConfirmedIntegration?.status,
+      yield: p8Yield.status,
+      qc: p8QcApproval.status,
+      release: p8Release.status,
+      duplicateRelease: duplicateP8Release.id === p8Release.id,
+      finishedGoodLot: p8Release.finishedGoodLot.id,
+      genealogyUsageCount: p8Genealogy.rawMaterialUsages.length,
+      closed: p8ClosedOrder.status,
+      cancelled: p8Cancellation.status,
+      directProductionReversalDenied,
+      correction: p8CorrectionIntegration?.status,
+      correctionConflict: p8CorrectionIdempotencyConflict,
+      correctionResume: p8CorrectionResume.status,
+      rework: p8CompletedRework.status,
+      crossTenantProductionDenied,
+      crossTenantFinishedGoodDenied,
+      finishedGoodGenealogyPermissionDenied,
+    },
   }))
 } finally {
   await appClient?.$disconnect()
-  await removeTestFixtures()
   await adminClient?.$disconnect()
+  // The verifier is gated to a loopback test database and starts from zero.
+  // Resetting the schema after connections close is safer than attempting to
+  // delete an interdependent audit graph inside one transaction.
+  resetDisposableSchema()
 }

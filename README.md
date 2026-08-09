@@ -86,6 +86,33 @@ Panelist chi thay blind assignment cua minh; operational reader moi co broad
 Trial read. `PHASE_7_READY = YES` cho checkpoint local. Xem [`docs/v2/phase-7`](docs/v2/phase-7/) va
 [`PHASE_7_IMPLEMENTATION_REPORT.md`](docs/v2/phase-7/PHASE_7_IMPLEMENTATION_REPORT.md).
 
+## Phase 8 status
+
+Phase 8 Production Manufacturing has a repository-local acceptance result of
+`PASS`: the focused production suite has 28 passing tests, `typecheck:v2`, API
+and frontend builds, the disposable PostgreSQL migration verifier, the
+application-role RLS workflow, and the isolated 12-role browser matrix all
+pass on the current tree. The boundary covers approved Formula snapshots,
+reservation-backed raw weighing/usage, controlled processing/QC,
+deviation/CAPA, yield/rework, release, finished-good lots and ledger,
+genealogy, and controlled documents.
+
+Finished goods use a separate Phase 8 lot and append-only ledger boundary, not
+raw inventory movements, raw inventory reservations, or shipments.
+Migrations `0012` through `0014` establish 19 forced-RLS P8 tables and 51
+composite tenant foreign keys. Release evaluates `production.release` and
+`production.qc.approve`; current default policies grant both only to Owner/Admin.
+It also requires the latest passed required QC revision and active pre-release
+document evidence. Lab Manager may plan, execute, approve QC, manage deviations,
+cancel, and close, but cannot release a finished-good lot under the default
+policy. A released lot can only enter hold through the documented, full-lot
+finished-good ledger workflow. The downstream Order/Shipment portion of BR-081
+is `BLOCKED` pending Commerce integration.
+
+Remote migration and production deployment are `NOT_APPLICABLE`: no remote
+database or deployment was attempted. See [`docs/v2/phase-8`](docs/v2/phase-8/)
+and [`PHASE_8_IMPLEMENTATION_REPORT.md`](docs/v2/phase-8/PHASE_8_IMPLEMENTATION_REPORT.md).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

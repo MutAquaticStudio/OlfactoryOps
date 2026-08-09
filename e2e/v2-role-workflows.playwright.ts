@@ -5,6 +5,39 @@ type Role = 'Owner' | 'Admin' | 'Lab Manager' | 'Perfumer' | 'R&D Scientist' | '
 type Manifest = { organizationId: string; hostname: string; otherHostname: string; statePaths: Record<Role, string> }
 const roles: Role[] = ['Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician', 'Procurement', 'Sensory Panelist', 'Brand', 'Supplier', 'Finance', 'Viewer']
 const manifest = JSON.parse(await readFile('.qa/v2-role-fixtures/manifest.json', 'utf8')) as Manifest
+const productionPermissions = [
+  'production.view',
+  'production.create',
+  'production.plan',
+  'production.allocate',
+  'production.weigh',
+  'production.process',
+  'production.qc',
+  'production.qc.record',
+  'production.qc.approve',
+  'production.deviation.manage',
+  'production.release',
+  'production.cancel',
+  'production.close',
+  'production.finishedGoods.view',
+  'production.documents.view',
+  'production.documents.manage',
+] as const
+type ProductionPermission = (typeof productionPermissions)[number]
+const productionAllowed: Record<Role, readonly ProductionPermission[]> = {
+  Owner: productionPermissions,
+  Admin: productionPermissions,
+  'Lab Manager': ['production.view', 'production.create', 'production.plan', 'production.allocate', 'production.weigh', 'production.process', 'production.qc', 'production.qc.record', 'production.qc.approve', 'production.deviation.manage', 'production.cancel', 'production.close', 'production.finishedGoods.view', 'production.documents.view', 'production.documents.manage'],
+  Perfumer: ['production.view', 'production.documents.view'],
+  'R&D Scientist': [],
+  'Lab Technician': ['production.view', 'production.weigh', 'production.process', 'production.qc.record', 'production.finishedGoods.view', 'production.documents.view'],
+  Procurement: [],
+  'Sensory Panelist': [],
+  Brand: [],
+  Supplier: [],
+  Finance: [],
+  Viewer: [],
+}
 const expected: Record<Role, { required: string[]; forbidden: string[] }> = {
   Owner: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'observability.view', 'privacy.export.self', 'trials.viewAll'], forbidden: [] },
   Admin: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'privacy.export.self', 'trials.viewAll'], forbidden: ['observability.view'] },
@@ -34,10 +67,46 @@ for (const role of roles) {
       expect(payload.user.verified).toBe(true)
       for (const permission of expected[role].required) expect(payload.capabilities[permission], `${role} must receive ${permission}`).toBe(true)
       for (const permission of expected[role].forbidden) expect(payload.capabilities[permission], `${role} must not receive ${permission}`).toBe(false)
+      for (const permission of productionPermissions) expect(payload.capabilities[permission], `${role} production capability ${permission}`).toBe(productionAllowed[role].includes(permission))
+
+      const canViewProduction = productionAllowed[role].includes('production.view')
+      const production = await page.request.get('/api/v1/v2/production')
+      expect(production.status(), `${role} production order projection`).toBe(canViewProduction ? 200 : 403)
 
       await page.goto('/v2/workspace')
       await expect(page.locator('[data-testid="v2-workspace"]')).toBeVisible()
       await expect(page.locator('.v2-workspace-nav button')).not.toHaveCount(0)
+      const csrfToken = await page.evaluate(() => window.localStorage.getItem('oo_v2_csrf'))
+      if (!csrfToken) throw new Error(`${role} fixture is missing its V2 CSRF token.`)
+      const probeId = `p8-role-probe-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+      const mutationProbes = [
+        { label: 'create', permissions: ['production.create'], path: '' },
+        { label: 'record QC', permissions: ['production.qc.record'], path: `/${probeId}/qc/results` },
+        { label: 'approve QC', permissions: ['production.qc.approve'], path: `/${probeId}/qc/results/${probeId}-result/approve` },
+        { label: 'release', permissions: ['production.release', 'production.qc.approve'], path: `/${probeId}/release` },
+        { label: 'cancel', permissions: ['production.cancel'], path: `/${probeId}/cancel` },
+        { label: 'close', permissions: ['production.close'], path: `/${probeId}/close` },
+      ] as const
+      for (const probe of mutationProbes) {
+        const response = await page.request.post(`/api/v1/v2/production${probe.path}`, {
+          data: {},
+          headers: {
+            Origin: 'http://127.0.0.1:4173',
+            'X-CSRF-Token': csrfToken,
+            'Idempotency-Key': `p8-role-boundary-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${probe.label.replace(/[^a-z0-9]+/gi, '-')}`,
+          },
+        })
+        const permitted = probe.permissions.every((permission) => payload.capabilities[permission] === true)
+        // Empty payloads are rejected only after authorization, so no probe can
+        // create or mutate a production record in the isolated fixture.
+        expect(response.status(), `${role} ${probe.label} authorization boundary`).toBe(permitted ? 422 : 403)
+      }
+      const genealogy = await page.request.get(`/api/v1/v2/production/finished-goods/${probeId}/genealogy`)
+      const canViewFinishedGoodGenealogy = payload.capabilities['production.finishedGoods.view'] === true && payload.capabilities['production.documents.view'] === true
+      expect(genealogy.status(), `${role} finished-good genealogy authorization boundary`).toBe(canViewFinishedGoodGenealogy ? 404 : 403)
+      const productionNavigation = page.locator('.v2-workspace-nav').getByRole('button', { name: 'Production', exact: true })
+      if (canViewProduction) await expect(productionNavigation).toBeVisible()
+      else await expect(productionNavigation).toHaveCount(0)
       await page.goto('/v2/workspace/observability')
       if (role === 'Owner') await expect(page.locator('h2', { hasText: 'Observability' })).toBeVisible()
       else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
@@ -65,6 +134,14 @@ for (const role of roles) {
       await page.goto('/v2/workspace/trials')
       if (canReadTrials) await expect(page.getByTestId('v2-trials-dashboard')).toBeVisible()
       else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
+
+      await page.goto('/v2/workspace/production')
+      if (canViewProduction) await expect(page.getByTestId('v2-production-dashboard')).toBeVisible()
+      else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
+      for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {
+        await page.setViewportSize(viewport)
+        expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${role} production route has horizontal overflow at ${viewport.width}px`).toBe(true)
+      }
       if (role === 'Owner') {
         await page.goto('/v2/workspace/materials')
         await expect(page.getByTestId('v2-materials')).toBeVisible()

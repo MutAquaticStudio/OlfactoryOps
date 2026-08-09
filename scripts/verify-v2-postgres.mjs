@@ -17,6 +17,9 @@ const migrations = [
   'infra/postgres/migrations/0009_phase4_6_completion_records.sql',
   'infra/postgres/migrations/0010_phase4_6_tenant_fk_hardening.sql',
   'infra/postgres/migrations/0011_phase7_trials_sensory.sql',
+  'infra/postgres/migrations/0012_phase8_production_manufacturing.sql',
+  'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql',
+  'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -110,6 +113,51 @@ try {
     if (resolver.length !== 1 || !resolver[0].security_definer) {
       throw new Error('Phase 7 public sensory link resolver is missing or not SECURITY DEFINER')
     }
+    const phase8Tables = [
+      'v2_production_orders', 'v2_production_formula_snapshots', 'v2_production_material_requirements',
+      'v2_production_allocations', 'v2_production_weighing_sessions', 'v2_production_material_usages',
+      'v2_production_process_steps', 'v2_production_qc_specifications', 'v2_production_qc_results',
+      'v2_production_deviations', 'v2_production_capa_actions', 'v2_production_yield_records',
+      'v2_production_rework_records', 'v2_production_releases', 'v2_finished_good_lots',
+      'v2_finished_good_ledger_entries', 'v2_production_genealogy_edges', 'v2_production_document_snapshots',
+      'v2_production_deviation_evidence',
+    ]
+    const phase8Rls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, phase8Tables)
+    if (phase8Rls.length !== phase8Tables.length || phase8Rls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Phase 8 table or forced RLS policy is missing')
+    }
+    const phase8Provenance = await client.$queryRawUnsafe(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND (
+          (table_name = 'v2_production_qc_results' AND column_name = ANY($1::text[]))
+          OR (table_name = 'v2_production_deviations' AND column_name = ANY($2::text[]))
+          OR (table_name = 'v2_production_rework_records' AND column_name = 'deviation_id')
+          OR (table_name = 'v2_production_releases' AND column_name = ANY($3::text[]))
+        )
+    `, ['revision', 'supersedes_result_id'], ['rework_target_stage', 'finished_good_lot_id'], ['revision', 'supersedes_release_id'])
+    if (phase8Provenance.length !== 7) throw new Error('Phase 8 QC, rework, release revision, or finished-good hold provenance columns are missing')
+    const phase8Constraints = await client.$queryRawUnsafe(`
+      SELECT conname FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `, [
+      'v2_production_qc_result_revision_unique',
+      'v2_production_qc_result_supersedes_tenant_fk',
+      'v2_production_rework_deviation_tenant_fk',
+      'v2_production_deviation_finished_good_lot_tenant_fk',
+      'v2_production_deviation_evidence_deviation_tenant_fk',
+      'v2_production_deviation_evidence_document_tenant_fk',
+      'v2_production_release_revision_unique',
+      'v2_production_release_order_id_unique',
+      'v2_production_release_supersedes_order_fk',
+    ])
+    if (phase8Constraints.length !== 9) throw new Error('Phase 8 QC, release revision, rework provenance, or finished-good evidence tenant constraints are missing')
   } finally {
     await client.$disconnect()
   }
