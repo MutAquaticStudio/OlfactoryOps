@@ -5,7 +5,7 @@
 | Capability | Evidence | Status |
 |---|---|---|
 | Consent-aware source policy | Source type, scope, purpose, retention and consent requirement | PASS |
-| Data minimization | Hashes/private reference only; strict contract rejects raw text | PASS |
+| Data minimization | Hashes/private reference only; transient EN/VI analysis persists derived signals but never raw text | PASS |
 | EN/VI analysis envelope | Language and bounded overall/aspect/perception/descriptor signals | PASS |
 | Consumer preference vector | Tenant/scope/source-set/version provenance and minimum-evidence state | PASS |
 | Source invalidation | Dependent analyses/vectors invalidated with audit evidence | PASS |

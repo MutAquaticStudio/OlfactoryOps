@@ -9,7 +9,8 @@
 | Fusion provenance | `FUSION_CONCAT` records feature-manifest hash and dimension | PASS |
 | Explainability | Feature association carries non-causal disclaimer and evidence state | PASS |
 | Prediction provenance | Requested model/input/task persisted with immutable evidence state | PASS |
-| Odor embedding/prediction/calibration | No reviewed odor-labelled dataset or calibrated serving model exists | NOT_APPLICABLE |
+| Research-only odor baseline | Morgan/SMILES late fusion, PCA embedding, descriptor head and validation residual uncertainty | PASS |
+| Production odor serving | No reviewed serving model is registered | NOT_APPLICABLE |
 | Cross-tenant model/material evidence | RLS, composite foreign keys and integration test coverage | PASS |
 | Production model/vector infrastructure | Not part of the local Phase 5 checkpoint | NOT_APPLICABLE |
 

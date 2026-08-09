@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Prisma, PrismaClient } from '@prisma/client'
-import { createFeedbackSourceRequestSchema, createPreferenceVectorRequestSchema, ingestFeedbackRequestSchema, invalidateFeedbackSourceRequestSchema, recordSentimentAnalysisRequestSchema } from '../../../packages/contracts/src/consumer-intelligence.js'
+import { analyzeTransientFeedbackRequestSchema, createFeedbackSourceRequestSchema, createPreferenceVectorRequestSchema, ingestFeedbackRequestSchema, invalidateFeedbackSourceRequestSchema, recordSentimentAnalysisRequestSchema } from '../../../packages/contracts/src/consumer-intelligence.js'
+import { analyzeConsentedFeedback } from './deterministic-analyzer.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
 
@@ -106,6 +107,27 @@ export class ConsumerIntelligenceService {
       if (!persistedId) throw new PlatformError('ANALYSIS_WRITE_FAILED', 'The sentiment analysis could not be recorded.', 409)
       await this.audit(tx, context, 'consumer_intelligence.analysis.record', 'allowed', 'sentiment_analysis', persistedId, { feedbackItemId: parsed.data.feedbackItemId, extractionVersion: parsed.data.extractionVersion, evidenceStatus: parsed.data.evidenceStatus })
       return { id: persistedId, feedbackItemId: parsed.data.feedbackItemId, evidenceStatus: parsed.data.evidenceStatus, rawContentReturned: false }
+    })
+  }
+
+  async analyzeTransientFeedback(context: PlatformContext, rawInput: unknown, key?: string) {
+    await this.platform.requirePermission(context, 'sentiment.analyze')
+    const parsed = analyzeTransientFeedbackRequestSchema.safeParse(rawInput)
+    if (!parsed.success) throw new PlatformError('INVALID_INPUT', 'Provide one bounded feedback item and consented text for transient analysis.', 422)
+    const analysis = analyzeConsentedFeedback(parsed.data.rawText)
+    // The idempotency record stores only a digest of this request; no raw text
+    // crosses the persistence boundary below.
+    return this.idempotent(context, 'consumer-intelligence.analysis.transient', key, { feedbackItemId: parsed.data.feedbackItemId, rawTextHash: digest(parsed.data.rawText) }, async (tx) => {
+      const item = await tx.$queryRaw<Array<{ id: string; sourceStatus: string }>>`SELECT fi.id, fs.status AS "sourceStatus" FROM v2_feedback_items fi JOIN v2_feedback_sources fs ON fs.id = fi.source_id AND fs.organization_id = fi.organization_id WHERE fi.id = ${parsed.data.feedbackItemId} AND fi.organization_id = ${context.organizationId}`
+      if (!item[0]) throw new PlatformError('FEEDBACK_ITEM_NOT_FOUND', 'The feedback item is not available in this workspace.', 404)
+      if (item[0].sourceStatus !== 'ACTIVE') throw new PlatformError('FEEDBACK_SOURCE_UNAVAILABLE', 'Analysis cannot be recorded against an inactive source.', 409)
+      const extractionVersion = 'deterministic-en-vi-v1'
+      const id = identifier('sentiment')
+      const saved = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_sentiment_analyses (id, organization_id, feedback_item_id, extraction_version, provider, model_version, language, language_confidence, overall, aspect_signals, perception_signals, descriptor_signals, evidence_status, created_by) VALUES (${id}, ${context.organizationId}, ${parsed.data.feedbackItemId}, ${extractionVersion}, 'deterministic-local', 'deterministic-en-vi-v1', ${analysis.language}, ${analysis.languageConfidence}, ${JSON.stringify(analysis.overall)}::jsonb, ${JSON.stringify(analysis.aspects)}::jsonb, ${JSON.stringify(analysis.perceptions)}::jsonb, ${JSON.stringify(analysis.descriptors)}::jsonb, ${analysis.evidenceStatus}, ${context.userId}) ON CONFLICT (organization_id, feedback_item_id, extraction_version) DO UPDATE SET language = EXCLUDED.language, language_confidence = EXCLUDED.language_confidence, overall = EXCLUDED.overall, aspect_signals = EXCLUDED.aspect_signals, perception_signals = EXCLUDED.perception_signals, descriptor_signals = EXCLUDED.descriptor_signals, evidence_status = EXCLUDED.evidence_status RETURNING id`
+      const persistedId = saved[0]?.id
+      if (!persistedId) throw new PlatformError('ANALYSIS_WRITE_FAILED', 'The feedback analysis could not be recorded.', 409)
+      await this.audit(tx, context, 'consumer_intelligence.analysis.transient', 'allowed', 'sentiment_analysis', persistedId, { feedbackItemId: parsed.data.feedbackItemId, rawTextHash: digest(parsed.data.rawText), extractionVersion, evidenceStatus: analysis.evidenceStatus })
+      return { id: persistedId, feedbackItemId: parsed.data.feedbackItemId, evidenceStatus: analysis.evidenceStatus, provider: 'deterministic-local', rawContentStored: false }
     })
   }
 

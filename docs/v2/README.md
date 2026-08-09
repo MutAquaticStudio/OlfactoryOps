@@ -72,7 +72,10 @@ or automatic Formula change is active. See `phase-5b/`.
 
 ## Phase 6 status
 
-Phase 6 Formula/Design Studio is in progress. Its tenant-scoped PostgreSQL
-persistence and RLS foundation are verified locally, but Formula service/API,
-deterministic composition validation, review/approval, candidate sharing and
-the disabled LLM gateway have not yet been implemented. See `phase-6/`.
+Phase 6 Formula/Design Studio is `PASS` on disposable PostgreSQL. It provides
+server-authoritative formula math, drafts, immutable approval, reviewed design
+briefs, pinned material universes, advisory candidates, recipient-safe shares,
+bounded evidence retrieval and durable research runs. Agent confirmation is
+durable, expires safely, can retry only within its ceiling and is lease-fenced;
+it remains read-only. The server-only LLM gateway truthfully reports
+`NOT_CONFIGURED`; no provider completion is faked. See `phase-6/`.

@@ -9,7 +9,7 @@ export const AGENT_PROTOCOL_VERSION = '1.0' as const
 export const AGENT_MAX_EVENT_BYTES = 64 * 1024
 export const AGENT_MAX_RETRIES = 2
 
-export const agentRunStatusSchema = z.enum(['QUEUED', 'RUNNING', 'PAUSED', 'COMPLETED', 'FAILED', 'CANCELLED'])
+export const agentRunStatusSchema = z.enum(['QUEUED', 'RUNNING', 'WAITING_FOR_CONFIRMATION', 'SUCCEEDED', 'FAILED', 'CANCELLED'])
 export type AgentRunStatus = z.infer<typeof agentRunStatusSchema>
 
 export const agentEventTypeSchema = z.enum([
@@ -17,6 +17,7 @@ export const agentEventTypeSchema = z.enum([
   'run.completed', 'run.failed', 'node.started', 'node.completed',
   'node.failed', 'node.retrying', 'artifact.created', 'artifact.updated',
   'job.queued', 'job.leased', 'job.retrying', 'job.completed', 'job.cancelled',
+  'confirmation.requested', 'confirmation.decided', 'confirmation.expired',
   'connection.snapshot', 'connection.resync_required', 'heartbeat',
 ])
 export type AgentEventType = z.infer<typeof agentEventTypeSchema>
@@ -52,16 +53,31 @@ export type AgentRuntimeState = {
   lastSequence: number
   eventIds: Set<string>
   events: AgentRuntimeEvent[]
+  pendingEvents: Map<number, AgentRuntimeEvent>
+}
+
+export function createAgentRuntimeState(): AgentRuntimeState {
+  return { status: 'QUEUED', lastSequence: 0, eventIds: new Set(), events: [], pendingEvents: new Map() }
 }
 
 export function reduceAgentRuntimeEvent(state: AgentRuntimeState, candidate: unknown): AgentRuntimeState {
   const parsed = agentRuntimeEventSchema.safeParse(candidate)
   if (!parsed.success || state.eventIds.has(parsed.data.id)) return state
-  if (parsed.data.sequence > state.lastSequence + 1 && state.events.length > 0) return state
   const eventIds = new Set(state.eventIds)
+  const pendingEvents = new Map(state.pendingEvents)
   eventIds.add(parsed.data.id)
-  const status = parsed.data.payload.status && agentRunStatusSchema.safeParse(parsed.data.payload.status).success
-    ? parsed.data.payload.status as AgentRunStatus
-    : state.status
-  return { ...state, status, lastSequence: Math.max(state.lastSequence, parsed.data.sequence), eventIds, events: [...state.events, parsed.data] }
+  if (parsed.data.sequence <= state.lastSequence) return { ...state, eventIds }
+  pendingEvents.set(parsed.data.sequence, parsed.data)
+  let lastSequence = state.lastSequence
+  let status = state.status
+  const events = [...state.events]
+  while (pendingEvents.has(lastSequence + 1)) {
+    const event = pendingEvents.get(lastSequence + 1)!
+    pendingEvents.delete(lastSequence + 1)
+    const parsedStatus = agentRunStatusSchema.safeParse(event.payload.status)
+    if (parsedStatus.success) status = parsedStatus.data
+    events.push(event)
+    lastSequence += 1
+  }
+  return { ...state, status, lastSequence, eventIds, events, pendingEvents }
 }

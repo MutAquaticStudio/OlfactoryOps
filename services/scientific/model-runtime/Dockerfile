@@ -34,4 +34,6 @@ RUN git clone --depth 1 https://github.com/osmoai/kgcnn-keras-unlocked.git /opt/
     && git -C /opt/transformer-cnn checkout 4db725b5e549af7697215d8cc7a6e8a2a952dca5
 
 COPY test_model_runtime.py /opt/test_model_runtime.py
+COPY olfactory_pipeline.py /opt/olfactory_pipeline.py
+COPY fixtures /opt/fixtures
 CMD ["python", "/opt/test_model_runtime.py"]

@@ -8,6 +8,9 @@ import { ScientificFeatureService, type ScientificRuntime } from '../services/sc
 import { ModelDatasetService } from '../services/scientific/src/model-dataset-service.js'
 import { OlfactoryIntelligenceService } from '../services/scientific/src/olfactory-intelligence-service.js'
 import { ConsumerIntelligenceService } from '../services/sentiment/src/consumer-intelligence-service.js'
+import { FormulaService } from '../services/formula/src/formula-service.js'
+import { MaterialEvidenceService } from '../services/rag/src/material-evidence-service.js'
+import { DurableAgentService } from '../services/agent-runtime/src/durable-agent-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -62,6 +65,8 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0006_phase5_olfactory_intelligence.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0007_phase5b_consumer_intelligence.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0008_phase6_formula_design_studio.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0009_phase4_6_completion_records.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0010_phase4_6_tenant_fk_hardening.sql')
 }
 
 const applicationUrl = new URL(databaseUrl)
@@ -75,6 +80,7 @@ let secondOrganizationId: string | undefined
 let firstUserId: string | undefined
 let secondUserId: string | undefined
 let restrictedUserId: string | undefined
+let brandUserId: string | undefined
 
 async function configureApplicationRole() {
   if (!adminClient) throw new Error('V2_RLS=FAIL disposable database was not initialized.')
@@ -112,7 +118,7 @@ async function removeTestFixtures() {
     try {
       if (secondOrganizationId) await tx.organization.deleteMany({ where: { id: secondOrganizationId } })
       if (firstOrganizationId) await tx.organization.deleteMany({ where: { id: firstOrganizationId } })
-      const userIds = [firstUserId, secondUserId, restrictedUserId].filter((value): value is string => Boolean(value))
+      const userIds = [firstUserId, secondUserId, restrictedUserId, brandUserId].filter((value): value is string => Boolean(value))
       if (userIds.length) await tx.user.deleteMany({ where: { id: { in: userIds } } })
     } finally {
       await tx.$executeRawUnsafe('ALTER TABLE v2_audit_events ENABLE TRIGGER v2_audit_append_only')
@@ -132,6 +138,9 @@ try {
   const modelDataset = new ModelDatasetService(appClient, service)
   const olfactory = new OlfactoryIntelligenceService(appClient, service)
   const consumer = new ConsumerIntelligenceService(appClient, service)
+  const formula = new FormulaService(appClient, service)
+  const evidence = new MaterialEvidenceService(appClient, service)
+  const agent = new DurableAgentService(appClient, service)
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -145,6 +154,11 @@ try {
   secondOrganizationId = second.membership.organizationId
   secondUserId = second.user.id
   await service.verifyEmail(second.verificationToken)
+  brandUserId = `usr_brand_${suffix.replace(/[^a-z0-9]/gi, '')}`
+  await adminClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', brandUserId!, `${brandUserId}@example.test`, 'Brand QA', 'not-a-login')
+    await tx.$executeRawUnsafe('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', `mem_${brandUserId}`, firstOrganizationId!, brandUserId!, 'Brand', 'ACTIVE')
+  })
 
   let crossTenantDenied = false
   try {
@@ -205,7 +219,60 @@ try {
   const sentimentSource = await consumer.createSource(context.context, { key: `sentiment-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, type: 'SURVEY', sourceScope: 'qa-project', storageRef: 'test://consumer-feedback', purpose: 'Isolated consumer preference verification.', consentRequired: true, retentionDays: 30 }, `rls-sentiment-source-${suffix}`)
   const sentimentFeedback = await consumer.ingestFeedback(context.context, { sourceId: sentimentSource.id, externalRefHash: '1'.repeat(64), contentHash: '2'.repeat(64), privateContentRef: 'private://qa-feedback/1', consentProofHash: '3'.repeat(64), languageHint: 'EN', collectedAt: new Date().toISOString() }, `rls-sentiment-feedback-${suffix}`)
   const sentimentAnalysis = await consumer.recordAnalysis(context.context, { feedbackItemId: sentimentFeedback.id, extractionVersion: 'manual-v1', provider: 'manual-review', modelVersion: 'manual-v1', language: 'EN', languageConfidence: 1, overall: { label: 'POSITIVE', score: 0.5, confidence: 0.8 }, descriptors: [{ id: 'woody', value: 0.6, confidence: 0.8 }], evidenceStatus: 'VERIFIED' }, `rls-sentiment-analysis-${suffix}`)
+  const transientAnalysis = await consumer.analyzeTransientFeedback(context.context, { feedbackItemId: sentimentFeedback.id, rawText: 'A beautiful woody opening, but the drydown is a little weak.' }, `rls-sentiment-transient-${suffix}`)
   const preference = await consumer.createPreferenceVector(context.context, { sourceIds: [sentimentSource.id], sourceScope: 'qa-project', vocabularyVersion: 'v1', aggregationVersion: 'v1' }, `rls-sentiment-preference-${suffix}`)
+  const inventoryMovementCountBeforeFormula = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_inventory_movements WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]!.count)
+  })
+  const formulaProject = await formula.createProject(context.context, { name: 'RLS formula', formulaType: 'ACCORD' }, `rls-formula-project-${suffix}`)
+  const formulaDraft = await formula.createDraft(context.context, formulaProject.id, { components: [{ materialId: material.id, percentage: 100, position: 0, note: 'isolated test component' }], targetMassGrams: 100 }, `rls-formula-draft-${suffix}`)
+  const formulaValidation = await formula.validateDraft(context.context, formulaDraft.id)
+  const submittedFormula = await formula.submitReview(context.context, formulaDraft.id, 'Isolated deterministic formula review.', `rls-formula-submit-${suffix}`)
+  const approvedFormula = await formula.approveDraft(context.context, formulaDraft.id, 'Isolated approval evidence.', `rls-formula-approve-${suffix}`)
+  const designProject = await formula.createDesignProject(context.context, { name: 'RLS design', rawBrief: 'A compact woody research direction.', formulaProjectId: formulaProject.id }, `rls-design-project-${suffix}`)
+  const reviewedBrief = await formula.reviewBrief(context.context, designProject.id, { structuredBrief: { product: { type: 'ACCORD' }, creativeDirection: 'Woody and transparent.', performance: ['moderate diffusion'], audience: [], markets: [], availabilityFirst: true, requiredMaterialIds: [material.id], prohibitedMaterialIds: [], unresolvedQuestions: [] } }, `rls-design-review-${suffix}`)
+  const materialUniverse = await formula.buildMaterialUniverse(context.context, designProject.id, `rls-design-universe-${suffix}`)
+  const indexedEvidence = await evidence.index(context.context, { materialId: material.id, sourceKind: 'MATERIAL_PROFILE', sourceRef: 'test://rls/profile', version: '1', contentHash: '9'.repeat(64), excerpts: ['Woody profile with a transparent drydown and material evidence.'] }, `rls-evidence-index-${suffix}`)
+  const retrievedEvidence = await evidence.retrieve(context.context, { materialId: material.id, query: 'woody drydown', limit: 3 })
+  const candidate = await formula.createCandidate(context.context, designProject.id, {
+    narrative: 'A private single-material benchmark direction.',
+    components: [{ materialId: material.id, percentage: 100, position: 0 }],
+    evidenceReferences: {
+      materialEvidenceSourceIds: [indexedEvidence.sourceId],
+      scientificArtifactIds: scienceArtifacts.filter((artifact) => artifact.evidenceStatus === 'VERIFIED').slice(0, 1).map((artifact) => artifact.id),
+      consumerPreferenceVectorId: preference.id,
+    },
+  }, `rls-design-candidate-${suffix}`)
+  await formula.shareCandidate(context.context, candidate.id, { recipientUserIds: [brandUserId!], allowMaterialNames: false }, `rls-design-share-${suffix}`)
+  const brandCandidate = await formula.candidateDetail({ ...context.context, userId: brandUserId!, role: 'Brand', sessionId: `ses_${brandUserId}` }, candidate.id)
+  const savedCandidateDraft = await formula.saveCandidateAsDraft(context.context, candidate.id, formulaProject.id, `rls-design-save-${suffix}`)
+  const duplicateCandidateDraft = await formula.saveCandidateAsDraft(context.context, candidate.id, formulaProject.id, `rls-design-save-duplicate-${suffix}`)
+  const agentRun = await agent.start(context.context, { designProjectId: designProject.id, workflowKey: 'design-studio/1', inputHash: 'a'.repeat(64) }, `rls-agent-start-${suffix}`)
+  const waitingAgentRun = await agent.execute(context.context, agentRun.id, `rls-agent-execute-${suffix}`)
+  const confirmedAgentRun = await agent.confirm(context.context, agentRun.id, waitingAgentRun.confirmation.id, { accept: true }, `rls-agent-confirm-${suffix}`)
+  const duplicateAgentConfirmation = await agent.confirm(context.context, agentRun.id, waitingAgentRun.confirmation.id, { accept: true }, `rls-agent-confirm-duplicate-${suffix}`)
+  const replayedAgentRun = await agent.detail(context.context, agentRun.id, 0)
+  const cancelableAgentRun = await agent.start(context.context, { designProjectId: designProject.id, workflowKey: 'design-studio/1', inputHash: 'b'.repeat(64) }, `rls-agent-cancel-start-${suffix}`)
+  const cancelledAgentRun = await agent.cancel(context.context, cancelableAgentRun.id, `rls-agent-cancel-${suffix}`)
+  const expiringAgentRun = await agent.start(context.context, { designProjectId: designProject.id, workflowKey: 'design-studio/1', inputHash: 'c'.repeat(64) }, `rls-agent-expire-start-${suffix}`)
+  const waitingExpiredAgentRun = await agent.execute(context.context, expiringAgentRun.id, `rls-agent-expire-execute-${suffix}`)
+  await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    await tx.$executeRawUnsafe('UPDATE v2_agent_confirmations SET expires_at = now() - interval \'1 second\' WHERE organization_id = $1 AND id = $2', firstOrganizationId!, waitingExpiredAgentRun.confirmation.id)
+  })
+  const expiredAgentConfirmation = await agent.confirm(context.context, expiringAgentRun.id, waitingExpiredAgentRun.confirmation.id, { accept: true }, `rls-agent-expire-confirm-${suffix}`)
+  const retriedAgentRun = await agent.retry(context.context, expiringAgentRun.id, `rls-agent-retry-${suffix}`)
+  const retriedCancelledAgentRun = await agent.cancel(context.context, expiringAgentRun.id, `rls-agent-retry-cancel-${suffix}`)
+  const inventoryMovementCountAfterFormula = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_inventory_movements WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]!.count)
+  })
   const materialDocument = await lab.addMaterialDocument(context.context, material.id, { kind: 'SDS', objectRef: `test://material/${suffix}`, contentHash: `hash-${suffix}` }, `rls-material-document-${suffix}`)
   const supplier = await lab.createSupplier(context.context, { legalName: `RLS Supplier ${suffix}`, currency: 'USD', paymentTerms: {} }, `rls-supplier-${suffix}`)
   await lab.changeSupplierStatus(context.context, supplier.id, 'ACTIVE', `rls-supplier-status-${suffix}`)
@@ -298,6 +365,9 @@ try {
   const crossTenantModelDenied = await deniedCode(() => modelDataset.runtimeStatus(secondContext.context, modelVersion.id), 'MODEL_VERSION_NOT_FOUND')
   const crossTenantEmbeddingDenied = await deniedCode(() => olfactory.createMolecularEmbedding(secondContext.context, material.id, { featureKinds: ['ECFP'] }, `rls-cross-embedding-${suffix}`), 'MATERIAL_NOT_FOUND')
   const crossTenantSentimentDenied = await deniedCode(() => consumer.invalidateSource(secondContext.context, sentimentSource.id, { reasonCode: 'CROSS_TENANT' }, `rls-cross-sentiment-${suffix}`), 'FEEDBACK_SOURCE_NOT_FOUND')
+  const crossTenantFormulaDenied = await deniedCode(() => formula.projectDetail(secondContext.context, formulaProject.id), 'FORMULA_PROJECT_NOT_FOUND')
+  const crossTenantAgentDenied = await deniedCode(() => agent.detail(secondContext.context, agentRun.id), 'AGENT_RUN_NOT_FOUND')
+  const crossTenantEvidence = await evidence.retrieve(secondContext.context, { materialId: material.id, query: 'woody', limit: 3 })
   const invalidation = await consumer.invalidateSource(context.context, sentimentSource.id, { reasonCode: 'CONSENT_REVOKED' }, `rls-sentiment-invalidate-${suffix}`)
   const invalidatedPreference = await consumer.latestPreference(context.context, 'qa-project')
   const secondDataset = await modelDataset.createDataset(secondContext.context, { key: `qa-other-${suffix.replace(/[^a-z0-9]/gi, '').slice(-20)}`, name: 'Second tenant dataset', task: 'Composite foreign-key isolation check' }, `rls-other-dataset-${suffix}`)
@@ -404,14 +474,42 @@ try {
     && explainability.status === 'NOT_EVALUATED'
     && crossTenantEmbeddingDenied
   const phase5bPass = sentimentAnalysis.evidenceStatus === 'VERIFIED'
+    && transientAnalysis.provider === 'deterministic-local'
+    && transientAnalysis.rawContentStored === false
     && preference.evidenceStatus === 'NOT_ENOUGH_EVIDENCE'
     && crossTenantSentimentDenied
     && sentimentPermissionDenied
     && invalidation.status === 'INVALIDATED'
     && invalidatedPreference.status === 'NOT_ENOUGH_EVIDENCE'
+  const phase6Pass = formulaDraft.math.valid
+    && formulaValidation.math.valid
+    && submittedFormula.status === 'IN_REVIEW'
+    && approvedFormula.status === 'APPROVED'
+    && reviewedBrief.status === 'REVIEWED'
+    && materialUniverse.materialIds.includes(material.id)
+    && candidate.status === 'ADVISORY'
+    && brandCandidate.projection === 'SAFE_SHARE'
+    && !('components' in brandCandidate)
+    && savedCandidateDraft.status === 'DRAFT'
+    && duplicateCandidateDraft.alreadySaved === true
+    && indexedEvidence.status === 'APPROVED'
+    && retrievedEvidence.citations.length === 1
+    && waitingAgentRun.status === 'WAITING_FOR_CONFIRMATION'
+    && confirmedAgentRun.status === 'ACCEPTED'
+    && duplicateAgentConfirmation.alreadyDecided === true
+    && replayedAgentRun.run.status === 'SUCCEEDED'
+    && replayedAgentRun.events.length >= 9
+    && cancelledAgentRun.status === 'CANCELLED'
+    && expiredAgentConfirmation.status === 'EXPIRED'
+    && retriedAgentRun.status === 'QUEUED'
+    && retriedCancelledAgentRun.status === 'CANCELLED'
+    && inventoryMovementCountBeforeFormula === inventoryMovementCountAfterFormula
+    && crossTenantFormulaDenied
+    && crossTenantAgentDenied
+    && crossTenantEvidence.citations.length === 0
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 1 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass) {
-    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2: { duplicateMaterial: duplicateMaterial.id === material.id, quarantineRejected, accepted: accepted.lotStatus, concurrentInspectionDenied, fefoAllocated: fefo[0]?.allocatedGrams, weighing: confirmed.status, duplicateWeighing: duplicateConfirmation.status, reservationCount: reservation.reservations.length, unsafeReversalDenied, concurrentLandedCostDenied, landedAllocationCount: landed.allocations.length, projection, secondTenantMaterials: secondMaterials.length, secondOffers: secondOffers.length, crossTenantLotDenied, crossTenantReceiptDenied, crossTenantShipmentDenied, crossTenantWeighingDenied, crossTenantSupplierDenied, permissionDenied }, phase3: { structure: structureJob.status, duplicate: duplicateStructureJob.id === structureJob.id, features: featureJob.status, artifactKinds: scienceArtifacts.map((artifact) => `${artifact.artifactKind}:${artifact.evidenceStatus}`), crossTenantScientificDenied, scientificPermissionDenied }, phase4: { duplicateDataset: duplicateDataset.id === dataset.id, approvedDatasetVersion: approvedDatasetVersion.status, trainingRun: trainingRun.status, evaluation: evaluation.leakageStatus, modelRuntime: modelRuntime.status, crossTenantDatasetDenied, crossTenantModelDenied, compositeCrossTenantDatasetDenied, modelRegistryPermissionDenied }, phase5: { molecularEmbedding: molecularEmbedding.status, molecularSimilarity: molecularSimilarity.status, odorPrediction: odorPrediction.status, explainability: explainability.status, crossTenantEmbeddingDenied } })}`)
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 2 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass) {
+    throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({ crossTenantDenied, unscopedMemberships, firstTenantMemberships, secondTenantVisibleFromFirstContext, phase2Pass, phase3Pass, phase4Pass, phase5bPass, phase6Pass, crossTenantFormulaDenied, crossTenantAgentDenied, crossTenantEvidenceCount: crossTenantEvidence.citations.length })}`)
   }
 
   console.log(JSON.stringify({
@@ -490,11 +588,34 @@ try {
     },
     phase5b: {
       sentimentAnalysis: sentimentAnalysis.evidenceStatus,
+      transientAnalysis: transientAnalysis.evidenceStatus,
       preference: preference.evidenceStatus,
       crossTenantSentimentDenied,
       sentimentPermissionDenied,
       invalidation: invalidation.status,
       invalidatedPreference: invalidatedPreference.status,
+    },
+    phase6: {
+      formulaDraft: formulaDraft.status,
+      formulaValidation: formulaValidation.math.valid,
+      approvedFormula: approvedFormula.status,
+      reviewedBrief: reviewedBrief.status,
+      materialUniverseCount: materialUniverse.materialIds.length,
+      candidate: candidate.status,
+      brandProjection: brandCandidate.projection,
+      savedCandidateDraft: savedCandidateDraft.status,
+      duplicateCandidateDraft: duplicateCandidateDraft.alreadySaved,
+      evidenceCitationCount: retrievedEvidence.citations.length,
+      agent: replayedAgentRun.run.status,
+      replayedEventCount: replayedAgentRun.events.length,
+      agentConfirmation: confirmedAgentRun.status,
+      cancelledAgent: cancelledAgentRun.status,
+      expiredAgentConfirmation: expiredAgentConfirmation.status,
+      retriedAgent: retriedAgentRun.status,
+      inventoryMovementsChanged: inventoryMovementCountBeforeFormula !== inventoryMovementCountAfterFormula,
+      crossTenantFormulaDenied,
+      crossTenantAgentDenied,
+      crossTenantEvidenceCount: crossTenantEvidence.citations.length,
     },
   }))
 } finally {

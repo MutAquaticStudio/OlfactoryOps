@@ -71,6 +71,12 @@ for (const role of roles) {
         await page.getByLabel('Legal supplier name').fill('Role E2E supplier')
         await page.getByRole('button', { name: 'Create draft supplier' }).click()
         await expect(page.getByText('Supplier profile created as a draft for review.')).toBeVisible()
+        await page.goto('/v2/workspace/formulas')
+        await expect(page.getByTestId('v2-formulas')).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Create formula project' })).toBeVisible()
+        await page.goto('/v2/workspace/design-studio')
+        await expect(page.getByTestId('v2-design-studio')).toBeVisible()
+        await expect(page.getByRole('button', { name: 'Save research brief' })).toBeVisible()
       }
 
       for (const viewport of [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {

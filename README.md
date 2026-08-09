@@ -36,10 +36,11 @@ tenant-scoped cho dataset, dataset version, license, transformation, artifact,
 model, model version, feature contract, checkpoint, training run, evaluation
 va metric. Moi dataset version can checksum, citation, license evidence va
 provenance; split train/validation/test phai co seed va group hash rieng de
-chan data leakage. KGCNN da co compatibility smoke voi checkpoint round-trip,
-inference tong hop va metric tong hop. Transformer-CNN van `BLOCKED` cho
-activation cho toi khi co license evidence review doc lap. Khong import bulk
-dataset, khong phuc vu model, khong goi LLM va khong deploy production. Xem
+chan data leakage. KGCNN va Transformer-CNN deu co bounded training,
+checkpoint round-trip va inference trong Docker compatibility runtime. Pipeline
+benchmark compact co group split, leakage guard, feature fusion va uncertainty
+tu residual validation; no van la research-only, khong phuc vu model, khong
+goi LLM va khong deploy production. Xem
 [`docs/v2/phase-4`](docs/v2/phase-4/) de xem boundary va evidence.
 
 ## Trang thai V2 Phase 5
@@ -48,10 +49,10 @@ Phase 5 Olfactory Intelligence da `PASS` tren branch
 `codex/v2-phase5-olfactory-intelligence`, voi PostgreSQL disposable. He thong them
 molecular embedding duoc trace tu ECFP/BCFP artifact, similarity Tanimoto co
 method/metric/index version va explainability record luon kem canh bao khong
-phai bang chung nhan qua. Odor embedding va odor prediction chi tra ve
-`NOT_EVALUATED` neu chua co dataset co nhan hop le, model duoc danh gia va
-calibration. Khong co du doan mui huong gia hoac goi y cong thuc tu Phase 5.
-Xem evidence tai [`docs/v2/phase-5`](docs/v2/phase-5/).
+phai bang chung nhan qua. Baseline research-only cho odor embedding,
+prediction, feature fusion va residual uncertainty duoc test trong model
+runtime; no khong phai production serving hay compliance decision. Xem evidence
+tai [`docs/v2/phase-5`](docs/v2/phase-5/).
 
 ## Trang thai V2 Phase 5B
 
@@ -65,12 +66,13 @@ Xem [`docs/v2/phase-5b`](docs/v2/phase-5b/).
 
 ## Trang thai V2 Phase 6
 
-Phase 6 Formula/Design Studio dang `IN_PROGRESS`. Da co schema PostgreSQL
-tenant-scoped cho Formula Project, Draft, immutable Version, Review, Design
-Project, Brief Version va material-universe snapshot; migration va RLS da pass
-tren PostgreSQL disposable. Service/API/UI, formula math, approval workflow,
-candidate sharing va LLM gateway chua duoc bat. Xem
-[`docs/v2/phase-6/EXECUTION_STATE.md`](docs/v2/phase-6/EXECUTION_STATE.md).
+Phase 6 Formula/Design Studio da `PASS` tren PostgreSQL disposable. Formula
+math va approval deu server-authoritative; Design Studio co raw/structured
+brief, constraint/universe snapshot, advisory candidate, safe sharing, RAG
+citation va agent run durable. Agent confirmation co expiry, retry gioi han va
+lease fencing; agent van chi doc, khong tu tao Formula Draft hay dong kho. LLM
+provider dang `NOT_CONFIGURED`, khong co ket qua gia. Xem
+[`docs/v2/phase-6`](docs/v2/phase-6/).
 
 ## Purpose
 

@@ -39,6 +39,13 @@ export const recordSentimentAnalysisRequestSchema = z.object({
   evidenceStatus,
 }).strict()
 
+// Raw feedback is accepted only for this immediate, deterministic analysis
+// boundary. It must never be persisted or returned by an API response.
+export const analyzeTransientFeedbackRequestSchema = z.object({
+  feedbackItemId: id,
+  rawText: z.string().trim().min(1).max(8_000),
+}).strict()
+
 export const createPreferenceVectorRequestSchema = z.object({
   sourceIds: z.array(id).min(1).max(32).transform((items) => [...new Set(items)].sort()),
   sourceScope: id,

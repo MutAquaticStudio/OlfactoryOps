@@ -1,26 +1,28 @@
 # OlfactoryOps V2 Phase 6 Execution State
 
-## Current slice
+## Current checkpoint
 
-The Formula/Design Studio persistence foundation is present in migration
-`0008_phase6_formula_design_studio.sql` and has passed disposable PostgreSQL
-migration and RLS execution.
+Phase 6 is implemented on the isolated V2 PostgreSQL boundary. It has no
+external LLM credential or remote deployment. Formula calculations, review,
+approval, tenant scoping, RAG retrieval and the durable research runtime are
+server-owned.
 
-## Implemented
+| Surface | Status |
+|---|---|
+| Formula aggregate, math and immutable approval | PASS |
+| Formula API and V2 Formula R&D UI | PASS |
+| Design brief, reviewed constraints and universe snapshot | PASS |
+| Candidate, safe recipient projection and draft handoff | PASS |
+| Approved-source material evidence retrieval | PASS |
+| Durable run, job, lease fencing, replay, confirmation expiry/retry/cancellation and allow-listed tool audit | PASS |
+| External LLM provider live smoke | BLOCKED |
+| Remote migration and production deployment | NOT_APPLICABLE |
 
-- Tenant-scoped Formula Project, Draft, Component, immutable Version and Review
-  tables.
-- Final-product context and optional concentrate percentage on Formula Project.
-- Tenant-scoped Design Project, raw/structured Brief Version, material-universe
-  snapshot and advisory Candidate tables.
-- Composite foreign keys and forced RLS on every Phase 6 table.
+`PHASE_6_READY = YES` for the local, provider-disabled Phase 6 scope.
 
-## Not implemented
+The provider gateway returns `NOT_CONFIGURED`; it does not fabricate a model
+response, candidate, usage value, or provider health state.
 
-- Formula service/API/UI and deterministic 100% math validation.
-- Draft submit/review/approval state machine and immutable version write path.
-- Authorized-material universe builder, candidate validation, sharing and draft
-  save flow.
-- LLM gateway, RAG retrieval or external provider activation.
-
-`PHASE_6_READY = NO`
+Confirmation currently closes a read-only research-review action exactly once.
+It is not a shortcut around Formula draft saving, Formula approval, inventory
+reservation or inventory consumption.

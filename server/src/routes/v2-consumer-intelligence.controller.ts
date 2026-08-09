@@ -22,6 +22,8 @@ export class V2ConsumerIntelligenceController {
   async ingest(@Req() request: FastifyRequest, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { feedback: await this.intelligence.ingestFeedback(context, body, key) } }
   @Post('analyses')
   async analysis(@Req() request: FastifyRequest, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { analysis: await this.intelligence.recordAnalysis(context, body, key) } }
+  @Post('analyses/transient')
+  async transientAnalysis(@Req() request: FastifyRequest, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { analysis: await this.intelligence.analyzeTransientFeedback(context, body, key) } }
   @Post('preference-vectors')
   async aggregate(@Req() request: FastifyRequest, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { preference: await this.intelligence.createPreferenceVector(context, body, key) } }
   @Post('sources/:id/invalidate')

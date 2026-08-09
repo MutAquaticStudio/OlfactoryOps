@@ -18,8 +18,9 @@ checkpoint.
 | Split controls | Seeded scaffold/time split with distinct train/validation/test group hashes | PASS |
 | Evaluation controls | Leakage status and metric recording are typed and tenant-scoped | PASS |
 | Tenant/RBAC/idempotency | Service/API checks, composite tenant foreign keys, RLS harness, audit events, scoped idempotency | PASS |
-| KGCNN compatibility | Pinned source, documented Keras Core adapter, synthetic checkpoint/inference/metric smoke | PASS |
-| Transformer-CNN activation | Source license evidence requires independent review | BLOCKED |
+| KGCNN compatibility | Pinned source, bounded optimization step, checkpoint reload, inference and metric smoke | PASS |
+| Transformer-CNN compatibility | Pinned preprocessing, bounded optimization step, checkpoint reload and inference smoke | PASS |
+| Compact public benchmark | Licensed fixture, canonical group split, leakage check, fusion, metrics and residual uncertainty | PASS |
 | Dataset import | No bulk public dataset was imported | NOT_APPLICABLE |
 | Production runtime/training | No scheduler or serving path is implemented | NOT_APPLICABLE |
 | Production deployment | Local checkpoint only | NOT_APPLICABLE |

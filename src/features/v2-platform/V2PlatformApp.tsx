@@ -7,6 +7,7 @@ type V2Invitation = { id: string; email: string; role: string; status: string; e
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/api\/v1\/?$/, '/api/v1/v2/platform')
 const labApiBase = apiBase.replace(/\/platform$/, '/lab')
+const formulaApiBase = apiBase.replace(/\/platform$/, '/formula-intelligence')
 
 const copy = {
   'en-US': {
@@ -33,6 +34,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function labRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const csrf = document.cookie.match(/(?:^|;\s*)oo_v2_csrf=([^;]+)/)?.[1] || window.localStorage.getItem('oo_v2_csrf') || undefined
   const response = await fetch(`${labApiBase}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}), ...(init?.method && init.method !== 'GET' ? { 'Idempotency-Key': crypto.randomUUID() } : {}), ...(init?.headers || {}) } })
+  const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || 'Request failed')
+  return payload as T
+}
+
+async function formulaRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const csrf = document.cookie.match(/(?:^|;\s*)oo_v2_csrf=([^;]+)/)?.[1] || window.localStorage.getItem('oo_v2_csrf') || undefined
+  const response = await fetch(`${formulaApiBase}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}), ...(init?.method && init.method !== 'GET' ? { 'Idempotency-Key': crypto.randomUUID() } : {}), ...(init?.headers || {}) } })
   const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
   if (!response.ok) throw new Error(payload.error?.message || payload.message || 'Request failed')
   return payload as T
@@ -66,7 +75,7 @@ function AuthView({ mode, text, onLocale, onNavigate }: { mode: 'login' | 'signu
 function WorkspaceView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
   const [session, setSession] = useState<V2Session | null>(null); const [busy, setBusy] = useState(true); const [error, setError] = useState<string | null>(null); const [active, setActive] = useState(window.location.pathname.split('/').at(-1) || 'workspace')
   useEffect(() => { void request<V2Session>('/me').then(setSession).catch((err) => { setError(err instanceof Error ? err.message : text.unavailable); onNavigate('/v2/login') }).finally(() => setBusy(false)) }, [onNavigate, text.unavailable])
-  const items = useMemo(() => [{ key: 'workspace', label: text.status, permission: 'tenant.view' }, { key: 'materials', label: 'Materials', permission: 'materials.view' }, { key: 'suppliers', label: 'Suppliers', permission: 'suppliers.view' }, { key: 'inventory', label: 'Inventory', permission: 'inventory.view' }, { key: 'procurement', label: 'Procurement', permission: 'procurement.view' }, { key: 'security', label: text.security, permission: 'security.sessions.view' }, { key: 'members', label: text.members, permission: 'members.view' }, { key: 'domains', label: text.domains, permission: 'domains.view' }, { key: 'billing', label: text.billing, permission: 'billing.capabilities' }, { key: 'notifications', label: text.notifications, permission: 'notifications.view' }, { key: 'privacy', label: text.privacy, permission: 'security.profile.view' }, { key: 'observability', label: text.observability, permission: 'observability.view' }].filter((item) => session?.capabilities?.[item.permission] === true), [session, text])
+  const items = useMemo(() => [{ key: 'workspace', label: text.status, permission: 'tenant.view' }, { key: 'materials', label: 'Materials', permission: 'materials.view' }, { key: 'formulas', label: 'Formulas', permission: 'formula.view' }, { key: 'design-studio', label: 'Design Studio', permission: 'formula.edit' }, { key: 'suppliers', label: 'Suppliers', permission: 'suppliers.view' }, { key: 'inventory', label: 'Inventory', permission: 'inventory.view' }, { key: 'procurement', label: 'Procurement', permission: 'procurement.view' }, { key: 'security', label: text.security, permission: 'security.sessions.view' }, { key: 'members', label: text.members, permission: 'members.view' }, { key: 'domains', label: text.domains, permission: 'domains.view' }, { key: 'billing', label: text.billing, permission: 'billing.capabilities' }, { key: 'notifications', label: text.notifications, permission: 'notifications.view' }, { key: 'privacy', label: text.privacy, permission: 'security.profile.view' }, { key: 'observability', label: text.observability, permission: 'observability.view' }].filter((item) => session?.capabilities?.[item.permission] === true), [session, text])
   if (busy) return <main className="v2-platform-page"><div className="v2-loading">{text.loading}</div></main>
   if (error && !session) return <main className="v2-platform-page"><div className="v2-auth-card"><div className="v2-alert is-error">{error}</div></div></main>
   const signOut = async () => { await request('/auth/logout', { method: 'POST' }).catch(() => undefined); onNavigate('/v2/login') }
@@ -85,9 +94,10 @@ function V2Section({ active, text, session }: { active: string; text: PlatformCo
     if (active === 'members') void Promise.all([request<{ members: typeof members }>('/workspace/members'), request<{ invitations: V2Invitation[] }>('/workspace/invitations')]).then(([memberPayload, invitationPayload]) => { setMembers(memberPayload.members); setInvitations(invitationPayload.invitations) }).catch((error) => setNotice(error instanceof Error ? error.message : text.noAccess))
   }, [active, text.noAccess])
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Request failed') } }
-  const requiredPermission: Record<string, string> = { materials: 'materials.view', suppliers: 'suppliers.view', inventory: 'inventory.view', procurement: 'procurement.view', security: 'security.sessions.view', members: 'members.view', domains: 'domains.view', billing: 'billing.capabilities', notifications: 'notifications.view', observability: 'observability.view', workspace: 'tenant.view' }
+  const requiredPermission: Record<string, string> = { materials: 'materials.view', formulas: 'formula.view', 'design-studio': 'formula.edit', suppliers: 'suppliers.view', inventory: 'inventory.view', procurement: 'procurement.view', security: 'security.sessions.view', members: 'members.view', domains: 'domains.view', billing: 'billing.capabilities', notifications: 'notifications.view', observability: 'observability.view', workspace: 'tenant.view' }
   if (requiredPermission[active] && session?.capabilities?.[requiredPermission[active]] !== true) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
   if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
+  if (active === 'formulas' || active === 'design-studio') return <FormulaIntelligencePanel active={active} />
   if (active === 'billing') return <div className="v2-panel"><h2>{text.billing}</h2><p>Self-service billing is disabled during managed beta. Workspace access and capability limits remain enforced server-side.</p></div>
   if (active === 'security') return <div className="v2-panel"><h2>{text.security}</h2><p>Sessions are opaque, rotated, hash-only, and protected by CSRF for unsafe requests.</p><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/password', passwords); setPasswords({ currentPassword: '', newPassword: '' }) }}><label>Current password<input type="password" required value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} /></label><label>New password<input type="password" required minLength={12} value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change password</button></form><form className="v2-inline-form" onSubmit={(event) => { event.preventDefault(); void post('/security/email', emailForm); setEmailForm({ currentPassword: '', newEmail: '' }) }}><label>New email<input type="email" required value={emailForm.newEmail} onChange={(event) => setEmailForm({ ...emailForm, newEmail: event.target.value })} /></label><label>Current password<input type="password" required value={emailForm.currentPassword} onChange={(event) => setEmailForm({ ...emailForm, currentPassword: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Change email</button></form>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
   if (active === 'privacy') return <div className="v2-panel"><h2>{text.privacy}</h2><p>Personal export and workspace export are separate authorization boundaries.</p><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/exports/privacy')}>{text.export}</button><button className="v2-secondary-button" type="button" onClick={() => void post('/workspace/consents', { purpose: 'PRIVACY', policyVersion: 'v2-2026-08' })}>{text.consent}</button>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
@@ -139,6 +149,104 @@ function LabOperationsPanel({ active, capabilities }: { active: 'materials' | 's
   if (active === 'suppliers') return <div className="v2-panel" data-testid="v2-suppliers"><h2>Supplier profiles</h2><p>Supplier identity, evidence and offer pricing are tenant-owned. Operational purchasing accepts only active supplier offers.</p>{capabilities['suppliers.edit'] ? <form className="v2-inline-form" onSubmit={createSupplier}><label>Legal supplier name<input required value={supplierName} onChange={(event) => setSupplierName(event.target.value)} /></label><button className="v2-secondary-button" type="submit">Create draft supplier</button></form> : null}<div className="v2-member-list">{suppliers.length ? suppliers.map((supplier) => <div className="v2-member-row" key={supplier.id}><strong>{supplier.tradeName || supplier.legalName}</strong><span>{supplier.status}</span><span>{supplier.currency}</span><span>{supplier.leadTimeDays === null || supplier.leadTimeDays === undefined ? 'Lead time not set' : `${supplier.leadTimeDays} days`}</span></div>) : <p className="v2-muted">No supplier profile is available in this workspace.</p>}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
   if (active === 'inventory') return <div className="v2-panel" data-testid="v2-inventory"><h2>Inventory lots</h2><p>Available stock is derived from the immutable ledger. Quarantine and failed-quality lots are excluded from FEFO allocation.</p><div className="v2-member-list">{lots.length ? lots.map((lot) => <div className="v2-member-row" key={lot.id}><strong>{lot.id.slice(0, 14)}</strong><span>{lot.status} / {lot.qualityStatus}</span><span>{lot.location}</span><span>{lot.projection.availableGrams.toFixed(3)} g available</span></div>) : <p className="v2-muted">No lots exist in this workspace.</p>}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
   return <div className="v2-panel" data-testid="v2-procurement"><h2>Procurement & receiving</h2><p>Request, approval, order, shipment, receipt, inspection and landed-cost operations are all tenant-scoped. Receiving always creates a quarantine lot; inspection is the gate into available inventory.</p><div className="v2-member-list">{procurement?.orders.length ? procurement.orders.map((order) => <div className="v2-member-row" key={order.id}><strong>{order.id.slice(0, 16)}</strong><span>{order.status.replaceAll('_', ' ')}</span><span>{order.currency}</span><span>Order</span></div>) : <p className="v2-muted">No purchase order is available. Create an approved request, then select an active supplier offer.</p>}{procurement?.shipments.map((shipment) => <div className="v2-member-row" key={shipment.id}><strong>{shipment.carrier || 'Supplier shipment'}</strong><span>{shipment.status.replaceAll('_', ' ')}</span><span>{shipment.trackingReference || 'No tracking reference'}</span><span>Shipment</span></div>)}</div>{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
+}
+
+type FormulaProjectRow = { id: string; name: string; formulaType: 'ACCORD' | 'FINE_FRAGRANCE'; status: string; latestVersion: number }
+type DesignProjectRow = { id: string; name: string; status: string; briefStatus: string; candidateCount: number; createdAt: string }
+type FormulaDraftDetail = { draft: { id: string; formulaProjectId: string; targetGrams: number; status: string }; components: Array<{ materialId: string; percentage: number; position: number; note?: string }>; math: { valid: boolean; totalPercentage: number; components: Array<{ materialId: string; grams: number }> }; reviews: Array<{ decision: string; rationale?: string | null; createdAt: string }> }
+
+function FormulaIntelligencePanel({ active }: { active: 'formulas' | 'design-studio' }) {
+  const [formulaProjects, setFormulaProjects] = useState<FormulaProjectRow[]>([])
+  const [designProjects, setDesignProjects] = useState<DesignProjectRow[]>([])
+  const [notice, setNotice] = useState<string | null>(null)
+  const [formula, setFormula] = useState({ name: '', formulaType: 'FINE_FRAGRANCE' as 'ACCORD' | 'FINE_FRAGRANCE' })
+  const [design, setDesign] = useState({ name: '', rawBrief: '' })
+  const [review, setReview] = useState({ projectId: '', creativeDirection: '', productType: 'FINE_FRAGRANCE' as 'ACCORD' | 'FINE_FRAGRANCE', availabilityFirst: true })
+  const [materials, setMaterials] = useState<MaterialRow[]>([])
+  const [selectedProjectId, setSelectedProjectId] = useState('')
+  const [componentRows, setComponentRows] = useState<Array<{ materialId: string; percentage: string; note: string }>>([{ materialId: '', percentage: '100', note: '' }])
+  const [targetMassGrams, setTargetMassGrams] = useState('100')
+  const [draftDetail, setDraftDetail] = useState<FormulaDraftDetail | null>(null)
+  const [rationale, setRationale] = useState('')
+
+  const refresh = useCallback(async () => {
+    try {
+      if (active === 'formulas') {
+        const [formulaPayload, materialPayload] = await Promise.all([
+          formulaRequest<{ projects: FormulaProjectRow[] }>('/projects'),
+          labRequest<{ materials: MaterialRow[] }>('/materials'),
+        ])
+        setFormulaProjects(formulaPayload.projects); setMaterials(materialPayload.materials.filter((material) => material.status === 'ACTIVE'))
+      }
+      if (active === 'design-studio') setDesignProjects((await formulaRequest<{ projects: DesignProjectRow[] }>('/design-projects')).projects)
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Unable to load Formula Intelligence.') }
+  }, [active])
+  useEffect(() => { void refresh() }, [refresh])
+
+  const createFormula = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    try {
+      await formulaRequest('/projects', { method: 'POST', body: JSON.stringify(formula) })
+      setFormula({ name: '', formulaType: 'FINE_FRAGRANCE' }); await refresh(); setNotice('Formula project created. Add an explicit material composition before submitting review.')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Formula project could not be created.') }
+  }
+  const openDraft = async (draftId: string) => {
+    try { setDraftDetail((await formulaRequest<{ draft: FormulaDraftDetail }>(`/drafts/${draftId}`)).draft) }
+    catch (error) { setNotice(error instanceof Error ? error.message : 'Draft detail could not be loaded.') }
+  }
+  const saveDraft = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    const components = componentRows.map((row, position) => ({ materialId: row.materialId, percentage: Number(row.percentage), position, note: row.note || undefined }))
+    try {
+      if (draftDetail) await formulaRequest(`/drafts/${draftDetail.draft.id}/components`, { method: 'PUT', body: JSON.stringify({ components, targetMassGrams: Number(targetMassGrams) }) })
+      else if (selectedProjectId) {
+        const created = await formulaRequest<{ draft: { id: string } }>(`/projects/${selectedProjectId}/drafts`, { method: 'POST', body: JSON.stringify({ components, targetMassGrams: Number(targetMassGrams), origin: 'MANUAL' }) })
+        await openDraft(created.draft.id)
+      }
+      else throw new Error('Select a formula project before saving a draft.')
+      setNotice('Draft saved. Validation and review remain server-authoritative.');
+      if (draftDetail) await openDraft(draftDetail.draft.id)
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Draft could not be saved.') }
+  }
+  const draftAction = async (action: 'validation' | 'submit-review' | 'approve' | 'reject') => {
+    if (!draftDetail) return
+    try {
+      if (action === 'validation') {
+        const result = await formulaRequest<{ validation: FormulaDraftDetail['math'] }>(`/drafts/${draftDetail.draft.id}/validation`)
+        setNotice(result.validation.valid ? `Formula math is valid at ${result.validation.totalPercentage.toFixed(3)}%.` : 'Formula math is not valid.')
+      } else {
+        await formulaRequest(`/drafts/${draftDetail.draft.id}/${action}`, { method: 'POST', body: JSON.stringify({ rationale: rationale || 'Reviewed in Formula R&D.' }) })
+        setNotice(action === 'approve' ? 'Immutable Formula Version approved.' : action === 'reject' ? 'Draft returned for revision.' : 'Draft submitted for review.')
+      }
+      await openDraft(draftDetail.draft.id); await refresh()
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Formula action could not be completed.') }
+  }
+  const createDesign = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    try {
+      const result = await formulaRequest<{ project: { id: string } }>('/design-projects', { method: 'POST', body: JSON.stringify(design) })
+      setReview((current) => ({ ...current, projectId: result.project.id })); setDesign({ name: '', rawBrief: '' }); await refresh(); setNotice('Brief saved. Review its structured constraints before selecting an authorized material universe.')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Research brief could not be created.') }
+  }
+  const reviewBrief = async (event: FormEvent) => {
+    event.preventDefault(); setNotice(null)
+    try {
+      await formulaRequest(`/design-projects/${review.projectId}/review-brief`, { method: 'POST', body: JSON.stringify({ structuredBrief: { product: { type: review.productType }, creativeDirection: review.creativeDirection, performance: [], audience: [], markets: [], availabilityFirst: review.availabilityFirst, requiredMaterialIds: [], prohibitedMaterialIds: [], unresolvedQuestions: [] } }) })
+      setNotice('Structured brief reviewed. You can now create an immutable material universe for this research project.'); await refresh()
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'The structured brief needs more information.') }
+  }
+  const buildUniverse = async () => {
+    if (!review.projectId) return
+    setNotice(null)
+    try {
+      const response = await formulaRequest<{ universe: { materialIds: string[] } }>(`/design-projects/${review.projectId}/material-universe`, { method: 'POST' })
+      setNotice(`Material universe pinned with ${response.universe.materialIds.length} eligible workspace materials. Candidate generation remains deterministic and provider-free until an approved research provider is configured.`)
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Material universe could not be created.') }
+  }
+
+  if (active === 'formulas') return <div className="v2-panel" data-testid="v2-formulas"><div className="v2-panel-heading"><div><h2>Formula R&D</h2><p>Formula identity, composition and approval are server-authoritative. Saving a draft never reserves or consumes inventory.</p></div></div><form className="v2-inline-form" onSubmit={createFormula}><label>Formula name<input required value={formula.name} onChange={(event) => setFormula({ ...formula, name: event.target.value })} /></label><label>Formula type<select value={formula.formulaType} onChange={(event) => setFormula({ ...formula, formulaType: event.target.value as 'ACCORD' | 'FINE_FRAGRANCE' })}><option value="ACCORD">Accord</option><option value="FINE_FRAGRANCE">Fine fragrance</option></select></label><button className="v2-secondary-button" type="submit">Create formula project</button></form><div className="v2-member-list">{formulaProjects.length ? formulaProjects.map((project) => <div className="v2-member-row" key={project.id}><strong>{project.name}</strong><span>{project.formulaType === 'ACCORD' ? 'Accord' : 'Fine fragrance'}</span><span>{project.status}</span><span>{project.latestVersion ? `Version ${project.latestVersion}` : 'No approved version'}</span><button type="button" className="v2-text-button" onClick={() => { setSelectedProjectId(project.id); setDraftDetail(null); setNotice(`Selected ${project.name}.`) }}>New draft</button></div>) : <p className="v2-muted">No formula project exists yet.</p>}</div>{selectedProjectId || draftDetail ? <form className="v2-inline-form" onSubmit={saveDraft}><label>Target mass (g)<input type="number" min="0.001" step="0.001" required value={targetMassGrams} onChange={(event) => setTargetMassGrams(event.target.value)} /></label>{componentRows.map((row, index) => <div className="v2-component-row" key={`${index}-${row.materialId}`}><label>Material<select required value={row.materialId} onChange={(event) => setComponentRows(componentRows.map((item, itemIndex) => itemIndex === index ? { ...item, materialId: event.target.value } : item))}><option value="">Choose active material</option>{materials.map((material) => <option key={material.id} value={material.id}>{material.name}</option>)}</select></label><label>Percentage<input type="number" min="0.000001" max="100" step="0.000001" required value={row.percentage} onChange={(event) => setComponentRows(componentRows.map((item, itemIndex) => itemIndex === index ? { ...item, percentage: event.target.value } : item))} /></label><label>Note<input value={row.note} onChange={(event) => setComponentRows(componentRows.map((item, itemIndex) => itemIndex === index ? { ...item, note: event.target.value } : item))} /></label>{componentRows.length > 1 ? <button type="button" className="v2-text-button" onClick={() => setComponentRows(componentRows.filter((_, itemIndex) => itemIndex !== index))}>Remove</button> : null}</div>)}<button type="button" className="v2-text-button" onClick={() => setComponentRows([...componentRows, { materialId: '', percentage: '', note: '' }])}>Add component</button><button className="v2-secondary-button" type="submit">{draftDetail ? 'Save composition' : 'Create draft'}</button></form> : null}{draftDetail ? <div className="v2-member-list"><div className="v2-member-row"><strong>Draft {draftDetail.draft.status}</strong><span>{draftDetail.math.totalPercentage.toFixed(3)}%</span><span>{draftDetail.math.valid ? 'Math valid' : 'Math invalid'}</span><span>{draftDetail.draft.targetGrams.toFixed(3)} g</span></div>{draftDetail.components.map((component) => <div className="v2-member-row" key={component.materialId}><strong>{materials.find((material) => material.id === component.materialId)?.name || component.materialId}</strong><span>{component.percentage.toFixed(3)}%</span><span>{draftDetail.math.components.find((item) => item.materialId === component.materialId)?.grams.toFixed(3)} g</span></div>)}<label>Review rationale<input value={rationale} onChange={(event) => setRationale(event.target.value)} /></label><div><button type="button" className="v2-secondary-button" onClick={() => void draftAction('validation')}>Validate</button><button type="button" className="v2-secondary-button" onClick={() => void draftAction('submit-review')}>Submit review</button><button type="button" className="v2-secondary-button" onClick={() => void draftAction('approve')}>Approve</button><button type="button" className="v2-text-button" onClick={() => void draftAction('reject')}>Reject</button></div>{draftDetail.reviews.map((item) => <div className="v2-member-row" key={`${item.decision}-${item.createdAt}`}><strong>{item.decision}</strong><span>{item.rationale || 'No rationale'}</span><span>{new Date(item.createdAt).toLocaleString()}</span></div>)}</div> : null}{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
+
+  return <div className="v2-panel" data-testid="v2-design-studio"><div className="v2-panel-heading"><div><h2>Formula Design Studio</h2><p>Create a research brief, review its structured constraints, then pin a private material universe. No external provider or hidden formula-generation heuristic is active.</p></div></div><form className="v2-inline-form" onSubmit={createDesign}><label>Project name<input required value={design.name} onChange={(event) => setDesign({ ...design, name: event.target.value })} /></label><label>Creative brief<textarea required maxLength={5000} value={design.rawBrief} onChange={(event) => setDesign({ ...design, rawBrief: event.target.value })} /></label><button className="v2-secondary-button" type="submit">Save research brief</button></form><div className="v2-member-list">{designProjects.length ? designProjects.map((project) => <div className="v2-member-row" key={project.id}><strong>{project.name}</strong><span>Brief: {project.briefStatus.replaceAll('_', ' ')}</span><span>{project.candidateCount} candidate{project.candidateCount === 1 ? '' : 's'}</span><button type="button" className="v2-text-button" onClick={() => setReview((current) => ({ ...current, projectId: project.id }))}>Review brief</button></div>) : <p className="v2-muted">No research brief exists yet.</p>}</div>{review.projectId ? <form className="v2-inline-form" onSubmit={reviewBrief}><label>Creative direction<input required value={review.creativeDirection} onChange={(event) => setReview({ ...review, creativeDirection: event.target.value })} /></label><label>Outcome<select value={review.productType} onChange={(event) => setReview({ ...review, productType: event.target.value as 'ACCORD' | 'FINE_FRAGRANCE' })}><option value="ACCORD">Accord</option><option value="FINE_FRAGRANCE">Fine fragrance</option></select></label><label className="v2-checkbox"><input type="checkbox" checked={review.availabilityFirst} onChange={(event) => setReview({ ...review, availabilityFirst: event.target.checked })} /> Prefer available materials</label><button className="v2-secondary-button" type="submit">Approve structured brief</button><button className="v2-text-button" type="button" onClick={() => void buildUniverse()}>Build material universe</button></form> : null}{notice ? <div className="v2-alert" role="status">{notice}</div> : null}</div>
 }
 
 function ObservabilityPanel({ text }: { text: PlatformCopy }) {

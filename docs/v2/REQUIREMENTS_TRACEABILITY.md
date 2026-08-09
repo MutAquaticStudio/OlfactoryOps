@@ -101,9 +101,10 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-ML-001..004 | Model, architecture, feature contract, checkpoint, model card, training/evaluation and metric records | PASS |
 | Reproducibility and leakage control | Seeded scaffold/time split and distinct train/validation/test group-set hashes | PASS |
 | Upstream model provenance | Immutable KGCNN, Transformer-CNN and Osmo Publications pin records with compatibility/license status | PASS |
-| KGCNN compatibility | Isolated synthetic model load, checkpoint, inference and metric smoke | PASS |
-| Transformer-CNN activation | Independent license evidence review has not completed | BLOCKED |
-| Bulk research dataset import, production training and serving | Outside Phase 4 scope | NOT_APPLICABLE |
+| KGCNN compatibility | Pinned source, bounded optimization step, checkpoint reload, inference and metric smoke | PASS |
+| Transformer-CNN compatibility | Pinned preprocessing, bounded optimization step, checkpoint reload and inference smoke | PASS |
+| Bounded public benchmark pipeline | Licensed compact fixture, group split, leakage check, fusion, evaluation and residual uncertainty | PASS |
+| Bulk research dataset import and production serving | Outside the local checkpoint | NOT_APPLICABLE |
 
 ## Phase 5 evidence (2026-08-08)
 
@@ -113,7 +114,8 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-ML-007 | Exact ECFP/BCFP Tanimoto records identify method, metric and index version | PASS |
 | FR-ML-008 | Explainability records retain a non-causal association disclaimer | PASS |
 | FR-ML-005 | Odor prediction requests retain model/input/task provenance and an honest evidence state | PASS |
-| Odor embedding, calibrated odor head and semantic odor prediction | No reviewed odor-labelled dataset or evaluated serving model exists | NOT_APPLICABLE |
+| Bounded odor baseline | Research-only Morgan/SMILES fusion, PCA embedding, Ridge descriptor head and validation residual uncertainty | PASS |
+| Production odor serving | No reviewed serving model is registered | NOT_APPLICABLE |
 
 ## Phase 5B evidence (2026-08-08)
 
@@ -124,3 +126,14 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 | FR-SENT-009..010 | RLS/composite tenant scope and source invalidation propagation | PASS |
 | FR-SENT-011..012 | Advisory data boundary only; no Formula/Trial/Material/Inventory/Production mutation | PASS |
 | FR-SENT-013..015 | Explicit `NOT_ENOUGH_EVIDENCE`; external NLP/LLM provider remains disabled | PASS |
+
+## Phase 6 evidence (2026-08-08)
+
+| Requirement family | Phase 6 evidence | Status |
+|---|---|---|
+| FR-FORM-* | Server-authoritative Formula Project/Draft/Version/Review/Provenance, deterministic 100 percent math and immutable approval | PASS |
+| FR-DS-* | Raw/structured brief, unresolved constraints, material universe, candidate, recipient-safe sharing and draft handoff | PASS |
+| FR-AG-* | Durable read-only run/job/event/tool/artifact path, lease fencing, replay, confirmation expiry/retry/cancellation and provider-disabled projection | PASS |
+| FR-RAG-* | Approved-source material evidence indexing and bounded tenant-scoped citation retrieval | PASS |
+| Provider live smoke | No server-side test credential is configured | BLOCKED |
+| Remote migration and production deploy | Local checkpoint only | NOT_APPLICABLE |
