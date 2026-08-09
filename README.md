@@ -113,6 +113,36 @@ Remote migration and production deployment are `NOT_APPLICABLE`: no remote
 database or deployment was attempted. See [`docs/v2/phase-8`](docs/v2/phase-8/)
 and [`PHASE_8_IMPLEMENTATION_REPORT.md`](docs/v2/phase-8/PHASE_8_IMPLEMENTATION_REPORT.md).
 
+## Trang thai V2 Phase 9
+
+Phase 9 Agent Runtime co governed boundary cho agent definition/workflow/tool/
+policy versioned theo tenant, durable run/node/message/tool/confirmation,
+provider usage, evaluation va lineage evidence. Snapshot active chi duoc phep
+tro toi ban `PUBLISHED`; version snapshot va evidence P9 duoc chi dinh la
+append-only, con run node, confirmation/effect va quota reservation co
+lifecycle update duoc kiem soat. Bang Phase 9 deu forced RLS. Tool la typed
+adapter duoc dang ky, co schema, permission, timeout/retry va audit; khong co
+generic SQL, database write, shell, URL, HTTP hay MCP tool vuot qua domain
+service.
+
+Persisted event sequence la source of truth. REST replay endpoint va SSE stream
+chi replay du lieu da luu; gap sequence hoac replay window exhausted se yeu cau
+resync tu persisted state. Run route la `/api/v1/v2/agent-runs`; catalog,
+evaluation va observability route la `/api/v1/v2/agent-runtime`. Provider
+gateway server-only mac dinh `NOT_CONFIGURED`, khong outbound call; runtime co
+the luu status trung thuc nay nhung khong tao completion, token/cost hay
+artifact gia. `commerce.status` cung `NOT_CONFIGURED` cho den Phase 10 khi
+Commerce records ton tai.
+
+Focused Phase 9 contract/controller/client tests, service/package typecheck va
+PostgreSQL migration/RLS disposable deu `PASS`. Disposable confirmation checks
+da verify fenced effect claim, Formula-origin unique-draft invariant, va
+invalid candidate/project terminal handling kem quota release; Phase 9 local
+acceptance la `PASS`. Credential-backed provider, Commerce-backed result, va
+authenticated HTTP/SSE + browser acceptance deu `BLOCKED`. Remote migration va
+production deployment la `NOT_APPLICABLE`. Xem
+[`docs/v2/phase-9`](docs/v2/phase-9/).
+
 ## Purpose
 
 This pack is the implementation source package for Codex and engineering review. It contains:

@@ -167,3 +167,21 @@ Phase 0 product-module, scientific-engine, provider, remote migration, and produ
 Trong bang nay, `BLOCKED` nghia la chua co bang chung command runtime dinh kem,
 khong phai la ket luan implementation that bai. Chi doi sang `PASS` sau khi
 gate tuong ung chay thanh cong tren source/migration hien tai.
+
+## Phase 9 evidence (2026-08-10)
+
+| Requirement family | Phase 9 evidence boundary | Status |
+|---|---|---|
+| FR-AG-001..002 | Versioned contracts, published active snapshots, durable run/node/message evidence, and disposable persistence checks | PASS |
+| FR-AG-003..005 | Typed allow-listed adapters, route/domain authorization, idempotency, and tool invocation controls | PASS |
+| FR-AG-006 | Confirmation-required Formula Draft mutation: fenced durable effect claim, Formula-origin unique-draft invariant, invalid candidate/project terminal handling with quota release, and cancel/approve race outcomes verified on disposable PostgreSQL | PASS |
+| FR-AG-007..008 | Server-only provider gateway, bounded structured artifacts, metadata redaction, and no raw prompts/reasoning/secrets | PASS |
+| FR-AG-009..010 | Persisted event replay, sequence validation/deduplication, REST/SSE resynchronization, lease fencing, quota reservation, cancellation, and bounded retry | PASS |
+| FR-AG-011 | Governed non-generic boundary; no generic SQL, database write, shell, URL, HTTP, MCP, or unregistered-tool path bypasses a domain service | PASS |
+| Focused Phase 9 contract, controller, client, and runtime tests | 15 test files and 62 tests passed | PASS |
+| Service/package typecheck and disposable PostgreSQL migration/RLS gates | `typecheck:v2`, `v2:postgres:verify`, and `v2:postgres:rls` passed | PASS |
+| Phase 9 confirmation-saga effect claim, unique draft, invalid-input recovery, and cancel/approve race acceptance | Cancel-first leaves no Formula draft; staged approval blocks cancel and then completes, verified on disposable PostgreSQL | PASS |
+| Credential-backed outbound provider completion and usage | Default provider state is `NOT_CONFIGURED`; no credential-backed outbound provider adapter is enabled | BLOCKED |
+| Commerce-backed order or fulfillment result | `commerce.status` returns `NOT_CONFIGURED` until Phase 10 Commerce records are available | BLOCKED |
+| Authenticated HTTP/SSE and browser acceptance | No current live sessioned API/SSE or browser evidence is included in this checkpoint | BLOCKED |
+| Remote migration and production deployment | Outside this local documentation checkpoint | NOT_APPLICABLE |

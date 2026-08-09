@@ -20,6 +20,7 @@ const migrations = [
   'infra/postgres/migrations/0012_phase8_production_manufacturing.sql',
   'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql',
   'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql',
+  'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -158,6 +159,149 @@ try {
       'v2_production_release_supersedes_order_fk',
     ])
     if (phase8Constraints.length !== 9) throw new Error('Phase 8 QC, release revision, rework provenance, or finished-good evidence tenant constraints are missing')
+    const phase9Tables = [
+      'v2_agent_definitions', 'v2_agent_definition_versions', 'v2_agent_workflows', 'v2_agent_workflow_versions',
+      'v2_agent_tools', 'v2_agent_tool_versions', 'v2_agent_policies', 'v2_agent_policy_versions',
+      'v2_agent_workflow_tool_bindings', 'v2_agent_run_nodes', 'v2_agent_run_messages', 'v2_agent_confirmation_intents',
+      'v2_agent_provider_usages', 'v2_agent_evaluations', 'v2_agent_lineage_refs',
+      'v2_agent_confirmation_effects', 'v2_agent_run_quota_reservations',
+    ]
+    const phase9Rls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, phase9Tables)
+    if (phase9Rls.length !== phase9Tables.length || phase9Rls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Phase 9 table or forced RLS policy is missing')
+    }
+    const phase9PointerColumns = await client.$queryRawUnsafe(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND (
+        (table_name = ANY($1::text[]) AND column_name = 'active_version_id')
+        OR (table_name = ANY($2::text[]) AND column_name = ANY($3::text[]))
+      )
+    `, [
+      'v2_agent_definitions', 'v2_agent_workflows', 'v2_agent_tools', 'v2_agent_policies',
+    ], [
+      'v2_agent_definition_versions', 'v2_agent_workflow_versions', 'v2_agent_tool_versions', 'v2_agent_policy_versions',
+    ], ['status', 'published_at'])
+    if (phase9PointerColumns.length !== 12) throw new Error('Phase 9 active-version or publication columns are missing')
+    const phase9Constraints = await client.$queryRawUnsafe(`
+      SELECT conname FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `, [
+      'v2_agent_definition_active_version_tenant_fk',
+      'v2_agent_workflow_active_version_tenant_fk',
+      'v2_agent_tool_active_version_tenant_fk',
+      'v2_agent_policy_active_version_tenant_fk',
+      'v2_agent_run_definition_version_tenant_fk',
+      'v2_agent_run_workflow_version_tenant_fk',
+      'v2_agent_run_policy_version_tenant_fk',
+      'v2_agent_definition_version_publication_check',
+      'v2_agent_workflow_version_publication_check',
+      'v2_agent_tool_version_publication_check',
+      'v2_agent_policy_version_publication_check',
+      'v2_agent_tool_version_mutation_confirmation_check',
+      'v2_agent_tool_version_mutation_adapter_check',
+      'v2_agent_confirmation_intent_tool_tenant_fk',
+      'v2_agent_provider_usage_status_check',
+      'v2_agent_provider_usage_response_provenance_check',
+      'v2_agent_run_nodes_org_run_id_unique',
+      'v2_agent_evaluation_node_run_tenant_fk',
+      'v2_agent_confirmation_effect_run_tenant_fk',
+      'v2_agent_confirmation_effect_confirmation_run_tenant_fk',
+      'v2_agent_confirmation_effect_intent_run_tenant_fk',
+      'v2_agent_run_quota_reservation_run_tenant_fk',
+    ])
+    if (phase9Constraints.length !== 22) throw new Error('Phase 9 version publication, provenance, confirmation, or tenant constraints are missing')
+    const phase9ConstraintDefinitions = await client.$queryRawUnsafe(`
+      SELECT conname, condeferrable, condeferred, pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `, [
+      'v2_agent_provider_usage_response_provenance_check',
+      'v2_agent_evaluation_node_run_tenant_fk',
+      'v2_agent_confirmation_status_check',
+      'v2_agent_run_quota_reservation_run_tenant_fk',
+    ])
+    const phase9Definitions = new Map(phase9ConstraintDefinitions.map((row) => [row.conname, String(row.definition).toLowerCase()]))
+    const providerProvenanceDefinition = phase9Definitions.get('v2_agent_provider_usage_response_provenance_check') ?? ''
+    const evaluationNodeDefinition = phase9Definitions.get('v2_agent_evaluation_node_run_tenant_fk') ?? ''
+    const confirmationStatusDefinition = phase9Definitions.get('v2_agent_confirmation_status_check') ?? ''
+    const quotaReservationConstraint = phase9ConstraintDefinitions.find((row) => row.conname === 'v2_agent_run_quota_reservation_run_tenant_fk')
+    if (!providerProvenanceDefinition.includes('response_hash is not null') || !providerProvenanceDefinition.includes('completed') || !providerProvenanceDefinition.includes('recorded')) {
+      throw new Error('Phase 9 provider completion provenance constraint is missing')
+    }
+    if (!evaluationNodeDefinition.includes('foreign key (organization_id, run_id, run_node_id) references v2_agent_run_nodes(organization_id, run_id, id)')) {
+      throw new Error('Phase 9 evaluation node constraint does not bind the node to its run')
+    }
+    if (!confirmationStatusDefinition.includes('processing')) throw new Error('Phase 9 confirmation processing state is missing')
+    if (!quotaReservationConstraint?.condeferrable || !quotaReservationConstraint.condeferred) {
+      throw new Error('Phase 9 quota reservation run reference must be deferred for atomic reservation-before-run creation')
+    }
+    const phase9ConfirmationEffectColumns = await client.$queryRawUnsafe(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'v2_agent_confirmation_effects'
+        AND column_name = ANY($1::text[])
+    `, ['claim_token_hash', 'claim_expires_at'])
+    if (phase9ConfirmationEffectColumns.length !== 2) {
+      throw new Error('Phase 9 confirmation effect fencing columns are missing')
+    }
+    const formulaOriginInvariant = await client.$queryRawUnsafe(`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'v2_formula_drafts'
+        AND indexname = 'v2_formula_drafts_origin_reference_unique'
+    `)
+    if (formulaOriginInvariant.length !== 1
+      || !String(formulaOriginInvariant[0].indexdef).includes('(organization_id, formula_project_id, origin_type, origin_reference_id)')) {
+      throw new Error('Formula candidate origin uniqueness invariant is missing')
+    }
+    const phase9Triggers = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+    `, [
+      'v2_agent_definition_active_version_published',
+      'v2_agent_workflow_active_version_published',
+      'v2_agent_tool_active_version_published',
+      'v2_agent_policy_active_version_published',
+      'v2_agent_definition_version_append_only',
+      'v2_agent_workflow_version_append_only',
+      'v2_agent_tool_version_append_only',
+      'v2_agent_policy_version_append_only',
+      'v2_agent_workflow_version_published_dependencies',
+      'v2_agent_workflow_binding_published_dependencies',
+      'v2_agent_event_safe_payload',
+      'v2_agent_artifact_safe_payload',
+      'v2_agent_event_p9_append_only',
+      'v2_agent_artifact_p9_append_only',
+      'v2_agent_run_message_safe_payload',
+      'v2_agent_confirmation_intent_safe_payload',
+    ])
+    if (phase9Triggers.length !== 16) throw new Error('Phase 9 published-version guard, immutable evidence trigger, dependency trigger, or safe payload trigger is missing')
+    const phase9ActivePointerGuard = await client.$queryRawUnsafe(`
+      SELECT pg_get_functiondef(p.oid) AS definition
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'v2_require_agent_active_version_published'
+    `)
+    if (phase9ActivePointerGuard.length !== 1 || !phase9ActivePointerGuard[0].definition.includes("status = ''PUBLISHED''")) {
+      throw new Error('Phase 9 active-version guard does not require a PUBLISHED snapshot')
+    }
+    const phase9EvidenceGuard = await client.$queryRawUnsafe(`
+      SELECT pg_get_functiondef(p.oid) AS definition
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'v2_guard_agent_runtime_p9_evidence_mutation'
+    `)
+    if (phase9EvidenceGuard.length !== 1 || !phase9EvidenceGuard[0].definition.includes("'agent-runtime/v1'")) {
+      throw new Error('Phase 9 protocol-scoped append-only evidence guard is missing')
+    }
   } finally {
     await client.$disconnect()
   }

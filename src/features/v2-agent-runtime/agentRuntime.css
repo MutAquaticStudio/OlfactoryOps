@@ -1,0 +1,517 @@
+.agent-runtime-workspace {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+  color: #edf2ed;
+}
+
+.agent-runtime-header,
+.agent-runtime-panel-heading,
+.agent-runtime-run-heading,
+.agent-runtime-notice,
+.agent-runtime-run-actions,
+.agent-runtime-confirm-actions,
+.agent-runtime-unavailable {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-runtime-header,
+.agent-runtime-panel-heading,
+.agent-runtime-run-heading {
+  justify-content: space-between;
+}
+
+.agent-runtime-header > div,
+.agent-runtime-panel-heading > div,
+.agent-runtime-run-heading > div,
+.agent-runtime-list-row > span:first-child {
+  min-width: 0;
+}
+
+.agent-runtime-header h2 {
+  margin: 4px 0 6px;
+  font-size: 1.62rem;
+  line-height: 1.14;
+}
+
+.agent-runtime-header p,
+.agent-runtime-run-heading p,
+.agent-runtime-empty,
+.agent-runtime-unavailable p {
+  margin: 0;
+  color: #aebbb2;
+  line-height: 1.48;
+}
+
+.agent-runtime-kicker {
+  color: #8fb9a0;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.agent-runtime-icon-button {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #41604e;
+  border-radius: 6px;
+  background: #152019;
+  color: #dcebdd;
+  cursor: pointer;
+}
+
+.agent-runtime-icon-button:hover:not(:disabled) {
+  border-color: #7dba94;
+  background: #1c2c22;
+}
+
+.agent-runtime-icon-button:disabled,
+.agent-runtime-workspace button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.agent-runtime-notice {
+  min-height: 42px;
+  border: 1px solid #365e45;
+  border-radius: 6px;
+  background: #12261a;
+  color: #d5ecd9;
+  padding: 10px 12px;
+  line-height: 1.4;
+}
+
+.agent-runtime-notice.is-error {
+  border-color: #814d4d;
+  background: #2b1919;
+  color: #ffd9d4;
+}
+
+.agent-runtime-notice.is-success {
+  border-color: #3f704d;
+  background: #12251a;
+}
+
+.agent-runtime-grid,
+.agent-runtime-lower-grid,
+.agent-runtime-detail-grid,
+.agent-runtime-definition-columns,
+.agent-runtime-management-forms {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.agent-runtime-grid {
+  grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr) minmax(0, 1.12fr);
+}
+
+.agent-runtime-lower-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-runtime-panel,
+.agent-runtime-run-detail,
+.agent-runtime-definition-detail,
+.agent-runtime-detail-panel,
+.agent-runtime-unavailable {
+  min-width: 0;
+  border: 1px solid #2d4035;
+  border-radius: 7px;
+  background: #151d18;
+  padding: 15px;
+}
+
+.agent-runtime-panel-heading h3,
+.agent-runtime-panel-heading h4,
+.agent-runtime-run-heading h3,
+.agent-runtime-unavailable h2 {
+  margin: 2px 0 0;
+  color: #f2f5f1;
+}
+
+.agent-runtime-panel-heading h3,
+.agent-runtime-run-heading h3,
+.agent-runtime-unavailable h2 {
+  font-size: 1.03rem;
+}
+
+.agent-runtime-panel-heading h4 {
+  font-size: .95rem;
+}
+
+.agent-runtime-list,
+.agent-runtime-record-list,
+.agent-runtime-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.agent-runtime-list-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #2b3c32;
+  border-radius: 6px;
+  background: #101713;
+  color: #dbe4dc;
+  padding: 10px;
+  text-align: left;
+  font: inherit;
+}
+
+button.agent-runtime-list-row {
+  cursor: pointer;
+}
+
+button.agent-runtime-list-row:hover,
+button.agent-runtime-list-row.is-selected {
+  border-color: #527763;
+  background: #18241d;
+}
+
+.agent-runtime-list-row.is-static {
+  cursor: default;
+}
+
+.agent-runtime-list-row strong,
+.agent-runtime-list-row small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-list-row strong {
+  color: #eff4ee;
+  font-size: .88rem;
+}
+
+.agent-runtime-list-row small,
+.agent-runtime-record-list small,
+.agent-runtime-timeline small {
+  margin-top: 3px;
+  color: #92a49a;
+  font-size: .76rem;
+}
+
+.agent-runtime-status {
+  display: inline-flex;
+  width: fit-content;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid #4e6255;
+  border-radius: 999px;
+  color: #bed3c2;
+  padding: 3px 7px;
+  font-size: .67rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-runtime-status.status-succeeded,
+.agent-runtime-status.status-completed,
+.agent-runtime-status.status-active,
+.agent-runtime-status.status-accepted,
+.agent-runtime-status.status-recorded {
+  border-color: #427751;
+  background: #11281a;
+  color: #bfe7c7;
+}
+
+.agent-runtime-status.status-running,
+.agent-runtime-status.status-queued,
+.agent-runtime-status.status-requested,
+.agent-runtime-status.status-pending,
+.agent-runtime-status.status-waiting-for-confirmation {
+  border-color: #756540;
+  background: #2a2515;
+  color: #f0d98a;
+}
+
+.agent-runtime-status.status-failed,
+.agent-runtime-status.status-cancelled,
+.agent-runtime-status.status-rejected,
+.agent-runtime-status.status-denied,
+.agent-runtime-status.status-degraded {
+  border-color: #844d4d;
+  background: #2b1919;
+  color: #ffc4bc;
+}
+
+.agent-runtime-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.agent-runtime-form label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: #d7e1d9;
+  font-size: .8rem;
+}
+
+.agent-runtime-form textarea,
+.agent-runtime-form select,
+.agent-runtime-form input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #3a5142;
+  border-radius: 6px;
+  background: #0c120f;
+  color: #eff3ef;
+  padding: 9px 10px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.agent-runtime-form select,
+.agent-runtime-form input {
+  font-family: inherit;
+  font-size: .86rem;
+}
+
+.agent-runtime-form textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.agent-runtime-workspace :is(button, textarea, select, a):focus-visible {
+  outline: 2px solid #93caa4;
+  outline-offset: 2px;
+}
+
+.agent-runtime-run-detail,
+.agent-runtime-definition-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-runtime-run-heading p {
+  font-size: .8rem;
+}
+
+.agent-runtime-run-actions,
+.agent-runtime-confirm-actions {
+  flex-wrap: wrap;
+}
+
+.agent-runtime-run-actions :is(.v2-secondary-button, .agent-runtime-danger-button),
+.agent-runtime-confirm-actions :is(.v2-secondary-button, .agent-runtime-danger-button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.agent-runtime-danger-button {
+  border: 1px solid #814b4b;
+  border-radius: 6px;
+  background: #2d1919;
+  color: #ffd2cb;
+  padding: 8px 11px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.agent-runtime-danger-button:hover:not(:disabled) {
+  border-color: #b56868;
+  background: #422020;
+}
+
+.agent-runtime-resync {
+  border-left: 3px solid #d0b95e;
+  background: #282315;
+  color: #eee0a6;
+  padding: 9px 11px;
+  font-size: .84rem;
+}
+
+.agent-runtime-detail-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-runtime-detail-panel {
+  padding: 13px;
+}
+
+.agent-runtime-detail-panel .agent-runtime-panel-heading {
+  align-items: flex-start;
+}
+
+.agent-runtime-timeline {
+  list-style: none;
+}
+
+.agent-runtime-timeline li {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+}
+
+.agent-runtime-sequence {
+  display: inline-grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 1px solid #42594a;
+  border-radius: 999px;
+  background: #102017;
+  color: #cde5d1;
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.agent-runtime-timeline strong,
+.agent-runtime-timeline small {
+  display: block;
+}
+
+.agent-runtime-record-list > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border-bottom: 1px solid #2a3a31;
+  padding: 0 0 10px;
+}
+
+.agent-runtime-record-list > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.agent-runtime-confirmation-preview {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #3d5d47;
+  border-radius: 5px;
+  background: #102017;
+  padding: 8px;
+}
+
+.agent-runtime-confirmation-preview small {
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-record-list strong,
+.agent-runtime-record-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-runtime-record-list a {
+  width: fit-content;
+  color: #a8ddb7;
+  font-size: .83rem;
+}
+
+.agent-runtime-error-text {
+  color: #ffc0b8;
+  font-size: .84rem;
+  line-height: 1.42;
+}
+
+.agent-runtime-json {
+  max-height: 180px;
+  min-width: 0;
+  overflow: auto;
+  margin: 8px 0 0;
+  border: 1px solid #2c3c33;
+  border-radius: 5px;
+  background: #0c120f;
+  color: #c9d7cc;
+  padding: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11px/1.42 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.agent-runtime-definition-columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-runtime-definition-columns h4 {
+  margin: 0;
+  color: #eaf0eb;
+  font-size: .86rem;
+}
+
+.agent-runtime-management-forms {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-runtime-management-forms .agent-runtime-form {
+  margin-top: 0;
+}
+
+.agent-runtime-empty {
+  margin-top: 14px;
+  font-size: .85rem;
+}
+
+.agent-runtime-unavailable {
+  align-items: flex-start;
+}
+
+@media (max-width: 1160px) {
+  .agent-runtime-grid,
+  .agent-runtime-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-runtime-runs {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-runtime-header,
+  .agent-runtime-run-heading {
+    align-items: flex-start;
+  }
+
+  .agent-runtime-grid,
+  .agent-runtime-lower-grid,
+  .agent-runtime-detail-grid,
+  .agent-runtime-definition-columns,
+  .agent-runtime-management-forms {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-runtime-runs {
+    grid-column: auto;
+  }
+
+  .agent-runtime-list-row {
+    align-items: flex-start;
+  }
+
+  .agent-runtime-status {
+    white-space: normal;
+    text-align: right;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-runtime-workspace *,
+  .agent-runtime-workspace *::before,
+  .agent-runtime-workspace *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

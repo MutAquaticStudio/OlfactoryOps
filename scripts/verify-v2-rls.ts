@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { PrismaPlatformRepository } from '../services/platform/src/prisma-repository.js'
-import { PlatformService } from '../services/platform/src/service.js'
+import { PlatformError, PlatformService } from '../services/platform/src/service.js'
 import { LabOperationsService } from '../services/lab-ops/src/service.js'
 import { ScientificFeatureService, type ScientificRuntime } from '../services/scientific/src/service.js'
 import { ModelDatasetService } from '../services/scientific/src/model-dataset-service.js'
@@ -11,6 +11,7 @@ import { ConsumerIntelligenceService } from '../services/sentiment/src/consumer-
 import { FormulaService } from '../services/formula/src/formula-service.js'
 import { MaterialEvidenceService } from '../services/rag/src/material-evidence-service.js'
 import { DurableAgentService } from '../services/agent-runtime/src/durable-agent-service.js'
+import type { CompiledAgentToolRegistry } from '../services/agent-runtime/src/tool-registry.js'
 import { TrialSensoryService } from '../services/trials-sensory/src/service.js'
 import { ProductionService } from '../services/production/src/production-service.js'
 
@@ -73,6 +74,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0012_phase8_production_manufacturing.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0013_phase8_production_quality_revisions.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql')
 }
 
 function resetDisposableSchema() {
@@ -123,6 +125,115 @@ async function scopedMembershipCount(organizationId?: string, userId?: string) {
     if (userId) await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
     return tx.membership.count()
   })
+}
+
+const phase9TenantScopedTables = [
+  'v2_agent_definitions',
+  'v2_agent_runs',
+  'v2_agent_run_messages',
+  'v2_agent_tool_calls',
+  'v2_agent_provider_usages',
+  'v2_agent_evaluations',
+  'v2_agent_lineage_refs',
+  'v2_agent_run_quota_reservations',
+] as const
+
+async function phase9TenantScopedCounts(organizationId: string, userId: string, targetOrganizationId: string) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  return appClient.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+    const counts = await Promise.all(phase9TenantScopedTables.map(async (table) => {
+      const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT count(*)::bigint AS count FROM ${table} WHERE organization_id = $1`,
+        targetOrganizationId,
+      )
+      return [table, Number(rows[0]?.count ?? 0)] as const
+    }))
+    return Object.fromEntries(counts) as Record<(typeof phase9TenantScopedTables)[number], number>
+  })
+}
+
+async function phase9PersistedPayloadsAreSafe(organizationId: string, userId: string) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  return appClient.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+    const rows = await tx.$queryRawUnsafe<Array<{ unsafeCount: bigint }>>(`
+      SELECT count(*)::bigint AS "unsafeCount"
+      FROM (
+        SELECT event.payload
+        FROM v2_agent_events AS event
+        JOIN v2_agent_runs AS run ON run.organization_id = event.organization_id AND run.id = event.run_id
+        WHERE event.organization_id = $1 AND run.protocol_version = 'agent-runtime/v1'
+        UNION ALL
+        SELECT artifact.payload
+        FROM v2_agent_artifacts AS artifact
+        JOIN v2_agent_runs AS run ON run.organization_id = artifact.organization_id AND run.id = artifact.run_id
+        WHERE artifact.organization_id = $1 AND run.protocol_version = 'agent-runtime/v1'
+        UNION ALL
+        SELECT message.payload
+        FROM v2_agent_run_messages AS message
+        JOIN v2_agent_runs AS run ON run.organization_id = message.organization_id AND run.id = message.run_id
+        WHERE message.organization_id = $1 AND run.protocol_version = 'agent-runtime/v1'
+        UNION ALL
+        SELECT intent.action_payload AS payload
+        FROM v2_agent_confirmation_intents AS intent
+        JOIN v2_agent_runs AS run ON run.organization_id = intent.organization_id AND run.id = intent.run_id
+        WHERE intent.organization_id = $1 AND run.protocol_version = 'agent-runtime/v1'
+      ) AS persisted
+      WHERE NOT public.v2_agent_runtime_payload_is_safe(payload)
+    `, organizationId)
+    return Number(rows[0]?.unsafeCount ?? 0) === 0
+  })
+}
+
+async function phase9UnsafeMutatingTools(organizationId: string, userId: string) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  return appClient.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+    return tx.$queryRawUnsafe<Array<{ toolKey: string; adapterKey: string }>>(`
+      SELECT tool.tool_key AS "toolKey", version.adapter_key AS "adapterKey"
+      FROM v2_agent_tools AS tool
+      JOIN v2_agent_tool_versions AS version
+        ON version.organization_id = tool.organization_id AND version.id = tool.active_version_id
+      WHERE tool.organization_id = $1
+        AND tool.status = 'ACTIVE'
+        AND version.status = 'PUBLISHED'
+        AND version.mode = 'MUTATING'
+        AND version.adapter_key <> 'formula.candidate_save_draft'
+      ORDER BY tool.tool_key ASC
+    `, organizationId)
+  })
+}
+
+async function phase9DatabaseRejects(organizationId: string, userId: string, statement: string, values: string[], expectedMessage: string) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  try {
+    await appClient.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+      await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+      await tx.$executeRawUnsafe(statement, ...values)
+    })
+    return false
+  } catch (error) {
+    return error instanceof Error && error.message.includes(expectedMessage)
+  }
+}
+
+async function phase9DatabaseAllows(organizationId: string, userId: string, statement: string, values: string[]) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  try {
+    await appClient.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+      await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+      await tx.$executeRawUnsafe(statement, ...values)
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -321,6 +432,24 @@ try {
   const brandCandidate = await formula.candidateDetail({ ...context.context, userId: brandUserId!, role: 'Brand', sessionId: `ses_${brandUserId}` }, candidate.id)
   const savedCandidateDraft = await formula.saveCandidateAsDraft(context.context, candidate.id, formulaProject.id, `rls-design-save-${suffix}`)
   const duplicateCandidateDraft = await formula.saveCandidateAsDraft(context.context, candidate.id, formulaProject.id, `rls-design-save-duplicate-${suffix}`)
+  const concurrentCandidate = await formula.createCandidate(context.context, designProject.id, {
+    narrative: 'A second isolated candidate for concurrent-draft verification.',
+    components: [{ materialId: material.id, percentage: 100, position: 0 }],
+  }, `rls-design-candidate-concurrent-${suffix}`)
+  const concurrentCandidateDrafts = await Promise.all([
+    formula.saveCandidateAsDraft(context.context, concurrentCandidate.id, formulaProject.id, `rls-design-save-concurrent-a-${suffix}`),
+    formula.saveCandidateAsDraft(context.context, concurrentCandidate.id, formulaProject.id, `rls-design-save-concurrent-b-${suffix}`),
+  ])
+  const concurrentCandidateDraftUnique = concurrentCandidateDrafts[0]?.id === concurrentCandidateDrafts[1]?.id
+  const unrelatedFormulaProject = await formula.createProject(context.context, { name: 'RLS unrelated formula', formulaType: 'ACCORD' }, `rls-formula-project-unrelated-${suffix}`)
+  let crossProjectCandidateDraftDenied = false
+  try {
+    await formula.saveCandidateAsDraft(context.context, candidate.id, unrelatedFormulaProject.id, `rls-design-save-cross-project-${suffix}`)
+  } catch (error) {
+    crossProjectCandidateDraftDenied = error instanceof Error
+      && 'code' in error
+      && (error as { code?: string }).code === 'DESIGN_CANDIDATE_FORMULA_PROJECT_MISMATCH'
+  }
   const agentRun = await agent.start(context.context, { designProjectId: designProject.id, workflowKey: 'design-studio/1', inputHash: 'a'.repeat(64) }, `rls-agent-start-${suffix}`)
   const waitingAgentRun = await agent.execute(context.context, agentRun.id, `rls-agent-execute-${suffix}`)
   const confirmedAgentRun = await agent.confirm(context.context, agentRun.id, waitingAgentRun.confirmation.id, { accept: true }, `rls-agent-confirm-${suffix}`)
@@ -338,6 +467,274 @@ try {
   const expiredAgentConfirmation = await agent.confirm(context.context, expiringAgentRun.id, waitingExpiredAgentRun.confirmation.id, { accept: true }, `rls-agent-expire-confirm-${suffix}`)
   const retriedAgentRun = await agent.retry(context.context, expiringAgentRun.id, `rls-agent-retry-${suffix}`)
   const retriedCancelledAgentRun = await agent.cancel(context.context, expiringAgentRun.id, `rls-agent-retry-cancel-${suffix}`)
+  const phase9Bootstrap = await agent.bootstrap(context.context)
+  const phase9BootstrapReplay = await agent.bootstrap(context.context)
+  const phase9Configuration = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    return tx.$queryRawUnsafe<Array<{ publishedActiveConfigurations: bigint }>>(`
+      SELECT count(*)::bigint AS "publishedActiveConfigurations"
+      FROM v2_agent_definitions AS definition
+      JOIN v2_agent_definition_versions AS definition_version
+        ON definition_version.organization_id = definition.organization_id
+       AND definition_version.id = definition.active_version_id
+       AND definition_version.status = 'PUBLISHED'
+      JOIN v2_agent_workflow_versions AS workflow_version
+        ON workflow_version.organization_id = definition.organization_id
+       AND workflow_version.agent_definition_version_id = definition_version.id
+       AND workflow_version.status = 'PUBLISHED'
+      JOIN v2_agent_workflows AS workflow
+        ON workflow.organization_id = workflow_version.organization_id
+       AND workflow.id = workflow_version.workflow_id
+       AND workflow.active_version_id = workflow_version.id
+      JOIN v2_agent_policy_versions AS policy_version
+        ON policy_version.organization_id = workflow_version.organization_id
+       AND policy_version.id = workflow_version.policy_version_id
+       AND policy_version.status = 'PUBLISHED'
+      WHERE definition.organization_id = $1
+        AND definition.agent_key = 'inventory-assistant'
+        AND definition.status = 'ACTIVE'
+    `, firstOrganizationId!)
+  })
+  const phase9Run = await agent.start(context.context, { definitionKey: 'inventory-assistant', input: {} }, `rls-p9-start-${suffix}`)
+  const duplicatePhase9Run = await agent.start(context.context, { definitionKey: 'inventory-assistant', input: {} }, `rls-p9-start-${suffix}`)
+  const phase9ToolExecution = await agent.execute(context.context, phase9Run.id, `rls-p9-execute-tool-${suffix}`)
+  const phase9ArtifactExecution = await agent.execute(context.context, phase9Run.id, `rls-p9-execute-artifact-${suffix}`)
+  const phase9Detail = await agent.detail(context.context, phase9Run.id, 0)
+  const phase9Replay = await agent.replay(context.context, phase9Run.id, { afterSequence: 0, limit: 100 })
+  const phase9Evidence = await agent.evidence(context.context, phase9Run.id)
+  const phase9RunMetadata = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    return tx.$queryRawUnsafe<Array<{ policyVersionId: string; correlationId: string }>>(
+      'SELECT policy_version_id AS "policyVersionId", correlation_id AS "correlationId" FROM v2_agent_runs WHERE organization_id = $1 AND id = $2',
+      firstOrganizationId!, phase9Run.id,
+    )
+  })
+  if (!phase9RunMetadata[0]) throw new Error('V2_RLS=FAIL Phase 9 run metadata is missing.')
+  const phase9Evaluation = await agent.createEvaluation(context.context, {
+    policyVersionId: phase9RunMetadata[0].policyVersionId,
+    evaluationKey: 'rls.read-only',
+    subjectKind: 'RUN',
+    subjectRef: phase9Run.id,
+    evaluatorKind: 'RULE',
+    status: 'PASSED',
+    score: 1,
+    resultSummary: { metadata: { summary: 'Disposable verifier confirms a read-only tenant-scoped run.' } },
+    resultHash: 'f'.repeat(64),
+    correlationId: phase9RunMetadata[0].correlationId,
+  }, `rls-p9-evaluation-${suffix}`)
+  const duplicatePhase9Evaluation = await agent.createEvaluation(context.context, {
+    policyVersionId: phase9RunMetadata[0].policyVersionId,
+    evaluationKey: 'rls.read-only',
+    subjectKind: 'RUN',
+    subjectRef: phase9Run.id,
+    evaluatorKind: 'RULE',
+    status: 'PASSED',
+    score: 1,
+    resultSummary: { metadata: { summary: 'Disposable verifier confirms a read-only tenant-scoped run.' } },
+    resultHash: 'f'.repeat(64),
+    correlationId: phase9RunMetadata[0].correlationId,
+  }, `rls-p9-evaluation-${suffix}`)
+  const phase9CandidateDraftCountBeforeConfirmation = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1 AND formula_project_id = $2', firstOrganizationId!, formulaProject.id)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const phase9ConfirmationInput = { definitionKey: 'formula-research', input: { candidateId: candidate.id, formulaProjectId: formulaProject.id } }
+  const phase9ConfirmationRun = await agent.start(context.context, phase9ConfirmationInput, `rls-p9-confirm-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact', 'confirmation'].entries()) {
+    await agent.execute(context.context, phase9ConfirmationRun.id, `rls-p9-confirm-execute-${step}-${index}-${suffix}`)
+  }
+  const phase9ConfirmationDetail = await agent.detail(context.context, phase9ConfirmationRun.id, 0)
+  const phase9PendingConfirmation = phase9ConfirmationDetail.confirmations[0] as { id?: string } | undefined
+  if (!phase9PendingConfirmation?.id) throw new Error('V2_RLS=FAIL Phase 9 candidate confirmation was not created.')
+  const phase9RejectedConfirmation = await agent.confirm(context.context, phase9ConfirmationRun.id, phase9PendingConfirmation.id, { decision: 'REJECT' }, `rls-p9-confirm-reject-${suffix}`)
+  const duplicatePhase9RejectedConfirmation = await agent.confirm(context.context, phase9ConfirmationRun.id, phase9PendingConfirmation.id, { decision: 'REJECT' }, `rls-p9-confirm-reject-duplicate-${suffix}`)
+  const phase9ExpiringConfirmationRun = await agent.start(context.context, phase9ConfirmationInput, `rls-p9-confirm-expire-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact', 'confirmation'].entries()) {
+    await agent.execute(context.context, phase9ExpiringConfirmationRun.id, `rls-p9-confirm-expire-execute-${step}-${index}-${suffix}`)
+  }
+  const phase9ExpiringConfirmationDetail = await agent.detail(context.context, phase9ExpiringConfirmationRun.id, 0)
+  const phase9ExpiringConfirmation = phase9ExpiringConfirmationDetail.confirmations[0] as { id?: string } | undefined
+  if (!phase9ExpiringConfirmation?.id) throw new Error('V2_RLS=FAIL Phase 9 expiring confirmation was not created.')
+  await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    await tx.$executeRawUnsafe("UPDATE v2_agent_confirmations SET expires_at = now() - interval '1 second' WHERE organization_id = $1 AND id = $2", firstOrganizationId!, phase9ExpiringConfirmation.id)
+  })
+  const phase9ExpiredConfirmation = await agent.confirm(context.context, phase9ExpiringConfirmationRun.id, phase9ExpiringConfirmation.id, { decision: 'REJECT' }, `rls-p9-confirm-expire-${suffix}`)
+  const phase9ApprovedConfirmationRun = await agent.start(context.context, phase9ConfirmationInput, `rls-p9-confirm-approve-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact', 'confirmation'].entries()) {
+    await agent.execute(context.context, phase9ApprovedConfirmationRun.id, `rls-p9-confirm-approve-execute-${step}-${index}-${suffix}`)
+  }
+  const phase9ApprovedConfirmationDetail = await agent.detail(context.context, phase9ApprovedConfirmationRun.id, 0)
+  const phase9ApprovedConfirmationPending = phase9ApprovedConfirmationDetail.confirmations[0] as { id?: string } | undefined
+  if (!phase9ApprovedConfirmationPending?.id) throw new Error('V2_RLS=FAIL Phase 9 approved confirmation was not created.')
+  const phase9ApprovedConfirmation = await agent.confirm(context.context, phase9ApprovedConfirmationRun.id, phase9ApprovedConfirmationPending.id, { decision: 'APPROVE' }, `rls-p9-confirm-approve-${suffix}`)
+  const phase9ApprovedConfirmationDuplicate = await agent.confirm(context.context, phase9ApprovedConfirmationRun.id, phase9ApprovedConfirmationPending.id, { decision: 'APPROVE' }, `rls-p9-confirm-approve-duplicate-${suffix}`)
+  const phase9InvalidConfirmationRun = await agent.start(context.context, { definitionKey: 'formula-research', input: { candidateId: candidate.id, formulaProjectId: unrelatedFormulaProject.id } }, `rls-p9-confirm-invalid-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact'].entries()) {
+    await agent.execute(context.context, phase9InvalidConfirmationRun.id, `rls-p9-confirm-invalid-execute-${step}-${index}-${suffix}`)
+  }
+  let phase9InvalidConfirmationCode: string | undefined
+  try {
+    await agent.execute(context.context, phase9InvalidConfirmationRun.id, `rls-p9-confirm-invalid-execute-confirmation-${suffix}`)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error) phase9InvalidConfirmationCode = (error as { code?: string }).code
+  }
+  const phase9InvalidConfirmationDetail = await agent.detail(context.context, phase9InvalidConfirmationRun.id, 0)
+  const phase9InvalidQuotaReleased = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    const rows = await tx.$queryRawUnsafe<Array<{ status: string }>>('SELECT status FROM v2_agent_run_quota_reservations WHERE organization_id = $1 AND run_id = $2', firstOrganizationId!, phase9InvalidConfirmationRun.id)
+    return rows[0]?.status === 'RELEASED'
+  })
+  const phase9CandidateDraftCountAfterConfirmation = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1 AND formula_project_id = $2', firstOrganizationId!, formulaProject.id)
+    return Number(rows[0]?.count ?? 0)
+  })
+  // Cancellation and Formula approval are separate HTTP operations, so prove
+  // both serialized outcomes against the same disposable database. A cancelled
+  // pending run cannot later invoke Formula, while a durably PROCESSING effect
+  // cannot be cancelled underneath the external Formula handoff.
+  const phase9CancelledBeforeApprovalRun = await agent.start(context.context, phase9ConfirmationInput, `rls-p9-cancel-before-approve-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact', 'confirmation'].entries()) {
+    await agent.execute(context.context, phase9CancelledBeforeApprovalRun.id, `rls-p9-cancel-before-approve-execute-${step}-${index}-${suffix}`)
+  }
+  const phase9CancelledBeforeApprovalDetail = await agent.detail(context.context, phase9CancelledBeforeApprovalRun.id, 0)
+  const phase9CancelledBeforeApprovalConfirmation = phase9CancelledBeforeApprovalDetail.confirmations[0] as { id?: string } | undefined
+  if (!phase9CancelledBeforeApprovalConfirmation?.id) throw new Error('V2_RLS=FAIL Phase 9 cancellation confirmation was not created.')
+  const phase9CancelledBeforeApproval = await agent.cancel(context.context, phase9CancelledBeforeApprovalRun.id, `rls-p9-cancel-before-approve-${suffix}`)
+  const phase9ConfirmAfterCancellation = await agent.confirm(context.context, phase9CancelledBeforeApprovalRun.id, phase9CancelledBeforeApprovalConfirmation.id, { decision: 'APPROVE' }, `rls-p9-confirm-after-cancel-${suffix}`)
+  const phase9CancelledBeforeApprovalFinal = await agent.detail(context.context, phase9CancelledBeforeApprovalRun.id, 0)
+  const phase9DraftCountAfterCancelledApproval = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1 AND formula_project_id = $2', firstOrganizationId!, formulaProject.id)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const phase9ApproveBlocksCancelRun = await agent.start(context.context, phase9ConfirmationInput, `rls-p9-approve-blocks-cancel-start-${suffix}`)
+  for (const [index, step] of ['materials', 'evidence', 'artifact', 'confirmation'].entries()) {
+    await agent.execute(context.context, phase9ApproveBlocksCancelRun.id, `rls-p9-approve-blocks-cancel-execute-${step}-${index}-${suffix}`)
+  }
+  const phase9ApproveBlocksCancelDetail = await agent.detail(context.context, phase9ApproveBlocksCancelRun.id, 0)
+  const phase9ApproveBlocksCancelConfirmation = phase9ApproveBlocksCancelDetail.confirmations[0] as { id?: string } | undefined
+  if (!phase9ApproveBlocksCancelConfirmation?.id) throw new Error('V2_RLS=FAIL Phase 9 approval/cancellation confirmation was not created.')
+  let signalFormulaWrite: (() => void) | undefined
+  let releaseFormulaWrite: (() => void) | undefined
+  const formulaWriteStarted = new Promise<void>((resolve) => { signalFormulaWrite = resolve })
+  const allowFormulaWrite = new Promise<void>((resolve) => { releaseFormulaWrite = resolve })
+  const phase9DelayedFormulaAgent = new DurableAgentService(appClient!, service, undefined, undefined, {
+    saveCandidateDraft: async (agentContext, candidateId, formulaProjectId, idempotencyKey) => {
+      signalFormulaWrite?.()
+      await allowFormulaWrite
+      return formula.saveCandidateAsDraft(agentContext, candidateId, formulaProjectId, idempotencyKey)
+    },
+  } as never)
+  const phase9ApprovePromise = phase9DelayedFormulaAgent.confirm(context.context, phase9ApproveBlocksCancelRun.id, phase9ApproveBlocksCancelConfirmation.id, { decision: 'APPROVE' }, `rls-p9-approve-blocks-cancel-${suffix}`)
+  await formulaWriteStarted
+  let phase9CancelDuringApprovalCode: string | undefined
+  try {
+    await agent.cancel(context.context, phase9ApproveBlocksCancelRun.id, `rls-p9-cancel-during-approve-${suffix}`)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error) phase9CancelDuringApprovalCode = (error as { code?: string }).code
+  }
+  releaseFormulaWrite?.()
+  const phase9ApproveAfterCancelAttempt = await phase9ApprovePromise
+  const phase9ApproveBlocksCancelFinal = await agent.detail(context.context, phase9ApproveBlocksCancelRun.id, 0)
+  const phase9LeaseRun = await agent.start(context.context, { definitionKey: 'inventory-assistant', input: {} }, `rls-p9-lease-start-${suffix}`)
+  await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    await tx.$executeRawUnsafe("UPDATE v2_agent_runs SET status = 'RUNNING', lease_token_hash = 'a', lease_expires_at = now() - interval '1 second' WHERE organization_id = $1 AND id = $2", firstOrganizationId!, phase9LeaseRun.id)
+    await tx.$executeRawUnsafe("UPDATE v2_agent_jobs SET status = 'LEASED', lease_token_hash = 'a', lease_expires_at = now() - interval '1 second' WHERE organization_id = $1 AND run_id = $2", firstOrganizationId!, phase9LeaseRun.id)
+  })
+  const phase9RecoveredLease = await agent.execute(context.context, phase9LeaseRun.id, `rls-p9-lease-recover-${suffix}`)
+  const phase9RecoveredLeaseCancelled = await agent.cancel(context.context, phase9LeaseRun.id, `rls-p9-lease-cancel-${suffix}`)
+  let phase9ForceToolFailure = true
+  const phase9FailureRegistry: CompiledAgentToolRegistry = {
+    get: () => { throw new Error('RLS verifier invokes only the fixed registry path.') },
+    has: () => true,
+    manifest: () => [],
+    invoke: async () => {
+      if (phase9ForceToolFailure) {
+        phase9ForceToolFailure = false
+        throw new PlatformError('RLS_FORCED_TOOL_FAILURE', 'Disposable verifier forced the bounded read tool to fail once.', 503)
+      }
+      return { toolKey: 'inventory.visibility', version: '1.0.0', output: { state: 'RETRY_RECOVERED' }, outputHash: 'e'.repeat(64), metadata: { outputBytes: 27 } }
+    },
+  }
+  const phase9FailureAgent = new DurableAgentService(appClient!, service, undefined, undefined, undefined, phase9FailureRegistry)
+  const phase9RetryRun = await phase9FailureAgent.start(context.context, { definitionKey: 'inventory-assistant', input: {} }, `rls-p9-retry-start-${suffix}`)
+  let phase9ForcedFailureCode: string | undefined
+  try {
+    await phase9FailureAgent.execute(context.context, phase9RetryRun.id, `rls-p9-retry-force-failure-${suffix}`)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error) phase9ForcedFailureCode = (error as { code?: string }).code
+  }
+  const phase9FailedRetryDetail = await phase9FailureAgent.detail(context.context, phase9RetryRun.id, 0)
+  const phase9FailedRetryNode = ((phase9FailedRetryDetail.run as { nodes?: Array<{ nodeKey?: string; status?: string; attempt?: number; errorCode?: string }> }).nodes ?? [])
+    .find((node) => node.nodeKey === 'review_inventory')
+  const phase9RetriedRun = await phase9FailureAgent.retry(context.context, phase9RetryRun.id, `rls-p9-retry-${suffix}`)
+  const phase9RetryToolExecution = await phase9FailureAgent.execute(context.context, phase9RetryRun.id, `rls-p9-retry-execute-tool-${suffix}`)
+  const phase9RetryArtifactExecution = await phase9FailureAgent.execute(context.context, phase9RetryRun.id, `rls-p9-retry-execute-artifact-${suffix}`)
+  const phase9RetriedRunDetail = await phase9FailureAgent.detail(context.context, phase9RetryRun.id, 0)
+  const phase9RetriedRunNode = ((phase9RetriedRunDetail.run as { nodes?: Array<{ nodeKey?: string; status?: string; attempt?: number; errorCode?: string }> }).nodes ?? [])
+    .find((node) => node.nodeKey === 'review_inventory')
+  const phase9CancelledRun = await agent.start(context.context, { definitionKey: 'inventory-assistant', input: {} }, `rls-p9-cancel-start-${suffix}`)
+  const phase9Cancelled = await agent.cancel(context.context, phase9CancelledRun.id, `rls-p9-cancel-${suffix}`)
+  const phase9EvidenceIds = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    return tx.$queryRawUnsafe<Array<{ eventId: string | null; artifactId: string | null; legacyEventId: string | null; legacyArtifactId: string | null }>>(`
+      SELECT
+        (SELECT id FROM v2_agent_events WHERE organization_id = $1 AND run_id = $2 AND protocol_version = 'agent-runtime/v1' ORDER BY sequence ASC LIMIT 1) AS "eventId",
+        (SELECT id FROM v2_agent_artifacts WHERE organization_id = $1 AND run_id = $2 AND protocol_version = 'agent-runtime/v1' ORDER BY created_at ASC LIMIT 1) AS "artifactId",
+        (SELECT id FROM v2_agent_events WHERE organization_id = $1 AND run_id = $3 AND protocol_version = 'phase6/v1' ORDER BY sequence ASC LIMIT 1) AS "legacyEventId",
+        (SELECT id FROM v2_agent_artifacts WHERE organization_id = $1 AND run_id = $3 AND protocol_version = 'phase6/v1' ORDER BY created_at ASC LIMIT 1) AS "legacyArtifactId"
+    `, firstOrganizationId!, phase9Run.id, agentRun.id)
+  })
+  const phase9EvidenceFixture = phase9EvidenceIds[0]
+  if (!phase9EvidenceFixture?.eventId || !phase9EvidenceFixture.artifactId || !phase9EvidenceFixture.legacyEventId || !phase9EvidenceFixture.legacyArtifactId) {
+    throw new Error('V2_RLS=FAIL Phase 9 or Phase 6 evidence fixture is missing.')
+  }
+  const phase9EventUpdateDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'UPDATE v2_agent_events SET event_type = event_type WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.eventId], 'V2_AGENT_RUNTIME_PROTOCOL_APPEND_ONLY')
+  const phase9EventDeleteDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'DELETE FROM v2_agent_events WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.eventId], 'V2_AGENT_RUNTIME_PROTOCOL_APPEND_ONLY')
+  const phase9ArtifactUpdateDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'UPDATE v2_agent_artifacts SET artifact_type = artifact_type WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.artifactId], 'V2_AGENT_RUNTIME_PROTOCOL_APPEND_ONLY')
+  const phase9ArtifactDeleteDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, 'DELETE FROM v2_agent_artifacts WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.artifactId], 'V2_AGENT_RUNTIME_PROTOCOL_APPEND_ONLY')
+  const phase6EventUpdateAllowed = await phase9DatabaseAllows(firstOrganizationId!, firstUserId!, 'UPDATE v2_agent_events SET event_type = event_type WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.legacyEventId])
+  const phase6ArtifactUpdateAllowed = await phase9DatabaseAllows(firstOrganizationId!, firstUserId!, 'UPDATE v2_agent_artifacts SET artifact_type = artifact_type WHERE organization_id = $1 AND id = $2', [firstOrganizationId!, phase9EvidenceFixture.legacyArtifactId])
+  const phase9CompletedProviderWithoutProvenanceDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, `
+    INSERT INTO v2_agent_provider_usages (id, organization_id, run_id, provider_key, model_identifier, usage_status, request_hash, correlation_id)
+    VALUES ($1, $2, $3, $4, $5, 'COMPLETED', $6, $7)
+  `, [`agent_usage_completed_${suffix}`, firstOrganizationId!, phase9Run.id, 'verifier.completed', 'verifier-model', '1'.repeat(64), phase9RunMetadata[0].correlationId], 'v2_agent_provider_usage_response_provenance_check')
+  const phase9RecordedProviderWithoutProvenanceDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, `
+    INSERT INTO v2_agent_provider_usages (id, organization_id, run_id, provider_key, model_identifier, usage_status, request_hash, correlation_id)
+    VALUES ($1, $2, $3, $4, $5, 'RECORDED', $6, $7)
+  `, [`agent_usage_recorded_${suffix}`, firstOrganizationId!, phase9Run.id, 'verifier.recorded', 'verifier-model', '2'.repeat(64), phase9RunMetadata[0].correlationId], 'v2_agent_provider_usage_response_provenance_check')
+  const phase9NotConfiguredProviderWithoutProvenanceAllowed = await phase9DatabaseAllows(firstOrganizationId!, firstUserId!, `
+    INSERT INTO v2_agent_provider_usages (id, organization_id, run_id, provider_key, model_identifier, usage_status, request_hash, correlation_id)
+    VALUES ($1, $2, $3, $4, $5, 'NOT_CONFIGURED', $6, $7)
+  `, [`agent_usage_not_configured_${suffix}`, firstOrganizationId!, phase9Run.id, 'verifier.not-configured', 'verifier-model', '3'.repeat(64), phase9RunMetadata[0].correlationId])
+  const phase9OtherRunNode = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId!)
+    return tx.$queryRawUnsafe<Array<{ id: string }>>(
+      'SELECT id FROM v2_agent_run_nodes WHERE organization_id = $1 AND run_id = $2 ORDER BY created_at ASC LIMIT 1',
+      firstOrganizationId!, phase9RetryRun.id,
+    )
+  })
+  if (!phase9OtherRunNode[0]) throw new Error('V2_RLS=FAIL Phase 9 cross-run node fixture is missing.')
+  const phase9CrossRunNodeEvaluationDenied = await phase9DatabaseRejects(firstOrganizationId!, firstUserId!, `
+    INSERT INTO v2_agent_evaluations (id, organization_id, run_id, run_node_id, policy_version_id, evaluation_key, subject_kind, subject_ref, evaluator_kind, status, score, result_summary, result_hash, evaluated_by, correlation_id)
+    VALUES ($1, $2, $3, $4, $5, $6, 'RUN', $3, 'RULE', 'PASSED', 1, '{}'::jsonb, $7, $8, $9)
+  `, [`agent_eval_cross_run_${suffix}`, firstOrganizationId!, phase9Run.id, phase9OtherRunNode[0].id, phase9RunMetadata[0].policyVersionId, `cross-run-node-${suffix}`, '4'.repeat(64), firstUserId!, phase9RunMetadata[0].correlationId], 'v2_agent_evaluation_node_run_tenant_fk')
+  const phase9UnsafeMutatingToolRows = await phase9UnsafeMutatingTools(firstOrganizationId!, firstUserId!)
+  const phase9SafePayloads = await phase9PersistedPayloadsAreSafe(firstOrganizationId!, firstUserId!)
   const inventoryMovementCountAfterFormula = await appClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
     await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
@@ -746,6 +1143,9 @@ try {
   try { await lab.receiveGoods(context.context, { freightCost: 0, dutyCost: 0, insuranceCost: 0, currency: 'USD', lines: [{ materialId: blockedMaterial.id, quantity: 1, unit: 'G', location: 'denied' }] }, `rls-blocked-receipt-${suffix}`) } catch (error) { blockedComplianceDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'MATERIAL_COMPLIANCE_BLOCKED' }
   const firstLots = await lab.listLots(context.context)
   const secondContext = await service.contextFromToken(second.rawSessionToken, `${secondSlug}.olfactoryops.com`)
+  const phase9SecondBootstrap = await agent.bootstrap(secondContext.context)
+  const phase9RowsInFirstTenant = await phase9TenantScopedCounts(firstOrganizationId!, firstUserId!, firstOrganizationId!)
+  const phase9RowsVisibleFromSecondTenant = await phase9TenantScopedCounts(secondOrganizationId!, secondContext.context.userId, firstOrganizationId!)
   const secondMaterials = await lab.listMaterials(secondContext.context)
   const secondOffers = await lab.listSupplierOffers(secondContext.context)
   const deniedCode = async (action: () => Promise<unknown>, expected: string) => {
@@ -763,6 +1163,9 @@ try {
   const crossTenantSentimentDenied = await deniedCode(() => consumer.invalidateSource(secondContext.context, sentimentSource.id, { reasonCode: 'CROSS_TENANT' }, `rls-cross-sentiment-${suffix}`), 'FEEDBACK_SOURCE_NOT_FOUND')
   const crossTenantFormulaDenied = await deniedCode(() => formula.projectDetail(secondContext.context, formulaProject.id), 'FORMULA_PROJECT_NOT_FOUND')
   const crossTenantAgentDenied = await deniedCode(() => agent.detail(secondContext.context, agentRun.id), 'AGENT_RUN_NOT_FOUND')
+  const crossTenantPhase9RunDenied = await deniedCode(() => agent.detail(secondContext.context, phase9Run.id), 'AGENT_RUN_NOT_FOUND')
+  const crossTenantPhase9EvidenceDenied = await deniedCode(() => agent.evidence(secondContext.context, phase9Run.id), 'AGENT_RUN_NOT_FOUND')
+  const crossTenantPhase9EvaluationDenied = await deniedCode(() => agent.evaluationDetail(secondContext.context, phase9Evaluation.id), 'AGENT_EVALUATION_NOT_FOUND')
   const crossTenantTrialDenied = await deniedCode(() => trials.detail(secondContext.context, trial.id), 'TRIAL_NOT_FOUND')
   crossTenantProductionDenied = await deniedCode(() => production.detail(secondContext.context, p8Order.id), 'PRODUCTION_ORDER_NOT_FOUND')
   crossTenantFinishedGoodDenied = await deniedCode(() => production.finishedGoodGenealogy(secondContext.context, p8Release.finishedGoodLot.id), 'FINISHED_GOOD_LOT_NOT_FOUND')
@@ -900,6 +1303,8 @@ try {
     && !('components' in brandCandidate)
     && savedCandidateDraft.status === 'DRAFT'
     && duplicateCandidateDraft.alreadySaved === true
+    && concurrentCandidateDraftUnique
+    && crossProjectCandidateDraftDenied
     && indexedEvidence.status === 'APPROVED'
     && retrievedEvidence.citations.length === 1
     && waitingAgentRun.status === 'WAITING_FOR_CONFIRMATION'
@@ -1000,7 +1405,81 @@ try {
     && crossTenantProductionDenied
     && crossTenantFinishedGoodDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass) {
+  const phase9DetailRun = phase9Detail.run as { status?: string; protocolVersion?: string; definitionKey?: string }
+  const phase9FailedRetryRun = phase9FailedRetryDetail.run as { status?: string }
+  const phase9RetriedRunProjection = phase9RetriedRunDetail.run as { status?: string }
+  const phase9ProviderUsage = phase9Evidence.providerUsage as Array<{ usageStatus?: string; providerKey?: string }>
+  const phase9RowsPresent = phase9TenantScopedTables.every((table) => phase9RowsInFirstTenant[table] > 0)
+  const phase9CrossTenantRowsDenied = phase9TenantScopedTables.every((table) => phase9RowsVisibleFromSecondTenant[table] === 0)
+  const phase9Pass = phase9Bootstrap.status === 'READY'
+    && phase9BootstrapReplay.status === 'READY'
+    && phase9SecondBootstrap.status === 'READY'
+    && Number(phase9Configuration[0]?.publishedActiveConfigurations ?? 0) === 1
+    && duplicatePhase9Run.id === phase9Run.id
+    && phase9ToolExecution.status === 'RUNNING'
+    && phase9ArtifactExecution.status === 'SUCCEEDED'
+    && phase9DetailRun.status === 'SUCCEEDED'
+    && phase9DetailRun.protocolVersion === 'agent-runtime/v1'
+    && phase9DetailRun.definitionKey === 'inventory-assistant'
+    && phase9Detail.toolCalls.length === 1
+    && phase9Detail.artifacts.length >= 2
+    && phase9Replay.events.length >= 6
+    && phase9Replay.resyncRequired === false
+    && phase9ProviderUsage.length === 1
+    && phase9ProviderUsage[0]?.usageStatus === 'NOT_CONFIGURED'
+    && duplicatePhase9Evaluation.id === phase9Evaluation.id
+    && phase9Evaluation.status === 'PASSED'
+    && phase9RejectedConfirmation.status === 'REJECTED'
+    && duplicatePhase9RejectedConfirmation.alreadyDecided === true
+    && phase9ExpiredConfirmation.status === 'EXPIRED'
+    && phase9ApprovedConfirmation.status === 'ACCEPTED'
+    && phase9ApprovedConfirmationDuplicate.alreadyDecided === true
+    && phase9InvalidConfirmationCode === 'DESIGN_CANDIDATE_FORMULA_PROJECT_MISMATCH'
+    && phase9InvalidConfirmationDetail.run.status === 'FAILED'
+    && phase9InvalidQuotaReleased
+    && phase9CandidateDraftCountBeforeConfirmation === phase9CandidateDraftCountAfterConfirmation
+    && phase9CancelledBeforeApproval.status === 'CANCELLED'
+    && phase9ConfirmAfterCancellation.status === 'CANCELLED'
+    && phase9ConfirmAfterCancellation.alreadyDecided === true
+    && phase9CancelledBeforeApprovalFinal.run.status === 'CANCELLED'
+    && phase9DraftCountAfterCancelledApproval === phase9CandidateDraftCountAfterConfirmation
+    && phase9CancelDuringApprovalCode === 'AGENT_CONFIRMATION_PROCESSING'
+    && phase9ApproveAfterCancelAttempt.status === 'ACCEPTED'
+    && phase9ApproveBlocksCancelFinal.run.status === 'SUCCEEDED'
+    && phase9RecoveredLease.status === 'RUNNING'
+    && phase9RecoveredLeaseCancelled.status === 'CANCELLED'
+    && phase9ForcedFailureCode === 'RLS_FORCED_TOOL_FAILURE'
+    && phase9FailedRetryRun.status === 'FAILED'
+    && phase9FailedRetryNode?.status === 'FAILED'
+    && phase9FailedRetryNode?.attempt === 1
+    && phase9FailedRetryNode?.errorCode === 'RLS_FORCED_TOOL_FAILURE'
+    && phase9RetriedRun.status === 'QUEUED'
+    && phase9RetryToolExecution.status === 'RUNNING'
+    && phase9RetryArtifactExecution.status === 'SUCCEEDED'
+    && phase9RetriedRunProjection.status === 'SUCCEEDED'
+    && phase9RetriedRunNode?.status === 'SUCCEEDED'
+    && phase9RetriedRunNode?.attempt === 2
+    && phase9Cancelled.status === 'CANCELLED'
+    && phase9SafePayloads
+    && phase9UnsafeMutatingToolRows.length === 0
+    && phase9EventUpdateDenied
+    && phase9EventDeleteDenied
+    && phase9ArtifactUpdateDenied
+    && phase9ArtifactDeleteDenied
+    && phase6EventUpdateAllowed
+    && phase6ArtifactUpdateAllowed
+    && phase9CompletedProviderWithoutProvenanceDenied
+    && phase9RecordedProviderWithoutProvenanceDenied
+    && phase9NotConfiguredProviderWithoutProvenanceAllowed
+    && phase9CrossRunNodeEvaluationDenied
+    && inventoryMovementCountBeforeFormula === inventoryMovementCountAfterFormula
+    && phase9RowsPresent
+    && phase9CrossTenantRowsDenied
+    && crossTenantPhase9RunDenied
+    && crossTenantPhase9EvidenceDenied
+    && crossTenantPhase9EvaluationDenied
+
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass) {
     throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({
       crossTenantDenied,
       unscopedMemberships,
@@ -1013,6 +1492,7 @@ try {
       phase6Pass,
       phase7Pass,
       phase8Pass,
+      phase9Pass,
       phase8Diagnostic: {
         plan: p8Plan.status,
         allocation: p8AllocationIntegration?.status,
@@ -1056,6 +1536,27 @@ try {
       crossTenantTrialDenied,
       crossTenantProductionDenied,
       crossTenantFinishedGoodDenied,
+      phase9Diagnostic: {
+        bootstrap: { first: phase9Bootstrap.status, replay: phase9BootstrapReplay.status, second: phase9SecondBootstrap.status },
+        publishedActiveConfigurations: Number(phase9Configuration[0]?.publishedActiveConfigurations ?? 0),
+        run: { started: phase9Run.status, duplicate: duplicatePhase9Run.id === phase9Run.id, tool: phase9ToolExecution.status, artifact: phase9ArtifactExecution.status, detail: phase9DetailRun, replayCount: phase9Replay.events.length, replayResyncRequired: phase9Replay.resyncRequired },
+        providerUsage: phase9ProviderUsage,
+        evaluation: { status: phase9Evaluation.status, duplicate: duplicatePhase9Evaluation.id === phase9Evaluation.id },
+        confirmation: { rejected: phase9RejectedConfirmation.status, duplicateRejected: duplicatePhase9RejectedConfirmation.alreadyDecided, expired: phase9ExpiredConfirmation.status, approved: phase9ApprovedConfirmation.status, duplicateApproved: phase9ApprovedConfirmationDuplicate.alreadyDecided, invalidCode: phase9InvalidConfirmationCode, invalidRun: phase9InvalidConfirmationDetail.run.status, invalidQuotaReleased: phase9InvalidQuotaReleased, candidateDraftsChanged: phase9CandidateDraftCountBeforeConfirmation !== phase9CandidateDraftCountAfterConfirmation, cancellationRace: { cancelFirst: phase9CancelledBeforeApproval.status, confirmAfterCancel: phase9ConfirmAfterCancellation.status, cancelFirstRun: phase9CancelledBeforeApprovalFinal.run.status, cancelledDraftsChanged: phase9DraftCountAfterCancelledApproval !== phase9CandidateDraftCountAfterConfirmation, cancelDuringApproval: phase9CancelDuringApprovalCode, approveAfterCancelAttempt: phase9ApproveAfterCancelAttempt.status, approveFirstRun: phase9ApproveBlocksCancelFinal.run.status } },
+        recovery: { reclaimedLease: phase9RecoveredLease.status, reclaimedLeaseCancelled: phase9RecoveredLeaseCancelled.status, forcedFailure: { code: phase9ForcedFailureCode, run: phase9FailedRetryRun.status, node: phase9FailedRetryNode }, retry: { queued: phase9RetriedRun.status, tool: phase9RetryToolExecution.status, artifact: phase9RetryArtifactExecution.status, run: phase9RetriedRunProjection.status, node: phase9RetriedRunNode }, cancel: phase9Cancelled.status },
+        safePayloads: phase9SafePayloads,
+        unsafeMutatingTools: phase9UnsafeMutatingToolRows,
+        persistenceGuards: {
+          p9Event: { updateDenied: phase9EventUpdateDenied, deleteDenied: phase9EventDeleteDenied },
+          p9Artifact: { updateDenied: phase9ArtifactUpdateDenied, deleteDenied: phase9ArtifactDeleteDenied },
+          phase6EvidenceUpdateAllowed: phase6EventUpdateAllowed && phase6ArtifactUpdateAllowed,
+          provider: { completedWithoutProvenanceDenied: phase9CompletedProviderWithoutProvenanceDenied, recordedWithoutProvenanceDenied: phase9RecordedProviderWithoutProvenanceDenied, notConfiguredWithoutProvenanceAllowed: phase9NotConfiguredProviderWithoutProvenanceAllowed },
+          crossRunNodeEvaluationDenied: phase9CrossRunNodeEvaluationDenied,
+        },
+        rowsInFirstTenant: phase9RowsInFirstTenant,
+        rowsVisibleFromSecondTenant: phase9RowsVisibleFromSecondTenant,
+        crossTenant: { run: crossTenantPhase9RunDenied, evidence: crossTenantPhase9EvidenceDenied, evaluation: crossTenantPhase9EvaluationDenied },
+      },
       crossTenantEvidenceCount: crossTenantEvidence.citations.length,
     })}`)
   }
@@ -1209,6 +1710,28 @@ try {
       crossTenantProductionDenied,
       crossTenantFinishedGoodDenied,
       finishedGoodGenealogyPermissionDenied,
+    },
+    phase9: {
+      bootstrap: { first: phase9Bootstrap.status, replay: phase9BootstrapReplay.status, second: phase9SecondBootstrap.status },
+      publishedActiveConfigurations: Number(phase9Configuration[0]?.publishedActiveConfigurations ?? 0),
+      run: { id: phase9Run.id, duplicate: duplicatePhase9Run.id === phase9Run.id, tool: phase9ToolExecution.status, artifact: phase9ArtifactExecution.status, detail: phase9DetailRun.status, replayedEvents: phase9Replay.events.length },
+      providerUsage: phase9ProviderUsage,
+      evaluation: { status: phase9Evaluation.status, duplicate: duplicatePhase9Evaluation.id === phase9Evaluation.id },
+      confirmation: { rejected: phase9RejectedConfirmation.status, duplicateRejected: duplicatePhase9RejectedConfirmation.alreadyDecided, expired: phase9ExpiredConfirmation.status, approved: phase9ApprovedConfirmation.status, duplicateApproved: phase9ApprovedConfirmationDuplicate.alreadyDecided, invalidCode: phase9InvalidConfirmationCode, invalidRun: phase9InvalidConfirmationDetail.run.status, invalidQuotaReleased: phase9InvalidQuotaReleased, candidateDraftsChanged: phase9CandidateDraftCountBeforeConfirmation !== phase9CandidateDraftCountAfterConfirmation, cancellationRace: { cancelFirst: phase9CancelledBeforeApproval.status, confirmAfterCancel: phase9ConfirmAfterCancellation.status, cancelFirstRun: phase9CancelledBeforeApprovalFinal.run.status, cancelledDraftsChanged: phase9DraftCountAfterCancelledApproval !== phase9CandidateDraftCountAfterConfirmation, cancelDuringApproval: phase9CancelDuringApprovalCode, approveAfterCancelAttempt: phase9ApproveAfterCancelAttempt.status, approveFirstRun: phase9ApproveBlocksCancelFinal.run.status } },
+      recovery: { reclaimedLease: phase9RecoveredLease.status, forcedFailure: { code: phase9ForcedFailureCode, node: phase9FailedRetryNode }, retry: { queued: phase9RetriedRun.status, final: phase9RetriedRunProjection.status, node: phase9RetriedRunNode }, cancelled: phase9Cancelled.status },
+      safePayloads: phase9SafePayloads,
+      unsafeMutatingTools: phase9UnsafeMutatingToolRows,
+      persistenceGuards: {
+        p9Event: { updateDenied: phase9EventUpdateDenied, deleteDenied: phase9EventDeleteDenied },
+        p9Artifact: { updateDenied: phase9ArtifactUpdateDenied, deleteDenied: phase9ArtifactDeleteDenied },
+        phase6EvidenceUpdateAllowed: phase6EventUpdateAllowed && phase6ArtifactUpdateAllowed,
+        provider: { completedWithoutProvenanceDenied: phase9CompletedProviderWithoutProvenanceDenied, recordedWithoutProvenanceDenied: phase9RecordedProviderWithoutProvenanceDenied, notConfiguredWithoutProvenanceAllowed: phase9NotConfiguredProviderWithoutProvenanceAllowed },
+        crossRunNodeEvaluationDenied: phase9CrossRunNodeEvaluationDenied,
+      },
+      inventoryMovementsChanged: inventoryMovementCountBeforeFormula !== inventoryMovementCountAfterFormula,
+      rowsInFirstTenant: phase9RowsInFirstTenant,
+      rowsVisibleFromSecondTenant: phase9RowsVisibleFromSecondTenant,
+      crossTenant: { run: crossTenantPhase9RunDenied, evidence: crossTenantPhase9EvidenceDenied, evaluation: crossTenantPhase9EvaluationDenied },
     },
   }))
 } finally {

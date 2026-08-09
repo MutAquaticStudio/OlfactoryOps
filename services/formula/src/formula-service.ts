@@ -105,6 +105,20 @@ export class FormulaService {
     `
   }
 
+  private async candidateForFormulaProject(tx: Transaction, context: PlatformContext, candidateId: string, formulaProjectId: string) {
+    const candidate = await tx.$queryRaw<Array<{ narrative: string; components: FormulaComponent[]; designProjectId: string; linkedFormulaProjectId: string | null }>>`
+      SELECT c.narrative, c.component_proposal AS components, c.design_project_id AS "designProjectId", d.formula_project_id AS "linkedFormulaProjectId"
+      FROM v2_design_candidates c
+      JOIN v2_design_projects d ON d.organization_id = c.organization_id AND d.id = c.design_project_id
+      WHERE c.id = ${candidateId} AND c.organization_id = ${context.organizationId} AND c.status = 'ADVISORY'
+    `
+    if (!candidate[0]) throw new PlatformError('DESIGN_CANDIDATE_NOT_FOUND', 'The selected advisory candidate is not available.', 404)
+    if (candidate[0].linkedFormulaProjectId !== formulaProjectId) {
+      throw new PlatformError('DESIGN_CANDIDATE_FORMULA_PROJECT_MISMATCH', 'The Design Studio candidate must be linked to this Formula project before it can become a draft.', 409)
+    }
+    return candidate[0]
+  }
+
   private async requireEligibleMaterials(tx: Transaction, context: PlatformContext, components: FormulaComponent[]) {
     const ids = components.map((component) => component.materialId)
     const rows = await tx.$queryRaw<Array<{ id: string; status: string; complianceStatus: string | null }>>`
@@ -431,20 +445,44 @@ export class FormulaService {
   async saveCandidateAsDraft(context: PlatformContext, candidateId: string, formulaProjectId: string, key?: string) {
     await this.platform.requirePermission(context, 'formula.edit')
     return this.idempotent(context, 'design.candidates.save-draft', key, { candidateId, formulaProjectId }, async (tx) => {
-      const candidate = await tx.$queryRaw<Array<{ narrative: string; components: FormulaComponent[] }>>`SELECT narrative, component_proposal AS components FROM v2_design_candidates WHERE id = ${candidateId} AND organization_id = ${context.organizationId} AND status = 'ADVISORY'`
-      if (!candidate[0]) throw new PlatformError('DESIGN_CANDIDATE_NOT_FOUND', 'The selected advisory candidate is not available.', 404)
       const project = await this.project(tx, context, formulaProjectId)
-      const math = calculateFormulaMath(candidate[0].components, 100)
+      if (project.status !== 'ACTIVE') throw new PlatformError('FORMULA_PROJECT_ARCHIVED', 'An archived formula project cannot receive a candidate draft.', 409)
+      const candidate = await this.candidateForFormulaProject(tx, context, candidateId, formulaProjectId)
+      const math = calculateFormulaMath(candidate.components, 100)
       if (!math.valid) throw new PlatformError('FORMULA_MATH_INVALID', 'The candidate cannot become a formula draft until its math validates.', 409)
       await this.requireEligibleMaterials(tx, context, math.components)
       const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_formula_drafts WHERE organization_id = ${context.organizationId} AND formula_project_id = ${formulaProjectId} AND origin_reference_id = ${candidateId} LIMIT 1`
       if (existing[0]) return { id: existing[0].id, status: 'DRAFT', alreadySaved: true }
       const id = identifier('fdraft')
-      await tx.$executeRaw`INSERT INTO v2_formula_drafts (id, organization_id, formula_project_id, name, target_grams, origin_type, origin_reference_id, created_by) VALUES (${id}, ${context.organizationId}, ${formulaProjectId}, ${project.name}, 100, 'DESIGN_CANDIDATE', ${candidateId}, ${context.userId})`
+      const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+        INSERT INTO v2_formula_drafts (id, organization_id, formula_project_id, name, target_grams, origin_type, origin_reference_id, created_by)
+        VALUES (${id}, ${context.organizationId}, ${formulaProjectId}, ${project.name}, 100, 'DESIGN_CANDIDATE', ${candidateId}, ${context.userId})
+        ON CONFLICT (organization_id, formula_project_id, origin_type, origin_reference_id) WHERE origin_reference_id IS NOT NULL DO NOTHING
+        RETURNING id
+      `
+      if (!inserted[0]) {
+        const concurrent = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_formula_drafts WHERE organization_id = ${context.organizationId} AND formula_project_id = ${formulaProjectId} AND origin_type = 'DESIGN_CANDIDATE' AND origin_reference_id = ${candidateId} LIMIT 1`
+        if (concurrent[0]) return { id: concurrent[0].id, status: 'DRAFT', alreadySaved: true }
+        throw new PlatformError('FORMULA_DRAFT_CONCURRENT_WRITE', 'The candidate draft could not be reconciled after a concurrent write.', 409)
+      }
       await this.writeComponents(tx, context, id, math.components)
       await tx.$executeRaw`INSERT INTO v2_formula_provenance (id, organization_id, formula_draft_id, origin_kind, origin_ref, payload_hash, created_by) VALUES (${identifier('fprov')}, ${context.organizationId}, ${id}, 'DESIGN_STUDIO', ${candidateId}, ${digest(math.components)}, ${context.userId})`
       await this.audit(tx, context, 'design.candidate.save_draft', 'allowed', 'formula_draft', id, { candidateId, formulaProjectId })
       return { id, status: 'DRAFT', alreadySaved: false }
+    })
+  }
+
+  /**
+   * A non-mutating preflight for cross-service callers. The save path repeats
+   * this predicate transactionally, so a caller cannot use the preflight as a
+   * substitute for the Formula aggregate's write-time guard.
+   */
+  async verifyCandidateDraftBinding(context: PlatformContext, candidateId: string, formulaProjectId: string) {
+    await this.platform.requirePermission(context, 'formula.edit')
+    return this.scoped(context, async (tx) => {
+      await this.project(tx, context, formulaProjectId)
+      const candidate = await this.candidateForFormulaProject(tx, context, candidateId, formulaProjectId)
+      return { candidateId, formulaProjectId, designProjectId: candidate.designProjectId }
     })
   }
 

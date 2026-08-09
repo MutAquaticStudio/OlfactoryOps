@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const V2_PERMISSION_REGISTRY_VERSION = '2.4.0'
+export const V2_PERMISSION_REGISTRY_VERSION = '2.5.0'
 
 export const permissionGroupSchema = z.enum([
   'tenant', 'security', 'members', 'materials', 'suppliers', 'inventory', 'procurement', 'formula', 'trials', 'sensory',
@@ -107,6 +107,9 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('sentiment.analyze', 'sentiment', 'Request sentiment analysis', true),
   definition('sentiment.manageSources', 'sentiment', 'Manage feedback sources and usage policy', true, true),
   definition('agent.execute', 'agent', 'Start an authorized agent run', true),
+  definition('agent.view', 'agent', 'View authorized agent runs, artifacts, and persisted event replay'),
+  definition('agent.observe', 'agent', 'View bounded agent reliability, latency, and usage metadata', false, true),
+  definition('agent.evaluate', 'agent', 'Create and execute governed agent evaluation cases', true, true),
   definition('agent.confirmWrite', 'agent', 'Confirm a registered agent write', true, true),
   definition('agent.manageTools', 'agent', 'Manage tenant agent tool policy', true, true),
   definition('billing.view', 'billing', 'View workspace billing state'),

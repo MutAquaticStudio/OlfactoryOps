@@ -115,6 +115,12 @@ describe('V2 platform security core', () => {
     const expectedRoles = ['Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician', 'Procurement', 'Sensory Panelist', 'Brand', 'Supplier', 'Finance', 'Viewer']
     for (const role of expectedRoles) expect(repository.rolePolicies.has(`${signup.membership.organizationId}:${role}`)).toBe(true)
     expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Viewer`)).not.toContain('billing.manage')
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Viewer`)).toContain('agent.view')
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Viewer`)).not.toContain('agent.execute')
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Perfumer`)).toEqual(expect.arrayContaining(['agent.view', 'agent.execute', 'agent.confirmWrite']))
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:R&D Scientist`)).toEqual(expect.arrayContaining(['agent.view', 'agent.execute', 'agent.evaluate']))
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Sensory Panelist`)).not.toContain('agent.execute')
+    expect(repository.rolePolicies.get(`${signup.membership.organizationId}:Brand`)).not.toContain('agent.view')
   })
 
   it('creates, reissues, revokes, and accepts one-time member invitations without storing raw tokens', async () => {

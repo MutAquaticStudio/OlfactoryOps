@@ -118,3 +118,32 @@ finished-good and document-view permissions. Its downstream Order/Shipment
 segment is `BLOCKED` pending Commerce integration. Remote migration and
 production deployment are `NOT_APPLICABLE` for this local checkpoint. See
 `phase-8/`.
+
+## Phase 9 status
+
+Phase 9 documents the active governed Agent Runtime: tenant-scoped versioned
+definitions, workflows, tools and policies; durable run/node/message/tool,
+confirmation, provider-usage, evaluation and lineage evidence; forced RLS;
+and published-only active snapshots. Version snapshots and designated P9
+evidence are immutable, while run nodes, confirmations/effects, and quota
+reservations use controlled lifecycle updates. Agent tools are registered,
+typed, permission-bound domain adapters rather than generic SQL, shell, URL,
+HTTP, or MCP access. Persisted event sequences remain the source of truth; the
+REST replay endpoint and SSE stream replay them and require a persisted-state
+resync on a gap.
+
+Run routes are under `/api/v1/v2/agent-runs`; catalog, evaluation, and
+observability routes are under `/api/v1/v2/agent-runtime`. The server-only
+provider gateway makes no outbound call by default and returns
+`NOT_CONFIGURED`; the runtime may persist that truthful status but cannot
+fabricate a completion, token/cost totals, or artifact. The read-only Commerce
+tool also returns `NOT_CONFIGURED` until Phase 10 supplies Commerce records.
+
+Focused Phase 9 contract/controller/client tests, service/package typecheck,
+and disposable PostgreSQL migration/RLS gates are `PASS`. The disposable
+confirmation checks verify the fenced effect claim, Formula-origin unique-draft
+invariant, and invalid candidate/project terminal handling with quota release;
+the repository-local Phase 9 acceptance is `PASS`. Credential-backed provider
+execution, Commerce-backed results, and authenticated HTTP/SSE plus browser
+acceptance are `BLOCKED`. Remote migration and production deployment are
+`NOT_APPLICABLE`. See `phase-9/`.
