@@ -9,5 +9,6 @@ import { V2PlatformModule } from './v2-platform.module.js'
   imports: [V2PlatformModule],
   controllers: [V2FormulaIntelligenceController],
   providers: [{ provide: FormulaService, inject: [PlatformService], useFactory: (platform: PlatformService) => new FormulaService(new PrismaClient(), platform) }],
+  exports: [FormulaService],
 })
 export class V2FormulaIntelligenceModule {}

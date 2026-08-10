@@ -1,10 +1,10 @@
 import { z } from 'zod'
 
-export const V2_PERMISSION_REGISTRY_VERSION = '2.5.0'
+export const V2_PERMISSION_REGISTRY_VERSION = '2.6.0'
 
 export const permissionGroupSchema = z.enum([
   'tenant', 'security', 'members', 'materials', 'suppliers', 'inventory', 'procurement', 'formula', 'trials', 'sensory',
-  'production', 'commerce', 'orders', 'costing', 'documents', 'rag', 'scientific_ai', 'sentiment', 'agent', 'billing', 'observability',
+  'production', 'commerce', 'orders', 'costing', 'documents', 'rag', 'scientific_ai', 'sentiment', 'agent', 'optimizer', 'imports', 'dataops', 'billing', 'observability',
 ])
 export type PermissionGroup = z.infer<typeof permissionGroupSchema>
 
@@ -112,6 +112,16 @@ export const V2_PERMISSION_REGISTRY = Object.freeze([
   definition('agent.evaluate', 'agent', 'Create and execute governed agent evaluation cases', true, true),
   definition('agent.confirmWrite', 'agent', 'Confirm a registered agent write', true, true),
   definition('agent.manageTools', 'agent', 'Manage tenant agent tool policy', true, true),
+  definition('optimizer.view', 'optimizer', 'View reproducible reformulation advisory runs'),
+  definition('optimizer.run', 'optimizer', 'Run a deterministic reformulation advisory solver', true),
+  definition('optimizer.review', 'optimizer', 'Review or save an advisory reformulation candidate as a Formula draft', true, true),
+  definition('imports.view', 'imports', 'View governed import jobs and validation reports'),
+  definition('imports.preview', 'imports', 'Parse and validate an import without changing business records', true),
+  definition('imports.commit', 'imports', 'Commit a confirmed create-only import', true, true),
+  definition('bulk.preview', 'imports', 'Preview a bounded administrative bulk operation', true),
+  definition('bulk.execute', 'imports', 'Execute a confirmed administrative bulk operation', true, true),
+  definition('dataops.view', 'dataops', 'View governed DataOps quality reports'),
+  definition('dataops.run', 'dataops', 'Run a configured governed DataOps adapter', true),
   definition('billing.view', 'billing', 'View workspace billing state'),
   definition('billing.manage', 'billing', 'Manage workspace billing', true, true),
   definition('billing.capabilities', 'billing', 'View capability and usage limits'),

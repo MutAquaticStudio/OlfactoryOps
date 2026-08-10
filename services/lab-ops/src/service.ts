@@ -14,6 +14,8 @@ export type LabOperationsTransaction = Prisma.TransactionClient
 type Transaction = LabOperationsTransaction
 type JsonRecord = Record<string, unknown>
 type IdempotencyRow = { requestHash: string; response: unknown }
+type CreateOnlyImportKind = 'MATERIALS' | 'SUPPLIERS' | 'SUPPLIER_OFFERS' | 'OPENING_INVENTORY'
+type CreateOnlyImportRow = Record<string, unknown>
 type LotRow = {
   id: string; materialId: string; status: string; qualityStatus: string; expiresAt: Date | null; createdAt: Date
   supplierId: string | null; supplierOfferId: string | null; supplierLot: string | null; location: string; landedUnitCost: Prisma.Decimal | null; currency: string | null
@@ -159,6 +161,122 @@ export class LabOperationsService {
         FROM v2_materials WHERE organization_id = ${context.organizationId} ORDER BY name ASC, id ASC
       `
       return rows.map((row) => ({ ...row, scope: 'TENANT', createdAt: row.createdAt.toISOString(), reviewedAt: iso(row.reviewedAt) }))
+    })
+  }
+
+  /**
+   * The Advanced import service owns parsing, preview and confirmation. This
+   * is the only bridge that creates material/supplier/inventory data so those
+   * aggregates retain their tenant, permission, idempotency and audit rules.
+   */
+  async applyCreateOnlyImport(context: PlatformContext, kind: CreateOnlyImportKind, rows: CreateOnlyImportRow[], idempotencyKey?: string) {
+    if (!rows.length || rows.length > 2_000) throw new PlatformError('IMPORT_ROWS_INVALID', 'A governed import must contain between one and two thousand valid rows.', 422)
+    if (kind === 'MATERIALS') await this.require(context, 'materials.edit')
+    if (kind === 'SUPPLIERS' || kind === 'SUPPLIER_OFFERS') await this.require(context, 'suppliers.edit')
+    if (kind === 'OPENING_INVENTORY') {
+      await this.require(context, 'procurement.receive')
+      const receipt = await this.receiveGoods(context, {
+        freightCost: 0, dutyCost: 0, insuranceCost: 0,
+        currency: typeof rows[0]?.currency === 'string' ? rows[0].currency : 'USD',
+        lines: rows.map((row) => ({
+          materialId: String(row.materialId ?? ''), supplierOfferId: typeof row.supplierOfferId === 'string' ? row.supplierOfferId : undefined,
+          supplierLot: typeof row.supplierLot === 'string' ? row.supplierLot : undefined,
+          quantity: Number(row.quantityGrams), unit: 'G' as const, location: String(row.location ?? ''),
+          manufacturedAt: typeof row.manufacturedAt === 'string' ? row.manufacturedAt : undefined,
+          expiresAt: typeof row.expiresAt === 'string' ? row.expiresAt : undefined,
+          unitPrice: typeof row.unitPrice === 'number' ? row.unitPrice : undefined,
+        })),
+      }, idempotencyKey)
+      return { kind, receiptId: receipt.id, targets: receipt.lines.map((line, index) => ({ sourceRowNumber: Number(rows[index]?.sourceRowNumber ?? 0), targetType: 'INVENTORY_LOT', targetId: line.lotId })) }
+    }
+
+    return this.idempotent(context, `imports.${kind.toLowerCase()}.create_only`, idempotencyKey, { kind, rows }, async (tx) => {
+      const targets: Array<{ sourceRowNumber: number; targetType: string; targetId: string }> = []
+      for (const row of rows) {
+        const sourceRowNumber = Number(row.sourceRowNumber)
+        if (!Number.isInteger(sourceRowNumber) || sourceRowNumber < 2) throw new PlatformError('IMPORT_ROW_INVALID', 'Each import row must retain a valid source row number.', 422)
+        if (kind === 'MATERIALS') {
+          const name = typeof row.name === 'string' ? row.name.trim() : ''
+          const internalCode = typeof row.internalCode === 'string' && row.internalCode.trim() ? row.internalCode.trim() : null
+          if (!name) throw new PlatformError('IMPORT_ROW_INVALID', 'A material import row requires a name.', 422)
+          if (internalCode) {
+            const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_materials WHERE organization_id = ${context.organizationId} AND internal_code = ${internalCode} LIMIT 1`
+            if (existing[0]) throw new PlatformError('IMPORT_TARGET_EXISTS', 'Create-only import cannot overwrite an existing material.', 409)
+          }
+          const materialId = identifier('mat')
+          await tx.$executeRaw`
+            INSERT INTO v2_materials (id, organization_id, scope, name, internal_code, description, sensory_metadata, created_by)
+            VALUES (${materialId}, ${context.organizationId}, 'TENANT', ${name}, ${internalCode}, ${typeof row.description === 'string' ? row.description.trim() || null : null}, ${JSON.stringify({})}::jsonb, ${context.userId})
+          `
+          if (typeof row.cas === 'string' && row.cas.trim()) await tx.$executeRaw`
+            INSERT INTO v2_material_identifiers (id, organization_id, material_id, identifier_type, identifier_value, source)
+            VALUES (${identifier('matid')}, ${context.organizationId}, ${materialId}, 'CAS', ${row.cas.trim()}, 'governed-import')
+          `
+          targets.push({ sourceRowNumber, targetType: 'MATERIAL', targetId: materialId })
+          continue
+        }
+        if (kind === 'SUPPLIERS') {
+          const legalName = typeof row.legalName === 'string' ? row.legalName.trim() : ''
+          if (!legalName) throw new PlatformError('IMPORT_ROW_INVALID', 'A supplier import row requires a legal name.', 422)
+          const existing = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_suppliers WHERE organization_id = ${context.organizationId} AND legal_name = ${legalName} LIMIT 1`
+          if (existing[0]) throw new PlatformError('IMPORT_TARGET_EXISTS', 'Create-only import cannot overwrite an existing supplier.', 409)
+          const supplierId = identifier('supplier')
+          await tx.$executeRaw`
+            INSERT INTO v2_suppliers (id, organization_id, legal_name, trade_name, primary_email, currency, lead_time_days, payment_terms, created_by)
+            VALUES (${supplierId}, ${context.organizationId}, ${legalName}, ${typeof row.tradeName === 'string' ? row.tradeName.trim() || null : null}, ${typeof row.primaryEmail === 'string' ? row.primaryEmail.trim().toLowerCase() || null : null}, ${typeof row.currency === 'string' ? row.currency : 'USD'}, ${typeof row.leadTimeDays === 'number' ? row.leadTimeDays : null}, '{}'::jsonb, ${context.userId})
+          `
+          targets.push({ sourceRowNumber, targetType: 'SUPPLIER', targetId: supplierId })
+          continue
+        }
+        const supplierId = typeof row.supplierId === 'string' ? row.supplierId : ''
+        const materialId = typeof row.materialId === 'string' ? row.materialId : ''
+        const productCode = typeof row.productCode === 'string' ? row.productCode.trim() : ''
+        const unitPrice = typeof row.unitPrice === 'number' ? row.unitPrice : Number.NaN
+        const minimumOrderQuantity = typeof row.minimumOrderQuantity === 'number' ? row.minimumOrderQuantity : 0
+        if (!supplierId || !materialId || !productCode || !Number.isFinite(unitPrice) || unitPrice < 0 || !Number.isFinite(minimumOrderQuantity) || minimumOrderQuantity < 0) throw new PlatformError('IMPORT_ROW_INVALID', 'A supplier offer import row is incomplete.', 422)
+        const supplier = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_suppliers WHERE organization_id = ${context.organizationId} AND id = ${supplierId} LIMIT 1`
+        const material = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_materials WHERE organization_id = ${context.organizationId} AND id = ${materialId} LIMIT 1`
+        if (!supplier[0] || !material[0]) throw new PlatformError('IMPORT_TENANT_REFERENCE_DENIED', 'An imported supplier offer may reference only this workspace supplier and material records.', 409)
+        const duplicate = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_supplier_offers WHERE organization_id = ${context.organizationId} AND supplier_id = ${supplierId} AND material_id = ${materialId} AND product_code = ${productCode} LIMIT 1`
+        if (duplicate[0]) throw new PlatformError('IMPORT_TARGET_EXISTS', 'Create-only import cannot overwrite an existing supplier offer.', 409)
+        const offerId = identifier('offer')
+        await tx.$executeRaw`
+          INSERT INTO v2_supplier_offers (id, organization_id, supplier_id, material_id, product_code, trade_name, grade, minimum_order_quantity, unit, unit_price, currency, lead_time_days, pack_size, created_by)
+          VALUES (${offerId}, ${context.organizationId}, ${supplierId}, ${materialId}, ${productCode}, ${typeof row.tradeName === 'string' ? row.tradeName.trim() || null : null}, ${typeof row.grade === 'string' ? row.grade.trim() || null : null}, ${minimumOrderQuantity}, ${typeof row.unit === 'string' ? row.unit : 'G'}, ${unitPrice}, ${typeof row.currency === 'string' ? row.currency : 'USD'}, ${typeof row.leadTimeDays === 'number' ? row.leadTimeDays : null}, ${typeof row.packSize === 'number' ? row.packSize : null}, ${context.userId})
+        `
+        await tx.$executeRaw`
+          INSERT INTO v2_supplier_offer_price_history (id, organization_id, supplier_offer_id, unit_price, currency, changed_by, reason)
+          VALUES (${identifier('offer_price')}, ${context.organizationId}, ${offerId}, ${unitPrice}, ${typeof row.currency === 'string' ? row.currency : 'USD'}, ${context.userId}, 'Governed import')
+        `
+        targets.push({ sourceRowNumber, targetType: 'SUPPLIER_OFFER', targetId: offerId })
+      }
+      await this.audit(tx, context, 'lab_ops.import.create_only', 'allowed', 'import', kind, { kind, rowCount: rows.length, targetCount: targets.length })
+      return { kind, targets }
+    })
+  }
+
+  /** Performs a bounded all-or-nothing status change for governed bulk work. */
+  async applyBulkStatusOperation(context: PlatformContext, kind: 'MATERIAL_STATUS' | 'SUPPLIER_STATUS' | 'SUPPLIER_OFFER_STATUS', targetIds: string[], status: string, rationale: string, idempotencyKey?: string) {
+    if (!targetIds.length || targetIds.length > 200 || new Set(targetIds).size !== targetIds.length) throw new PlatformError('BULK_TARGETS_INVALID', 'A bulk operation needs between one and two hundred unique targets.', 422)
+    if (kind === 'MATERIAL_STATUS') {
+      if (!['DRAFT', 'REVIEW_REQUIRED', 'ACTIVE', 'BLOCKED', 'ARCHIVED'].includes(status)) throw new PlatformError('BULK_STATUS_INVALID', 'The material status is not valid.', 422)
+      await this.require(context, status === 'ACTIVE' || status === 'BLOCKED' ? 'materials.approve' : 'materials.edit')
+    }
+    if (kind === 'SUPPLIER_STATUS') {
+      if (!['DRAFT', 'ACTIVE', 'SUSPENDED', 'ARCHIVED'].includes(status)) throw new PlatformError('BULK_STATUS_INVALID', 'The supplier status is not valid.', 422)
+      await this.require(context, status === 'ACTIVE' || status === 'SUSPENDED' ? 'suppliers.approve' : 'suppliers.edit')
+    }
+    if (kind === 'SUPPLIER_OFFER_STATUS') {
+      if (!['DRAFT', 'ACTIVE', 'EXPIRED', 'ARCHIVED'].includes(status)) throw new PlatformError('BULK_STATUS_INVALID', 'The supplier offer status is not valid.', 422)
+      await this.require(context, status === 'ACTIVE' ? 'suppliers.approve' : 'suppliers.edit')
+    }
+    return this.idempotent(context, `bulk.${kind.toLowerCase()}.execute`, idempotencyKey, { kind, targetIds, status, rationale }, async (tx) => {
+      const table = kind === 'MATERIAL_STATUS' ? 'v2_materials' : kind === 'SUPPLIER_STATUS' ? 'v2_suppliers' : 'v2_supplier_offers'
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM ${Prisma.raw(table)} WHERE organization_id = ${context.organizationId} AND id IN (${Prisma.join(targetIds)}) FOR UPDATE`
+      if (rows.length !== targetIds.length) throw new PlatformError('BULK_TARGET_NOT_FOUND', 'Every bulk target must exist in this workspace.', 404)
+      await tx.$executeRaw`UPDATE ${Prisma.raw(table)} SET status = ${status}, updated_at = now() WHERE organization_id = ${context.organizationId} AND id IN (${Prisma.join(targetIds)})`
+      for (const targetId of targetIds) await this.audit(tx, context, 'lab_ops.bulk.status', 'allowed', kind.toLowerCase(), targetId, { status, rationale })
+      return { kind, status, targetIds, changedCount: targetIds.length }
     })
   }
 

@@ -59,6 +59,7 @@
     "@nestjs/platform-fastify": "^11.1.27",
     "@prisma/client": "^6.19.3",
     "@types/qrcode": "^1.5.6",
+    "fflate": "^0.8.3",
     "framer-motion": "^12.42.2",
     "lucide-react": "^1.22.0",
     "qrcode": "^1.5.4",

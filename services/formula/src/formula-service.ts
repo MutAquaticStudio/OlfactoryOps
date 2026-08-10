@@ -472,6 +472,81 @@ export class FormulaService {
     })
   }
 
+  private async persistReformulationCandidateAsDraftInTransaction(
+    context: PlatformContext,
+    tx: Transaction,
+    candidateId: string,
+    formulaProjectId: string,
+  ) {
+    const project = await this.project(tx, context, formulaProjectId)
+    if (project.status !== 'ACTIVE') throw new PlatformError('FORMULA_PROJECT_ARCHIVED', 'An archived formula project cannot receive an optimizer draft.', 409)
+    const candidates = await tx.$queryRaw<Array<{ components: FormulaComponent[]; status: string; runStatus: string; parentFormulaProjectId: string }>>`
+      SELECT c.component_proposal AS components, c.status, r.status AS "runStatus", v.formula_project_id AS "parentFormulaProjectId"
+      FROM v2_reformulation_candidates c
+      JOIN v2_reformulation_runs r ON r.organization_id = c.organization_id AND r.id = c.reformulation_run_id
+      JOIN v2_formula_versions v ON v.organization_id = r.organization_id AND v.id = r.parent_formula_version_id
+      WHERE c.organization_id = ${context.organizationId} AND c.id = ${candidateId}
+      FOR UPDATE
+    `
+    const candidate = candidates[0]
+    if (!candidate) throw new PlatformError('REFORMULATION_CANDIDATE_NOT_FOUND', 'The selected optimizer candidate is not available in this workspace.', 404)
+    if (candidate.status !== 'ADVISORY' || candidate.runStatus !== 'COMPLETED') throw new PlatformError('REFORMULATION_CANDIDATE_NOT_READY', 'Only a completed advisory optimizer candidate may become a Formula draft.', 409)
+    if (candidate.parentFormulaProjectId !== formulaProjectId) throw new PlatformError('REFORMULATION_CANDIDATE_FORMULA_PROJECT_MISMATCH', 'A reformulation candidate may be saved only to the Formula Project that owns its approved parent version.', 409)
+    const math = calculateFormulaMath(candidate.components, 100)
+    if (!math.valid) throw new PlatformError('FORMULA_MATH_INVALID', 'The optimizer candidate no longer satisfies Formula math.', 409)
+    await this.requireEligibleMaterials(tx, context, math.components)
+    const existing = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM v2_formula_drafts
+      WHERE organization_id = ${context.organizationId} AND formula_project_id = ${formulaProjectId}
+        AND origin_type = 'REFORMULATION_OPTIMIZER' AND origin_reference_id = ${candidateId}
+      LIMIT 1
+    `
+    if (existing[0]) return { id: existing[0].id, status: 'DRAFT', alreadySaved: true }
+    const draftId = identifier('fdraft')
+    const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO v2_formula_drafts (id, organization_id, formula_project_id, name, target_grams, origin_type, origin_reference_id, created_by)
+      VALUES (${draftId}, ${context.organizationId}, ${formulaProjectId}, ${project.name}, 100, 'REFORMULATION_OPTIMIZER', ${candidateId}, ${context.userId})
+      ON CONFLICT (organization_id, formula_project_id, origin_type, origin_reference_id) WHERE origin_reference_id IS NOT NULL DO NOTHING
+      RETURNING id
+    `
+    if (!inserted[0]) {
+      const concurrent = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM v2_formula_drafts
+        WHERE organization_id = ${context.organizationId} AND formula_project_id = ${formulaProjectId}
+          AND origin_type = 'REFORMULATION_OPTIMIZER' AND origin_reference_id = ${candidateId}
+        LIMIT 1
+      `
+      if (concurrent[0]) return { id: concurrent[0].id, status: 'DRAFT', alreadySaved: true }
+      throw new PlatformError('FORMULA_DRAFT_CONCURRENT_WRITE', 'The optimizer draft could not be reconciled after a concurrent write.', 409)
+    }
+    await this.writeComponents(tx, context, draftId, math.components)
+    const contentHash = digest(math.components)
+    await tx.$executeRaw`
+      INSERT INTO v2_formula_provenance (id, organization_id, formula_draft_id, origin_kind, origin_ref, payload_hash, created_by)
+      VALUES (${identifier('fprov')}, ${context.organizationId}, ${draftId}, 'REFORMULATION_OPTIMIZER', ${candidateId}, ${contentHash}, ${context.userId})
+    `
+    await this.audit(tx, context, 'reformulation.candidate.save_draft', 'allowed', 'formula_draft', draftId, { candidateId, formulaProjectId, contentHash })
+    return { id: draftId, status: 'DRAFT', alreadySaved: false }
+  }
+
+  /**
+   * Phase 11 candidates stay in the optimizer aggregate until a perfumer
+   * deliberately invokes this bridge. Formula remains the only writer of its
+   * draft/components/provenance tables, and repeats every math/eligibility
+   * guard at the final persistence boundary.
+   */
+  async saveReformulationCandidateAsDraft(context: PlatformContext, candidateId: string, formulaProjectId: string, key?: string) {
+    await this.platform.requirePermission(context, 'formula.edit')
+    return this.idempotent(context, 'reformulation.candidates.save-draft', key, { candidateId, formulaProjectId }, async (tx) => {
+      return this.persistReformulationCandidateAsDraftInTransaction(context, tx, candidateId, formulaProjectId)
+    })
+  }
+
+  async saveReformulationCandidateAsDraftInTransaction(context: PlatformContext, tx: Transaction, candidateId: string, formulaProjectId: string) {
+    return this.persistReformulationCandidateAsDraftInTransaction(context, tx, candidateId, formulaProjectId)
+  }
+
   /**
    * A non-mutating preflight for cross-service callers. The save path repeats
    * this predicate transactionally, so a caller cannot use the preflight as a

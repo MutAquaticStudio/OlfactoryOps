@@ -15,6 +15,7 @@ import type { CompiledAgentToolRegistry } from '../services/agent-runtime/src/to
 import { TrialSensoryService } from '../services/trials-sensory/src/service.js'
 import { ProductionService } from '../services/production/src/production-service.js'
 import { CommerceService } from '../services/commerce/src/commerce-service.js'
+import { AdvancedOperationsService } from '../services/advanced/src/advanced-service.js'
 
 class RlsScientificRuntime implements ScientificRuntime {
   private structure(smiles: string) {
@@ -77,6 +78,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql')
 }
 
 function resetDisposableSchema() {
@@ -140,6 +142,17 @@ const phase9TenantScopedTables = [
   'v2_agent_run_quota_reservations',
 ] as const
 
+const phase11TenantScopedTables = [
+  'v2_reformulation_runs',
+  'v2_reformulation_candidates',
+  'v2_reformulation_candidate_reviews',
+  'v2_import_jobs',
+  'v2_import_rows',
+  'v2_import_commits',
+  'v2_dataops_runs',
+  'v2_bulk_operations',
+] as const
+
 async function phase9TenantScopedCounts(organizationId: string, userId: string, targetOrganizationId: string) {
   if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
   return appClient.$transaction(async (tx) => {
@@ -153,6 +166,22 @@ async function phase9TenantScopedCounts(organizationId: string, userId: string, 
       return [table, Number(rows[0]?.count ?? 0)] as const
     }))
     return Object.fromEntries(counts) as Record<(typeof phase9TenantScopedTables)[number], number>
+  })
+}
+
+async function phase11TenantScopedCounts(organizationId: string, userId: string, targetOrganizationId: string) {
+  if (!appClient) throw new Error('V2_RLS=FAIL application client was not initialized.')
+  return appClient.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", organizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", userId)
+    const counts = await Promise.all(phase11TenantScopedTables.map(async (table) => {
+      const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>(
+        `SELECT count(*)::bigint AS count FROM ${table} WHERE organization_id = $1`,
+        targetOrganizationId,
+      )
+      return [table, Number(rows[0]?.count ?? 0)] as const
+    }))
+    return Object.fromEntries(counts) as Record<(typeof phase11TenantScopedTables)[number], number>
   })
 }
 
@@ -302,6 +331,51 @@ async function verifyLegacyProductionPolicyBackfill() {
   return valid(afterFirst) && valid(afterSecond)
 }
 
+/**
+ * Phase 11 permissions live in persisted policy documents, so upgrades need
+ * proof in addition to fresh-signup defaults. The migration must retain
+ * tenant-specific grants and be harmless when replayed.
+ */
+async function verifyLegacyAdvancedPolicyBackfill() {
+  if (!adminClient) throw new Error('V2_RLS=FAIL administrative test client is unavailable.')
+  const fixture = `legacy-p11-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const organizationId = `org_${fixture}`
+  const userId = `usr_${fixture}`
+  const grants: Record<string, string[]> = {
+    Owner: ['optimizer.view', 'optimizer.run', 'optimizer.review', 'imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view', 'dataops.run'],
+    Admin: ['optimizer.view', 'optimizer.run', 'optimizer.review', 'imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view', 'dataops.run'],
+    Perfumer: ['optimizer.view', 'optimizer.run', 'optimizer.review'],
+    'R&D Scientist': ['optimizer.view', 'optimizer.run', 'dataops.view'],
+    'Lab Manager': ['imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view', 'dataops.run'],
+    Procurement: ['imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view'],
+  }
+  await adminClient.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('INSERT INTO v2_organizations (id, slug, name) VALUES ($1, $2, $3)', organizationId, fixture.slice(0, 60), 'Legacy Phase 11 policy fixture')
+    await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', userId, `${fixture}@example.test`, 'Legacy Phase 11 policy fixture', 'not-a-login')
+    for (const roleKey of Object.keys(grants)) {
+      await tx.$executeRawUnsafe(
+        'INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by) VALUES ($1, $2, $3, $4::jsonb, $5, $6)',
+        `policy_${fixture}_${roleKey.replaceAll(' ', '_')}`, organizationId, roleKey, JSON.stringify(['tenant.view', `legacy.${roleKey.toLowerCase().replaceAll(' ', '')}`]), 5, userId,
+      )
+    }
+  })
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql')
+  const afterFirst = await adminClient.$queryRawUnsafe<Array<{ roleKey: string; permissions: unknown; version: number }>>(
+    'SELECT role_key AS "roleKey", permissions, version FROM v2_role_policies WHERE organization_id = $1 ORDER BY role_key ASC', organizationId,
+  )
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql')
+  const afterSecond = await adminClient.$queryRawUnsafe<Array<{ roleKey: string; permissions: unknown; version: number }>>(
+    'SELECT role_key AS "roleKey", permissions, version FROM v2_role_policies WHERE organization_id = $1 ORDER BY role_key ASC', organizationId,
+  )
+  const valid = (rows: Array<{ roleKey: string; permissions: unknown; version: number }>) => rows.length === Object.keys(grants).length
+    && rows.every((row) => Array.isArray(row.permissions)
+      && row.version === 6
+      && row.permissions.includes('tenant.view')
+      && row.permissions.includes(`legacy.${row.roleKey.toLowerCase().replaceAll(' ', '')}`)
+      && (grants[row.roleKey] ?? []).every((permission) => row.permissions.includes(permission)))
+  return valid(afterFirst) && valid(afterSecond)
+}
+
 try {
   resetDisposableSchema()
   applyMigrations()
@@ -309,6 +383,7 @@ try {
   appClient = new PrismaClient({ datasources: { db: { url: applicationUrl.toString() } } })
   await configureApplicationRole()
   const legacyProductionPolicyBackfill = await verifyLegacyProductionPolicyBackfill()
+  const legacyAdvancedPolicyBackfill = await verifyLegacyAdvancedPolicyBackfill()
   const repository = new PrismaPlatformRepository(appClient)
   const service = new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'rls-session', passwordPepper: 'rls-password' })
   const lab = new LabOperationsService(appClient, service)
@@ -322,6 +397,7 @@ try {
   const trials = new TrialSensoryService(appClient, service, lab)
   const production = new ProductionService(appClient, service, lab)
   const commerce = new CommerceService(appClient, service)
+  const advanced = new AdvancedOperationsService(appClient, service, formula, lab, { confirmationSecret: 'rls-phase11-confirmation-secret' })
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const slug = `rls-${suffix}`
   const secondSlug = `rls-second-${suffix}`
@@ -1376,11 +1452,116 @@ try {
   await lab.saveCompliance(context.context, blockedMaterial.id, { jurisdiction: 'QA', category: 'TEST', status: 'BLOCKED', source: 'isolated test', sourceVersion: '1', limits: {} }, `rls-blocked-compliance-${suffix}`)
   let blockedComplianceDenied = false
   try { await lab.receiveGoods(context.context, { freightCost: 0, dutyCost: 0, insuranceCost: 0, currency: 'USD', lines: [{ materialId: blockedMaterial.id, quantity: 1, unit: 'G', location: 'denied' }] }, `rls-blocked-receipt-${suffix}`) } catch (error) { blockedComplianceDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'MATERIAL_COMPLIANCE_BLOCKED' }
+
+  // Phase 11: the optimizer is deterministic and advisory until the explicit
+  // review writes a Formula-owned draft. Imports and bulk actions carry their
+  // own bounded confirmation evidence and delegate domain mutations to LabOps.
+  const phase11DraftCountBeforeRun = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const optimizerRun = await advanced.createOptimizerRun(context.context, {
+    parentFormulaVersionId: approvedFormula.id,
+    constraints: { requiredMaterialIds: [], prohibitedMaterialIds: [], replaceMaterialIds: [material.id], minComponentCount: 1, maxComponentCount: 2, complianceMode: 'REPORT_ONLY', requireAvailableInventory: false },
+    objectives: { odorSimilarity: 0.55, briefAlignment: 0.2, availability: 0.15, cost: 0, sensoryEvidence: 0.05, consumerEvidence: 0.05 },
+    solverConfig: { algorithmVersion: 'reformulation/1', candidateLimit: 1, randomSeed: 41 },
+  }, `rls-p11-optimizer-${suffix}`)
+  const duplicateOptimizerRun = await advanced.createOptimizerRun(context.context, {
+    parentFormulaVersionId: approvedFormula.id,
+    constraints: { requiredMaterialIds: [], prohibitedMaterialIds: [], replaceMaterialIds: [material.id], minComponentCount: 1, maxComponentCount: 2, complianceMode: 'REPORT_ONLY', requireAvailableInventory: false },
+    objectives: { odorSimilarity: 0.55, briefAlignment: 0.2, availability: 0.15, cost: 0, sensoryEvidence: 0.05, consumerEvidence: 0.05 },
+    solverConfig: { algorithmVersion: 'reformulation/1', candidateLimit: 1, randomSeed: 41 },
+  }, `rls-p11-optimizer-${suffix}`)
+  const optimizerDetail = await advanced.optimizerDetail(context.context, optimizerRun.id)
+  const optimizerCandidate = optimizerDetail.candidates[0]
+  if (!optimizerCandidate) throw new Error('V2_RLS=FAIL optimizer did not persist an advisory candidate')
+  const phase11DraftCountAfterRun = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
+  const phase11UnrelatedFormulaProject = await formula.createProject(context.context, { name: 'RLS P11 unrelated project', formulaType: 'ACCORD' }, `rls-p11-unrelated-project-${suffix}`)
+  let optimizerProjectMismatchDenied = false
+  try {
+    await advanced.reviewOptimizerCandidate(context.context, optimizerCandidate.id, { decision: 'SAVE_AS_DRAFT', formulaProjectId: phase11UnrelatedFormulaProject.id, rationale: 'A candidate must remain bound to its immutable parent Formula Project.' }, `rls-p11-optimizer-mismatch-${suffix}`)
+  } catch (error) {
+    optimizerProjectMismatchDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'REFORMULATION_CANDIDATE_FORMULA_PROJECT_MISMATCH'
+  }
+  const optimizerReview = await advanced.reviewOptimizerCandidate(context.context, optimizerCandidate.id, { decision: 'SAVE_AS_DRAFT', formulaProjectId: formulaProject.id, rationale: 'Perfumer review accepts the advisory candidate only as a new Formula draft.' }, `rls-p11-optimizer-review-${suffix}`)
+  const duplicateOptimizerReview = await advanced.reviewOptimizerCandidate(context.context, optimizerCandidate.id, { decision: 'SAVE_AS_DRAFT', formulaProjectId: formulaProject.id, rationale: 'Perfumer review accepts the advisory candidate only as a new Formula draft.' }, `rls-p11-optimizer-review-${suffix}`)
+  const phase11DraftCountAfterReview = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    const rows = await tx.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT count(*)::bigint AS count FROM v2_formula_drafts WHERE organization_id = $1', firstOrganizationId!)
+    return Number(rows[0]?.count ?? 0)
+  })
+
+  const phase11ImportCsv = Buffer.from(`name,internalCode,description,cas\nP11 Imported Material ${suffix},P11-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)},Create-only test material,123-45-6\n`, 'utf8').toString('base64')
+  const phase11DryRunImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-materials.csv', contentBase64: phase11ImportCsv, mapping: {}, dryRun: true }, `rls-p11-import-dry-${suffix}`)
+  const phase11MappedImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-materials.csv', contentBase64: phase11ImportCsv, mapping: { name: 'name', internalCode: 'internalCode', description: 'description', cas: 'cas' }, dryRun: true }, `rls-p11-import-mapped-${suffix}`)
+  const phase11ConfirmedImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-materials.csv', contentBase64: phase11ImportCsv, mapping: {}, dryRun: false }, `rls-p11-import-confirmed-${suffix}`)
+  let phase11DryRunCommitDenied = false
+  try { await advanced.commitImport(context.context, phase11DryRunImport.id, { confirmationToken: phase11DryRunImport.confirmationToken! }, `rls-p11-import-dry-commit-${suffix}`) } catch (error) {
+    phase11DryRunCommitDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'IMPORT_DRY_RUN_ONLY'
+  }
+  if (!phase11ConfirmedImport.confirmationToken) throw new Error('V2_RLS=FAIL confirmed import did not return a volatile confirmation token')
+  await advanced.commitImport(context.context, phase11ConfirmedImport.id, { confirmationToken: phase11ConfirmedImport.confirmationToken }, `rls-p11-import-commit-${suffix}`)
+  const phase11CommittedImport = await advanced.importDetail(context.context, phase11ConfirmedImport.id)
+  const phase11RenewalCsv = Buffer.from(`name,internalCode,description\nP11 Renewable Material ${suffix},P11-R-${suffix.replace(/[^a-z0-9]/gi, '').slice(-10)},Confirmation renewal test\n`, 'utf8').toString('base64')
+  const phase11ExpiringImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-renewal.csv', contentBase64: phase11RenewalCsv, mapping: {}, dryRun: false }, `rls-p11-import-expiring-${suffix}`)
+  await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", firstOrganizationId!)
+    await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", firstUserId)
+    await tx.$executeRawUnsafe("UPDATE v2_import_jobs SET confirmation_expires_at = now() - interval '1 minute' WHERE organization_id = $1 AND id = $2", firstOrganizationId!, phase11ExpiringImport.id)
+  })
+  const phase11RenewedImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-renewal.csv', contentBase64: phase11RenewalCsv, mapping: {}, dryRun: false }, `rls-p11-import-renew-${suffix}`)
+  if (!phase11RenewedImport.confirmationToken) throw new Error('V2_RLS=FAIL renewed import did not return a confirmation token')
+  await advanced.commitImport(context.context, phase11RenewedImport.id, { confirmationToken: phase11RenewedImport.confirmationToken }, `rls-p11-import-renew-commit-${suffix}`)
+  const phase11RenewalCommitted = await advanced.importDetail(context.context, phase11RenewedImport.id)
+  const phase11LargeImportCsv = Buffer.from([
+    'name,internalCode',
+    ...Array.from({ length: 201 }, (_, index) => `P11 Bulk Material ${suffix}-${index + 1},P11-B-${suffix.replace(/[^a-z0-9]/gi, '').slice(-8)}-${index + 1}`),
+    '',
+  ].join('\n'), 'utf8').toString('base64')
+  const phase11LargeImport = await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-large.csv', contentBase64: phase11LargeImportCsv, mapping: {}, dryRun: false }, `rls-p11-import-large-${suffix}`)
+  if (!phase11LargeImport.confirmationToken) throw new Error('V2_RLS=FAIL large import did not return a confirmation token')
+  await advanced.commitImport(context.context, phase11LargeImport.id, { confirmationToken: phase11LargeImport.confirmationToken }, `rls-p11-import-large-commit-${suffix}`)
+  const phase11LargeCommitted = await advanced.importDetail(context.context, phase11LargeImport.id)
+  const phase11DuplicateImport = await advanced.createImport(context.context, {
+    kind: 'MATERIALS', format: 'CSV', fileName: 'phase11-materials-retry.csv',
+    contentBase64: Buffer.from(`name,internalCode,description\nP11 Imported Material ${suffix},P11-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)},Different source hash but same create-only key\n`, 'utf8').toString('base64'),
+    mapping: {}, dryRun: true,
+  }, `rls-p11-import-duplicate-${suffix}`)
+  const phase11DuplicateDetail = await advanced.importDetail(context.context, phase11DuplicateImport.id)
+  let phase11SpreadsheetInjectionDenied = false
+  try {
+    await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'unsafe.csv', contentBase64: Buffer.from('name,internalCode\n"=HYPERLINK(""https://unsafe.test"")",P11-UNSAFE\n', 'utf8').toString('base64'), mapping: {}, dryRun: true }, `rls-p11-import-injection-${suffix}`)
+  } catch (error) { phase11SpreadsheetInjectionDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'IMPORT_FORMULA_CELL_DENIED' }
+  let phase11UnknownMappingDenied = false
+  try {
+    await advanced.createImport(context.context, { kind: 'MATERIALS', format: 'CSV', fileName: 'bad-mapping.csv', contentBase64: phase11ImportCsv, mapping: { unexpectedTarget: 'name' }, dryRun: true }, `rls-p11-import-mapping-invalid-${suffix}`)
+  } catch (error) { phase11UnknownMappingDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'IMPORT_MAPPING_INVALID' }
+  const phase11LocalDataOps = await advanced.runDataOps(context.context, { importJobId: phase11ConfirmedImport.id, adapter: 'LOCAL_QUALITY_GATE' }, `rls-p11-dataops-local-${suffix}`)
+  const phase11VexoDataOps = await advanced.runDataOps(context.context, { importJobId: phase11ConfirmedImport.id, adapter: 'VEXO' }, `rls-p11-dataops-vexo-${suffix}`)
+  const phase11ImportedMaterial = (await lab.listMaterials(context.context)).find((item) => item.internalCode === `P11-${suffix.replace(/[^a-z0-9]/gi, '').slice(-12)}`)
+  if (!phase11ImportedMaterial) throw new Error('V2_RLS=FAIL committed import did not create its material through Lab Operations')
+  const phase11BulkPreview = await advanced.previewBulkOperation(context.context, { kind: 'MATERIAL_STATUS', targetIds: [phase11ImportedMaterial.id], payload: { status: 'ACTIVE' }, rationale: 'Activate the create-only material through the governed bulk confirmation flow.' }, `rls-p11-bulk-preview-${suffix}`)
+  let phase11BulkInvalidConfirmationDenied = false
+  try { await advanced.commitBulkOperation(context.context, phase11BulkPreview.id, { confirmationToken: 'x'.repeat(64) }, `rls-p11-bulk-invalid-${suffix}`) } catch (error) {
+    phase11BulkInvalidConfirmationDenied = error instanceof Error && 'code' in error && (error as { code?: string }).code === 'BULK_CONFIRMATION_INVALID'
+  }
+  await advanced.commitBulkOperation(context.context, phase11BulkPreview.id, { confirmationToken: phase11BulkPreview.confirmationToken }, `rls-p11-bulk-commit-${suffix}`)
+  const phase11BulkMaterial = (await lab.listMaterials(context.context)).find((item) => item.id === phase11ImportedMaterial.id)
   const firstLots = await lab.listLots(context.context)
   const secondContext = await service.contextFromToken(second.rawSessionToken, `${secondSlug}.olfactoryops.com`)
   const phase9SecondBootstrap = await agent.bootstrap(secondContext.context)
   const phase9RowsInFirstTenant = await phase9TenantScopedCounts(firstOrganizationId!, firstUserId!, firstOrganizationId!)
   const phase9RowsVisibleFromSecondTenant = await phase9TenantScopedCounts(secondOrganizationId!, secondContext.context.userId, firstOrganizationId!)
+  const phase11RowsInFirstTenant = await phase11TenantScopedCounts(firstOrganizationId!, firstUserId!, firstOrganizationId!)
+  const phase11RowsVisibleFromSecondTenant = await phase11TenantScopedCounts(secondOrganizationId!, secondContext.context.userId, firstOrganizationId!)
   const secondMaterials = await lab.listMaterials(secondContext.context)
   const secondOffers = await lab.listSupplierOffers(secondContext.context)
   const deniedCode = async (action: () => Promise<unknown>, expected: string) => {
@@ -1405,6 +1586,9 @@ try {
   crossTenantProductionDenied = await deniedCode(() => production.detail(secondContext.context, p8Order.id), 'PRODUCTION_ORDER_NOT_FOUND')
   crossTenantFinishedGoodDenied = await deniedCode(() => production.finishedGoodGenealogy(secondContext.context, p8Release.finishedGoodLot.id), 'FINISHED_GOOD_LOT_NOT_FOUND')
   const crossTenantCommerceDenied = await deniedCode(() => commerce.detail(secondContext.context, commerceOrder.id), 'SALES_ORDER_NOT_FOUND')
+  const crossTenantOptimizerDenied = await deniedCode(() => advanced.optimizerDetail(secondContext.context, optimizerRun.id), 'OPTIMIZER_RUN_NOT_FOUND')
+  const crossTenantImportDenied = await deniedCode(() => advanced.importDetail(secondContext.context, phase11ConfirmedImport.id), 'IMPORT_JOB_NOT_FOUND')
+  const crossTenantBulkDenied = await deniedCode(() => advanced.commitBulkOperation(secondContext.context, phase11BulkPreview.id, { confirmationToken: phase11BulkPreview.confirmationToken }, `rls-p11-cross-bulk-${suffix}`), 'BULK_OPERATION_NOT_FOUND')
   const commerceRowsVisibleFromSecondTenant = await appClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SELECT set_config('app.organization_id', $1, true)", secondOrganizationId)
     await tx.$executeRawUnsafe("SELECT set_config('app.user_id', $1, true)", secondContext.context.userId)
@@ -1793,7 +1977,43 @@ try {
     && crossTenantCommerceDenied
     && commerceRowsVisibleFromSecondTenant === 0
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass || !phase10Pass) {
+  const phase11RowsPresent = phase11TenantScopedTables.every((table) => phase11RowsInFirstTenant[table] > 0)
+  const phase11CrossTenantRowsDenied = phase11TenantScopedTables.every((table) => phase11RowsVisibleFromSecondTenant[table] === 0)
+  const phase11Pass = optimizerRun.status === 'COMPLETED'
+    && duplicateOptimizerRun.id === optimizerRun.id
+    && optimizerCandidate.status === 'ADVISORY'
+    && Array.isArray(optimizerCandidate.componentProposal)
+    && optimizerCandidate.componentProposal.every((component) => component.materialId !== material.id)
+    && phase11DraftCountAfterRun === phase11DraftCountBeforeRun
+    && optimizerProjectMismatchDenied
+    && optimizerReview.status === 'SAVED_AS_DRAFT'
+    && duplicateOptimizerReview.reviewId === optimizerReview.reviewId
+    && phase11DraftCountAfterReview === phase11DraftCountBeforeRun + 1
+    && phase11DryRunImport.id !== phase11ConfirmedImport.id
+    && phase11MappedImport.id !== phase11DryRunImport.id
+    && phase11DryRunCommitDenied
+    && phase11CommittedImport.job.status === 'COMMITTED'
+    && phase11CommittedImport.rows.every((row) => row.status === 'COMMITTED')
+    && phase11RenewedImport.id === phase11ExpiringImport.id
+    && phase11RenewalCommitted.job.status === 'COMMITTED'
+    && phase11LargeCommitted.job.status === 'COMMITTED'
+    && phase11LargeCommitted.job.committedRowCount === 201
+    && phase11DuplicateDetail.rows.length === 1
+    && phase11DuplicateDetail.rows[0]?.status === 'DUPLICATE'
+    && phase11SpreadsheetInjectionDenied
+    && phase11UnknownMappingDenied
+    && phase11LocalDataOps.status === 'SUCCEEDED'
+    && phase11VexoDataOps.status === 'NOT_CONFIGURED'
+    && phase11BulkInvalidConfirmationDenied
+    && phase11BulkMaterial?.status === 'ACTIVE'
+    && legacyAdvancedPolicyBackfill
+    && phase11RowsPresent
+    && phase11CrossTenantRowsDenied
+    && crossTenantOptimizerDenied
+    && crossTenantImportDenied
+    && crossTenantBulkDenied
+
+  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass || !phase10Pass || !phase11Pass) {
     throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({
       crossTenantDenied,
       unscopedMemberships,
@@ -1808,6 +2028,16 @@ try {
       phase8Pass,
       phase9Pass,
       phase10Pass,
+      phase11Pass,
+      phase11Diagnostic: {
+        optimizer: { run: optimizerRun, duplicate: duplicateOptimizerRun.id === optimizerRun.id, candidate: optimizerCandidate, draftCounts: { before: phase11DraftCountBeforeRun, afterRun: phase11DraftCountAfterRun, afterReview: phase11DraftCountAfterReview }, projectMismatchDenied: optimizerProjectMismatchDenied, review: optimizerReview, duplicateReview: duplicateOptimizerReview },
+        imports: { dry: phase11DryRunImport, mapped: phase11MappedImport, confirmed: phase11ConfirmedImport, dryCommitDenied: phase11DryRunCommitDenied, committed: phase11CommittedImport.job.status, renewal: { before: phase11ExpiringImport, after: phase11RenewedImport, committed: phase11RenewalCommitted.job.status }, large: { status: phase11LargeCommitted.job.status, committedRows: phase11LargeCommitted.job.committedRowCount }, duplicateRows: phase11DuplicateDetail.rows, injectionDenied: phase11SpreadsheetInjectionDenied, unknownMappingDenied: phase11UnknownMappingDenied },
+        dataOps: { local: phase11LocalDataOps, vexo: phase11VexoDataOps },
+        bulk: { preview: phase11BulkPreview, invalidConfirmationDenied: phase11BulkInvalidConfirmationDenied, material: phase11BulkMaterial },
+        legacyAdvancedPolicyBackfill,
+        rows: { first: phase11RowsInFirstTenant, second: phase11RowsVisibleFromSecondTenant },
+        crossTenant: { optimizer: crossTenantOptimizerDenied, import: crossTenantImportDenied, bulk: crossTenantBulkDenied },
+      },
       phase8Diagnostic: {
         plan: p8Plan.status,
         allocation: p8AllocationIntegration?.status,
@@ -2097,6 +2327,32 @@ try {
       rawInventoryMovementsChanged: commerceRawMovementCountBefore !== commerceRawMovementCountAfter,
       crossTenantCommerceDenied,
       crossTenantRows: commerceRowsVisibleFromSecondTenant,
+    },
+    phase11: {
+      optimizer: {
+        run: optimizerRun.status,
+        advisory: optimizerCandidate.status,
+        duplicateRun: duplicateOptimizerRun.id === optimizerRun.id,
+        projectMismatchDenied: optimizerProjectMismatchDenied,
+        formulaDraftCreatedOnlyAfterReview: phase11DraftCountAfterRun === phase11DraftCountBeforeRun && phase11DraftCountAfterReview === phase11DraftCountBeforeRun + 1,
+      },
+      imports: {
+        dryRunDistinct: phase11DryRunImport.id !== phase11ConfirmedImport.id,
+        mappingSnapshotDistinct: phase11MappedImport.id !== phase11DryRunImport.id,
+        dryRunCommitDenied: phase11DryRunCommitDenied,
+        committed: phase11CommittedImport.job.status,
+        confirmationRenewed: phase11RenewedImport.id === phase11ExpiringImport.id && phase11RenewalCommitted.job.status === 'COMMITTED',
+        largeCreateOnlyCommittedRows: phase11LargeCommitted.job.committedRowCount,
+        createOnlyDuplicate: phase11DuplicateDetail.rows[0]?.status,
+        formulaInjectionDenied: phase11SpreadsheetInjectionDenied,
+        unknownMappingDenied: phase11UnknownMappingDenied,
+      },
+      dataOps: { local: phase11LocalDataOps.status, vexo: phase11VexoDataOps.status },
+      bulk: { invalidConfirmationDenied: phase11BulkInvalidConfirmationDenied, targetStatus: phase11BulkMaterial?.status },
+      legacyPolicyBackfill: legacyAdvancedPolicyBackfill,
+      rowsInFirstTenant: phase11RowsInFirstTenant,
+      rowsVisibleFromSecondTenant: phase11RowsVisibleFromSecondTenant,
+      crossTenant: { optimizer: crossTenantOptimizerDenied, import: crossTenantImportDenied, bulk: crossTenantBulkDenied },
     },
   }))
 } finally {

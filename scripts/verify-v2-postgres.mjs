@@ -22,6 +22,7 @@ const migrations = [
   'infra/postgres/migrations/0014_phase8_finished_good_hold_and_rework.sql',
   'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql',
   'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql',
+  'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -373,6 +374,67 @@ try {
         AND (pg_get_constraintdef(oid) ILIKE '%v2_shipments%' OR pg_get_constraintdef(oid) ILIKE '%v2_inventory_reservations%')
     `, phase10Tables.map((table) => `public.${table}`))
     if (phase10ForbiddenReferences.length) throw new Error('Phase 10 must not reuse procurement shipments or raw inventory reservations')
+    const phase11Tables = [
+      'v2_reformulation_runs', 'v2_reformulation_candidates', 'v2_reformulation_candidate_reviews',
+      'v2_import_jobs', 'v2_import_rows', 'v2_import_commits', 'v2_dataops_runs', 'v2_bulk_operations',
+    ]
+    const phase11Rls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, phase11Tables)
+    if (phase11Rls.length !== phase11Tables.length || phase11Rls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Phase 11 table or forced RLS policy is missing')
+    }
+    const phase11Constraints = await client.$queryRawUnsafe(`
+      SELECT conname, pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname = ANY($1::text[])
+    `, [
+      'v2_reformulation_runs_formula_tenant_fk',
+      'v2_reformulation_candidates_run_tenant_fk',
+      'v2_reformulation_candidates_draft_tenant_fk',
+      'v2_reformulation_candidate_reviews_candidate_tenant_fk',
+      'v2_reformulation_candidate_reviews_project_tenant_fk',
+      'v2_reformulation_candidate_reviews_project_check',
+      'v2_import_jobs_source_validation_mode_unique',
+      'v2_import_rows_job_tenant_fk',
+      'v2_import_commits_job_tenant_fk',
+      'v2_dataops_runs_job_tenant_fk',
+      'v2_bulk_operations_execution_check',
+    ])
+    if (phase11Constraints.length !== 11) throw new Error('Phase 11 optimizer, import, bulk, or tenant constraints are missing')
+    const phase11Definitions = new Map(phase11Constraints.map((row) => [row.conname, String(row.definition).toLowerCase()]))
+    const importUniqueness = phase11Definitions.get('v2_import_jobs_source_validation_mode_unique')
+    if (!importUniqueness?.includes('dry_run') || !importUniqueness.includes('validation_hash')) {
+      throw new Error('Phase 11 import uniqueness must distinguish dry-run mode and validation snapshots')
+    }
+    if (!phase11Definitions.get('v2_reformulation_candidate_reviews_project_check')?.includes('save_as_draft')) {
+      throw new Error('Phase 11 candidate review decision/project invariant is missing')
+    }
+    const phase11Columns = await client.$queryRawUnsafe(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND ((table_name = 'v2_import_jobs' AND column_name = 'confirmation_expires_at')
+          OR (table_name = 'v2_bulk_operations' AND column_name = 'confirmation_expires_at'))
+    `)
+    if (phase11Columns.length !== 2) throw new Error('Phase 11 confirmation expiry columns are missing')
+    const phase11Triggers = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger
+      WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+    `, ['v2_reformulation_candidate_reviews_append_only', 'v2_import_commits_append_only'])
+    if (phase11Triggers.length !== 2) throw new Error('Phase 11 review or import-commit audit evidence is not append-only')
+    const phase11FormulaOrigin = await client.$queryRawUnsafe(`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'v2_formula_drafts'::regclass
+        AND conname = 'v2_formula_drafts_origin_type_check'
+    `)
+    if (phase11FormulaOrigin.length !== 1 || !String(phase11FormulaOrigin[0].definition).includes("'REFORMULATION_OPTIMIZER'")) {
+      throw new Error('Phase 11 Formula origin type is not registered')
+    }
   } finally {
     await client.$disconnect()
   }

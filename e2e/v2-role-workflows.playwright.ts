@@ -40,6 +40,8 @@ const commercePermissions = [
 type CommercePermission = (typeof commercePermissions)[number]
 const agentPermissions = ['agent.execute', 'agent.view', 'agent.observe', 'agent.evaluate', 'agent.confirmWrite', 'agent.manageTools'] as const
 type AgentPermission = (typeof agentPermissions)[number]
+const advancedPermissions = ['optimizer.view', 'optimizer.run', 'optimizer.review', 'imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view', 'dataops.run'] as const
+type AdvancedPermission = (typeof advancedPermissions)[number]
 const agentAllowed: Record<Role, readonly AgentPermission[]> = {
   Owner: agentPermissions,
   Admin: agentPermissions,
@@ -82,6 +84,20 @@ const commerceAllowed: Record<Role, readonly CommercePermission[]> = {
   Finance: ['commerce.view', 'orders.view', 'costing.view', 'costing.viewMargin', 'documents.view'],
   Viewer: [],
 }
+const advancedAllowed: Record<Role, readonly AdvancedPermission[]> = {
+  Owner: advancedPermissions,
+  Admin: advancedPermissions,
+  'Lab Manager': ['imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view', 'dataops.run'],
+  Perfumer: ['optimizer.view', 'optimizer.run', 'optimizer.review'],
+  'R&D Scientist': ['optimizer.view', 'optimizer.run', 'dataops.view'],
+  'Lab Technician': [],
+  Procurement: ['imports.view', 'imports.preview', 'imports.commit', 'bulk.preview', 'bulk.execute', 'dataops.view'],
+  'Sensory Panelist': [],
+  Brand: [],
+  Supplier: [],
+  Finance: [],
+  Viewer: [],
+}
 const expected: Record<Role, { required: string[]; forbidden: string[] }> = {
   Owner: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'observability.view', 'privacy.export.self', 'trials.viewAll'], forbidden: [] },
   Admin: { required: ['tenant.view', 'members.view', 'members.invite', 'billing.capabilities', 'privacy.export.self', 'trials.viewAll'], forbidden: ['observability.view'] },
@@ -114,6 +130,7 @@ for (const role of roles) {
       for (const permission of productionPermissions) expect(payload.capabilities[permission], `${role} production capability ${permission}`).toBe(productionAllowed[role].includes(permission))
       for (const permission of commercePermissions) expect(payload.capabilities[permission], `${role} commerce capability ${permission}`).toBe(commerceAllowed[role].includes(permission))
       for (const permission of agentPermissions) expect(payload.capabilities[permission], `${role} agent capability ${permission}`).toBe(agentAllowed[role].includes(permission))
+      for (const permission of advancedPermissions) expect(payload.capabilities[permission], `${role} advanced capability ${permission}`).toBe(advancedAllowed[role].includes(permission))
 
       const canViewProduction = productionAllowed[role].includes('production.view')
       const production = await page.request.get('/api/v1/v2/production')
@@ -141,6 +158,11 @@ for (const role of roles) {
         Origin: 'http://127.0.0.1:4173',
         'X-CSRF-Token': csrfToken,
         'Idempotency-Key': `p10-role-boundary-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${label}`,
+      })
+      const advancedHeaders = (label: string) => ({
+        Origin: 'http://127.0.0.1:4173',
+        'X-CSRF-Token': csrfToken,
+        'Idempotency-Key': `p11-role-boundary-${role.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${label}`,
       })
       const expectAgentProbe = (response: { status(): number }, permission: AgentPermission, label: string, permitted: readonly number[]) => {
         // Probe IDs and bodies are deliberately invalid/non-persistent. A role
@@ -259,6 +281,28 @@ for (const role of roles) {
         // the role matrix can prove authorization without persisting Commerce data.
         expect(response.status(), `${role} ${probe.label} authorization boundary`).toBe(permitted ? ('allowedStatus' in probe ? probe.allowedStatus : 422) : 403)
       }
+      const optimizerRuns = await page.request.get('/api/v1/v2/advanced/optimizer/runs')
+      expect(optimizerRuns.status(), `${role} optimizer projection`).toBe(payload.capabilities['optimizer.view'] ? 200 : 403)
+      const importJobs = await page.request.get('/api/v1/v2/advanced/imports')
+      expect(importJobs.status(), `${role} import projection`).toBe(payload.capabilities['imports.view'] ? 200 : 403)
+      const dataOpsRuns = await page.request.get('/api/v1/v2/advanced/dataops/runs')
+      expect(dataOpsRuns.status(), `${role} DataOps projection`).toBe(payload.capabilities['dataops.view'] ? 200 : 403)
+      const advancedMutationProbes = [
+        { label: 'optimizer', permissions: ['optimizer.run', 'formula.viewSensitive', 'materials.view'], path: 'optimizer/runs' },
+        { label: 'import preview', permissions: ['imports.preview'], path: 'imports' },
+        { label: 'dataops', permissions: ['dataops.run', 'imports.view'], path: 'dataops/runs' },
+        { label: 'bulk preview', permissions: ['bulk.preview'], path: 'bulk/preview' },
+      ] as const
+      for (const probe of advancedMutationProbes) {
+        const response = await page.request.post(`/api/v1/v2/advanced/${probe.path}`, {
+          data: {},
+          headers: advancedHeaders(probe.label.replace(/[^a-z0-9]+/gi, '-')),
+        })
+        const permitted = probe.permissions.every((permission) => payload.capabilities[permission] === true)
+        // Empty contracts prove authorization happens before validation and do
+        // not create an optimizer run, import, DataOps record, or bulk job.
+        expect(response.status(), `${role} ${probe.label} authorization boundary`).toBe(permitted ? 422 : 403)
+      }
       const genealogy = await page.request.get(`/api/v1/v2/production/finished-goods/${probeId}/genealogy`)
       const canViewFinishedGoodGenealogy = payload.capabilities['production.finishedGoods.view'] === true && payload.capabilities['production.documents.view'] === true
       expect(genealogy.status(), `${role} finished-good genealogy authorization boundary`).toBe(canViewFinishedGoodGenealogy ? 404 : 403)
@@ -299,6 +343,17 @@ for (const role of roles) {
       for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {
         await page.setViewportSize(viewport)
         expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${role} production route has horizontal overflow at ${viewport.width}px`).toBe(true)
+      }
+      const canAccessAdvanced = advancedAllowed[role].some((permission) => ['optimizer.view', 'imports.view', 'dataops.view', 'bulk.preview'].includes(permission))
+      const advancedNavigation = page.locator('.v2-workspace-nav').getByRole('button', { name: 'Optimizer & DataOps', exact: true })
+      if (canAccessAdvanced) await expect(advancedNavigation).toBeVisible()
+      else await expect(advancedNavigation).toHaveCount(0)
+      await page.goto('/v2/workspace/advanced')
+      if (canAccessAdvanced) await expect(page.getByTestId('v2-advanced-workspace')).toBeVisible()
+      else await expect(page.getByText('This section is not available for your role.')).toBeVisible()
+      for (const viewport of [{ width: 320, height: 720 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1280, height: 900 }, { width: 1440, height: 960 }]) {
+        await page.setViewportSize(viewport)
+        expect(await page.locator('body').evaluate((element) => element.scrollWidth <= element.clientWidth + 1), `${role} advanced route has horizontal overflow at ${viewport.width}px`).toBe(true)
       }
       const commerceNavigation = page.locator('.v2-workspace-nav').getByRole('button', { name: 'Commerce', exact: true })
       if (canViewCommerce || canViewOrders) await expect(commerceNavigation).toBeVisible()
