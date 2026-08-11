@@ -3,11 +3,15 @@ import {
   scientificContainerDiagnostic,
   scientificContainerEnvironment,
   scientificContainerHealthEndpoint,
+  scientificContainerStartupPollIntervalMs,
+  scientificContainerStartupTimeoutMs,
 } from './scientific-container-env.js'
 
 describe('scientificContainerEnvironment', () => {
   it('uses the only bounded health endpoint for Container startup probes', () => {
     expect(scientificContainerHealthEndpoint).toBe('localhost/health')
+    expect(scientificContainerStartupTimeoutMs).toBe(90_000)
+    expect(scientificContainerStartupPollIntervalMs).toBe(1_000)
   })
 
   it('maps the runtime secret only to the image service variable', () => {
@@ -28,6 +32,10 @@ describe('scientificContainerEnvironment', () => {
     })
     expect(scientificContainerDiagnostic(new Error('startup details secret=never-log'))).toEqual({
       code: 'SCIENTIFIC_CONTAINER_STARTUP_FAILED',
+      exitCode: null,
+    })
+    expect(scientificContainerDiagnostic('Failed to verify port 8099 is available after 20000ms, last error: opaque')).toEqual({
+      code: 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE',
       exitCode: null,
     })
   })

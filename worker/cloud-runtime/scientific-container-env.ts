@@ -3,6 +3,8 @@
  * the Cloudflare Worker binding name private to the runtime boundary.
  */
 export const scientificContainerHealthEndpoint = 'localhost/health'
+export const scientificContainerStartupTimeoutMs = 90_000
+export const scientificContainerStartupPollIntervalMs = 1_000
 
 export type ScientificContainerDiagnostic = {
   code:
@@ -29,13 +31,13 @@ export function scientificContainerEnvironment(sharedSecret: string | undefined)
  * stable error class and the process exit code for staging diagnostics.
  */
 export function scientificContainerDiagnostic(error: unknown): ScientificContainerDiagnostic {
-  const message = error instanceof Error ? error.message : ''
+  const message = typeof error === 'string' ? error : error instanceof Error ? error.message : ''
   const exitCode = Number(message.match(/exit code:\s*(\d+)/i)?.[1])
 
   if (Number.isInteger(exitCode)) {
     return { code: 'SCIENTIFIC_CONTAINER_EXITED_BEFORE_HEALTHY', exitCode }
   }
-  if (/not listening|port/i.test(message)) {
+  if (/not listening|port|verify port/i.test(message)) {
     return { code: 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE', exitCode: null }
   }
   if (/start|health/i.test(message)) {

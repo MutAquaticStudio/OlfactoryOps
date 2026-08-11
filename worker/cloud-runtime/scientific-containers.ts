@@ -3,6 +3,8 @@ import {
   scientificContainerDiagnostic,
   scientificContainerEnvironment,
   scientificContainerHealthEndpoint,
+  scientificContainerStartupPollIntervalMs,
+  scientificContainerStartupTimeoutMs,
 } from './scientific-container-env.js'
 
 type CloudRuntimeSecretBindings = {
@@ -38,6 +40,20 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
         reason,
       }),
     )
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    if (this.defaultPort === undefined) throw new Error('SCIENTIFIC_CONTAINER_PORT_NOT_CONFIGURED')
+    await this.startAndWaitForPorts({
+      ports: this.defaultPort,
+      cancellationOptions: {
+        abort: request.signal,
+        instanceGetTimeoutMS: scientificContainerStartupTimeoutMs,
+        portReadyTimeoutMS: scientificContainerStartupTimeoutMs,
+        waitInterval: scientificContainerStartupPollIntervalMs,
+      },
+    })
+    return super.fetch(request)
   }
 }
 
