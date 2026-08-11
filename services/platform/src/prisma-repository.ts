@@ -1,4 +1,4 @@
-import { Prisma, PrismaClient } from '@prisma/client'
+import { PrismaClient } from '@prisma/client'
 import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
 import { SignupWriteError, type PlatformRepository, type RepositoryContext, type SessionCreate, type SignupSeed } from './repository.js'
 import type { ConsentRecord, ExportRequest, HostnameRecord, InvitationRecord, MemberProjection, NotificationDelivery, NotificationPreference, ObservabilityProjection, PushSubscriptionInput, PlatformRole } from '../../../packages/contracts/src/index.js'
@@ -81,30 +81,28 @@ export class PrismaPlatformRepository implements PlatformRepository {
     // Prisma's Worker adapter serializes JSON write results differently from its
     // Node runtime. Keep the bootstrap write RLS-scoped, parameterized, and
     // batched so a tenant signup does not make one Hyperdrive round trip per role.
-    const rolePolicies = Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })
-    const rolePolicyRows = rolePolicies.map(([role, permissions]) => Prisma.sql`(
-      ${`policy_${input.organization.id}_${role}`},
-      ${input.organization.id},
-      ${role},
-      jsonb_build_array(${Prisma.join(permissions)}),
-      1,
-      ${input.user.id}
-    )`)
+    const rolePolicies = Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions }).map(([role, permissions]) => ({
+      id: `policy_${input.organization.id}_${role}`,
+      role_key: role,
+      permissions,
+    }))
     await signupWrite('ROLE_POLICY', () => this.client.$executeRaw`
       INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by)
-      VALUES ${Prisma.join(rolePolicyRows)}
+      SELECT payload.id, ${input.organization.id}, payload.role_key, payload.permissions, 1, ${input.user.id}
+      FROM jsonb_to_recordset(CAST(${JSON.stringify(rolePolicies)} AS jsonb))
+      AS payload(id TEXT, role_key TEXT, permissions JSONB)
     `)
     await signupWrite('SUBSCRIPTION', () => this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } }))
-    const entitlementRows = Object.entries(input.billing.capabilities).map(([capability, enabled]) => Prisma.sql`(
-      ${`ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`},
-      ${input.organization.id},
-      ${capability},
-      ${enabled},
-      'MANAGED_BETA'
-    )`)
+    const entitlements = Object.entries(input.billing.capabilities).map(([capability, enabled]) => ({
+      id: `ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`,
+      capability,
+      enabled,
+    }))
     await signupWrite('ENTITLEMENT', () => this.client.$executeRaw`
       INSERT INTO v2_entitlements (id, organization_id, capability, enabled, source)
-      VALUES ${Prisma.join(entitlementRows)}
+      SELECT payload.id, ${input.organization.id}, payload.capability, payload.enabled, 'MANAGED_BETA'
+      FROM jsonb_to_recordset(CAST(${JSON.stringify(entitlements)} AS jsonb))
+      AS payload(id TEXT, capability TEXT, enabled BOOLEAN)
     `)
     return { user: input.user, organization: input.organization, membership: input.membership, hostname: input.hostname }
   }
