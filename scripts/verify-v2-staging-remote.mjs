@@ -21,7 +21,7 @@ const roles = [
   'Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician',
   'Procurement', 'Sensory Panelist', 'Brand', 'Supplier', 'Finance', 'Viewer',
 ]
-const materialViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician', 'Procurement', 'Finance', 'Viewer'])
+const materialViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician', 'Procurement', 'Viewer'])
 const inventoryViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Lab Technician', 'Viewer'])
 
 function fail(code) { throw new Error(`REMOTE_STAGING_E2E=FAIL ${code}`) }
@@ -143,8 +143,15 @@ async function main() {
 
   async function cleanup() {
     if (!fixtureOrganizationIds.length) return
-    await client.query('DELETE FROM v2_organizations WHERE id = ANY($1::text[])', [fixtureOrganizationIds])
-    await client.query('DELETE FROM v2_users WHERE id = ANY($1::text[])', [fixtureUserIds])
+    let phase = 'ORGANIZATIONS'
+    try {
+      await client.query('DELETE FROM v2_organizations WHERE id = ANY($1::text[])', [fixtureOrganizationIds])
+      phase = 'USERS'
+      await client.query('DELETE FROM v2_users WHERE id = ANY($1::text[])', [fixtureUserIds])
+    } catch (error) {
+      console.log(JSON.stringify({ remoteStagingCleanupFailure: { phase, category: postgresFailureCategory(error) } }))
+      throw error
+    }
   }
 
   let executionError
@@ -231,7 +238,7 @@ async function main() {
   try {
     await cleanup()
   } catch {
-    executionError = new Error('REMOTE_STAGING_E2E=FAIL fixture_cleanup_failed')
+    if (!executionError) executionError = new Error('REMOTE_STAGING_E2E=FAIL fixture_cleanup_failed')
   }
   await client.end().catch(() => undefined)
   if (executionError) throw executionError
