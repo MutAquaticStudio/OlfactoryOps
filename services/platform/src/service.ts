@@ -41,6 +41,15 @@ function addDays(date: Date, days: number) { return new Date(date.getTime() + da
 function slugify(value: string) { return value.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63) }
 function normalizeEmail(value: string) { return value.trim().toLowerCase() }
 function normalizeHost(value: string) { return value.trim().toLowerCase().replace(/\.$/, '') }
+
+async function signupTransactionStep<T>(step: string, operation: () => Promise<T>) {
+  try {
+    return await operation()
+  } catch (error) {
+    if (error instanceof SignupWriteError) throw error
+    throw new SignupWriteError(`SIGNUP_WRITE_${step}_FAILED`)
+  }
+}
 function correlationId() { return `v2_${randomUUID()}` }
 
 export type PlatformServiceConfig = {
@@ -111,10 +120,10 @@ export class PlatformService {
     try {
       seed = await this.repository.transaction(async (tx) => {
         const created = await tx.createSignup({ user, organization, membership, hostname, rolePermissions: DEFAULT_ROLE_PERMISSIONS.Owner, rolePolicies: DEFAULT_ROLE_PERMISSIONS, billing })
-        await tx.createSession(sessionTokens.record)
-        await tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId, organizationId, email, tokenHash: hashSecret(verificationToken, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt })
-        await tx.enqueueNotification({ userId, organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${userId}:${createdAt}`, payload: { email, verificationRequired: true } })
-        await tx.appendAudit({ organizationId, actorUserId: userId, action: 'platform.signup', outcome: 'allowed', subjectType: 'organization', subjectId: organizationId, correlationId: correlationId() })
+        await signupTransactionStep('SESSION', () => tx.createSession(sessionTokens.record))
+        await signupTransactionStep('EMAIL_VERIFICATION', () => tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId, organizationId, email, tokenHash: hashSecret(verificationToken, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt }))
+        await signupTransactionStep('NOTIFICATION', () => tx.enqueueNotification({ userId, organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${userId}:${createdAt}`, payload: { email, verificationRequired: true } }))
+        await signupTransactionStep('AUDIT', () => tx.appendAudit({ organizationId, actorUserId: userId, action: 'platform.signup', outcome: 'allowed', subjectType: 'organization', subjectId: organizationId, correlationId: correlationId() }))
         return created
       })
     } catch (error) {
