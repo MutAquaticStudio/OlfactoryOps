@@ -24,6 +24,7 @@ const migrations = [
   'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql',
   'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql',
   'infra/postgres/migrations/0018_cloud_native_runtime.sql',
+  'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -140,6 +141,11 @@ try {
       WHERE tgrelid = 'v2_cloud_job_events'::regclass AND tgname = 'v2_cloud_job_events_append_only_trigger' AND NOT tgisinternal
     `)
     if (cloudRuntimeTrigger.length !== 1) throw new Error('Cloud runtime job event append-only trigger is missing')
+    const cloudScientificInput = await client.$queryRawUnsafe(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'v2_scientific_jobs' AND column_name = 'cloud_input'
+    `)
+    if (cloudScientificInput.length !== 1) throw new Error('Cloud scientific dispatch input snapshot column is missing')
     const phase8Rls = await client.$queryRawUnsafe(`
       SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
       FROM pg_class c

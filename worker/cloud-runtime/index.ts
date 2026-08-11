@@ -1,6 +1,7 @@
 import { cloudJobEnvelopeSchema, safeCloudError, type CloudJobEnvelope } from './contracts.js'
 import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
+import { CloudQueueDispatcher } from './queue-dispatcher.js'
 import { ScientificFeatureContainer, ScientificModelContainer } from './scientific-containers.js'
 import { ScientificJobWorkflow, type CloudScientificEnv } from './scientific-workflow.js'
 
@@ -60,6 +61,23 @@ export default {
         return json(200, { status: 'ok', runtime: 'cloud-runtime/v1', database: 'hyperdrive', environment: env.RELEASE_ENVIRONMENT ?? 'unconfigured' })
       } catch {
         return json(503, { status: 'blocked', code: 'HYPERDRIVE_NOT_CONFIGURED' })
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/internal/scientific-dispatch') {
+      if (env.RELEASE_ENVIRONMENT !== 'staging' || request.headers.get('x-olfactoryops-internal-dispatch') !== 'cloud-runtime/v1') {
+        return json(403, { code: 'INTERNAL_DISPATCH_DENIED' })
+      }
+      try {
+        const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+        if (!contentType.includes('application/json')) return json(415, { code: 'INVALID_CONTENT_TYPE' })
+        const body = await request.text()
+        if (body.length > 16_384) return json(413, { code: 'DISPATCH_TOO_LARGE' })
+        const job = cloudJobEnvelopeSchema.parse(JSON.parse(body))
+        if (job.jobType !== 'SCIENTIFIC_FEATURE' && job.jobType !== 'SCIENTIFIC_MODEL') return json(422, { code: 'CLOUD_JOB_HANDLER_NOT_CONFIGURED' })
+        const result = await new CloudQueueDispatcher(new CloudJobLedger(createHyperdrivePrisma(env)), env).dispatch(job)
+        return json(202, result)
+      } catch (error) {
+        return json(500, { code: safeCloudError(error) })
       }
     }
     return json(404, { code: 'NOT_FOUND' })

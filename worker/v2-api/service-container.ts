@@ -11,9 +11,12 @@ import { ConsumerIntelligenceService } from '../../services/sentiment/src/consum
 import { ModelDatasetService } from '../../services/scientific/src/model-dataset-service.js'
 import { OlfactoryIntelligenceService } from '../../services/scientific/src/olfactory-intelligence-service.js'
 import { ScientificFeatureService, ScientificRuntimeUnavailable } from '../../services/scientific/src/service.js'
+import { CloudflareScientificDispatcher } from './cloud-scientific-dispatch.js'
 
 export type V2ApiServiceEnv = {
   HYPERDRIVE: Hyperdrive
+  R2_ARTIFACTS: R2Bucket
+  CLOUD_RUNTIME: Fetcher
   V2_WORKSPACE_BASE_DOMAIN: string
   V2_SESSION_PEPPER: string
   V2_PASSWORD_PEPPER: string
@@ -65,7 +68,7 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
     },
     platform,
     lab,
-    scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable()),
+    scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable(), new CloudflareScientificDispatcher(env)),
     modelDataset: new ModelDatasetService(prisma, platform),
     olfactory: new OlfactoryIntelligenceService(prisma, platform),
     consumer: new ConsumerIntelligenceService(prisma, platform),

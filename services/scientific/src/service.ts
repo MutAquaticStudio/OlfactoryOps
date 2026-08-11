@@ -10,12 +10,20 @@ import {
 } from '../../../packages/contracts/src/scientific.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
+import type { CloudScientificDispatcher } from './cloud-dispatch.js'
 
 type Transaction = Prisma.TransactionClient
 type JsonRecord = Record<string, unknown>
 type IdempotencyRow = { requestHash: string; response: unknown }
 type MaterialRow = { id: string; molecularIdentityId: string | null }
 type IdentityRow = { id: string; canonicalSmiles: string; structureHash: string; rdkitVersion: string; standardizationVersion: string }
+type CloudScientificJobRow = {
+  id: string
+  materialId: string
+  correlationId: string
+  requestHash: string
+  cloudInput: { canonicalSmiles: string; featureKinds: ScientificFeatureRequest['featureKinds'] } | null
+}
 
 export interface ScientificRuntime {
   normalize(input: StructureNormalizeRequest): Promise<ScientificRuntimeResponse>
@@ -95,6 +103,7 @@ export class ScientificFeatureService {
     private readonly client: PrismaClient,
     private readonly platform: PlatformService,
     private readonly runtime: ScientificRuntime = new ScientificRuntimeUnavailable(),
+    private readonly cloudDispatcher?: CloudScientificDispatcher,
   ) {}
 
   private async scoped<T>(context: PlatformContext, action: (tx: Transaction) => Promise<T>) {
@@ -173,8 +182,93 @@ export class ScientificFeatureService {
     `
   }
 
-  private jobProjection(jobId: string, materialId: string, operation: 'STRUCTURE_NORMALIZE' | 'FEATURE_GENERATE', requestHash: string, status: 'SUCCEEDED' | 'FAILED', failureCode?: string) {
+  private jobProjection(jobId: string, materialId: string, operation: 'STRUCTURE_NORMALIZE' | 'FEATURE_GENERATE', requestHash: string, status: 'QUEUED' | 'SUCCEEDED' | 'FAILED', failureCode?: string) {
     return { id: jobId, materialId, operation, status, requestHash, failureCode: failureCode ?? null }
+  }
+
+  private async reserveCloudFeatureJob(context: PlatformContext, materialId: string, input: ScientificFeatureRequest, idempotencyKey: string) {
+    const route = 'scientific.features.generate'
+    const request = { materialId, ...input }
+    const requestHash = digest(request)
+    return this.scoped(context, async (tx) => {
+      const material = await this.material(tx, context, materialId)
+      if (!material.molecularIdentityId) throw new PlatformError('MOLECULAR_IDENTITY_REQUIRED', 'Normalize a molecular structure before generating features.', 409)
+      const identityRows = await tx.$queryRaw<IdentityRow[]>`
+        SELECT id, canonical_smiles AS "canonicalSmiles", structure_hash AS "structureHash", rdkit_version AS "rdkitVersion", standardization_version AS "standardizationVersion"
+        FROM v2_molecular_identities WHERE id = ${material.molecularIdentityId} AND organization_id = ${context.organizationId} AND resolution_status = 'RESOLVED'
+      `
+      const identity = identityRows[0]
+      if (!identity) throw new PlatformError('MOLECULAR_IDENTITY_REQUIRED', 'Normalize a molecular structure before generating features.', 409)
+
+      const existing = await tx.$queryRaw<IdempotencyRow[]>`
+        SELECT request_hash AS "requestHash", response FROM v2_operation_idempotency
+        WHERE organization_id = ${context.organizationId} AND actor_user_id = ${context.userId} AND route = ${route} AND idempotency_key = ${idempotencyKey}
+      `
+      if (existing[0]) {
+        if (existing[0].requestHash !== requestHash) throw new PlatformError('IDEMPOTENCY_CONFLICT', 'This idempotency key was already used for a different request.', 409)
+        const jobs = await tx.$queryRaw<CloudScientificJobRow[]>`
+          SELECT id, material_id AS "materialId", correlation_id AS "correlationId", request_hash AS "requestHash", cloud_input AS "cloudInput"
+          FROM v2_scientific_jobs
+          WHERE organization_id = ${context.organizationId} AND requested_by = ${context.userId} AND operation = 'FEATURE_GENERATE' AND idempotency_key = ${idempotencyKey}
+        `
+        const job = jobs[0]
+        if (!job?.cloudInput) throw new PlatformError('SCIENTIFIC_JOB_NOT_FOUND', 'The queued scientific job is not available in this workspace.', 404)
+        return { job, response: existing[0].response as JsonRecord | null }
+      }
+
+      const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+        INSERT INTO v2_operation_idempotency (id, organization_id, actor_user_id, route, idempotency_key, request_hash)
+        VALUES (${identifier('idem')}, ${context.organizationId}, ${context.userId}, ${route}, ${idempotencyKey}, ${requestHash})
+        ON CONFLICT (organization_id, actor_user_id, route, idempotency_key) DO NOTHING
+        RETURNING id
+      `
+      if (!inserted[0]) throw new PlatformError('OPERATION_IN_PROGRESS', 'The original operation is still being completed.', 409)
+      const pins = await tx.$queryRaw<Array<{ manifestHash: string }>>`SELECT manifest_hash AS "manifestHash" FROM v2_scientific_component_pins WHERE component_key = 'RDKIT'`
+      const job: CloudScientificJobRow = {
+        id: identifier('sciencejob'), materialId, correlationId: identifier('corr'), requestHash,
+        cloudInput: { canonicalSmiles: identity.canonicalSmiles, featureKinds: input.featureKinds },
+      }
+      await tx.$executeRaw`
+        INSERT INTO v2_scientific_jobs (id, organization_id, material_id, requested_by, operation, status, request_hash, idempotency_key, component_manifest_hash, correlation_id, cloud_input)
+        VALUES (${job.id}, ${context.organizationId}, ${materialId}, ${context.userId}, 'FEATURE_GENERATE', 'QUEUED', ${requestHash}, ${idempotencyKey}, ${pins[0]?.manifestHash ?? digest('missing-pin')}, ${job.correlationId}, ${JSON.stringify(job.cloudInput)}::jsonb)
+      `
+      await this.audit(tx, context, 'scientific.features.dispatch', 'allowed', 'scientific_job', job.id, { materialId, requestHash, featureKinds: input.featureKinds })
+      return { job, response: null }
+    })
+  }
+
+  private async persistCloudFeatureResponse(context: PlatformContext, idempotencyKey: string, requestHash: string, response: JsonRecord) {
+    await this.scoped(context, async (tx) => {
+      await tx.$executeRaw`
+        UPDATE v2_operation_idempotency SET response = ${JSON.stringify(response)}::jsonb
+        WHERE organization_id = ${context.organizationId} AND actor_user_id = ${context.userId}
+          AND route = 'scientific.features.generate' AND idempotency_key = ${idempotencyKey} AND request_hash = ${requestHash}
+      `
+    })
+  }
+
+  private async enqueueCloudFeatures(context: PlatformContext, materialId: string, input: ScientificFeatureRequest, idempotencyKey: string) {
+    const reserved = await this.reserveCloudFeatureJob(context, materialId, input, idempotencyKey)
+    if (reserved.response) return reserved.response
+    const job = reserved.job
+    const dispatch = await this.cloudDispatcher!.dispatchFeatures({
+      jobId: job.id,
+      organizationId: context.organizationId,
+      actorUserId: context.userId,
+      correlationId: job.correlationId,
+      idempotencyKey,
+      canonicalSmiles: job.cloudInput!.canonicalSmiles,
+      featureKinds: job.cloudInput!.featureKinds,
+    }).catch((error: unknown) => {
+      const code = runtimeFailureCode(error)
+      throw new PlatformError(code, 'The private scientific runtime is temporarily unavailable. Retry with the same idempotency key.', code === 'SCIENTIFIC_RUNTIME_NOT_CONFIGURED' ? 503 : 502)
+    })
+    const response = {
+      ...this.jobProjection(job.id, job.materialId, 'FEATURE_GENERATE', job.requestHash, 'QUEUED'),
+      dispatch: { id: dispatch.dispatchId, queued: dispatch.queued },
+    }
+    await this.persistCloudFeatureResponse(context, idempotencyKey, job.requestHash, response)
+    return response
   }
 
   async normalizeMaterial(context: PlatformContext, materialId: string, rawInput: unknown, idempotencyKey?: string) {
@@ -215,6 +309,10 @@ export class ScientificFeatureService {
     await this.require(context)
     const input = scientificFeatureRequestSchema.safeParse(rawInput)
     if (!input.success) throw new PlatformError('INVALID_INPUT', 'Choose one or more supported feature artifacts.', 422)
+    if (this.cloudDispatcher) {
+      if (!idempotencyKey || idempotencyKey.length < 12 || idempotencyKey.length > 200) throw new PlatformError('IDEMPOTENCY_KEY_REQUIRED', 'Provide an Idempotency-Key for this operation.', 428)
+      return this.enqueueCloudFeatures(context, materialId, input.data, idempotencyKey)
+    }
     return this.idempotent(context, 'scientific.features.generate', idempotencyKey, { materialId, ...input.data }, async (tx) => {
       const material = await this.material(tx, context, materialId)
       if (!material.molecularIdentityId) throw new PlatformError('MOLECULAR_IDENTITY_REQUIRED', 'Normalize a molecular structure before generating features.', 409)

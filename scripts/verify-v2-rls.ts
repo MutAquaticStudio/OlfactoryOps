@@ -80,6 +80,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0018_cloud_native_runtime.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql')
 }
 
 function resetDisposableSchema() {
