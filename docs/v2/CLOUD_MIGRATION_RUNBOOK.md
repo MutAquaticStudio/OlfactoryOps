@@ -57,7 +57,11 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    `hyperdrive_user` role without reading or printing credentials. The runtime
    role has no membership escalation, schema `CREATE`, superuser, or
    `BYPASSRLS` privilege.
-4. Keep deployment workflow manual and non-production.
+4. Make the protected workflow available on the repository default branch
+   before manual dispatch. GitHub requires a `workflow_dispatch` file on that
+   branch; do not merge unrelated cloud-runtime work merely to satisfy this
+   control-plane requirement.
+5. Keep deployment workflow manual and non-production.
 
 ## 5. Remote scientific build
 

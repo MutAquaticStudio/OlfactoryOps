@@ -66,7 +66,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Gate | Status | Reason |
 | --- | --- | --- |
 | Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
-| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. The protected workflow is ready, but the GitHub `staging` environment and its `STAGING_DATABASE_URL` secret do not exist, and remote RLS fixtures have not run. |
+| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. The GitHub `staging` environment and its `STAGING_DATABASE_URL` secret do not exist; additionally, GitHub requires this `workflow_dispatch` file on the default branch before it can run. Remote RLS fixtures have not run. |
 | API Worker staging deployment | PASS | `olfactoryops-v2-api-staging` was uploaded with Hyperdrive only, three Cloudflare-managed secret bindings, a Cloudflare-managed `api-beta` custom domain/certificate, and an exact route that excludes the legacy wildcard router. |
 | Tenant-router wildcard and Pages deployment | BLOCKED | The PostgreSQL hostname registry/RLS gate and staging Pages deployment remain outstanding. |
 | R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Control-plane PUT/delete passed, but raw GET and tenant-denial require the deployed Worker. |

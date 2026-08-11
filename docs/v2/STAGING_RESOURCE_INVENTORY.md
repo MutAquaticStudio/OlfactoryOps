@@ -65,6 +65,7 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | API Worker custom domain and exact route | PASS | Cloudflare-managed `api-beta.labofscents.org` custom domain/certificate and a more-specific Worker route bypass the legacy `*.labofscents.org` router. |
 | Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
 | GitHub Cloudflare and migration secrets | BLOCKED | The GitHub `staging` environment does not yet exist. The checked-in migration workflow requires its `STAGING_DATABASE_URL`; `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` are also absent from repository secrets. |
+| Protected migration dispatch | BLOCKED | GitHub requires `workflow_dispatch` to exist on the default branch. The workflow is intentionally only on this staging branch, which must not be merged without separate authorization. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
@@ -75,7 +76,8 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
    placing its value in source control or chat.
 2. Apply the approved V2 migration baseline and restrict the `hyperdrive_user`
    role with the protected manual `V2 Staging PostgreSQL Migration` workflow
-   before exposing any tenant-routed or authenticated workflow.
+   before exposing any tenant-routed or authenticated workflow. First arrange
+   an explicitly approved default-branch delivery for that workflow only.
 3. Deploy the separate `*.beta.labofscents.org` tenant-router only after the
    PostgreSQL hostname registry/RLS gate passes.
 4. Configure and deploy the existing `olfactoryops-beta` Pages project with
