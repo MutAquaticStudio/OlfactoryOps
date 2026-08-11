@@ -14,12 +14,19 @@ async function signupWrite<T>(step: string, operation: () => Promise<T>) {
     const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
       ? (error as { code: string }).code
       : ''
-    const category = /row-level security/i.test(message) ? 'RLS'
+    const databaseCode = error && typeof error === 'object' && 'meta' in error
+      && (error as { meta?: { code?: unknown } }).meta
+      && typeof (error as { meta: { code?: unknown } }).meta.code === 'string'
+      ? (error as { meta: { code: string } }).meta.code
+      : ''
+    const category = databaseCode === '42501' || /row-level security/i.test(message) ? 'RLS'
       : /permission denied/i.test(message) ? 'PERMISSION'
-        : /foreign key/i.test(message) || code === 'P2003' ? 'FOREIGN_KEY'
-          : /unique constraint/i.test(message) || code === 'P2002' ? 'CONFLICT'
-            : /not-null constraint/i.test(message) || code === 'P2011' ? 'NOT_NULL'
-              : 'FAILED'
+        : databaseCode === '23503' || /foreign key/i.test(message) || code === 'P2003' ? 'FOREIGN_KEY'
+          : databaseCode === '23505' || /unique constraint/i.test(message) || code === 'P2002' ? 'CONFLICT'
+            : databaseCode === '23502' || /not-null constraint/i.test(message) || code === 'P2011' ? 'NOT_NULL'
+              : databaseCode === '23514' || /check constraint/i.test(message) ? 'CHECK'
+                : databaseCode === '22P02' || /invalid input syntax/i.test(message) ? 'INVALID'
+                  : 'FAILED'
     throw new SignupWriteError(`SIGNUP_WRITE_${step}_${category}`)
   }
 }
@@ -29,8 +36,8 @@ export class PrismaPlatformRepository implements PlatformRepository {
 
   async transaction<T>(callback: (repository: PlatformRepository) => Promise<T>, context?: RepositoryContext): Promise<T> {
     return this.client.$transaction(async (tx): Promise<T> => {
-      if (context?.organizationId) await tx.$executeRawUnsafe(`SELECT set_config('app.organization_id', $1, true)`, context.organizationId)
-      if (context?.userId) await tx.$executeRawUnsafe(`SELECT set_config('app.user_id', $1, true)`, context.userId)
+      if (context?.organizationId) await tx.$executeRaw`SELECT set_config('app.organization_id', ${context.organizationId}, true)`
+      if (context?.userId) await tx.$executeRaw`SELECT set_config('app.user_id', ${context.userId}, true)`
       return callback(new PrismaPlatformRepository(tx as unknown as PrismaClient))
     })
   }
@@ -40,8 +47,8 @@ export class PrismaPlatformRepository implements PlatformRepository {
   async createUser(user: PlatformUser) { const row = await this.client.user.create({ data: { id: user.id, email: user.email, displayName: user.displayName, passwordHash: user.passwordHash, status: user.status, verifiedAt: user.verifiedAt ? new Date(user.verifiedAt) : undefined } }); return this.user(row) }
 
   async createSignup(input: { user: PlatformUser; organization: OrganizationRecord; membership: MembershipRecord; hostname: HostnameRecord; rolePermissions: string[]; rolePolicies?: Record<string, string[]>; billing: BillingRecord }): Promise<SignupSeed> {
-    await signupWrite('CONTEXT_ORGANIZATION', () => this.client.$executeRawUnsafe(`SELECT set_config('app.organization_id', $1, true)`, input.organization.id))
-    await signupWrite('CONTEXT_USER', () => this.client.$executeRawUnsafe(`SELECT set_config('app.user_id', $1, true)`, input.user.id))
+    await signupWrite('CONTEXT_ORGANIZATION', () => this.client.$executeRaw`SELECT set_config('app.organization_id', ${input.organization.id}, true)`)
+    await signupWrite('CONTEXT_USER', () => this.client.$executeRaw`SELECT set_config('app.user_id', ${input.user.id}, true)`)
     await signupWrite('ORGANIZATION', () => this.client.organization.create({ data: { id: input.organization.id, slug: input.organization.slug, name: input.organization.name, status: input.organization.status } }))
     await signupWrite('USER', () => this.client.user.create({ data: { id: input.user.id, email: input.user.email, displayName: input.user.displayName, passwordHash: input.user.passwordHash, status: input.user.status } }))
     await signupWrite('MEMBERSHIP', () => this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } }))
