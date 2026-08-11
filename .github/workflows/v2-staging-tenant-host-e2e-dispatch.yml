@@ -4,7 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       staging_sha:
-        description: Exact deployed SHA of codex/cloudflare-cloud-native-runtime.
+        description: Exact harness SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      runtime_sha:
+        description: Exact currently deployed Pages/API/Tenant Router SHA to verify.
         required: true
         type: string
       confirm_staging:
@@ -30,6 +34,7 @@ jobs:
       staging_sha: ${{ steps.revision.outputs.staging_sha }}
     env:
       STAGING_SHA: ${{ inputs.staging_sha }}
+      RUNTIME_SHA: ${{ inputs.runtime_sha }}
       CONFIRM_STAGING: ${{ inputs.confirm_staging }}
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +44,7 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_STAGING" = "RUN_STAGING_TENANT_HOST_E2E"
           [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$RUNTIME_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           git fetch --no-tags origin "$STAGING_BRANCH"
           test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
           git cat-file -e "${STAGING_SHA}^{commit}"
@@ -56,7 +62,7 @@ jobs:
       V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
       V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
       V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
-      V2_STAGING_EXPECTED_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      V2_STAGING_EXPECTED_SHA: ${{ inputs.runtime_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
