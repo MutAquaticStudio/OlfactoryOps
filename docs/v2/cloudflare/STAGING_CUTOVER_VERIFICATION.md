@@ -68,8 +68,8 @@ customer data, and unrelated Cloudflare projects were not changed.
 | --- | --- | --- |
 | Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
 | GitHub staging Environment and dispatch | PASS | The `staging` Environment exists with the approved secret names, and default-branch dispatchers validate exact staging SHAs before entering it. |
-| Staging migration chain | PASS | GitHub run `31477033801` completed the immutable V2 migration chain. |
-| Hyperdrive runtime role hardening | PASS | GitHub run `31479091142` applied/verified the current role policy: `LOGIN=true`; `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, and `REPLICATION` are false; no inherited privileged memberships. No credential value was read or recorded. |
+| Staging migration chain | PASS | GitHub run `31481271211` applied/verified all 18 immutable V2 migrations for approved staging source SHA `7cabd0a1bfc42366404e446ea6bd305d79fd5a36`; six required RLS tables were verified. |
+| Hyperdrive runtime role hardening | PASS | GitHub run `31481271211` applied/verified the current role policy: `LOGIN=true`; `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, and `REPLICATION` are false; no inherited privileged memberships. No credential value was read or recorded. |
 | Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. Remote RLS fixtures must wait for `RUNTIME_DB_PRIVILEGES=PASS`. |
 | API Worker staging deployment at approved SHA | BLOCKED | GitHub run `31480119688` reached Wrangler but Cloudflare returned authentication error `10000` before a Worker mutation. The currently reachable health endpoint is a prior revision and does not report the required approved release SHA. |
 | Remote route parity for the 143-route source matrix | BLOCKED | It must be verified only after the approved API Worker SHA is deployed; a prior staging revision and local route generation are not parity evidence. |
@@ -78,7 +78,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Vectorize Worker tenant isolation | BLOCKED | Control-plane metadata filters passed; application authorization still requires the deployed Worker and fixture tenant. |
 | Queue retry/DLQ and Workflow terminal-failure smoke | BLOCKED | No consumer Worker or Workflow is deployed. |
 | Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
-| Remote scientific Linux build | PASS | GitHub run `31480599001` completed provenance, feature runtime, and model compatibility checks for staging SHA `868368c145ebcf75728e14669b0d1728e738cd41` without a staging Environment or Cloudflare credentials. The publish job was skipped by its `push_images=false` guard. |
+| Remote scientific Linux build | PASS | GitHub run `31480933921` completed provenance, feature runtime, and model compatibility checks for staging SHA `7cabd0a1bfc42366404e446ea6bd305d79fd5a36` without a staging Environment or Cloudflare credentials. The publish job was skipped by its `push_images=false` guard. |
 | GitHub scientific image publishing | BLOCKED | The staging-only publish job received its Environment secrets but Cloudflare Container Registry rejected the configured token with `403 Forbidden`. Cloudflare mutations stopped immediately. |
 | AI Gateway | NOT_APPLICABLE | No approved provider policy or staging provider credential. |
 | Browser rendered routes | PASS | `beta.labofscents.org`, `/login`, and `/signup` rendered in a real browser with no captured console errors. |

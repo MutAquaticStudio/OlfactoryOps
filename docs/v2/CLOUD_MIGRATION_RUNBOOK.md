@@ -58,7 +58,7 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    role must have no membership escalation, schema `CREATE`, superuser, or
    `BYPASSRLS` privilege.
 
-   Current staging evidence: GitHub run `31479091142` applied/verified the
+   Current staging evidence: GitHub run `31481271211` applied/verified the
    role policy. `hyperdrive_user` can log in but is not a superuser, cannot
    bypass RLS, cannot create databases or roles, cannot replicate, and has no
    inherited privileged membership. The workflow preserves database grants and

@@ -66,8 +66,8 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
 | GitHub staging environment secrets | PASS | The protected `staging` Environment contains only `STAGING_DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`; values were not read. |
 | Default-branch protected dispatch | PASS | Default branch dispatchers validate an exact `codex/cloudflare-cloud-native-runtime` SHA before the staging Environment is entered. |
-| Staging migration chain | PASS | GitHub run `31477033801` applied the immutable V2 migration chain before role hardening began. |
-| Hyperdrive runtime role hardening | PASS | GitHub run `31479091142` verified `LOGIN=true`, no `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or inherited privileged membership. Least-privilege runtime grants and PostgreSQL RLS were preserved. |
+| Staging migration chain | PASS | GitHub run `31481271211` verified the 18-migration immutable V2 chain for approved staging source SHA `7cabd0a1bfc42366404e446ea6bd305d79fd5a36`. |
+| Hyperdrive runtime role hardening | PASS | GitHub run `31481271211` verified `LOGIN=true`, no `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or inherited privileged membership. Least-privilege runtime grants and PostgreSQL RLS were preserved. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
