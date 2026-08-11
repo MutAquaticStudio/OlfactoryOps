@@ -1,0 +1,173 @@
+name: V2 Staging Cloud Runtime Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      scientific_feature_image_digest:
+        description: Immutable sha256 digest for the staging scientific feature image.
+        required: true
+        type: string
+      scientific_model_image_digest:
+        description: Immutable sha256 digest for the staging scientific model image.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type DEPLOY_STAGING_CLOUD_RUNTIME to deploy only the private staging runtime.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-cloud-runtime-deployment
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+  STAGING_RUNTIME_NAME: olfactoryops-v2-cloud-runtime-staging
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+      feature_digest: ${{ steps.revision.outputs.feature_digest }}
+      model_digest: ${{ steps.revision.outputs.model_digest }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      FEATURE_DIGEST: ${{ inputs.scientific_feature_image_digest }}
+      MODEL_DIGEST: ${{ inputs.scientific_model_image_digest }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        name: Validate the approved staging revision and immutable images
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "DEPLOY_STAGING_CLOUD_RUNTIME"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$FEATURE_DIGEST" =~ ^sha256:[0-9a-fA-F]{64}$ ]]
+          [[ "$MODEL_DIGEST" =~ ^sha256:[0-9a-fA-F]{64}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+          echo "feature_digest=$FEATURE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "model_digest=$MODEL_DIGEST" >> "$GITHUB_OUTPUT"
+
+  deploy-staging-cloud-runtime:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUD_RUNTIME_GIT_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      CLOUD_RUNTIME_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+      SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ needs.validate-staging-revision.outputs.feature_digest }}
+      SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ needs.validate-staging-revision.outputs.model_digest }}
+      CLOUD_RUNTIME_REQUIRE_READY: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require staging-only Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Render and validate the non-secret private runtime configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CLOUD_RUNTIME_STAGING_CONFIG=.qa/wrangler.v2-cloud-runtime.staging.toml
+          node scripts/render-cloud-runtime-staging-config.mjs
+          node scripts/validate-cloud-runtime-config.mjs "$CLOUD_RUNTIME_STAGING_CONFIG"
+      - name: Deploy private staging Cloud Runtime with immutable images
+        shell: bash
+        run: npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.staging.toml --keep-vars
+      - name: Create an opaque internal scientific secret only when absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_json="$(npx wrangler secret list --config .qa/wrangler.v2-cloud-runtime.staging.toml)"
+          if node --input-type=module -e 'const rows = JSON.parse(process.argv[1]); process.exit(rows.some((row) => row.name === "SCIENTIFIC_CONTAINER_SHARED_SECRET") ? 0 : 1)' "$secret_json"; then
+            echo "SCIENTIFIC_CONTAINER_SHARED_SECRET=REUSED"
+            exit 0
+          fi
+          generated_secret="$(node --input-type=module -e 'import { randomBytes } from "node:crypto"; process.stdout.write(randomBytes(48).toString("base64url"))')"
+          printf '%s' "$generated_secret" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config .qa/wrangler.v2-cloud-runtime.staging.toml
+          unset generated_secret
+          echo "SCIENTIFIC_CONTAINER_SHARED_SECRET=CREATED"
+      - name: Verify active runtime revision and non-secret bindings
+        shell: bash
+        env:
+          STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+          STAGING_FEATURE_DIGEST: ${{ needs.validate-staging-revision.outputs.feature_digest }}
+          STAGING_MODEL_DIGEST: ${{ needs.validate-staging-revision.outputs.model_digest }}
+          STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+        run: |
+          set -euo pipefail
+          deployments_json="$(mktemp)"
+          version_json="$(mktemp)"
+          trap 'rm -f "$deployments_json" "$version_json"' EXIT
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/olfactoryops-v2-cloud-runtime-staging/deployments" \
+            --output "$deployments_json"
+          deployed_version_id="$(node --input-type=module - "$deployments_json" <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const body = JSON.parse(readFileSync(process.argv[2], 'utf8'))
+          const versions = body?.success === true ? body?.result?.deployments?.[0]?.versions : undefined
+          if (!Array.isArray(versions) || versions.length !== 1 || versions[0]?.percentage !== 100 || typeof versions[0]?.version_id !== 'string') {
+            throw new Error('expected one active 100-percent private runtime version')
+          }
+          process.stdout.write(versions[0].version_id)
+          NODE
+          )"
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/olfactoryops-v2-cloud-runtime-staging/versions/$deployed_version_id" \
+            --output "$version_json"
+          VERSION_JSON="$version_json" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const body = JSON.parse(readFileSync(process.env.VERSION_JSON, 'utf8'))
+          if (body?.success !== true) throw new Error('runtime version lookup failed')
+          const bindings = body?.result?.resources?.bindings
+          if (!Array.isArray(bindings)) throw new Error('runtime version has no binding metadata')
+          const assertBinding = (name, type, expected) => {
+            const binding = bindings.find((candidate) => candidate?.name === name && candidate?.type === type)
+            if (!binding) throw new Error(`missing ${name} ${type} binding`)
+            if (expected && binding.id !== expected && binding.text !== expected) throw new Error(`unexpected ${name} binding`)
+          }
+          assertBinding('RELEASE_GIT_SHA', 'plain_text', process.env.STAGING_SHA)
+          assertBinding('HYPERDRIVE', 'hyperdrive', process.env.STAGING_HYPERDRIVE_ID)
+          assertBinding('R2_ARTIFACTS', 'r2_bucket')
+          assertBinding('MATERIAL_EVIDENCE_VECTORS', 'vectorize')
+          assertBinding('SCIENTIFIC_JOBS', 'queue')
+          assertBinding('RAG_INGESTION_JOBS', 'queue')
+          assertBinding('NOTIFICATION_DELIVERY_JOBS', 'queue')
+          assertBinding('SCIENTIFIC_WORKFLOW', 'workflow')
+          assertBinding('SCIENTIFIC_FEATURE_CONTAINER', 'durable_object_namespace')
+          assertBinding('SCIENTIFIC_MODEL_CONTAINER', 'durable_object_namespace')
+          const secret = bindings.find((candidate) => candidate?.name === 'SCIENTIFIC_CONTAINER_SHARED_SECRET' && candidate?.type === 'secret_text')
+          if (!secret) throw new Error('internal scientific secret binding is absent')
+          console.log('STAGING_CLOUD_RUNTIME_ACTIVE_VERSION=PASS')
+          console.log('STAGING_CLOUD_RUNTIME_BINDINGS=PASS')
+          console.log('SCIENTIFIC_CONTAINER_SECRET_BINDING=PASS')
+          NODE
