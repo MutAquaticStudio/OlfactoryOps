@@ -1,6 +1,6 @@
 import { Container } from '@cloudflare/containers'
 import { env } from 'cloudflare:workers'
-import { scientificContainerEnvironment } from './scientific-container-env.js'
+import { scientificContainerEnvironment, scientificContainerHealthEndpoint } from './scientific-container-env.js'
 
 type CloudRuntimeSecretBindings = {
   SCIENTIFIC_CONTAINER_SHARED_SECRET?: string
@@ -15,6 +15,7 @@ const runtimeSecrets = env as unknown as CloudRuntimeSecretBindings
 export class ScientificFeatureContainer extends Container {
   defaultPort = 8099
   requiredPorts = [8099]
+  pingEndpoint = scientificContainerHealthEndpoint
   sleepAfter = '10m'
   enableInternet = false
   envVars = scientificContainerEnvironment(runtimeSecrets.SCIENTIFIC_CONTAINER_SHARED_SECRET)
@@ -23,6 +24,7 @@ export class ScientificFeatureContainer extends Container {
 export class ScientificModelContainer extends Container {
   defaultPort = 8100
   requiredPorts = [8100]
+  pingEndpoint = scientificContainerHealthEndpoint
   sleepAfter = '10m'
   enableInternet = false
   envVars = scientificContainerEnvironment(runtimeSecrets.SCIENTIFIC_CONTAINER_SHARED_SECRET)
