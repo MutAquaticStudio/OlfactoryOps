@@ -103,8 +103,10 @@ jobs:
                 const container = /container\\?"\s*:\s*\\?"(feature|model)/.exec(line)?.[1] ?? "unknown"
                 const code = /SCIENTIFIC_CONTAINER_(?:CRASHED_DURING_STARTUP|EXITED_BEFORE_HEALTHY|NO_INSTANCE|PORT_UNAVAILABLE|RATE_LIMITED|REQUEST_ABORTED|RUNTIME_SIGNALLED|STARTUP_FAILED|RUNTIME_ERROR)/.exec(line)?.[0] ?? null
                 const exitCode = /exitCode\\?"\s*:\s*(-?\d+)/.exec(line)?.[1] ?? null
+                const errorShape = /errorShape\\?"\s*:\s*\\?"(STRING|ERROR|OBJECT_MESSAGE|OBJECT_ERROR|OBJECT_REASON|OBJECT_CONTEXT|OBJECT|UNKNOWN)/.exec(line)?.[1] ?? null
+                const statusCode = /statusCode\\?"\s*:\s*(\d{3})/.exec(line)?.[1] ?? null
                 const secretConfigured = /secretConfigured\\?"\s*:\s*(true|false)/.exec(line)?.[1] ?? null
-                diagnostics.push({ event, container, code, exitCode, secretConfigured })
+                diagnostics.push({ event, container, code, exitCode, errorShape, statusCode, secretConfigured })
               }
               console.log(`CLOUD_RUNTIME_SAFE_DIAGNOSTICS=${JSON.stringify(diagnostics)}`)
             '
