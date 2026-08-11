@@ -16,10 +16,17 @@ describe('V2 Worker transport', () => {
 
   it('binds every generated route to a decorator-free shared controller delegate', () => {
     const shared = {} as V2ApiServices
-    const routes = v2ControllerRoutes({ ...shared, platform: {}, lab: {}, scientific: {}, modelDataset: {}, olfactory: {}, consumer: {}, formula: {}, evidence: {}, agent: {} } as V2ApiServices)
+    const routes = v2ControllerRoutes({ ...shared, databaseHealth: async () => 'PASS', platform: {}, lab: {}, scientific: {}, modelDataset: {}, olfactory: {}, consumer: {}, formula: {}, evidence: {}, agent: {} } as V2ApiServices)
     expect(routes).toHaveLength(generatedRouteSpecs.length)
     for (const route of routes) expect(typeof (route.controller as Record<string, unknown>)[route.handler]).toBe('function')
     expect(routes).toContainEqual(expect.objectContaining({ method: 'GET', path: '/v2/agent-runs/:id/stream' }))
+  })
+
+  it('reports the injected Hyperdrive probe rather than a Node-only environment variable', async () => {
+    const shared = {} as V2ApiServices
+    const routes = v2ControllerRoutes({ ...shared, databaseHealth: async () => 'PASS', platform: {}, lab: {}, scientific: {}, modelDataset: {}, olfactory: {}, consumer: {}, formula: {}, evidence: {}, agent: {} } as V2ApiServices)
+    const health = routes.find((route) => route.path === '/v2/platform/health')!
+    await expect((health.controller as { health: () => Promise<unknown> }).health()).resolves.toEqual({ status: 'PASS', scope: 'v2-platform', database: 'PASS' })
   })
 
   it('matches path parameters and invokes a decorator-free controller with the trusted origin host', async () => {

@@ -4,6 +4,7 @@ import { DurableAgentService } from '../../services/agent-runtime/src/durable-ag
 import { FormulaService } from '../../services/formula/src/formula-service.js'
 import { LabOperationsService } from '../../services/lab-ops/src/service.js'
 import { PlatformService } from '../../services/platform/src/service.js'
+import type { V2DatabaseHealth } from '../../server/src/routes/v2-platform.worker.js'
 import { PrismaPlatformRepository } from '../../services/platform/src/prisma-repository.js'
 import { MaterialEvidenceService } from '../../services/rag/src/material-evidence-service.js'
 import { ConsumerIntelligenceService } from '../../services/sentiment/src/consumer-intelligence-service.js'
@@ -21,6 +22,7 @@ export type V2ApiServiceEnv = {
 
 export type V2ApiServices = {
   prisma: PrismaClient
+  databaseHealth: V2DatabaseHealth
   platform: PlatformService
   lab: LabOperationsService
   scientific: ScientificFeatureService
@@ -53,6 +55,14 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
   const formula = new FormulaService(prisma, platform)
   return {
     prisma,
+    databaseHealth: async () => {
+      try {
+        await prisma.$queryRawUnsafe('SELECT 1')
+        return 'PASS'
+      } catch {
+        return 'DEGRADED'
+      }
+    },
     platform,
     lab,
     scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable()),

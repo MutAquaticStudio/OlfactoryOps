@@ -50,13 +50,20 @@ class V2PlatformErrorFilter implements ExceptionFilter {
   }
 }
 
+export type V2DatabaseHealth = () => Promise<'PASS' | 'DEGRADED' | 'NOT_CONFIGURED'>
+
 @Controller('v2/platform')
 @UseFilters(V2PlatformErrorFilter)
 export class V2PlatformController {
-  constructor(private readonly platform: PlatformService) {}
+  constructor(private readonly platform: PlatformService, private readonly databaseHealth?: V2DatabaseHealth) {}
 
   @Get('health')
-  health() { return { status: 'PASS', scope: 'v2-platform', database: process.env.DATABASE_URL ? 'PASS' : 'NOT_CONFIGURED' } }
+  async health() {
+    const database = this.databaseHealth
+      ? await this.databaseHealth()
+      : process.env.DATABASE_URL ? 'PASS' : 'NOT_CONFIGURED'
+    return { status: database === 'DEGRADED' ? 'DEGRADED' : 'PASS', scope: 'v2-platform', database }
+  }
 
   @Post('auth/signup')
   async signup(@Body() body: { organizationName?: string; workspaceSlug?: string; email?: string; displayName?: string; password?: string }, @Res({ passthrough: true }) reply: FastifyReply) {

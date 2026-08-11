@@ -28,7 +28,7 @@ export type ControllerRoute = {
  */
 export function v2ControllerRoutes(services: V2ApiServices): ControllerRoute[] {
   const instances: Record<string, object> = {
-    platform: new V2PlatformController(services.platform),
+    platform: new V2PlatformController(services.platform, services.databaseHealth),
     lab: new V2LabOperationsController(services.platform, services.lab),
     scientific: new V2ScientificController(services.platform, services.scientific),
     modelDataset: new V2ModelDatasetController(services.platform, services.modelDataset),
