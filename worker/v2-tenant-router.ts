@@ -37,19 +37,12 @@ function invalidConfig() {
 async function activeWorkspaceForHostname(env: V2TenantRouterEnv, hostname: string) {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.HYPERDRIVE.connectionString }) })
   try {
-    return await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.request_hostname', ${hostname}, true)`
-      const rows = await tx.$queryRaw<HostRow[]>`
-        SELECT h.organization_id AS "organizationId"
-        FROM v2_workspace_hostnames h
-        INNER JOIN v2_organizations o ON o.id = h.organization_id
-        WHERE h.hostname = ${hostname}
-          AND h.status = 'ACTIVE'
-          AND o.status = 'ACTIVE'
-        LIMIT 1
-      `
-      return rows[0] ?? null
-    })
+    const rows = await prisma.$queryRaw<HostRow[]>`
+      SELECT organization_id AS "organizationId"
+      FROM public.v2_resolve_active_workspace_hostname(${hostname})
+      LIMIT 1
+    `
+    return rows[0] ?? null
   } finally {
     await prisma.$disconnect()
   }

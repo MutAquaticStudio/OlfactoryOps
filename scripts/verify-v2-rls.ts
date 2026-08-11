@@ -82,6 +82,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0018_cloud_native_runtime.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql')
 }
 
 function resetDisposableSchema() {
@@ -121,6 +122,7 @@ async function configureApplicationRole() {
   await adminClient.$executeRawUnsafe('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
+  await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO v2_app')
   const roles = await adminClient.$queryRawUnsafe<Array<{ rolbypassrls: boolean; rolsuper: boolean }>>("SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'v2_app'")
   if (roles.length !== 1 || roles[0].rolbypassrls || roles[0].rolsuper) throw new Error('V2_RLS=FAIL application role is not constrained by RLS.')
 }
@@ -413,6 +415,17 @@ try {
   const second = await service.signup({ organizationName: 'RLS Second', workspaceSlug: secondSlug, email: `${secondSlug}@example.test`, displayName: 'RLS Second', password: 'Correct Horse Battery 12!' })
   secondOrganizationId = second.membership.organizationId
   await service.verifyEmail(second.verificationToken)
+  const trustedHostnameResolution = await appClient!.$queryRawUnsafe<Array<{ organizationId: string }>>(
+    'SELECT organization_id AS "organizationId" FROM public.v2_resolve_active_workspace_hostname($1)',
+    `${slug}.olfactoryops.com`,
+  )
+  const unknownHostnameResolution = await appClient!.$queryRawUnsafe<Array<{ organizationId: string }>>(
+    'SELECT organization_id AS "organizationId" FROM public.v2_resolve_active_workspace_hostname($1)',
+    `unknown-${suffix}.olfactoryops.com`,
+  )
+  if (trustedHostnameResolution.length !== 1 || trustedHostnameResolution[0]?.organizationId !== firstOrganizationId || unknownHostnameResolution.length !== 0) {
+    throw new Error('V2_RLS=FAIL trusted hostname resolver did not return an exact active workspace only')
+  }
   brandUserId = `usr_brand_${suffix.replace(/[^a-z0-9]/gi, '')}`
   await adminClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', brandUserId!, `${brandUserId}@example.test`, 'Brand QA', 'not-a-login')
@@ -2236,6 +2249,7 @@ try {
       crossTenantFormulaDenied,
       crossTenantAgentDenied,
       crossTenantEvidenceCount: crossTenantEvidence.citations.length,
+      trustedHostnameResolver: trustedHostnameResolution[0]?.organizationId === firstOrganizationId && unknownHostnameResolution.length === 0,
     },
     phase7: {
       trial: trial.id,

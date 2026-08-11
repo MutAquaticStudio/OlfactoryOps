@@ -26,6 +26,7 @@ const migrations = [
   'infra/postgres/migrations/0018_cloud_native_runtime.sql',
   'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql',
   'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
+  'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -118,6 +119,16 @@ try {
     `)
     if (resolver.length !== 1 || !resolver[0].security_definer) {
       throw new Error('Phase 7 public sensory link resolver is missing or not SECURITY DEFINER')
+    }
+    const hostnameResolver = await client.$queryRawUnsafe(`
+      SELECT p.prosecdef AS security_definer
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'v2_resolve_active_workspace_hostname'
+        AND pg_get_function_identity_arguments(p.oid) = 'p_hostname text'
+    `)
+    if (hostnameResolver.length !== 1 || !hostnameResolver[0].security_definer) {
+      throw new Error('Trusted active workspace hostname resolver is missing or not SECURITY DEFINER')
     }
     const phase8Tables = [
       'v2_production_orders', 'v2_production_formula_snapshots', 'v2_production_material_requirements',

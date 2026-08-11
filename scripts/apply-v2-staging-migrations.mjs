@@ -24,6 +24,7 @@ const migrations = [
   'infra/postgres/migrations/0018_cloud_native_runtime.sql',
   'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql',
   'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
+  'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL

@@ -65,6 +65,7 @@ try {
     await client.query(`GRANT USAGE ON SCHEMA public TO ${identifier}`)
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO ${identifier}`)
+    await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO ${identifier}`)
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)
@@ -76,7 +77,8 @@ try {
       has_schema_privilege($1, 'public', 'USAGE') AS schema_usage,
       has_schema_privilege($1, 'public', 'CREATE') AS schema_create,
       has_table_privilege($1, 'v2_organizations', 'SELECT,INSERT,UPDATE,DELETE') AS table_access,
-      has_function_privilege($1, 'public.v2_resolve_sensory_public_link(text)', 'EXECUTE') AS sensory_link_execute
+      has_function_privilege($1, 'public.v2_resolve_sensory_public_link(text)', 'EXECUTE') AS sensory_link_execute,
+      has_function_privilege($1, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS hostname_resolver_execute
     FROM pg_roles r
     WHERE r.rolname = $1
   `, [role])
@@ -87,7 +89,7 @@ try {
     JOIN pg_roles member ON member.oid = membership.member
     WHERE member.rolname = $1
   `, [role])).rows[0].count
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute) {
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute) {
     throw new Error('RUNTIME_DB_PRIVILEGES=FAIL least-privilege verification failed')
   }
   console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'NONE' }))
