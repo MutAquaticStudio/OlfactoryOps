@@ -117,6 +117,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Generate the V2 Prisma client for the Cloud Runtime
+        run: npm run prisma:generate:v2
       - name: Require staging-only Cloudflare credentials
         shell: bash
         run: |
