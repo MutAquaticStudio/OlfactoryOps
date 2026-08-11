@@ -40,7 +40,7 @@ to a broader repository secret, a local credential, or production token.
 | Gate | Status | Evidence |
 | --- | --- | --- |
 | Staging secret boundary | PASS | Cloudflare credentials are referenced only by `publish-scientific-images`, which uses the `staging` Environment. |
-| Remote Linux scientific build | PASS | GitHub run `31477266765` completed the feature and model compatibility checks. |
+| Remote Linux scientific build | PASS | GitHub run `31480599001` completed the feature and model compatibility checks for SHA `868368c145ebcf75728e14669b0d1728e738cd41`; its publish job was skipped because `push_images=false`. |
 | Staging Container Registry publish | BLOCKED | The environment-scoped Cloudflare token returned `403 Forbidden` from `wrangler containers push`; Cloudflare mutations stopped. It needs account `Containers: Write` without changing the staging Environment boundary. |
 | Staging API Worker publish | BLOCKED | GitHub run `31480119688` reached Wrangler but the staging token returned Cloudflare authentication error `10000` before any Worker mutation. The minimum required scope is account `Workers Scripts: Write` and zone `Workers Routes: Write` for `labofscents.org`. |
 | Immutable image digest | BLOCKED | No image was accepted by the registry, so no digest may be recorded. |

@@ -78,7 +78,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Vectorize Worker tenant isolation | BLOCKED | Control-plane metadata filters passed; application authorization still requires the deployed Worker and fixture tenant. |
 | Queue retry/DLQ and Workflow terminal-failure smoke | BLOCKED | No consumer Worker or Workflow is deployed. |
 | Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
-| Remote scientific Linux build | PASS | GitHub run `31477266765` completed provenance, feature runtime, and model compatibility checks without a staging Environment or Cloudflare credentials. |
+| Remote scientific Linux build | PASS | GitHub run `31480599001` completed provenance, feature runtime, and model compatibility checks for staging SHA `868368c145ebcf75728e14669b0d1728e738cd41` without a staging Environment or Cloudflare credentials. The publish job was skipped by its `push_images=false` guard. |
 | GitHub scientific image publishing | BLOCKED | The staging-only publish job received its Environment secrets but Cloudflare Container Registry rejected the configured token with `403 Forbidden`. Cloudflare mutations stopped immediately. |
 | AI Gateway | NOT_APPLICABLE | No approved provider policy or staging provider credential. |
 | Browser rendered routes | PASS | `beta.labofscents.org`, `/login`, and `/signup` rendered in a real browser with no captured console errors. |
@@ -107,6 +107,7 @@ TENANT_ISOLATION_STAGING = BLOCKED
 ROLE_E2E_STAGING = BLOCKED
 PUBLIC_V2_WORKER_ROUTE_COVERAGE = BLOCKED
 REMOTE_SCIENTIFIC_BUILD = PASS
+SCIENTIFIC_REPRODUCIBILITY = PASS
 SCIENTIFIC_CONTAINER_STAGING = BLOCKED
 REMOTE_STAGING_ACCEPTANCE = BLOCKED
 PRODUCTION_DEPLOYED = NOT_APPLICABLE
