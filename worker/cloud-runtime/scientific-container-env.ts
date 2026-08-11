@@ -4,6 +4,15 @@
  */
 export const scientificContainerHealthEndpoint = 'localhost/health'
 
+export type ScientificContainerDiagnostic = {
+  code:
+    | 'SCIENTIFIC_CONTAINER_EXITED_BEFORE_HEALTHY'
+    | 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE'
+    | 'SCIENTIFIC_CONTAINER_STARTUP_FAILED'
+    | 'SCIENTIFIC_CONTAINER_RUNTIME_ERROR'
+  exitCode: number | null
+}
+
 export function scientificContainerEnvironment(sharedSecret: string | undefined): Record<string, string> {
   return sharedSecret
     ? {
@@ -13,4 +22,24 @@ export function scientificContainerEnvironment(sharedSecret: string | undefined)
         SCIENTIFIC_SERVICE_HOST: '0.0.0.0',
       }
     : {}
+}
+
+/**
+ * Container lifecycle errors can include transport details. Retain only a
+ * stable error class and the process exit code for staging diagnostics.
+ */
+export function scientificContainerDiagnostic(error: unknown): ScientificContainerDiagnostic {
+  const message = error instanceof Error ? error.message : ''
+  const exitCode = Number(message.match(/exit code:\s*(\d+)/i)?.[1])
+
+  if (Number.isInteger(exitCode)) {
+    return { code: 'SCIENTIFIC_CONTAINER_EXITED_BEFORE_HEALTHY', exitCode }
+  }
+  if (/not listening|port/i.test(message)) {
+    return { code: 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE', exitCode: null }
+  }
+  if (/start|health/i.test(message)) {
+    return { code: 'SCIENTIFIC_CONTAINER_STARTUP_FAILED', exitCode: null }
+  }
+  return { code: 'SCIENTIFIC_CONTAINER_RUNTIME_ERROR', exitCode: null }
 }
