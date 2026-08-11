@@ -33,6 +33,7 @@ function postgresFailureCategory(error) {
   if (code === '23514') return 'CHECK'
   if (code === '23503') return 'FOREIGN_KEY'
   if (code === '23502') return 'NOT_NULL'
+  if (/^[0-9A-Z]{5}$/.test(code)) return `PG_${code}`
   return 'DATABASE'
 }
 
@@ -87,7 +88,6 @@ async function main() {
   const ownerA = credentials(suffix, 'Owner A')
   const ownerB = credentials(suffix, 'Owner B')
   const fixtureOrganizationIds = []
-  const fixtureUserIds = []
   const roleResults = []
 
   async function verifyRuntimeRoleWriteProbe() {
@@ -128,7 +128,6 @@ async function main() {
     }, 200, 'signup_failed')
     assert(typeof result.body?.user?.id === 'string' && typeof result.body?.membership?.organizationId === 'string' && typeof result.body?.hostname?.hostname === 'string', 'signup_projection_invalid')
     fixtureOrganizationIds.push(result.body.membership.organizationId)
-    fixtureUserIds.push(result.body.user.id)
     await verifyUser(result.body.user.id)
     return { ...input, userId: result.body.user.id, organizationId: result.body.membership.organizationId, hostname: result.body.hostname.hostname }
   }
@@ -143,12 +142,22 @@ async function main() {
 
   async function cleanup() {
     if (!fixtureOrganizationIds.length) return
-    let phase = 'ORGANIZATIONS'
+    let phase = 'ARCHIVE'
     try {
-      await client.query('DELETE FROM v2_organizations WHERE id = ANY($1::text[])', [fixtureOrganizationIds])
-      phase = 'USERS'
-      await client.query('DELETE FROM v2_users WHERE id = ANY($1::text[])', [fixtureUserIds])
+      await client.query('BEGIN')
+      for (const organizationId of fixtureOrganizationIds) {
+        // The remote flow intentionally creates immutable audit evidence. Deleting an
+        // organization would cascade into the append-only audit table and weaken that
+        // invariant, so staging fixtures are made unreachable instead.
+        await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId])
+        await client.query("UPDATE v2_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = COALESCE(revoke_reason, 'STAGING_FIXTURE_ARCHIVED') WHERE organization_id = $1", [organizationId])
+        await client.query("UPDATE v2_workspace_hostnames SET status = 'ARCHIVED', updated_at = now() WHERE organization_id = $1", [organizationId])
+        await client.query("UPDATE v2_organizations SET status = 'ARCHIVED', updated_at = now() WHERE id = $1", [organizationId])
+      }
+      await client.query('COMMIT')
+      console.log(JSON.stringify({ remoteStagingFixtureCleanup: 'ARCHIVED', organizations: fixtureOrganizationIds.length }))
     } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
       console.log(JSON.stringify({ remoteStagingCleanupFailure: { phase, category: postgresFailureCategory(error) } }))
       throw error
     }
