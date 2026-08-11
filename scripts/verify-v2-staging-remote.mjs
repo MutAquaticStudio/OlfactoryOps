@@ -92,18 +92,23 @@ async function main() {
 
   async function verifyRuntimeRoleWriteProbe() {
     const probeId = `probe_${suffix}`
+    let phase = 'BEGIN'
     await client.query('BEGIN')
     try {
+      phase = 'SET_ROLE'
       await client.query('SET LOCAL ROLE "hyperdrive_user"')
+      phase = 'SET_CONTEXT'
       await client.query("SELECT set_config('app.organization_id', $1, true)", [probeId])
+      phase = 'INSERT_ORGANIZATION'
       await client.query('INSERT INTO v2_organizations (id, slug, name, status) VALUES ($1, $2, $3, $4)', [probeId, `probe-${suffix}`, 'Staging runtime role rollback probe', 'ACTIVE'])
+      phase = 'VERIFY_CONTEXT'
       const context = await client.query("SELECT current_user = 'hyperdrive_user' AS runtime_role, current_setting('app.organization_id', true) = $1 AS tenant_context", [probeId])
       assert(context.rows[0]?.runtime_role === true && context.rows[0]?.tenant_context === true, 'runtime_role_write_probe_context_invalid')
       await client.query('ROLLBACK')
       console.log(JSON.stringify({ runtimeRoleWriteProbe: 'PASS' }))
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined)
-      console.log(JSON.stringify({ runtimeRoleWriteProbe: 'FAIL', category: postgresFailureCategory(error) }))
+      console.log(JSON.stringify({ runtimeRoleWriteProbe: 'FAIL', phase, category: postgresFailureCategory(error) }))
       fail('runtime_role_write_probe_failed')
     }
   }
