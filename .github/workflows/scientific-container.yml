@@ -47,7 +47,6 @@ jobs:
           }
           trap cleanup EXIT
           docker run --detach --name "$container_name" --publish 127.0.0.1:18099:8099 \
-            --env SCIENTIFIC_SERVICE_SHARED_SECRET=scientific-http-test-secret \
             --env SCIENTIFIC_SERVICE_HOST=0.0.0.0 \
             --entrypoint /opt/conda/bin/python \
             olfactoryops-scientific-feature:${IMAGE_TAG} -m scientific_runtime.server >/dev/null

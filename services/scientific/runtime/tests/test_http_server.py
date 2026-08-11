@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import unittest
+from unittest import mock
 from http import HTTPStatus
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -60,5 +61,17 @@ class ScientificRuntimeHttpTests(unittest.TestCase):
             "canonicalSmiles": "CCO",
             "featureKinds": ["ECFP"],
         }, key="not-the-shared-secret")
+        self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
+        self.assertEqual(body["error"], "UNAUTHORIZED")
+
+    def test_private_job_fails_closed_when_no_runtime_secret_is_available(self) -> None:
+        with mock.patch.dict(os.environ, {"SCIENTIFIC_SERVICE_SHARED_SECRET": ""}):
+            status, body = self.request({
+                "jobId": "science-http-job-3",
+                "artifactRef": "v2/org_1/scientific/input",
+                "operation": "FEATURE_GENERATE",
+                "canonicalSmiles": "CCO",
+                "featureKinds": ["ECFP"],
+            })
         self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
         self.assertEqual(body["error"], "UNAUTHORIZED")

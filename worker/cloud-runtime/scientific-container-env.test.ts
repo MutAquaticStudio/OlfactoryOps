@@ -31,28 +31,52 @@ describe('scientificContainerEnvironment', () => {
     expect(scientificContainerDiagnostic(new Error('Container exited before we could determine the container health, exit code: 1'))).toEqual({
       code: 'SCIENTIFIC_CONTAINER_EXITED_BEFORE_HEALTHY',
       exitCode: 1,
+      errorShape: 'ERROR',
+      statusCode: null,
     })
     expect(scientificContainerDiagnostic(new Error('startup details secret=never-log'))).toEqual({
       code: 'SCIENTIFIC_CONTAINER_STARTUP_FAILED',
       exitCode: null,
+      errorShape: 'ERROR',
+      statusCode: null,
     })
     expect(scientificContainerDiagnostic('Failed to verify port 8099 is available after 20000ms, last error: opaque')).toEqual({
       code: 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE',
       exitCode: null,
+      errorShape: 'STRING',
+      statusCode: null,
     })
     expect(scientificContainerDiagnostic(new Error('outer opaque', {
       cause: new Error('There is no container instance that can be provided to this Durable Object'),
     }))).toEqual({
       code: 'SCIENTIFIC_CONTAINER_NO_INSTANCE',
       exitCode: null,
+      errorShape: 'ERROR',
+      statusCode: null,
     })
     expect(scientificContainerDiagnostic({ message: 'You are requesting too many containers per second' })).toEqual({
       code: 'SCIENTIFIC_CONTAINER_RATE_LIMITED',
       exitCode: null,
+      errorShape: 'OBJECT_MESSAGE',
+      statusCode: null,
     })
     expect(scientificContainerDiagnostic(new Error('Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?'))).toEqual({
       code: 'SCIENTIFIC_CONTAINER_CRASHED_DURING_STARTUP',
       exitCode: null,
+      errorShape: 'ERROR',
+      statusCode: null,
+    })
+  })
+
+  it('classifies nested opaque lifecycle errors without logging their values', () => {
+    expect(scientificContainerDiagnostic({
+      error: { reason: new Error('Container request aborted') },
+      status: 503,
+    })).toEqual({
+      code: 'SCIENTIFIC_CONTAINER_REQUEST_ABORTED',
+      exitCode: null,
+      errorShape: 'OBJECT_ERROR',
+      statusCode: 503,
     })
   })
 })

@@ -16,7 +16,6 @@ MAX_BODY_BYTES = 1_048_576
 
 class Handler(BaseHTTPRequestHandler):
     runtime = ScientificRuntimeService()
-    shared_secret = os.environ.get("SCIENTIFIC_SERVICE_SHARED_SECRET", "")
 
     def log_message(self, _format: str, *_args: object) -> None:
         # Molecular structures and request headers are intentionally never logged here.
@@ -33,7 +32,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _authorized(self) -> bool:
         provided = self.headers.get("x-olfactoryops-scientific-key", "")
-        return bool(self.shared_secret) and hmac.compare_digest(provided, self.shared_secret)
+        shared_secret = os.environ.get("SCIENTIFIC_SERVICE_SHARED_SECRET", "")
+        return bool(shared_secret) and hmac.compare_digest(provided, shared_secret)
 
     def do_GET(self) -> None:  # noqa: N802
         if self.path == "/health":
@@ -100,8 +100,9 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     host = os.environ.get("SCIENTIFIC_SERVICE_HOST", "127.0.0.1")
     port = int(os.environ.get("SCIENTIFIC_SERVICE_PORT", "8099"))
-    if not os.environ.get("SCIENTIFIC_SERVICE_SHARED_SECRET"):
-        raise SystemExit("SCIENTIFIC_SERVICE_SHARED_SECRET must be configured for the private scientific runtime.")
+    # Startup health establishes process liveness only. The workflow still
+    # fails closed because every POST is rejected when the runtime secret is
+    # absent.
     ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
