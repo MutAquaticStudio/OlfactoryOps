@@ -57,7 +57,6 @@ jobs:
       V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
       V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
       V2_STAGING_EXPECTED_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
-      V2_STAGING_TENANT_EVIDENCE_DIR: ${{ runner.temp }}/staging-tenant-host-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,6 +74,8 @@ jobs:
           set -euo pipefail
           test -n "$STAGING_DATABASE_URL"
       - name: Verify known and unknown tenants through the deployed route and TLS
+        env:
+          V2_STAGING_TENANT_EVIDENCE_DIR: ${{ runner.temp }}/staging-tenant-host-evidence
         run: node scripts/verify-v2-staging-tenant-hosts.mjs
       - uses: actions/upload-artifact@v4
         if: always()

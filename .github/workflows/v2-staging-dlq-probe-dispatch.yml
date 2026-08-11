@@ -56,8 +56,6 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       V2_STAGING_ENVIRONMENT: staging
-      V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
-      V2_STAGING_DLQ_PROBE_EVIDENCE_PATH: ${{ runner.temp }}/staging-dlq-probe-evidence.json
       V2_STAGING_DLQ_PROBE_TIMEOUT_MS: "240000"
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +78,11 @@ jobs:
       - name: Prepare an isolated staging-only failure fixture
         env:
           V2_STAGING_DLQ_PROBE_APPROVED: PREPARE_STAGING_DLQ_PROBE
+          V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
         run: node scripts/prepare-v2-staging-dlq-probe.mjs
       - name: Submit exactly one fixture through the staging source queue
+        env:
+          V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
         shell: bash
         run: |
           set -euo pipefail
@@ -101,8 +102,12 @@ jobs:
       - name: Verify terminal job state and zero business side effects through staging PostgreSQL
         env:
           V2_STAGING_DLQ_PROBE_APPROVED: VERIFY_STAGING_DLQ_PROBE
+          V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
+          V2_STAGING_DLQ_PROBE_EVIDENCE_PATH: ${{ runner.temp }}/staging-dlq-probe-evidence.json
         run: node scripts/verify-v2-staging-dlq-probe.mjs
       - name: Observe the exact test message in the configured DLQ and remove only that reference
+        env:
+          V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
         shell: bash
         run: |
           set -euo pipefail
@@ -155,6 +160,7 @@ jobs:
       - name: Archive the isolated fixture after evidence and exact DLQ cleanup
         env:
           V2_STAGING_DLQ_PROBE_APPROVED: ARCHIVE_STAGING_DLQ_PROBE
+          V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
         run: node scripts/archive-v2-staging-dlq-probe.mjs
       - uses: actions/upload-artifact@v4
         if: always()
