@@ -81,7 +81,39 @@ jobs:
           set -euo pipefail
           result_ref="$(mktemp)"
           result_file="$(mktemp)"
-          trap 'rm -f "$result_ref" "$result_file"' EXIT
+          tail_file="$(mktemp)"
+          tail_pid=""
+          emit_safe_container_diagnostics() {
+            if [[ -n "$tail_pid" ]]; then
+              kill -TERM -- "-$tail_pid" 2>/dev/null || true
+              for _ in $(seq 1 5); do
+                kill -0 "$tail_pid" 2>/dev/null || break
+                sleep 1
+              done
+              kill -KILL -- "-$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+            fi
+            TAIL_FILE="$tail_file" node --input-type=module <<'NODE'
+            import { readFileSync } from 'node:fs'
+
+            const source = readFileSync(process.env.TAIL_FILE, 'utf8')
+            const diagnostics = []
+            for (const line of source.split(/\r?\n/)) {
+              const event = /scientific_container_(?:error|stop)/.exec(line)?.[0]
+              if (!event) continue
+              const container = /container\\?"\s*:\s*\\?"(feature|model)/.exec(line)?.[1] ?? 'unknown'
+              const code = /SCIENTIFIC_CONTAINER_(?:EXITED_BEFORE_HEALTHY|PORT_UNAVAILABLE|STARTUP_FAILED|RUNTIME_ERROR)/.exec(line)?.[0] ?? null
+              const exitCode = /exitCode\\?"\s*:\s*(-?\d+)/.exec(line)?.[1] ?? null
+              const secretConfigured = /secretConfigured\\?"\s*:\s*(true|false)/.exec(line)?.[1] ?? null
+              diagnostics.push({ event, container, code, exitCode, secretConfigured })
+            }
+            console.log(`CLOUD_RUNTIME_SAFE_DIAGNOSTICS=${JSON.stringify(diagnostics)}`)
+            NODE
+          }
+          trap 'emit_safe_container_diagnostics; rm -f "$result_ref" "$result_file" "$tail_file"' EXIT
+          setsid timeout --signal=TERM --kill-after=5s 180s npx wrangler tail olfactoryops-v2-cloud-runtime-staging --format json > "$tail_file" 2>&1 &
+          tail_pid="$!"
+          sleep 3
           export V2_STAGING_SCIENTIFIC_RESULT_REF_PATH="$result_ref"
           node scripts/verify-v2-staging-scientific.mjs
           artifact_ref="$(tr -d '\r\n' < "$result_ref")"
