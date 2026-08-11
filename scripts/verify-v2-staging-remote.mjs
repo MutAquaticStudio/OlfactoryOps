@@ -55,6 +55,10 @@ async function request(path, { method = 'GET', origin, cookie, csrf, idempotency
 
 async function expectStatus(path, options, status, code) {
   const result = await request(path, options)
+  if (result.status !== status) {
+    const errorCode = typeof result.body?.error?.code === 'string' ? result.body.error.code : 'NO_STABLE_ERROR_CODE'
+    console.log(JSON.stringify({ remoteStagingFailure: { code, expectedStatus: status, actualStatus: result.status, errorCode } }))
+  }
   assert(result.status === status, code)
   return result
 }
