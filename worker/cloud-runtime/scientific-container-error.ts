@@ -22,12 +22,17 @@ export async function safeScientificContainerError(response: Response): Promise<
 
   if (response.status === 500) {
     try {
-      const payload = await response.clone().json() as { error?: unknown }
+      const body = await response.clone().text()
+      if (body.startsWith('Failed to start container:')) return 'SCIENTIFIC_CONTAINER_START_FAILED'
+      if (body.startsWith('Origin is disallowed')) return 'SCIENTIFIC_CONTAINER_NETWORK_DENIED'
+      const payload = JSON.parse(body) as { error?: unknown }
       if (typeof payload.error === 'string' && runtimeCodes.has(payload.error)) return payload.error
     } catch {
       // The response is intentionally treated as opaque unless it matches our protocol.
     }
   }
+
+  if (response.status >= 400 && response.status <= 599) return `SCIENTIFIC_CONTAINER_HTTP_${response.status}`
 
   return 'SCIENTIFIC_CONTAINER_FAILED'
 }
