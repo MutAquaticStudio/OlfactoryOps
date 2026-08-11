@@ -1,0 +1,71 @@
+name: V2 Staging PostgreSQL Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type APPLY_STAGING to apply V2 migrations to staging only.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-postgres-migration
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        name: Validate the approved staging revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "APPLY_STAGING"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  migrate-staging:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      V2_STAGING_MIGRATION_APPROVED: APPLY_STAGING
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require the staging-only database secret
+        run: test -n "$STAGING_DATABASE_URL"
+      - name: Apply immutable V2 PostgreSQL migrations
+        run: node scripts/apply-v2-staging-migrations.mjs
+      - name: Restrict the Hyperdrive runtime role
+        run: node scripts/configure-v2-runtime-role.mjs

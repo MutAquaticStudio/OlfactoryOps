@@ -35,6 +35,8 @@ jobs:
         run: npm run build:api
 
       - name: Prisma schema validation
+        env:
+          DATABASE_URL: postgresql://schema_check:schema_check@127.0.0.1:5432/schema_check
         run: npm run prisma:validate
 
       - name: Dependency audit
