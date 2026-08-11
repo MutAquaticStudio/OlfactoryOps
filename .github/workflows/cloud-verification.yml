@@ -1,0 +1,71 @@
+name: Cloud Verification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 5 * * *"
+  pull_request:
+    paths:
+      - "apps/**"
+      - "infra/cloudflare/**"
+      - "services/**"
+      - "server/**"
+      - "worker/**"
+      - ".github/workflows/cloud-verification.yml"
+      - "docs/v2/CLOUD_MIGRATION_RUNBOOK.md"
+      - "docs/v2/REMOTE_BUILD_AND_CI.md"
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_CI_CREDENTIALS: ${{ secrets.CLOUDFLARE_CI_CREDENTIALS }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Identity and docs gates
+        run: |
+          npm run release:identity:check
+          npm run release:docs:check
+
+      - name: Migration and manifest checks
+        run: |
+          npm run release:migrations:verify
+          npm run release:manifest:generate
+          npm run release:manifest:validate
+
+      - name: Worker and router build checks
+        run: |
+          npm run build:api
+          npm run build:worker
+          npm run build:tenant-router
+          npm run test
+
+      - name: Cloud integration availability check
+        run: |
+          if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] && [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ "${CLOUDFLARE_CI_CREDENTIALS:-}" = "enabled" ]; then
+            echo "CLOUDFLARE_CI_CREDENTIALS=AVAILABLE"
+          else
+            echo "CLOUDFLARE_CI_CREDENTIALS=MANUAL_SETUP_REQUIRED"
+            exit 0
+          fi
+        continue-on-error: true
+
+      - name: Optional cloud smoke (workers)
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_CI_CREDENTIALS == 'enabled'
+        run: |
+          echo "Cloud provider smoke checks are intentionally blocked in this checkpoint."
+          echo "Implement in future environment with explicit staging credentials."
+

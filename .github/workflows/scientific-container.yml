@@ -1,0 +1,71 @@
+name: Scientific Container Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: Attempt remote publish for configured Cloudflare container registry
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - "services/scientific/**"
+      - ".github/workflows/scientific-container.yml"
+      - "docs/v2/SCIENTIFIC_CONTAINER_RUNTIME.md"
+  push:
+    branches:
+      - main
+      - master
+      - "release-*"
+    paths:
+      - "services/scientific/**"
+      - ".github/workflows/scientific-container.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      SCIENTIFIC_CONTAINER_IMAGE_PREFIX: olfactoryops-scientific
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build base scientific images
+        run: |
+          set -euo pipefail
+          GIT_SHA="${GITHUB_SHA:-local}"
+          for runtime in "runtime|services/scientific/runtime:Dockerfile" "model-runtime|services/scientific/model-runtime:Dockerfile"; do
+            IFS='|' read -r label path <<< "$runtime"
+            context="${path%:*}"
+            dockerfile="${path#*:}"
+            image="${SCIENTIFIC_CONTAINER_IMAGE_PREFIX}-${label}:${GIT_SHA}"
+            docker build --file "$dockerfile" --tag "$image" "$context"
+            echo "Built $image"
+          done
+
+      - name: Optional container provenance smoke
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "CLOUDFLARE_CI_CREDENTIALS=MANUAL_SETUP_REQUIRED"
+            exit 0
+          fi
+          echo "Cloud credentials available; remote publish is defined as a manual integration step."
+          echo "CLOUDFLARE_CI_CREDENTIALS=AVAILABLE_NOT_ENABLED"
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.push_images == 'true' }}
+        continue-on-error: true
