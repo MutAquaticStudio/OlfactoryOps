@@ -17,19 +17,32 @@ This document defines the CI checkpoints for:
 
 Workflow: `.github/workflows/scientific-container.yml`
 
-Expected pipeline:
-1. checkout
-2. node/npm setup and install
-3. build container image for each scientific runtime
-4. run scientific tests in container context (or deterministic compatibility tests)
-5. run provenance/license checks
-6. tag image with immutable git SHA
-7. push to Cloudflare managed registry
-8. record image tags and registry listing as build evidence; the staging render
-   command accepts only immutable `sha256:` digests, never a mutable tag
+The workflow deliberately separates the two trust boundaries:
 
-If credentials are absent, the workflow reports:
-`CLOUDFLARE_CI_CREDENTIALS = MANUAL_SETUP_REQUIRED`.
+1. `scientific-images` checks out the exact SHA, builds Linux/amd64 images,
+   runs the feature/model fixtures and provenance checks, and uploads only
+   non-sensitive CI evidence. It has no `staging` Environment and no
+   Cloudflare credential reference.
+2. `publish-scientific-images` depends on that build and runs only after the
+   explicit staging publish confirmation. It alone enters `environment:
+   staging`, rebuilds the immutable images, pushes them to Cloudflare, and
+   uploads immutable image evidence.
+
+The staging render command accepts only immutable `sha256:` digests, never a
+mutable tag.
+
+If the configured staging token is missing a Container Registry permission,
+publishing stops at the Cloudflare authorization error. It must not fall back
+to a broader repository secret, a local credential, or production token.
+
+## Current Staging Evidence
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Staging secret boundary | PASS | Cloudflare credentials are referenced only by `publish-scientific-images`, which uses the `staging` Environment. |
+| Remote Linux scientific build | PASS | GitHub run `31477266765` completed the feature and model compatibility checks. |
+| Staging Container Registry publish | BLOCKED | The environment-scoped Cloudflare token returned `403 Forbidden` from `wrangler containers push`; Cloudflare mutations stopped. |
+| Immutable image digest | BLOCKED | No image was accepted by the registry, so no digest may be recorded. |
 
 The workflow does not build images on a developer Windows machine. It runs
 Linux/amd64 builds, native feature tests, model compatibility tests, provenance

@@ -66,16 +66,21 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Gate | Status | Reason |
 | --- | --- | --- |
 | Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
-| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. The GitHub `staging` environment and its `STAGING_DATABASE_URL` secret do not exist; additionally, GitHub requires this `workflow_dispatch` file on the default branch before it can run. Remote RLS fixtures have not run. |
+| GitHub staging Environment and dispatch | PASS | The `staging` Environment exists with the approved secret names, and default-branch dispatchers validate exact staging SHAs before entering it. |
+| Staging migration chain | PASS | GitHub run `31477033801` completed the immutable V2 migration chain. |
+| Hyperdrive runtime role hardening | BLOCKED | The configured `hyperdrive_user` is a `SUPERUSER`; Supabase rejected the migration credential's least-privilege `ALTER ROLE` with `42501`. |
+| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. Remote RLS fixtures must wait for `RUNTIME_DB_PRIVILEGES=PASS`. |
 | API Worker staging deployment | PASS | `olfactoryops-v2-api-staging` was uploaded with Hyperdrive only, three Cloudflare-managed secret bindings, a Cloudflare-managed `api-beta` custom domain/certificate, and an exact route that excludes the legacy wildcard router. |
 | Tenant-router wildcard and Pages deployment | BLOCKED | The PostgreSQL hostname registry/RLS gate and staging Pages deployment remain outstanding. |
 | R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Control-plane PUT/delete passed, but raw GET and tenant-denial require the deployed Worker. |
 | Vectorize Worker tenant isolation | BLOCKED | Control-plane metadata filters passed; application authorization still requires the deployed Worker and fixture tenant. |
 | Queue retry/DLQ and Workflow terminal-failure smoke | BLOCKED | No consumer Worker or Workflow is deployed. |
 | Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
-| GitHub scientific image publishing | BLOCKED | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets are absent. |
+| Remote scientific Linux build | PASS | GitHub run `31477266765` completed provenance, feature runtime, and model compatibility checks without a staging Environment or Cloudflare credentials. |
+| GitHub scientific image publishing | BLOCKED | The staging-only publish job received its Environment secrets but Cloudflare Container Registry rejected the configured token with `403 Forbidden`. Cloudflare mutations stopped immediately. |
 | AI Gateway | NOT_APPLICABLE | No approved provider policy or staging provider credential. |
-| Browser staging checks | BLOCKED | `api-beta` is active, but `beta` still serves a prior Pages deployment whose CSP excludes `api-beta`; the current staging Pages build has not been deployed and no fixture tenant hostname exists. |
+| Browser rendered routes | PASS | `beta.labofscents.org`, `/login`, and `/signup` rendered in a real browser with no captured console errors. |
+| Browser authenticated staging flow | BLOCKED | No isolated remote role fixture may be created until the least-privilege Hyperdrive role gate passes. |
 | Production deployment | NOT_APPLICABLE | Explicitly prohibited in this cutover. |
 
 ## Verdict
@@ -87,6 +92,10 @@ LOCAL_ACCEPTANCE = PASS
 REMOTE_POSTGRES_REQUIRED = PASS
 HYPERDRIVE_EXISTS = PASS
 HYPERDRIVE_STAGING = PASS
+MIGRATIONS_STAGING = PASS
+RUNTIME_DB_PRIVILEGES = BLOCKED
+REMOTE_SCIENTIFIC_BUILD = PASS
+SCIENTIFIC_CONTAINER_STAGING = BLOCKED
 REMOTE_STAGING_ACCEPTANCE = BLOCKED
 PRODUCTION_DEPLOYED = NOT_APPLICABLE
 V2_CLOUDFLARE_STAGING_READY = BLOCKED

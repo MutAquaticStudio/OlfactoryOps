@@ -55,8 +55,15 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    `STAGING_DATABASE_URL` secret for the migration/admin connection. The
    workflow applies `0001` through `0018`, then restricts the existing
    `hyperdrive_user` role without reading or printing credentials. The runtime
-   role has no membership escalation, schema `CREATE`, superuser, or
+   role must have no membership escalation, schema `CREATE`, superuser, or
    `BYPASSRLS` privilege.
+
+   Current staging evidence: the migration chain completed in GitHub run
+   `31477033801`, but Supabase rejected the role hardening step because
+   `hyperdrive_user` is itself a `SUPERUSER`. The GitHub migration credential
+   must not bypass that restriction. An owner-level Supabase administration
+   action is required to replace the superuser configuration before this gate
+   can pass.
 4. Make the protected workflow available on the repository default branch
    before manual dispatch. GitHub requires a `workflow_dispatch` file on that
    branch; do not merge unrelated cloud-runtime work merely to satisfy this
@@ -68,10 +75,16 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 1. Use immutable image tag format:
    - `olfactoryops-scientific:<git-sha>`
 2. Build and push via GitHub Actions + Wrangler container support (or explicit Cloudflare support in target account).
-3. Record digest into runbook or environment run metadata.
+3. Record digest into runbook or environment run metadata only after the
+   staging Container Registry accepts the image.
 4. Store at least:
    - active image digest
    - known-good backup digest
+
+Current staging evidence: Linux build and compatibility checks completed in
+GitHub run `31477266765`, but `wrangler containers push` returned `403
+Forbidden` from the staging Cloudflare token. Do not retry Cloudflare mutations
+until its Container Registry permission/scope is corrected.
 
 ## 6. Containerized workloads
 

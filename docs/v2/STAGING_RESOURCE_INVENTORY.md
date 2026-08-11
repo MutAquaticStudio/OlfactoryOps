@@ -64,20 +64,21 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | Hyperdrive runtime path | PASS | The staging API Worker reports `database: hyperdrive` only after its PostgreSQL `SELECT 1` succeeds. |
 | API Worker custom domain and exact route | PASS | Cloudflare-managed `api-beta.labofscents.org` custom domain/certificate and a more-specific Worker route bypass the legacy `*.labofscents.org` router. |
 | Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
-| GitHub Cloudflare and migration secrets | BLOCKED | The GitHub `staging` environment does not yet exist. The checked-in migration workflow requires its `STAGING_DATABASE_URL`; `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` are also absent from repository secrets. |
-| Protected migration dispatch | BLOCKED | GitHub requires `workflow_dispatch` to exist on the default branch. The workflow is intentionally only on this staging branch, which must not be merged without separate authorization. |
+| GitHub staging environment secrets | PASS | The protected `staging` Environment contains only `STAGING_DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`; values were not read. |
+| Default-branch protected dispatch | PASS | Default branch dispatchers validate an exact `codex/cloudflare-cloud-native-runtime` SHA before the staging Environment is entered. |
+| Staging migration chain | PASS | GitHub run `31477033801` applied the immutable V2 migration chain before role hardening began. |
+| Hyperdrive runtime role hardening | BLOCKED | `hyperdrive_user` is currently a Supabase-managed `SUPERUSER`; the approved migration credential cannot alter a superuser role (`42501`). No privilege was weakened or changed. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
 ## Activation Sequence
 
-1. Create the protected GitHub `staging` environment and provide the approved
-   staging migration/admin connection as `STAGING_DATABASE_URL`, without
-   placing its value in source control or chat.
-2. Apply the approved V2 migration baseline and restrict the `hyperdrive_user`
-   role with the protected manual `V2 Staging PostgreSQL Migration` workflow
-   before exposing any tenant-routed or authenticated workflow. First arrange
-   an explicitly approved default-branch delivery for that workflow only.
+1. In Supabase staging with an owner-level database administration session,
+   replace the current superuser configuration of `hyperdrive_user` with the
+   least-privilege role required by `scripts/configure-v2-runtime-role.mjs`.
+   The GitHub migration credential intentionally cannot make this change.
+2. Re-run the protected `V2 Staging PostgreSQL Migration` dispatcher for the
+   exact current staging SHA and require `RUNTIME_DB_PRIVILEGES=PASS`.
 3. Deploy the separate `*.beta.labofscents.org` tenant-router only after the
    PostgreSQL hostname registry/RLS gate passes.
 4. Configure and deploy the existing `olfactoryops-beta` Pages project with
@@ -95,6 +96,8 @@ REMOTE_POSTGRES_REQUIRED = PASS
 HYPERDRIVE_EXISTS = PASS
 HYPERDRIVE_STAGING = PASS
 STAGING_API_WORKER = PASS
+MIGRATIONS_STAGING = PASS
+RUNTIME_DB_PRIVILEGES = BLOCKED
 STAGING_DNS_AND_ROUTES = BLOCKED
 MATERIAL_EVIDENCE_VECTORIZE = PASS
 MOLECULAR_VECTORIZE = NOT_APPLICABLE
