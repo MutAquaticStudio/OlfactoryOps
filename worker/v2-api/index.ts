@@ -21,7 +21,13 @@ export default {
       services = createV2ApiServices(env)
       if (request.method === 'GET' && url.pathname === '/health') {
         await services.prisma.$queryRawUnsafe('SELECT 1')
-        return json(200, { status: 'ok', runtime: 'v2-api-worker/1', environment: env.RELEASE_ENVIRONMENT ?? 'unconfigured', database: 'hyperdrive' })
+        return json(200, {
+          status: 'ok',
+          runtime: 'v2-api-worker/1',
+          environment: env.RELEASE_ENVIRONMENT ?? 'unconfigured',
+          releaseGitSha: env.RELEASE_GIT_SHA ?? 'unconfigured',
+          database: 'hyperdrive',
+        })
       }
       const streamServices = services
       const stream = await agentEventStreamResponse({

@@ -9,8 +9,8 @@ if (missing.length) {
   console.log(`CLOUD_RUNTIME_RENDER=BLOCKED missing:${missing.join(',')}`)
   process.exit(process.env.CLOUD_RUNTIME_REQUIRE_READY === 'true' ? 2 : 0)
 }
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-if (!uuid.test(process.env.CLOUD_RUNTIME_HYPERDRIVE_ID ?? '')) throw new Error('CLOUD_RUNTIME_HYPERDRIVE_ID must be a UUID')
+const hyperdriveId = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i
+if (!hyperdriveId.test(process.env.CLOUD_RUNTIME_HYPERDRIVE_ID ?? '')) throw new Error('CLOUD_RUNTIME_HYPERDRIVE_ID must be a valid Cloudflare Hyperdrive ID')
 for (const key of ['SCIENTIFIC_FEATURE_IMAGE_DIGEST', 'SCIENTIFIC_MODEL_IMAGE_DIGEST']) {
   if (!/^sha256:[a-f0-9]{64}$/i.test(process.env[key] ?? '')) throw new Error(`${key} must be an immutable sha256 digest`)
 }
