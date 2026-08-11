@@ -1,4 +1,4 @@
-name: V2 Staging Remote Tenant Verification
+name: V2 Staging Tenant Host Browser Verification
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       confirm_staging:
-        description: Type RUN_REMOTE_STAGING_E2E to create and remove isolated staging fixtures.
+        description: Type RUN_STAGING_TENANT_HOST_E2E to verify known and unknown staging tenants.
         required: true
         type: string
 
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: v2-staging-remote-tenant-verification
+  group: v2-staging-tenant-host-browser-verification
   cancel-in-progress: false
 
 env:
@@ -34,30 +34,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: revision
-        name: Validate the approved staging revision
         shell: bash
         run: |
           set -euo pipefail
-          test "$CONFIRM_STAGING" = "RUN_REMOTE_STAGING_E2E"
+          test "$CONFIRM_STAGING" = "RUN_STAGING_TENANT_HOST_E2E"
           [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           git fetch --no-tags origin "$STAGING_BRANCH"
           test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
           git cat-file -e "${STAGING_SHA}^{commit}"
           echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
 
-  verify-remote-staging:
+  verify-tenant-hosts:
     needs: validate-staging-revision
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: staging
     env:
       STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      V2_STAGING_REMOTE_APPROVED: RUN_REMOTE_STAGING_E2E
+      V2_STAGING_ENVIRONMENT: staging
+      V2_STAGING_TENANT_HOST_APPROVED: RUN_STAGING_TENANT_HOST_E2E
       V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
       V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
       V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+      V2_STAGING_EXPECTED_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      V2_STAGING_TENANT_EVIDENCE_DIR: ${{ runner.temp }}/staging-tenant-host-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,36 +67,19 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Require the staging-only database secret
-        run: |
-          test -n "$STAGING_DATABASE_URL"
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$CLOUDFLARE_API_TOKEN"
-      - name: Verify API Worker to Hyperdrive tenant isolation and all active roles
+      - name: Install the browser required for authenticated hostname verification
+        run: npx playwright install --with-deps chromium
+      - name: Require only the staging database secret
         shell: bash
         run: |
           set -euo pipefail
-          tail_log="$(mktemp)"
-          tail_pid=""
-          cleanup() {
-            if [ -n "$tail_pid" ] && kill -0 "$tail_pid" 2>/dev/null; then
-              kill "$tail_pid" 2>/dev/null || true
-              wait "$tail_pid" 2>/dev/null || true
-            fi
-            node scripts/extract-v2-worker-tail.mjs "$tail_log"
-            rm -f "$tail_log"
-          }
-          trap cleanup EXIT
-
-          # This protected, dispatch-only Environment job is the sole consumer
-          # of the staging Cloudflare token for diagnostics. The tail is never
-          # written to workflow output; only the allow-listed code extractor runs.
-          npx wrangler tail olfactoryops-v2-api-staging --format json >"$tail_log" 2>&1 &
-          tail_pid="$!"
-          sleep 4
-          set +e
-          node scripts/verify-v2-staging-remote.mjs
-          verification_status="$?"
-          set -e
-          sleep 4
-          exit "$verification_status"
+          test -n "$STAGING_DATABASE_URL"
+      - name: Verify known and unknown tenants through the deployed route and TLS
+        run: node scripts/verify-v2-staging-tenant-hosts.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-tenant-host-evidence-${{ needs.validate-staging-revision.outputs.staging_sha }}
+          path: ${{ runner.temp }}/staging-tenant-host-evidence
+          if-no-files-found: error
+          retention-days: 14

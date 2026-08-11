@@ -57,7 +57,8 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       V2_STAGING_SCIENTIFIC_APPROVED: RUN_REMOTE_SCIENTIFIC_E2E
       V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
-      V2_STAGING_PUBLIC_BASE_DOMAIN: beta.labofscents.org
+      V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
+      V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
     steps:
       - uses: actions/checkout@v4
         with:

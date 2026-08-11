@@ -1,0 +1,167 @@
+name: V2 Staging Scientific DLQ Acceptance Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact deployed SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type RUN_STAGING_DLQ_PROBE to submit one isolated terminal-failure fixture.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-scientific-dlq-probe
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_SCIENTIFIC_QUEUE_ID: 27cfb24e0ec44399a499c60d4d39623b
+  STAGING_SCIENTIFIC_DLQ_ID: e951f2834df84f3890d3021fdac21884
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "RUN_STAGING_DLQ_PROBE"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  run-staging-dlq-probe:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    env:
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_STAGING_ENVIRONMENT: staging
+      V2_STAGING_DLQ_PROBE_ENVELOPE_PATH: ${{ runner.temp }}/staging-dlq-probe-envelope.json
+      V2_STAGING_DLQ_PROBE_EVIDENCE_PATH: ${{ runner.temp }}/staging-dlq-probe-evidence.json
+      V2_STAGING_DLQ_PROBE_TIMEOUT_MS: "240000"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require staging-only credentials and resource identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_DATABASE_URL"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          [[ "$STAGING_SCIENTIFIC_QUEUE_ID" =~ ^[a-f0-9]{32}$ ]]
+          [[ "$STAGING_SCIENTIFIC_DLQ_ID" =~ ^[a-f0-9]{32}$ ]]
+      - name: Prepare an isolated staging-only failure fixture
+        env:
+          V2_STAGING_DLQ_PROBE_APPROVED: PREPARE_STAGING_DLQ_PROBE
+        run: node scripts/prepare-v2-staging-dlq-probe.mjs
+      - name: Submit exactly one fixture through the staging source queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const envelope = JSON.parse(readFileSync(process.env.V2_STAGING_DLQ_PROBE_ENVELOPE_PATH, 'utf8'))
+          const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/queues/${process.env.STAGING_SCIENTIFIC_QUEUE_ID}/messages`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ body: envelope, content_type: 'json' }),
+          })
+          const body = await response.json().catch(() => undefined)
+          if (!response.ok || body?.success !== true) throw new Error(`source queue submission failed with HTTP ${response.status}`)
+          console.log(JSON.stringify({ terminalFailureFixtureSubmitted: 'PASS', jobId: envelope.jobId, correlationId: envelope.correlationId }))
+          NODE
+      - name: Verify terminal job state and zero business side effects through staging PostgreSQL
+        env:
+          V2_STAGING_DLQ_PROBE_APPROVED: VERIFY_STAGING_DLQ_PROBE
+        run: node scripts/verify-v2-staging-dlq-probe.mjs
+      - name: Observe the exact test message in the configured DLQ and remove only that reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs'
+
+          const api = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/queues`
+          const envelope = JSON.parse(readFileSync(process.env.V2_STAGING_DLQ_PROBE_ENVELOPE_PATH, 'utf8'))
+          const headers = { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json' }
+          const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+          const peek = async (queueId) => {
+            const response = await fetch(`${api}/${queueId}/messages/peek`, { method: 'POST', headers, body: JSON.stringify({ batch_size: 100 }) })
+            const body = await response.json().catch(() => undefined)
+            if (!response.ok || body?.success !== true || !Array.isArray(body?.result?.messages)) throw new Error(`queue peek failed for ${queueId} with HTTP ${response.status}`)
+            return body.result.messages
+          }
+          let message
+          for (let attempt = 0; attempt < 48 && !message; attempt += 1) {
+            const messages = await peek(process.env.STAGING_SCIENTIFIC_DLQ_ID)
+            message = messages.find((candidate) => {
+              try {
+                const parsed = typeof candidate?.body === 'string' ? JSON.parse(candidate.body) : candidate?.body
+                return parsed?.jobId === envelope.jobId && parsed?.correlationId === envelope.correlationId && parsed?.jobType === 'STAGING_DLQ_TERMINAL_FAILURE_PROBE'
+              } catch { return false }
+            })
+            if (!message) await sleep(5_000)
+          }
+          if (!message?.ref) throw new Error('terminal fixture was not observed in the configured DLQ')
+          const purge = await fetch(`${api}/${process.env.STAGING_SCIENTIFIC_DLQ_ID}/messages/purge`, {
+            method: 'POST', headers, body: JSON.stringify({ refs: [{ ref: message.ref }] }),
+          })
+          const purgeBody = await purge.json().catch(() => undefined)
+          if (!purge.ok || purgeBody?.success !== true) throw new Error(`exact DLQ fixture cleanup failed with HTTP ${purge.status}`)
+          const sourceMessages = await peek(process.env.STAGING_SCIENTIFIC_QUEUE_ID)
+          const dlqMessages = await peek(process.env.STAGING_SCIENTIFIC_DLQ_ID)
+          if (sourceMessages.length !== 0 || dlqMessages.length !== 0) throw new Error('a staging queue backlog remains; no unrelated messages were purged')
+          const evidence = {
+            terminalFailureReachedDlq: 'PASS',
+            queueRetryPolicyExecuted: 'PASS',
+            dlqMessageAttempts: Number(message.attempts ?? 0),
+            dlqMessageId: message.id ?? null,
+            dlqArrivalTimestampMs: Number(message.timestamp_ms ?? 0),
+            sourceQueueBacklog: sourceMessages.length,
+            dlqBacklog: dlqMessages.length,
+            cleanedExactRef: true,
+          }
+          writeFileSync(`${process.env.RUNNER_TEMP}/staging-dlq-queue-evidence.json`, `${JSON.stringify(evidence, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+          console.log(JSON.stringify(evidence))
+          NODE
+      - name: Archive the isolated fixture after evidence and exact DLQ cleanup
+        env:
+          V2_STAGING_DLQ_PROBE_APPROVED: ARCHIVE_STAGING_DLQ_PROBE
+        run: node scripts/archive-v2-staging-dlq-probe.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-dlq-probe-evidence-${{ needs.validate-staging-revision.outputs.staging_sha }}
+          path: |
+            ${{ runner.temp }}/staging-dlq-probe-evidence.json
+            ${{ runner.temp }}/staging-dlq-queue-evidence.json
+          if-no-files-found: error
+          retention-days: 14

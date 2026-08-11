@@ -58,7 +58,10 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
       VITE_API_BASE_URL: https://api-beta.labofscents.org/api/v1
-      VITE_V2_WORKSPACE_BASE_DOMAIN: beta.labofscents.org
+      # The Pages host remains beta.labofscents.org. Tenant hosts use the
+      # separately TLS-covered api-beta wildcard and are resolved by the
+      # staging Tenant Router Worker before Pages is reached.
+      VITE_V2_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
       VITE_V2_STAGING_PUBLIC_CUTOVER: "true"
     steps:
       - uses: actions/checkout@v4
