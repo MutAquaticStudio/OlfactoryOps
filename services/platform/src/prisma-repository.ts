@@ -1,10 +1,18 @@
 import { PrismaClient } from '@prisma/client'
 import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
-import type { PlatformRepository, RepositoryContext, SessionCreate, SignupSeed } from './repository.js'
+import { SignupWriteError, type PlatformRepository, type RepositoryContext, type SessionCreate, type SignupSeed } from './repository.js'
 import type { ConsentRecord, ExportRequest, HostnameRecord, InvitationRecord, MemberProjection, NotificationDelivery, NotificationPreference, ObservabilityProjection, PushSubscriptionInput, PlatformRole } from '../../../packages/contracts/src/index.js'
 
 type PrismaLike = PrismaClient
 const iso = (value: Date | string) => value instanceof Date ? value.toISOString() : value
+
+async function signupWrite<T>(step: string, operation: () => Promise<T>) {
+  try {
+    return await operation()
+  } catch {
+    throw new SignupWriteError(`SIGNUP_WRITE_${step}`)
+  }
+}
 
 export class PrismaPlatformRepository implements PlatformRepository {
   constructor(private readonly client: PrismaLike) {}
@@ -22,15 +30,15 @@ export class PrismaPlatformRepository implements PlatformRepository {
   async createUser(user: PlatformUser) { const row = await this.client.user.create({ data: { id: user.id, email: user.email, displayName: user.displayName, passwordHash: user.passwordHash, status: user.status, verifiedAt: user.verifiedAt ? new Date(user.verifiedAt) : undefined } }); return this.user(row) }
 
   async createSignup(input: { user: PlatformUser; organization: OrganizationRecord; membership: MembershipRecord; hostname: HostnameRecord; rolePermissions: string[]; rolePolicies?: Record<string, string[]>; billing: BillingRecord }): Promise<SignupSeed> {
-    await this.client.$executeRawUnsafe(`SELECT set_config('app.organization_id', $1, true)`, input.organization.id)
-    await this.client.$executeRawUnsafe(`SELECT set_config('app.user_id', $1, true)`, input.user.id)
-    await this.client.organization.create({ data: { id: input.organization.id, slug: input.organization.slug, name: input.organization.name, status: input.organization.status } })
-    await this.client.user.create({ data: { id: input.user.id, email: input.user.email, displayName: input.user.displayName, passwordHash: input.user.passwordHash, status: input.user.status } })
-    await this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } })
-    await this.client.workspaceHostname.create({ data: { id: input.hostname.id, organizationId: input.hostname.organizationId, hostname: input.hostname.hostname, kind: input.hostname.kind, status: input.hostname.status, validationStatus: input.hostname.validationStatus, sslStatus: input.hostname.sslStatus } })
-    for (const [role, permissions] of Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })) await this.client.rolePolicy.create({ data: { id: `policy_${input.organization.id}_${role}`, organizationId: input.organization.id, roleKey: role, permissions, version: 1, updatedBy: input.user.id } })
-    await this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } })
-    for (const [capability, enabled] of Object.entries(input.billing.capabilities)) await this.client.entitlement.create({ data: { id: `ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`, organizationId: input.organization.id, capability, enabled, source: 'MANAGED_BETA' } })
+    await signupWrite('CONTEXT_ORGANIZATION', () => this.client.$executeRawUnsafe(`SELECT set_config('app.organization_id', $1, true)`, input.organization.id))
+    await signupWrite('CONTEXT_USER', () => this.client.$executeRawUnsafe(`SELECT set_config('app.user_id', $1, true)`, input.user.id))
+    await signupWrite('ORGANIZATION', () => this.client.organization.create({ data: { id: input.organization.id, slug: input.organization.slug, name: input.organization.name, status: input.organization.status } }))
+    await signupWrite('USER', () => this.client.user.create({ data: { id: input.user.id, email: input.user.email, displayName: input.user.displayName, passwordHash: input.user.passwordHash, status: input.user.status } }))
+    await signupWrite('MEMBERSHIP', () => this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } }))
+    await signupWrite('HOSTNAME', () => this.client.workspaceHostname.create({ data: { id: input.hostname.id, organizationId: input.hostname.organizationId, hostname: input.hostname.hostname, kind: input.hostname.kind, status: input.hostname.status, validationStatus: input.hostname.validationStatus, sslStatus: input.hostname.sslStatus } }))
+    for (const [role, permissions] of Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })) await signupWrite('ROLE_POLICY', () => this.client.rolePolicy.create({ data: { id: `policy_${input.organization.id}_${role}`, organizationId: input.organization.id, roleKey: role, permissions, version: 1, updatedBy: input.user.id } }))
+    await signupWrite('SUBSCRIPTION', () => this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } }))
+    for (const [capability, enabled] of Object.entries(input.billing.capabilities)) await signupWrite('ENTITLEMENT', () => this.client.entitlement.create({ data: { id: `ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`, organizationId: input.organization.id, capability, enabled, source: 'MANAGED_BETA' } }))
     return { user: input.user, organization: input.organization, membership: input.membership, hostname: input.hostname }
   }
   async listMemberships(userId: string) { const rows = await this.client.membership.findMany({ where: { userId, status: 'ACTIVE' }, include: { organization: true } }); return rows.map((row) => this.membership(row)) }

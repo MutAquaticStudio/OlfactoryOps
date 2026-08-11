@@ -11,6 +11,10 @@ export type SignupSeed = {
 export type SessionCreate = Omit<SessionRecord, 'revokedAt' | 'revokeReason' | 'lastSeenAt'> & { lastSeenAt?: string }
 export type RepositoryContext = { organizationId?: string; userId?: string }
 
+export class SignupWriteError extends Error {
+  constructor(readonly code: `SIGNUP_WRITE_${string}`) { super(code) }
+}
+
 export interface PlatformRepository {
   transaction<T>(callback: (repository: PlatformRepository) => Promise<T>, context?: RepositoryContext): Promise<T>
   findUserByEmail(email: string): Promise<PlatformUser | null>

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { hostnameRecordSchema, platformRoleSchema, type BillingCapabilityProjection, type HostnameRecord, type InvitationRecord, type MemberProjection, type NotificationPreference, type ObservabilityProjection, type PlatformAuthResponse, type PlatformRole, type PushSubscriptionInput, type SessionSummary, type TenantMembership } from '../../../packages/contracts/src/index.js'
 import { V2_PERMISSION_KEYS } from '../../../packages/permissions/src/registry.js'
 import { hashPassword, hashSecret, PasswordCryptoError, randomSecret, sealSecret, verifyPassword } from './crypto.js'
-import type { PlatformRepository } from './repository.js'
+import { SignupWriteError, type PlatformRepository } from './repository.js'
 import type { MembershipRecord, OrganizationRecord, PlatformContext, PlatformUser, SessionRecord } from './types.js'
 
 export class PlatformError extends Error {
@@ -120,6 +120,7 @@ export class PlatformService {
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const target = error && typeof error === 'object' && 'meta' in error ? JSON.stringify((error as { meta?: unknown }).meta) : ''
+      if (error instanceof SignupWriteError) throw new PlatformRuntimeFailure(error.code)
       if (code === 'SLUG_CONFLICT' || code === 'HOSTNAME_CONFLICT') throw new PlatformError('HOSTNAME_CONFLICT', 'That workspace address is already registered.', 409)
       if (target.includes('slug') || target.includes('hostname')) throw new PlatformError('HOSTNAME_CONFLICT', 'That workspace address is already registered.', 409)
       if (code === 'EMAIL_CONFLICT' || code.includes('P2002') || code.includes('Unique constraint')) throw new PlatformError('EMAIL_CONFLICT', 'That email or workspace address is already registered.', 409)
