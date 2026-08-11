@@ -9,6 +9,10 @@ export class PlatformError extends Error {
   constructor(readonly code: string, message: string, readonly status = 400) { super(message) }
 }
 
+class PlatformRuntimeFailure extends Error {
+  constructor(readonly code: string) { super(code) }
+}
+
 const RESERVED_SLUGS = new Set(['api', 'www', 'beta', 'customers', 'saas-origin', 'admin', 'app', 'login', 'signup', 'v2'])
 const DEFAULT_ROLE_PERMISSIONS: Record<PlatformRole, string[]> = {
   Owner: [...V2_PERMISSION_KEYS],
@@ -83,30 +87,43 @@ export class PlatformService {
     const membershipId = `mem_${randomUUID().slice(0, 12)}`
     const hostnameId = `host_${randomUUID().slice(0, 12)}`
     const createdAt = iso()
-    const user: PlatformUser = { id: userId, email, displayName: input.displayName.trim().slice(0, 160) || email.split('@')[0], passwordHash: hashPassword(email, input.password, this.passwordPepper), status: 'ACTIVE' }
+    let passwordHash: string
+    try {
+      passwordHash = hashPassword(email, input.password, this.passwordPepper)
+    } catch {
+      throw new PlatformRuntimeFailure('SIGNUP_PASSWORD_HASH_FAILED')
+    }
+    const user: PlatformUser = { id: userId, email, displayName: input.displayName.trim().slice(0, 160) || email.split('@')[0], passwordHash, status: 'ACTIVE' }
     const organization: OrganizationRecord = { id: organizationId, slug, name: input.organizationName.trim().slice(0, 160) || slug, status: 'ACTIVE' }
     const membership: MembershipRecord = { id: membershipId, organizationId, organizationName: organization.name, organizationSlug: slug, userId, role: 'Owner', status: 'ACTIVE' }
     const hostname = hostnameRecordSchema.parse({ id: hostnameId, organizationId, hostname: input.hostname ? normalizeHost(input.hostname) : this.defaultHostname(slug), kind: 'DEFAULT', status: 'ACTIVE' })
     const billing: BillingCapabilityProjection = { mode: 'MANAGED_BETA', status: 'ACTIVE', capabilities: { 'workspace.access': true, 'notifications.in_app': true, 'privacy.export.self': true }, limits: { members: 25, storageMb: 1024, aiRuns: 0 } }
+    let sessionTokens: ReturnType<PlatformService['newSession']>
+    let verificationToken: string
+    try {
+      sessionTokens = this.newSession(userId, organizationId, hostname.hostname, undefined, undefined, undefined, undefined)
+      verificationToken = randomSecret('verify_')
+    } catch {
+      throw new PlatformRuntimeFailure('SIGNUP_SESSION_TOKEN_FAILED')
+    }
     let seed
     try {
-      seed = await this.repository.transaction((tx) => tx.createSignup({ user, organization, membership, hostname, rolePermissions: DEFAULT_ROLE_PERMISSIONS.Owner, rolePolicies: DEFAULT_ROLE_PERMISSIONS, billing }))
+      seed = await this.repository.transaction(async (tx) => {
+        const created = await tx.createSignup({ user, organization, membership, hostname, rolePermissions: DEFAULT_ROLE_PERMISSIONS.Owner, rolePolicies: DEFAULT_ROLE_PERMISSIONS, billing })
+        await tx.createSession(sessionTokens.record)
+        await tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId, organizationId, email, tokenHash: hashSecret(verificationToken, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt })
+        await tx.enqueueNotification({ userId, organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${userId}:${createdAt}`, payload: { email, verificationRequired: true } })
+        await tx.appendAudit({ organizationId, actorUserId: userId, action: 'platform.signup', outcome: 'allowed', subjectType: 'organization', subjectId: organizationId, correlationId: correlationId() })
+        return created
+      })
     } catch (error) {
       const code = error instanceof Error ? error.message : ''
       const target = error && typeof error === 'object' && 'meta' in error ? JSON.stringify((error as { meta?: unknown }).meta) : ''
       if (code === 'SLUG_CONFLICT' || code === 'HOSTNAME_CONFLICT') throw new PlatformError('HOSTNAME_CONFLICT', 'That workspace address is already registered.', 409)
       if (target.includes('slug') || target.includes('hostname')) throw new PlatformError('HOSTNAME_CONFLICT', 'That workspace address is already registered.', 409)
       if (code === 'EMAIL_CONFLICT' || code.includes('P2002') || code.includes('Unique constraint')) throw new PlatformError('EMAIL_CONFLICT', 'That email or workspace address is already registered.', 409)
-      throw error
+      throw new PlatformRuntimeFailure('SIGNUP_TENANT_WRITE_FAILED')
     }
-    const sessionTokens = this.newSession(userId, organizationId, hostname.hostname, undefined, undefined, undefined, undefined)
-    const verificationToken = randomSecret('verify_')
-    await this.repository.transaction(async (tx) => {
-      await tx.createSession(sessionTokens.record)
-      await tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId, organizationId, email, tokenHash: hashSecret(verificationToken, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt })
-      await tx.enqueueNotification({ userId, organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${userId}:${createdAt}`, payload: { email, verificationRequired: true } })
-      await tx.appendAudit({ organizationId, actorUserId: userId, action: 'platform.signup', outcome: 'allowed', subjectType: 'organization', subjectId: organizationId, correlationId: correlationId() })
-    }, { organizationId, userId })
     return { ...await this.authProjection(seed.user, seed.membership, [seed.membership], hostname, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken, billing), rawSessionToken: sessionTokens.rawToken, verificationToken }
   }
 
