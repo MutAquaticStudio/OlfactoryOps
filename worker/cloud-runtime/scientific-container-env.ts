@@ -3,7 +3,9 @@
  * the Cloudflare Worker binding name private to the runtime boundary.
  */
 export const scientificContainerHealthEndpoint = 'localhost/health'
-export const scientificContainerStartupTimeoutMs = 90_000
+// Native feature images can require a first-use image pull and process warmup.
+// Keep the staging bound finite while giving that cold start enough time.
+export const scientificContainerStartupTimeoutMs = 300_000
 export const scientificContainerStartupPollIntervalMs = 1_000
 export const scientificFeatureContainerEntrypoint = ['/opt/conda/bin/python', '-m', 'scientific_runtime.server']
 

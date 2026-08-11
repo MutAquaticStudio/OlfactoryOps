@@ -11,7 +11,7 @@ import {
 describe('scientificContainerEnvironment', () => {
   it('uses the only bounded health endpoint for Container startup probes', () => {
     expect(scientificContainerHealthEndpoint).toBe('localhost/health')
-    expect(scientificContainerStartupTimeoutMs).toBe(90_000)
+    expect(scientificContainerStartupTimeoutMs).toBe(300_000)
     expect(scientificContainerStartupPollIntervalMs).toBe(1_000)
     expect(scientificFeatureContainerEntrypoint).toEqual(['/opt/conda/bin/python', '-m', 'scientific_runtime.server'])
   })

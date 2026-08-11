@@ -37,7 +37,7 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
       return JSON.stringify(await loadPrivateScientificInput(job, source))
     })
     const input = JSON.parse(serializedInput) as Record<string, unknown>
-    const serializedArtifact = await step.do('scientific-container-invocation', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '2 minutes' } as const, async () => {
+    const serializedArtifact = await step.do('scientific-container-invocation', { retries: { limit: 2, delay: '10 seconds', backoff: 'exponential' }, timeout: '6 minutes' } as const, async () => {
       const request = scientificContainerRequestSchema.parse({
         jobId: job.jobId,
         correlationId: job.correlationId,
