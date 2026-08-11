@@ -131,29 +131,35 @@ jobs:
         env:
           STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
         run: |
-          node --input-type=module <<'NODE'
-          const healthUrl = new URL('https://api-beta.labofscents.org/health')
-          healthUrl.searchParams.set('staging_probe', `${Date.now()}`)
-          const response = await fetch(healthUrl, {
-            cache: 'no-store',
-            headers: {
-              accept: 'application/json',
-              'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-            },
-          })
-          const body = await response.json().catch(() => undefined)
-          const ready = response.ok
-            && body?.status === 'ok'
-            && body?.environment === 'staging'
-            && body?.database === 'hyperdrive'
-            && body?.releaseGitSha === process.env.STAGING_SHA
-          if (ready) {
-            console.log('STAGING_API_PUBLIC_HEALTH=PASS')
-            process.exit(0)
+          STAGING_SHA="$STAGING_SHA" node --input-type=module <<'NODE'
+          const attempts = 20
+          let last = { status: 0, mitigated: 'none', release: 'missing', database: 'missing' }
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const healthUrl = new URL('https://api-beta.labofscents.org/health')
+            healthUrl.searchParams.set('staging_probe', `${Date.now()}-${attempt}`)
+            const response = await fetch(healthUrl, {
+              cache: 'no-store',
+              headers: {
+                accept: 'application/json',
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+              },
+            })
+            const body = await response.json().catch(() => undefined)
+            last = { status: response.status, mitigated: response.headers.get('cf-mitigated') ?? 'none', release: body?.releaseGitSha ?? 'missing', database: body?.database ?? 'missing' }
+            const ready = response.ok
+              && body?.status === 'ok'
+              && body?.environment === 'staging'
+              && body?.database === 'hyperdrive'
+              && body?.releaseGitSha === process.env.STAGING_SHA
+            if (ready) {
+              console.log('STAGING_API_PUBLIC_HEALTH=PASS')
+              process.exit(0)
+            }
+            if (response.status === 403 && response.headers.get('cf-mitigated') === 'challenge') {
+              console.log('STAGING_API_PUBLIC_HEALTH=BLOCKED_GITHUB_EDGE_CHALLENGE')
+              process.exit(0)
+            }
+            if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 3_000))
           }
-          if (response.status === 403 && response.headers.get('cf-mitigated') === 'challenge') {
-            console.log('STAGING_API_PUBLIC_HEALTH=BLOCKED_GITHUB_EDGE_CHALLENGE')
-            process.exit(0)
-          }
-          throw new Error(`staging public health probe failed: status=${response.status} mitigated=${response.headers.get('cf-mitigated') ?? 'none'} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`)
+          throw new Error(`staging public health probe failed after ${attempts} attempts: status=${last.status} mitigated=${last.mitigated} release=${last.release} database=${last.database}`)
           NODE
