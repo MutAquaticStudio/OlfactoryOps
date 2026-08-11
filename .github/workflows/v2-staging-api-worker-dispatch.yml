@@ -77,45 +77,83 @@ jobs:
         run: npm run generate:v2-worker-transport
       - name: Deploy the exact staging API Worker revision
         run: npx wrangler deploy --config .qa/wrangler.v2-api-staging.toml --keep-vars
-      - name: Verify deployed Hyperdrive health and revision
+      - name: Verify active Worker deployment, revision, and Hyperdrive binding
+        env:
+          STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+          STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+        run: |
+          set -euo pipefail
+          deployment_json="$(mktemp)"
+          version_json="$(mktemp)"
+          trap 'rm -f "$deployment_json" "$version_json"' EXIT
+
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/olfactoryops-v2-api-staging/deployments" \
+            --output "$deployment_json"
+
+          deployed_version_id="$(node --input-type=module - "$deployment_json" <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const body = JSON.parse(readFileSync(process.argv[2], 'utf8'))
+          const deployment = body?.success === true ? body?.result?.deployments?.[0] : undefined
+          const versions = deployment?.versions
+          if (!Array.isArray(versions) || versions.length !== 1 || versions[0]?.percentage !== 100 || typeof versions[0]?.version_id !== 'string') {
+            throw new Error('expected exactly one active 100-percent Worker version')
+          }
+          process.stdout.write(versions[0].version_id)
+          NODE
+          )"
+
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/olfactoryops-v2-api-staging/versions/$deployed_version_id" \
+            --output "$version_json"
+
+          VERSION_JSON="$version_json" DEPLOYED_VERSION_ID="$deployed_version_id" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+
+          const body = JSON.parse(readFileSync(process.env.VERSION_JSON, 'utf8'))
+          if (body?.success !== true) throw new Error('Worker version lookup was not successful')
+          const bindings = body?.result?.resources?.bindings
+          if (!Array.isArray(bindings)) throw new Error('Worker version has no binding metadata')
+
+          const releaseSha = bindings.find((binding) => binding?.name === 'RELEASE_GIT_SHA' && binding?.type === 'plain_text')
+          const hyperdrive = bindings.find((binding) => binding?.name === 'HYPERDRIVE' && binding?.type === 'hyperdrive')
+          if (releaseSha?.text !== process.env.STAGING_SHA) throw new Error('active Worker release SHA does not match the approved staging revision')
+          if (hyperdrive?.id !== process.env.STAGING_HYPERDRIVE_ID) throw new Error('active Worker Hyperdrive binding does not match staging')
+
+          console.log(`STAGING_API_ACTIVE_VERSION=PASS ${process.env.DEPLOYED_VERSION_ID}`)
+          console.log('STAGING_API_RELEASE_BINDING=PASS')
+          console.log('STAGING_API_HYPERDRIVE_BINDING=PASS')
+          NODE
+      - name: Probe public health without treating a GitHub bot challenge as deployment truth
         env:
           STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
         run: |
           node --input-type=module <<'NODE'
-          const expectedSha = process.env.STAGING_SHA
-          let lastResult = 'no response received'
-
-          for (let attempt = 1; attempt <= 20; attempt += 1) {
-            const healthUrl = new URL('https://api-beta.labofscents.org/health')
-            healthUrl.searchParams.set('staging_verify', `${Date.now()}-${attempt}`)
-
-            try {
-              const response = await fetch(healthUrl, {
-                cache: 'no-store',
-                headers: {
-                  accept: 'application/json',
-                  'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-                },
-              })
-              const body = await response.json().catch(() => undefined)
-              const ready = response.ok
-                && body?.status === 'ok'
-                && body?.environment === 'staging'
-                && body?.database === 'hyperdrive'
-                && body?.releaseGitSha === expectedSha
-
-              if (ready) {
-                console.log('STAGING_API_DEPLOY=PASS')
-                process.exit(0)
-              }
-
-              lastResult = `status=${response.status} mitigated=${response.headers.get('cf-mitigated') ?? 'none'} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`
-            } catch (error) {
-              lastResult = error instanceof Error ? error.message : 'health request failed'
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, 3_000))
+          const healthUrl = new URL('https://api-beta.labofscents.org/health')
+          healthUrl.searchParams.set('staging_probe', `${Date.now()}`)
+          const response = await fetch(healthUrl, {
+            cache: 'no-store',
+            headers: {
+              accept: 'application/json',
+              'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+            },
+          })
+          const body = await response.json().catch(() => undefined)
+          const ready = response.ok
+            && body?.status === 'ok'
+            && body?.environment === 'staging'
+            && body?.database === 'hyperdrive'
+            && body?.releaseGitSha === process.env.STAGING_SHA
+          if (ready) {
+            console.log('STAGING_API_PUBLIC_HEALTH=PASS')
+            process.exit(0)
           }
-
-          throw new Error(`staging API deployment verification timed out: ${lastResult}`)
+          if (response.status === 403 && response.headers.get('cf-mitigated') === 'challenge') {
+            console.log('STAGING_API_PUBLIC_HEALTH=BLOCKED_GITHUB_EDGE_CHALLENGE')
+            process.exit(0)
+          }
+          throw new Error(`staging public health probe failed: status=${response.status} mitigated=${response.headers.get('cf-mitigated') ?? 'none'} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`)
           NODE
