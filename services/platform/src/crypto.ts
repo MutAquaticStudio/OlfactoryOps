@@ -3,6 +3,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 const PASSWORD_ITERATIONS = 120_000
 const PASSWORD_KEY_LENGTH = 32
 
+export class PasswordCryptoError extends Error {
+  constructor(readonly code: 'PASSWORD_WEB_CRYPTO_UNAVAILABLE' | 'PASSWORD_PBKDF2_FAILED') { super(code) }
+}
+
 export function randomSecret(prefix = '') {
   return `${prefix}${randomBytes(32).toString('base64url')}`
 }
@@ -34,7 +38,7 @@ function asArrayBuffer(value: Uint8Array) {
 
 function subtleCrypto() {
   const crypto = globalThis.crypto
-  if (!crypto?.subtle || !crypto.getRandomValues) throw new Error('WEB_CRYPTO_UNAVAILABLE')
+  if (!crypto?.subtle || !crypto.getRandomValues) throw new PasswordCryptoError('PASSWORD_WEB_CRYPTO_UNAVAILABLE')
   return crypto
 }
 
@@ -55,14 +59,19 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
 // Web Crypto is available in both Node and Cloudflare Workers. Keeping the
 // existing encoded format makes pre-cutover credentials verifiable.
 export async function hashPassword(email: string, password: string, pepper = '') {
-  const crypto = subtleCrypto()
-  const saltBytes = crypto.getRandomValues(new Uint8Array(16))
-  const salt = bytesToBase64Url(saltBytes)
-  // v2 historically passed the encoded salt string into Node's PBKDF2. Keep
-  // that representation so credentials created before the Worker cutover stay
-  // valid, while the entropy source itself remains a 128-bit random value.
-  const digest = await passwordDigest(email, password, new TextEncoder().encode(salt), PASSWORD_ITERATIONS, pepper)
-  return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
+  try {
+    const crypto = subtleCrypto()
+    const saltBytes = crypto.getRandomValues(new Uint8Array(16))
+    const salt = bytesToBase64Url(saltBytes)
+    // v2 historically passed the encoded salt string into Node's PBKDF2. Keep
+    // that representation so credentials created before the Worker cutover stay
+    // valid, while the entropy source itself remains a 128-bit random value.
+    const digest = await passwordDigest(email, password, new TextEncoder().encode(salt), PASSWORD_ITERATIONS, pepper)
+    return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
+  } catch (error) {
+    if (error instanceof PasswordCryptoError) throw error
+    throw new PasswordCryptoError('PASSWORD_PBKDF2_FAILED')
+  }
 }
 
 export async function verifyPassword(email: string, password: string, encoded: string, pepper = '') {

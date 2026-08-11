@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { hostnameRecordSchema, platformRoleSchema, type BillingCapabilityProjection, type HostnameRecord, type InvitationRecord, type MemberProjection, type NotificationPreference, type ObservabilityProjection, type PlatformAuthResponse, type PlatformRole, type PushSubscriptionInput, type SessionSummary, type TenantMembership } from '../../../packages/contracts/src/index.js'
 import { V2_PERMISSION_KEYS } from '../../../packages/permissions/src/registry.js'
-import { hashPassword, hashSecret, randomSecret, sealSecret, verifyPassword } from './crypto.js'
+import { hashPassword, hashSecret, PasswordCryptoError, randomSecret, sealSecret, verifyPassword } from './crypto.js'
 import type { PlatformRepository } from './repository.js'
 import type { MembershipRecord, OrganizationRecord, PlatformContext, PlatformUser, SessionRecord } from './types.js'
 
@@ -90,7 +90,8 @@ export class PlatformService {
     let passwordHash: string
     try {
       passwordHash = await hashPassword(email, input.password, this.passwordPepper)
-    } catch {
+    } catch (error) {
+      if (error instanceof PasswordCryptoError) throw new PlatformRuntimeFailure(`SIGNUP_${error.code}`)
       throw new PlatformRuntimeFailure('SIGNUP_PASSWORD_HASH_FAILED')
     }
     const user: PlatformUser = { id: userId, email, displayName: input.displayName.trim().slice(0, 160) || email.split('@')[0], passwordHash, status: 'ACTIVE' }
