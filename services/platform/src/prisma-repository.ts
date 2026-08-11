@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
 import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
 import { SignupWriteError, type PlatformRepository, type RepositoryContext, type SessionCreate, type SignupSeed } from './repository.js'
 import type { ConsentRecord, ExportRequest, HostnameRecord, InvitationRecord, MemberProjection, NotificationDelivery, NotificationPreference, ObservabilityProjection, PushSubscriptionInput, PlatformRole } from '../../../packages/contracts/src/index.js'
@@ -79,34 +79,33 @@ export class PrismaPlatformRepository implements PlatformRepository {
     await signupWrite('MEMBERSHIP', () => this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } }))
     await signupWrite('HOSTNAME', () => this.client.workspaceHostname.create({ data: { id: input.hostname.id, organizationId: input.hostname.organizationId, hostname: input.hostname.hostname, kind: input.hostname.kind, status: input.hostname.status, validationStatus: input.hostname.validationStatus, sslStatus: input.hostname.sslStatus } }))
     // Prisma's Worker adapter serializes JSON write results differently from its
-    // Node runtime. Keep this bootstrap write inside the same RLS-scoped
-    // transaction, but use a parameterized JSONB insert with no returned row.
-    for (const [role, permissions] of Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })) {
-      await signupWrite('ROLE_POLICY', () => this.client.$executeRaw`
-        INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by)
-        VALUES (
-          ${`policy_${input.organization.id}_${role}`},
-          ${input.organization.id},
-          ${role},
-          CAST(${JSON.stringify(permissions)} AS jsonb),
-          1,
-          ${input.user.id}
-        )
-      `)
-    }
+    // Node runtime. Keep the bootstrap write RLS-scoped, parameterized, and
+    // batched so a tenant signup does not make one Hyperdrive round trip per role.
+    const rolePolicies = Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })
+    const rolePolicyRows = rolePolicies.map(([role, permissions]) => Prisma.sql`(
+      ${`policy_${input.organization.id}_${role}`},
+      ${input.organization.id},
+      ${role},
+      jsonb_build_array(${Prisma.join(permissions)}),
+      1,
+      ${input.user.id}
+    )`)
+    await signupWrite('ROLE_POLICY', () => this.client.$executeRaw`
+      INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by)
+      VALUES ${Prisma.join(rolePolicyRows)}
+    `)
     await signupWrite('SUBSCRIPTION', () => this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } }))
-    for (const [capability, enabled] of Object.entries(input.billing.capabilities)) {
-      await signupWrite('ENTITLEMENT', () => this.client.$executeRaw`
-        INSERT INTO v2_entitlements (id, organization_id, capability, enabled, source)
-        VALUES (
-          ${`ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`},
-          ${input.organization.id},
-          ${capability},
-          ${enabled},
-          'MANAGED_BETA'
-        )
-      `)
-    }
+    const entitlementRows = Object.entries(input.billing.capabilities).map(([capability, enabled]) => Prisma.sql`(
+      ${`ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`},
+      ${input.organization.id},
+      ${capability},
+      ${enabled},
+      'MANAGED_BETA'
+    )`)
+    await signupWrite('ENTITLEMENT', () => this.client.$executeRaw`
+      INSERT INTO v2_entitlements (id, organization_id, capability, enabled, source)
+      VALUES ${Prisma.join(entitlementRows)}
+    `)
     return { user: input.user, organization: input.organization, membership: input.membership, hostname: input.hostname }
   }
   async listMemberships(userId: string) { const rows = await this.client.membership.findMany({ where: { userId, status: 'ACTIVE' }, include: { organization: true } }); return rows.map((row) => this.membership(row)) }
