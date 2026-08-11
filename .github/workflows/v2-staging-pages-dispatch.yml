@@ -91,6 +91,36 @@ jobs:
           --commit-hash "$STAGING_SHA"
           --commit-message "staging ${STAGING_SHA}"
           --commit-dirty=false
+      - name: Require the staging hostname to activate on the staging Pages project
+        shell: bash
+        run: |
+          set -euo pipefail
+          domains_json="$(mktemp)"
+          trap 'rm -f "$domains_json"' EXIT
+          for attempt in $(seq 1 36); do
+            curl --fail --silent --show-error \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$STAGING_PAGES_PROJECT/domains" \
+              --output "$domains_json"
+            if DOMAINS_JSON="$domains_json" STAGING_PAGES_HOST="$STAGING_PAGES_HOST" node --input-type=module <<'NODE'
+            import { readFileSync } from 'node:fs'
+
+            const body = JSON.parse(readFileSync(process.env.DOMAINS_JSON, 'utf8'))
+            const domain = body?.success === true && Array.isArray(body.result)
+              ? body.result.find((candidate) => candidate?.name === process.env.STAGING_PAGES_HOST)
+              : undefined
+            if (domain?.status !== 'active') process.exit(1)
+            NODE
+            then
+              echo 'STAGING_PAGES_DOMAIN_BINDING=PASS'
+              break
+            fi
+            if [ "$attempt" = 36 ]; then
+              echo 'staging Pages hostname did not activate on the staging project' >&2
+              exit 1
+            fi
+            sleep 5
+          done
       - name: Verify the live staging CSP and HTML transform boundary
         shell: bash
         env:
