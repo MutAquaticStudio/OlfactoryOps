@@ -104,7 +104,7 @@ async function main() {
     let completed
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const query = await client.query(
-        `SELECT dispatch.status AS dispatch_status, dispatch.result_artifact_ref, job.status AS scientific_status,
+        `SELECT dispatch.status AS dispatch_status, dispatch.failure_code AS dispatch_failure_code, dispatch.result_artifact_ref, job.status AS scientific_status, job.failure_code AS scientific_failure_code,
           (SELECT count(*)::int FROM v2_scientific_artifacts artifact WHERE artifact.organization_id = job.organization_id AND artifact.job_id = job.id) AS artifact_count
          FROM v2_scientific_jobs job
          LEFT JOIN v2_cloud_job_dispatches dispatch ON dispatch.organization_id = job.organization_id AND dispatch.id = job.id
@@ -117,7 +117,11 @@ async function main() {
         break
       }
       if (['FAILED', 'DLQ', 'CANCELLED'].includes(row?.dispatch_status) || ['FAILED', 'CANCELLED', 'BLOCKED'].includes(row?.scientific_status)) {
-        fail(`scientific_workflow_terminal_${row?.dispatch_status ?? row?.scientific_status}`)
+        const safeCode = typeof row?.dispatch_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.dispatch_failure_code)
+          ? row.dispatch_failure_code
+          : (typeof row?.scientific_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.scientific_failure_code) ? row.scientific_failure_code : 'NO_STABLE_FAILURE_CODE')
+        console.log(JSON.stringify({ remoteScientificTerminalFailure: { dispatchStatus: row?.dispatch_status ?? null, scientificStatus: row?.scientific_status ?? null, code: safeCode } }))
+        fail(`scientific_workflow_terminal_${safeCode}`)
       }
       await sleep(3_000)
     }
