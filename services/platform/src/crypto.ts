@@ -1,10 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, pbkdf2, randomBytes } from 'node:crypto'
 
 const PASSWORD_ITERATIONS = 120_000
 const PASSWORD_KEY_LENGTH = 32
 
 export class PasswordCryptoError extends Error {
-  constructor(readonly code: 'PASSWORD_WEB_CRYPTO_UNAVAILABLE' | 'PASSWORD_RANDOM_FAILED' | 'PASSWORD_SALT_ENCODING_FAILED' | 'PASSWORD_PBKDF2_IMPORT_FAILED' | 'PASSWORD_PBKDF2_DERIVE_FAILED' | 'PASSWORD_DIGEST_ENCODING_FAILED') { super(code) }
+  constructor(readonly code: 'PASSWORD_NODE_PBKDF2_FAILED') { super(code) }
 }
 
 export function randomSecret(prefix = '') {
@@ -13,10 +13,6 @@ export function randomSecret(prefix = '') {
 
 export function hashSecret(value: string, pepper = '') {
   return createHash('sha256').update(`${pepper}:${value}`).digest('hex')
-}
-
-function passwordInput(email: string, password: string, pepper: string) {
-  return new TextEncoder().encode(`${pepper}:${email.toLowerCase()}:${password}`)
 }
 
 function bytesToBase64Url(value: Uint8Array) {
@@ -32,27 +28,17 @@ function base64UrlToBytes(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
-function subtleCrypto() {
-  const crypto = globalThis.crypto
-  if (!crypto?.subtle || !crypto.getRandomValues) throw new PasswordCryptoError('PASSWORD_WEB_CRYPTO_UNAVAILABLE')
-  return crypto
-}
-
-async function passwordDigest(email: string, password: string, salt: Uint8Array, iterations: number, pepper: string) {
-  const crypto = subtleCrypto()
-  let key: CryptoKey
+async function passwordDigest(email: string, password: string, salt: string, iterations: number, pepper: string) {
   try {
-    key = await crypto.subtle.importKey('raw', passwordInput(email, password, pepper) as unknown as BufferSource, 'PBKDF2', false, ['deriveBits'])
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      pbkdf2(`${pepper}:${email.toLowerCase()}:${password}`, salt, iterations, PASSWORD_KEY_LENGTH, 'sha256', (error, value) => {
+        if (error) reject(error)
+        else resolve(new Uint8Array(value))
+      })
+    })
   } catch {
-    throw new PasswordCryptoError('PASSWORD_PBKDF2_IMPORT_FAILED')
+    throw new PasswordCryptoError('PASSWORD_NODE_PBKDF2_FAILED')
   }
-  let bits: ArrayBuffer
-  try {
-    bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as unknown as BufferSource, iterations }, key, PASSWORD_KEY_LENGTH * 8)
-  } catch {
-    throw new PasswordCryptoError('PASSWORD_PBKDF2_DERIVE_FAILED')
-  }
-  return new Uint8Array(bits)
 }
 
 function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
@@ -62,35 +48,16 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
   return difference === 0
 }
 
-// Web Crypto is available in both Node and Cloudflare Workers. Keeping the
-// existing encoded format makes pre-cutover credentials verifiable.
+// The asynchronous Node Crypto API is Worker-compatible under nodejs_compat.
+// Keeping the existing encoded format makes pre-cutover credentials verifiable.
 export async function hashPassword(email: string, password: string, pepper = '') {
   try {
-    const crypto = subtleCrypto()
-    let saltBytes: Uint8Array
-    try {
-      saltBytes = crypto.getRandomValues(new Uint8Array(16))
-    } catch {
-      throw new PasswordCryptoError('PASSWORD_RANDOM_FAILED')
-    }
-    let salt: string
-    try {
-      salt = bytesToBase64Url(saltBytes)
-    } catch {
-      throw new PasswordCryptoError('PASSWORD_SALT_ENCODING_FAILED')
-    }
-    // v2 historically passed the encoded salt string into Node's PBKDF2. Keep
-    // that representation so credentials created before the Worker cutover stay
-    // valid, while the entropy source itself remains a 128-bit random value.
-    const digest = await passwordDigest(email, password, new TextEncoder().encode(salt), PASSWORD_ITERATIONS, pepper)
-    try {
-      return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
-    } catch {
-      throw new PasswordCryptoError('PASSWORD_DIGEST_ENCODING_FAILED')
-    }
+    const salt = randomBytes(16).toString('base64url')
+    const digest = await passwordDigest(email, password, salt, PASSWORD_ITERATIONS, pepper)
+    return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
   } catch (error) {
     if (error instanceof PasswordCryptoError) throw error
-    throw new PasswordCryptoError('PASSWORD_PBKDF2_DERIVE_FAILED')
+    throw new PasswordCryptoError('PASSWORD_NODE_PBKDF2_FAILED')
   }
 }
 
@@ -102,7 +69,7 @@ export async function verifyPassword(email: string, password: string, encoded: s
   const expected = parts[5]
   if (!Number.isSafeInteger(iterations) || iterations < 100_000 || !salt || !expected) return false
   try {
-    const candidate = await passwordDigest(email, password, new TextEncoder().encode(salt), iterations, pepper)
+    const candidate = await passwordDigest(email, password, salt, iterations, pepper)
     return constantTimeEqual(candidate, base64UrlToBytes(expected))
   } catch {
     return false
