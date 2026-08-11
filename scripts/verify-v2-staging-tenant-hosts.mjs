@@ -110,7 +110,10 @@ async function main() {
     await page.locator('[data-testid="v2-auth-card"]').waitFor({ state: 'visible', timeout: 30_000 })
     await page.locator('input[type="email"]').fill(email)
     await page.locator('input[type="password"]').fill(password)
-    await page.locator('button[type="submit"]').click()
+    // The V2 auth form uses the HTML default submit behavior. Keep this
+    // selector scoped to the auth card so locale and navigation controls are
+    // never mistaken for the login action.
+    await page.locator('[data-testid="v2-auth-card"] .v2-primary-button').click()
     await page.waitForURL(new RegExp(`^https://${hostname.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/v2/workspace`), { timeout: 45_000 })
     await page.locator('[data-testid="v2-workspace"]').waitFor({ state: 'visible', timeout: 30_000 })
     await page.screenshot({ path: `${evidenceDirectory}/known-tenant.png`, fullPage: true })
