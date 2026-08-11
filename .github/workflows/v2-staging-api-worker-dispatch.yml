@@ -1,0 +1,82 @@
+name: V2 Staging API Worker Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type DEPLOY_STAGING_API to deploy only api-beta.labofscents.org.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-api-worker-deployment
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        name: Validate the approved staging revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "DEPLOY_STAGING_API"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  deploy-staging-api:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_API_STAGING_GIT_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      V2_API_STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require staging-only Cloudflare credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Render the non-secret staging Worker configuration
+        run: node scripts/render-v2-api-staging-config.mjs
+      - name: Deploy the exact staging API Worker revision
+        run: npx wrangler deploy --config .qa/wrangler.v2-api-staging.toml --keep-vars
+      - name: Verify deployed Hyperdrive health and revision
+        env:
+          STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+        run: |
+          node --input-type=module -e "const response=await fetch('https://api-beta.labofscents.org/health'); if(!response.ok) throw new Error('staging API health request failed'); const body=await response.json(); if(body.status!=='ok'||body.environment!=='staging'||body.database!=='hyperdrive'||body.releaseGitSha!==process.env.STAGING_SHA) throw new Error('staging API deployment verification failed'); console.log('STAGING_API_DEPLOY=PASS');"
