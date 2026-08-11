@@ -21,8 +21,6 @@ jobs:
   scientific-images:
     runs-on: ubuntu-latest
     env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       IMAGE_TAG: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -46,25 +44,51 @@ jobs:
           docker run --rm olfactoryops-scientific-model:${IMAGE_TAG} python /opt/test_model_runtime.py
           docker run --rm -e SCIENTIFIC_SERVICE_SHARED_SECRET=model-http-test-secret --entrypoint python olfactoryops-scientific-model:${IMAGE_TAG} -m unittest discover -s /opt -p 'test_model_runtime_server.py'
           docker run --rm olfactoryops-scientific-model:${IMAGE_TAG} python /opt/olfactory_pipeline.py > model-runtime-provenance.json
+      - name: Upload non-sensitive scientific CI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-ci-evidence-${{ github.sha }}
+          path: model-runtime-provenance.json
+          if-no-files-found: error
+
+  publish-scientific-images:
+    needs: scientific-images
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images == true }}
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Download verified scientific CI evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: scientific-ci-evidence-${{ github.sha }}
+          path: ci-evidence
+      - name: Require staging-only Cloudflare credentials
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Rebuild immutable Linux images for publishing
+        run: |
+          docker buildx build --platform linux/amd64 --load --file services/scientific/runtime/Dockerfile --tag olfactoryops-scientific-feature:${IMAGE_TAG} services/scientific/runtime
+          docker buildx build --platform linux/amd64 --load --file services/scientific/model-runtime/Dockerfile --tag olfactoryops-scientific-model:${IMAGE_TAG} services/scientific/model-runtime
       - name: Publish immutable Cloudflare Container images
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
         run: |
           set -euo pipefail
           npx wrangler containers push olfactoryops-scientific-feature:${IMAGE_TAG}
           npx wrangler containers push olfactoryops-scientific-model:${IMAGE_TAG}
           npx wrangler containers images list --json > cloudflare-container-images.json
       - name: Record immutable image evidence
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: scientific-container-${{ github.sha }}
           path: |
-            model-runtime-provenance.json
+            ci-evidence/model-runtime-provenance.json
             cloudflare-container-images.json
-      - name: Credential state
-        run: |
-          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "CLOUDFLARE_CI_CREDENTIALS=MANUAL_SETUP_REQUIRED"
-          else
-            echo "CLOUDFLARE_CI_CREDENTIALS=CONFIGURED"
-          fi
