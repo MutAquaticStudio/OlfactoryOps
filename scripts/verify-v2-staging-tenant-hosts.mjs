@@ -59,6 +59,7 @@ async function main() {
   const password = `TenantHost-${suffix}-Password!47`
   const client = new Client({ connectionString: databaseUrl })
   const fixtureOrganizationIds = []
+  const diagnostic = { knownHost: null, hostnameRegistry: null, knownResponse: null, unknownResponse: null }
   let browser
   let executionError
   try {
@@ -73,8 +74,16 @@ async function main() {
     const userId = signup.body?.user?.id
     const hostname = signup.body?.hostname?.hostname
     assert(typeof organizationId === 'string' && typeof userId === 'string' && typeof hostname === 'string' && hostname === `${slug}.${workspaceBaseDomain}`, 'tenant_hostname_projection_invalid')
+    diagnostic.knownHost = hostname
     fixtureOrganizationIds.push(organizationId)
     await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
+    const hostnameRegistry = await client.query(
+      `SELECT hostname, status, kind
+       FROM v2_workspace_hostnames
+       WHERE organization_id = $1 AND hostname = $2`,
+      [organizationId, hostname],
+    )
+    diagnostic.hostnameRegistry = hostnameRegistry.rows.map((row) => ({ hostname: row.hostname, status: row.status, kind: row.kind }))
 
     browser = await chromium.launch({ headless: true })
     const context = await browser.newContext()
@@ -86,6 +95,15 @@ async function main() {
 
     const knownUrl = `https://${hostname}/v2/login`
     const knownResponse = await page.goto(knownUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+    diagnostic.knownResponse = {
+      url: knownUrl,
+      status: knownResponse?.status() ?? null,
+      router: knownResponse?.headers()['x-olfactoryops-workspace-router'] ?? null,
+      releaseSha: knownResponse?.headers()['x-olfactoryops-release-sha'] ?? null,
+      releaseEnvironment: knownResponse?.headers()['x-olfactoryops-release-environment'] ?? null,
+      cfMitigated: knownResponse?.headers()['cf-mitigated'] ?? null,
+      contentType: knownResponse?.headers()['content-type'] ?? null,
+    }
     assert(knownResponse?.status() === 200, 'known_tenant_http_status')
     assert(knownResponse?.headers()['x-olfactoryops-workspace-router'] === 'active', 'known_tenant_router_header_missing')
     assert(knownResponse?.headers()['x-olfactoryops-release-sha'] === expectedSha, 'known_tenant_router_sha_mismatch')
@@ -115,6 +133,13 @@ async function main() {
     const unknownPage = await context.newPage()
     const unknownUrl = `https://${unknownHostname}/v2/login`
     const unknownResponse = await unknownPage.goto(unknownUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 })
+    diagnostic.unknownResponse = {
+      url: unknownUrl,
+      status: unknownResponse?.status() ?? null,
+      router: unknownResponse?.headers()['x-olfactoryops-workspace-router'] ?? null,
+      cfMitigated: unknownResponse?.headers()['cf-mitigated'] ?? null,
+      contentType: unknownResponse?.headers()['content-type'] ?? null,
+    }
     assert(unknownResponse?.status() === 404, 'unknown_tenant_http_status')
     assert(unknownResponse?.headers()['x-olfactoryops-workspace-router'] === undefined, 'unknown_tenant_router_activated')
     assert(unknownPage.url() === unknownUrl, 'unknown_tenant_redirected')
@@ -141,6 +166,12 @@ async function main() {
     console.log(JSON.stringify(evidence))
   } catch (error) {
     executionError = error
+    writeFileSync(`${evidenceDirectory}/tenant-host-failure.json`, `${JSON.stringify({
+      stagingKnownTenantHost: 'FAIL',
+      failure: error instanceof Error ? error.message : 'unknown_failure',
+      ...diagnostic,
+      verifiedAt: new Date().toISOString(),
+    }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
   }
 
   await browser?.close().catch(() => undefined)
