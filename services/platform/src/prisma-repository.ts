@@ -66,7 +66,22 @@ export class PrismaPlatformRepository implements PlatformRepository {
     await signupWrite('USER', () => this.client.user.create({ data: { id: input.user.id, email: input.user.email, displayName: input.user.displayName, passwordHash: input.user.passwordHash, status: input.user.status } }))
     await signupWrite('MEMBERSHIP', () => this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } }))
     await signupWrite('HOSTNAME', () => this.client.workspaceHostname.create({ data: { id: input.hostname.id, organizationId: input.hostname.organizationId, hostname: input.hostname.hostname, kind: input.hostname.kind, status: input.hostname.status, validationStatus: input.hostname.validationStatus, sslStatus: input.hostname.sslStatus } }))
-    for (const [role, permissions] of Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })) await signupWrite('ROLE_POLICY', () => this.client.rolePolicy.create({ data: { id: `policy_${input.organization.id}_${role}`, organizationId: input.organization.id, roleKey: role, permissions, version: 1, updatedBy: input.user.id } }))
+    // Prisma's Worker adapter serializes JSON write results differently from its
+    // Node runtime. Keep this bootstrap write inside the same RLS-scoped
+    // transaction, but use a parameterized JSONB insert with no returned row.
+    for (const [role, permissions] of Object.entries(input.rolePolicies ?? { Owner: input.rolePermissions })) {
+      await signupWrite('ROLE_POLICY', () => this.client.$executeRaw`
+        INSERT INTO v2_role_policies (id, organization_id, role_key, permissions, version, updated_by)
+        VALUES (
+          ${`policy_${input.organization.id}_${role}`},
+          ${input.organization.id},
+          ${role},
+          CAST(${JSON.stringify(permissions)} AS jsonb),
+          1,
+          ${input.user.id}
+        )
+      `)
+    }
     await signupWrite('SUBSCRIPTION', () => this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } }))
     for (const [capability, enabled] of Object.entries(input.billing.capabilities)) await signupWrite('ENTITLEMENT', () => this.client.entitlement.create({ data: { id: `ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`, organizationId: input.organization.id, capability, enabled, source: 'MANAGED_BETA' } }))
     return { user: input.user, organization: input.organization, membership: input.membership, hostname: input.hostname }
