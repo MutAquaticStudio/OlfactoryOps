@@ -54,6 +54,7 @@ function correlationId() { return `v2_${randomUUID()}` }
 
 export type PlatformServiceConfig = {
   baseDomain?: string
+  publicHostnames?: readonly string[]
   sessionPepper?: string
   passwordPepper?: string
   invitationEncryptionKey?: string
@@ -68,6 +69,7 @@ export class PlatformService {
   private readonly sessionPepper: string
   private readonly passwordPepper: string
   private readonly invitationEncryptionKey: string
+  private readonly publicHostnames: ReadonlySet<string>
   readonly cookieName: string
 
   constructor(private readonly repository: PlatformRepository, config: PlatformServiceConfig = {}) {
@@ -76,6 +78,15 @@ export class PlatformService {
     this.passwordPepper = config.passwordPepper ?? 'local-v2-password-pepper'
     this.invitationEncryptionKey = config.invitationEncryptionKey ?? 'local-v2-invitation-key'
     this.cookieName = config.cookieName ?? 'oo_v2_session'
+    this.publicHostnames = new Set([
+      this.baseDomain,
+      `www.${this.baseDomain}`,
+      'labofscents.org',
+      'www.labofscents.org',
+      'localhost',
+      '127.0.0.1',
+      ...(config.publicHostnames ?? []).map(normalizeHost).filter(Boolean),
+    ])
   }
 
   validateSlug(value: string) {
@@ -350,8 +361,7 @@ export class PlatformService {
   }
 
   private isPublicHost(hostname: string) {
-    const host = normalizeHost(hostname)
-    return new Set([this.baseDomain, `www.${this.baseDomain}`, 'labofscents.org', 'www.labofscents.org', 'localhost', '127.0.0.1']).has(host)
+    return this.publicHostnames.has(normalizeHost(hostname))
   }
 
   private newSession(userId: string, organizationId: string, _hostname: string, userAgent?: string, ip?: string, deviceLabel?: string, rotatedFromId?: string) { const rawToken = randomSecret('sess_'); const csrfToken = randomSecret('csrf_'); const createdAt = new Date(); const record: SessionRecord = { id: `ses_${randomUUID().slice(0, 12)}`, userId, organizationId, tokenVerifierHash: hashSecret(rawToken, this.sessionPepper), csrfVerifierHash: hashSecret(csrfToken, this.sessionPepper), deviceLabel: deviceLabel?.slice(0, 160), userAgent: userAgent?.slice(0, 512), createdAt: iso(createdAt), lastSeenAt: iso(createdAt), idleExpiresAt: iso(addMinutes(createdAt, 60)), absoluteExpiresAt: iso(addDays(createdAt, 30)), rotatedFromId }; return { rawToken, csrfToken, record } }

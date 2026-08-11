@@ -4,7 +4,7 @@ import { generatedRouteSpecs } from './generated-route-specs.js'
 import type { V2ApiServices } from './service-container.js'
 import { invokeControllerRoute, matchControllerRoute } from './transport.js'
 
-const config = { publicHostname: 'beta.labofscents.org', tenantBaseDomain: 'beta.labofscents.org' }
+const config = { publicHostname: 'api-beta.labofscents.org', publicPageHostname: 'beta.labofscents.org', tenantBaseDomain: 'api-beta.labofscents.org' }
 
 describe('V2 Worker transport', () => {
   it('uses the generated Phase 1-6 route matrix and excludes later public modules', () => {
@@ -43,14 +43,14 @@ describe('V2 Worker transport', () => {
       ],
     }
     const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example/item-1', {
-      method: 'POST', headers: { Origin: 'https://tenant-a.beta.labofscents.org', 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf' }, body: JSON.stringify({ value: 1 }),
+      method: 'POST', headers: { Origin: 'https://tenant-a.api-beta.labofscents.org', 'Content-Type': 'application/json', 'X-CSRF-Token': 'csrf' }, body: JSON.stringify({ value: 1 }),
     })
     const matched = matchControllerRoute([route], request)
     expect(matched?.params).toEqual({ id: 'item-1' })
     const response = await invokeControllerRoute({ request, route, params: matched!.params, config })
     expect(response.status).toBe(200)
-    expect(response.headers.get('access-control-allow-origin')).toBe('https://tenant-a.beta.labofscents.org')
-    expect(observed).toEqual(['tenant-a.beta.labofscents.org', 'item-1', { value: 1 }, 'csrf'])
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://tenant-a.api-beta.labofscents.org')
+    expect(observed).toEqual(['tenant-a.api-beta.labofscents.org', 'item-1', { value: 1 }, 'csrf'])
   })
 
   it('accepts the exact public staging Pages origin for cookie-authenticated mutations', async () => {
@@ -77,7 +77,7 @@ describe('V2 Worker transport', () => {
     const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {
       method: 'OPTIONS',
       headers: {
-        Origin: 'https://tenant-a.beta.labofscents.org',
+        Origin: 'https://tenant-a.api-beta.labofscents.org',
         'Access-Control-Request-Method': 'POST',
         'Access-Control-Request-Headers': 'content-type, x-csrf-token, idempotency-key',
       },
@@ -85,7 +85,7 @@ describe('V2 Worker transport', () => {
     const matched = matchControllerRoute([route], new Request(request, { method: 'POST' }))
     const response = await invokeControllerRoute({ request, route: matched!.route, params: matched!.params, config })
     expect(response.status).toBe(204)
-    expect(response.headers.get('access-control-allow-origin')).toBe('https://tenant-a.beta.labofscents.org')
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://tenant-a.api-beta.labofscents.org')
     expect(response.headers.get('access-control-allow-methods')).toContain('POST')
   })
 })

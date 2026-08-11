@@ -25,6 +25,7 @@ const migrations = [
   'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql',
   'infra/postgres/migrations/0018_cloud_native_runtime.sql',
   'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql',
+  'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')

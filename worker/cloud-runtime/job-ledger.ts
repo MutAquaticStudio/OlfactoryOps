@@ -130,6 +130,43 @@ export class CloudJobLedger {
     })
   }
 
+  /**
+   * This is intentionally separate from ordinary delivery failure handling.
+   * The staging-only acceptance probe never reserves a Workflow, writes an
+   * artifact, or invokes a business service. Its queue message is retried by
+   * the caller until Cloudflare moves it to the configured DLQ naturally.
+   */
+  async recordStagingDlqProbeFailure(input: CloudJobEnvelope): Promise<{ attempts: number; recorded: boolean }> {
+    const job = cloudJobEnvelopeSchema.parse(input)
+    if (job.jobType !== 'STAGING_DLQ_TERMINAL_FAILURE_PROBE') throw new Error('STAGING_DLQ_PROBE_TYPE_REQUIRED')
+    return withTenantTransaction(this.prisma, { organizationId: job.organizationId, actorUserId: job.actorUserId }, async (tx) => {
+      const failed = await tx.$queryRawUnsafe<DispatchRow[]>(
+        `UPDATE v2_cloud_job_dispatches
+         SET status = 'FAILED', attempts = attempts + 1, failure_code = 'STAGING_DLQ_TERMINAL_FAILURE', updated_at = now()
+         WHERE organization_id = $1 AND id = $2
+           AND job_type = 'STAGING_DLQ_TERMINAL_FAILURE_PROBE'
+           AND status IN ('QUEUED','FAILED')
+           AND attempts < 3
+         RETURNING id, status, attempts, workflow_instance_id, input_hash, artifact_ref`,
+        job.organizationId, job.jobId,
+      )
+      if (failed[0]) {
+        await this.recordEvent(tx, job, 'STAGING_DLQ_DELIVERY_FAILED', { attempt: failed[0].attempts, retryPolicy: 3 })
+        return { attempts: failed[0].attempts, recorded: true }
+      }
+      const existing = await tx.$queryRawUnsafe<DispatchRow[]>(
+        `SELECT id, status, attempts, workflow_instance_id, input_hash, artifact_ref
+         FROM v2_cloud_job_dispatches
+         WHERE organization_id = $1 AND id = $2 AND job_type = 'STAGING_DLQ_TERMINAL_FAILURE_PROBE'`,
+        job.organizationId, job.jobId,
+      )
+      const row = existing[0]
+      if (!row) throw new Error('CLOUD_JOB_NOT_FOUND')
+      if (row.status !== 'FAILED' || row.attempts < 3) throw new Error('STAGING_DLQ_PROBE_STATE_INVALID')
+      return { attempts: row.attempts, recorded: false }
+    })
+  }
+
   /** Queue delivery can retry. A terminal Workflow failure cannot rely on that delivery being replayed. */
   async workflowFailed(input: CloudJobEnvelope, error: unknown): Promise<void> {
     const job = cloudJobEnvelopeSchema.parse(input)

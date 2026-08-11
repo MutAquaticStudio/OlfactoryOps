@@ -6,7 +6,8 @@ const { Client } = pg
 const approval = process.env.V2_STAGING_SCIENTIFIC_APPROVED
 const databaseUrl = process.env.STAGING_DATABASE_URL
 const apiOrigin = process.env.V2_STAGING_API_ORIGIN ?? 'https://api-beta.labofscents.org'
-const publicBaseDomain = process.env.V2_STAGING_PUBLIC_BASE_DOMAIN ?? 'beta.labofscents.org'
+const publicPagesHost = process.env.V2_STAGING_PUBLIC_PAGES_HOST ?? 'beta.labofscents.org'
+const workspaceBaseDomain = process.env.V2_STAGING_WORKSPACE_BASE_DOMAIN ?? 'api-beta.labofscents.org'
 const resultReferencePath = process.env.V2_STAGING_SCIENTIFIC_RESULT_REF_PATH
 
 if (approval !== 'RUN_REMOTE_SCIENTIFIC_E2E') throw new Error('REMOTE_SCIENTIFIC_E2E=BLOCKED explicit approval is required')
@@ -14,7 +15,7 @@ if (!databaseUrl) throw new Error('REMOTE_SCIENTIFIC_E2E=BLOCKED STAGING_DATABAS
 const database = new URL(databaseUrl)
 const api = new URL(apiOrigin)
 if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('REMOTE_SCIENTIFIC_E2E=FAIL a non-loopback staging PostgreSQL origin is required')
-if (api.protocol !== 'https:' || api.hostname !== 'api-beta.labofscents.org' || publicBaseDomain !== 'beta.labofscents.org') throw new Error('REMOTE_SCIENTIFIC_E2E=FAIL the exact staging public hosts are required')
+if (api.protocol !== 'https:' || api.hostname !== 'api-beta.labofscents.org' || publicPagesHost !== 'beta.labofscents.org' || workspaceBaseDomain !== 'api-beta.labofscents.org') throw new Error('REMOTE_SCIENTIFIC_E2E=FAIL the exact staging public hosts are required')
 
 function fail(code) { throw new Error(`REMOTE_SCIENTIFIC_E2E=FAIL ${code}`) }
 function assert(value, code) { if (!value) fail(code) }
@@ -55,13 +56,13 @@ async function main() {
     const email = `scientific-${suffix}@staging.invalid`
     const password = `Scientific-${suffix}-Password!47`
     const signup = await expect('/v2/platform/auth/signup', {
-      method: 'POST', origin: `https://${publicBaseDomain}`,
+      method: 'POST', origin: `https://${publicPagesHost}`,
       body: { organizationName: `Scientific staging ${suffix}`, workspaceSlug: `scientific-${suffix}`, email, password, displayName: 'Scientific staging owner' },
     }, 200, 'signup_failed')
     organizationId = signup.body?.membership?.organizationId
     const userId = signup.body?.user?.id
     const hostname = signup.body?.hostname?.hostname
-    assert(typeof organizationId === 'string' && typeof userId === 'string' && typeof hostname === 'string', 'signup_projection_invalid')
+    assert(typeof organizationId === 'string' && typeof userId === 'string' && typeof hostname === 'string' && hostname.endsWith(`.${workspaceBaseDomain}`), 'signup_projection_invalid')
     await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
     const login = await expect('/v2/platform/auth/login', { method: 'POST', origin: `https://${hostname}`, body: { email, password } }, 200, 'login_failed')
     assert(login.cookie.includes('oo_v2_session=') && typeof login.body?.csrfToken === 'string', 'session_bootstrap_invalid')

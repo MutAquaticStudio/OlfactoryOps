@@ -71,4 +71,21 @@ describe('CloudJobLedger', () => {
     await expect(ledger.workflowFailed(job, new Error('SCIENTIFIC_CONTAINER_UNAVAILABLE'))).resolves.toBeUndefined()
     expect(execute.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO v2_cloud_job_events'))).toHaveLength(1)
   })
+
+  it('records only bounded FAILED delivery evidence for the staging DLQ probe', async () => {
+    const probe = { ...job, jobType: 'STAGING_DLQ_TERMINAL_FAILURE_PROBE' as const }
+    const failed = { id: probe.jobId, status: 'FAILED', attempts: 1, workflow_instance_id: null, input_hash: probe.inputHash, artifact_ref: probe.artifactRef }
+    const { ledger, execute } = createLedger((sql) => {
+      if (sql.includes("SET status = 'FAILED', attempts = attempts + 1")) return [failed]
+      throw new Error(`Unexpected query: ${sql}`)
+    })
+
+    await expect(ledger.recordStagingDlqProbeFailure(probe)).resolves.toEqual({ attempts: 1, recorded: true })
+    expect(execute.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO v2_cloud_job_events'))).toHaveLength(1)
+  })
+
+  it('rejects ordinary jobs from the staging DLQ probe ledger path', async () => {
+    const { ledger } = createLedger(() => [])
+    await expect(ledger.recordStagingDlqProbeFailure(job)).rejects.toThrow('STAGING_DLQ_PROBE_TYPE_REQUIRED')
+  })
 })

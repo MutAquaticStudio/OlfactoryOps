@@ -16,6 +16,16 @@ describe('Cloudflare cloud runtime bindings', () => {
     expect(() => cloudJobEnvelopeSchema.parse({ ...valid, payload: { smiles: 'CCO' } })).toThrow()
   })
 
+  it('allows the isolated staging terminal-failure fixture without adding a payload channel', () => {
+    const probe = cloudJobEnvelopeSchema.parse({
+      protocolVersion: 'cloud-runtime/v1', jobId: 'job_dlq_probe_1', organizationId: 'org_dlq_probe_1', correlationId: 'corr_dlq_probe_1',
+      idempotencyKey: 'staging-dlq-probe-idempotency-key-0001', jobType: 'STAGING_DLQ_TERMINAL_FAILURE_PROBE', artifactRef: 'staging-fixtures/dlq/job_dlq_probe_1', inputHash: hash,
+      createdAt: '2026-08-11T00:00:00.000Z',
+    })
+    expect(probe.jobType).toBe('STAGING_DLQ_TERMINAL_FAILURE_PROBE')
+    expect(() => cloudJobEnvelopeSchema.parse({ ...probe, payload: { unsafe: true } })).toThrow()
+  })
+
   it('writes private tenant-scoped R2 artifacts and denies cross-tenant reads', async () => {
     const objects = new Map<string, { bytes: Uint8Array; metadata: Record<string, string>; version: string; etag: string }>()
     const bucket = {

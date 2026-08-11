@@ -14,7 +14,8 @@ routes = [
 RELEASE_ENVIRONMENT = "staging"
 RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
 V2_API_PUBLIC_HOSTNAME = "api-beta.labofscents.org"
-V2_WORKSPACE_BASE_DOMAIN = "beta.labofscents.org"
+V2_PUBLIC_PAGES_HOSTNAME = "beta.labofscents.org"
+V2_WORKSPACE_BASE_DOMAIN = "api-beta.labofscents.org"
 
 [[hyperdrive]]
 binding = "HYPERDRIVE"

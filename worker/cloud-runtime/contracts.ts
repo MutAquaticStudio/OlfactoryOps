@@ -5,8 +5,22 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/i).transform((value) => value.toLo
 const reference = z.string().trim().min(1).max(512)
 
 export const cloudRuntimeProtocol = 'cloud-runtime/v1' as const
-export const cloudJobTypeSchema = z.enum(['SCIENTIFIC_FEATURE', 'SCIENTIFIC_MODEL', 'RAG_INGESTION', 'NOTIFICATION_DELIVERY'])
+/**
+ * `STAGING_DLQ_TERMINAL_FAILURE_PROBE` is an internal-only acceptance fixture.
+ * It has no public dispatcher and the runtime acknowledges it outside staging.
+ */
+export const cloudJobTypeSchema = z.enum([
+  'SCIENTIFIC_FEATURE',
+  'SCIENTIFIC_MODEL',
+  'RAG_INGESTION',
+  'NOTIFICATION_DELIVERY',
+  'STAGING_DLQ_TERMINAL_FAILURE_PROBE',
+])
 export type CloudJobType = z.infer<typeof cloudJobTypeSchema>
+
+export function isStagingDlqTerminalFailureProbe(job: Pick<CloudJobEnvelope, 'jobType'>) {
+  return job.jobType === 'STAGING_DLQ_TERMINAL_FAILURE_PROBE'
+}
 
 export const cloudJobEnvelopeSchema = z.object({
   protocolVersion: z.literal(cloudRuntimeProtocol),

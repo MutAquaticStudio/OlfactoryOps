@@ -6,7 +6,8 @@ const { Client } = pg
 const approval = process.env.V2_STAGING_REMOTE_APPROVED
 const databaseUrl = process.env.STAGING_DATABASE_URL
 const apiOrigin = process.env.V2_STAGING_API_ORIGIN ?? 'https://api-beta.labofscents.org'
-const publicBaseDomain = process.env.V2_STAGING_PUBLIC_BASE_DOMAIN ?? 'beta.labofscents.org'
+const publicPagesHost = process.env.V2_STAGING_PUBLIC_PAGES_HOST ?? 'beta.labofscents.org'
+const workspaceBaseDomain = process.env.V2_STAGING_WORKSPACE_BASE_DOMAIN ?? 'api-beta.labofscents.org'
 
 if (approval !== 'RUN_REMOTE_STAGING_E2E') throw new Error('REMOTE_STAGING_E2E=BLOCKED explicit RUN_REMOTE_STAGING_E2E approval is required')
 if (!databaseUrl) throw new Error('REMOTE_STAGING_E2E=BLOCKED STAGING_DATABASE_URL is required')
@@ -15,7 +16,7 @@ const database = new URL(databaseUrl)
 const api = new URL(apiOrigin)
 if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('REMOTE_STAGING_E2E=FAIL a non-loopback staging PostgreSQL origin is required')
 if (api.protocol !== 'https:' || api.hostname !== 'api-beta.labofscents.org') throw new Error('REMOTE_STAGING_E2E=FAIL api origin must be the exact staging API hostname')
-if (publicBaseDomain !== 'beta.labofscents.org') throw new Error('REMOTE_STAGING_E2E=FAIL the staging public base domain is fixed')
+if (publicPagesHost !== 'beta.labofscents.org' || workspaceBaseDomain !== 'api-beta.labofscents.org') throw new Error('REMOTE_STAGING_E2E=FAIL the staging public and workspace hosts are fixed')
 
 const roles = [
   'Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician',
@@ -123,10 +124,10 @@ async function main() {
 
   async function signup(label, input) {
     const result = await expectStatus('/v2/platform/auth/signup', {
-      method: 'POST', origin: `https://${publicBaseDomain}`,
+      method: 'POST', origin: `https://${publicPagesHost}`,
       body: { organizationName: `Staging remote ${label} ${suffix}`, workspaceSlug: `stage-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${suffix}`, ...input },
     }, 200, 'signup_failed')
-    assert(typeof result.body?.user?.id === 'string' && typeof result.body?.membership?.organizationId === 'string' && typeof result.body?.hostname?.hostname === 'string', 'signup_projection_invalid')
+    assert(typeof result.body?.user?.id === 'string' && typeof result.body?.membership?.organizationId === 'string' && typeof result.body?.hostname?.hostname === 'string' && result.body.hostname.hostname.endsWith(`.${workspaceBaseDomain}`), 'signup_projection_invalid')
     fixtureOrganizationIds.push(result.body.membership.organizationId)
     await verifyUser(result.body.user.id)
     return { ...input, userId: result.body.user.id, organizationId: result.body.membership.organizationId, hostname: result.body.hostname.hostname }

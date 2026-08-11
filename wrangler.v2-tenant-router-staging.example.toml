@@ -6,15 +6,16 @@ compatibility_date = "2026-08-11"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
-# This hostname shape cannot capture api-beta.labofscents.org. The API has its
-# own exact route in wrangler.v2-api-staging.example.toml.
+# Cloudflare's active advanced certificate covers *.api-beta.labofscents.org.
+# The exact api-beta host has its own more-specific API Worker route and cannot
+# match this one-label tenant wildcard.
 routes = [
-  { pattern = "*.beta.labofscents.org/*", zone_name = "labofscents.org" },
+  { pattern = "*.api-beta.labofscents.org/*", zone_name = "labofscents.org" },
 ]
 
 [vars]
 PAGES_ORIGIN = "https://olfactoryops-beta.pages.dev"
-V2_WORKSPACE_BASE_DOMAIN = "beta.labofscents.org"
+V2_WORKSPACE_BASE_DOMAIN = "api-beta.labofscents.org"
 RELEASE_ENVIRONMENT = "staging"
 RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
 

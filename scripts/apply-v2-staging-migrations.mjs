@@ -23,6 +23,7 @@ const migrations = [
   'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql',
   'infra/postgres/migrations/0018_cloud_native_runtime.sql',
   'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql',
+  'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL

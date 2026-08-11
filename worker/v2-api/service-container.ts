@@ -18,6 +18,8 @@ export type V2ApiServiceEnv = {
   R2_ARTIFACTS: R2Bucket
   CLOUD_RUNTIME: Fetcher
   V2_WORKSPACE_BASE_DOMAIN: string
+  V2_API_PUBLIC_HOSTNAME?: string
+  V2_PUBLIC_PAGES_HOSTNAME?: string
   V2_SESSION_PEPPER: string
   V2_PASSWORD_PEPPER: string
   V2_INVITATION_ENCRYPTION_KEY: string
@@ -50,6 +52,7 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.HYPERDRIVE.connectionString }) })
   const platform = new PlatformService(new PrismaPlatformRepository(prisma), {
     baseDomain: env.V2_WORKSPACE_BASE_DOMAIN,
+    publicHostnames: [env.V2_API_PUBLIC_HOSTNAME, env.V2_PUBLIC_PAGES_HOSTNAME].filter((value): value is string => Boolean(value)),
     sessionPepper: required(env.V2_SESSION_PEPPER, 'V2_SESSION_PEPPER'),
     passwordPepper: required(env.V2_PASSWORD_PEPPER, 'V2_PASSWORD_PEPPER'),
     invitationEncryptionKey: required(env.V2_INVITATION_ENCRYPTION_KEY, 'V2_INVITATION_ENCRYPTION_KEY'),

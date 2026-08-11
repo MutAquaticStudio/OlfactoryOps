@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { agentEventStreamResponse } from './agent-stream.js'
 import type { V2ApiServices } from './service-container.js'
 
-const config = { publicHostname: 'beta.labofscents.org', tenantBaseDomain: 'beta.labofscents.org' }
+const config = { publicHostname: 'api-beta.labofscents.org', publicPageHostname: 'beta.labofscents.org', tenantBaseDomain: 'api-beta.labofscents.org' }
 
 function services(): V2ApiServices {
-  const context = { userId: 'user_a', organizationId: 'org_a', sessionId: 'session_a', role: 'Owner' as const, hostname: 'tenant-a.beta.labofscents.org' }
+  const context = { userId: 'user_a', organizationId: 'org_a', sessionId: 'session_a', role: 'Owner' as const, hostname: 'tenant-a.api-beta.labofscents.org' }
   return {
     prisma: {} as V2ApiServices['prisma'],
     platform: {
@@ -29,7 +29,7 @@ describe('Worker Agent event stream', () => {
     const close = vi.fn(async () => undefined)
     const response = await agentEventStreamResponse({
       request: new Request('https://api-beta.labofscents.org/api/v1/v2/agent-runs/run_a/stream?afterSequence=0', {
-        headers: { Origin: 'https://tenant-a.beta.labofscents.org', Cookie: 'oo_v2_session=session-token' },
+        headers: { Origin: 'https://tenant-a.api-beta.labofscents.org', Cookie: 'oo_v2_session=session-token' },
       }),
       services: services(),
       config,
@@ -37,7 +37,7 @@ describe('Worker Agent event stream', () => {
     })
     expect(response?.status).toBe(200)
     expect(response?.headers.get('content-type')).toContain('text/event-stream')
-    expect(response?.headers.get('access-control-allow-origin')).toBe('https://tenant-a.beta.labofscents.org')
+    expect(response?.headers.get('access-control-allow-origin')).toBe('https://tenant-a.api-beta.labofscents.org')
     const reader = response!.body!.getReader()
     const first = await reader.read()
     const second = await reader.read()
