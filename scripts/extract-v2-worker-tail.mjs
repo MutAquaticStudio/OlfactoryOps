@@ -4,7 +4,10 @@ const logPath = process.argv[2]
 if (!logPath) throw new Error('WORKER_TAIL_DIAGNOSTIC=FAIL a tail log path is required')
 
 const contents = readFileSync(logPath, 'utf8')
-const codes = [...contents.matchAll(/"event"\s*:\s*"v2_platform_runtime_failure"\s*,\s*"code"\s*:\s*"([A-Z0-9_]{3,96})"/g)]
+// Wrangler's JSON transport escapes console payloads once. Normalize that
+// single transport layer before matching our fixed, allow-listed event shape.
+const normalized = contents.replaceAll('\\"', '"')
+const codes = [...normalized.matchAll(/"event"\s*:\s*"v2_platform_runtime_failure"\s*,\s*"code"\s*:\s*"([A-Z0-9_]{3,96})"/g)]
   .map((match) => match[1])
 
 console.log(JSON.stringify({
