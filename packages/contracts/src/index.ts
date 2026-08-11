@@ -110,6 +110,7 @@ export const ragCitationReferenceSchema = z.object({
 export type RagCitationReference = z.infer<typeof ragCitationReferenceSchema>
 
 export * from './platform.js'
+export * from './platform-admin.js'
 export * from './lab-operations.js'
 export * from './scientific.js'
 export * from './model-dataset.js'

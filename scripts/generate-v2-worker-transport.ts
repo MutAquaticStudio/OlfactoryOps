@@ -12,6 +12,7 @@ const outputManifest = join(root, 'worker', 'v2-api', 'generated-route-specs.ts'
 const outputDocumentation = join(root, 'docs', 'v2', 'cloudflare', 'V2_WORKER_ROUTE_MATRIX.md')
 const controllers: SourceDefinition[] = [
   { input: 'v2-platform.controller.ts', output: 'v2-platform.worker.ts', key: 'platform', controller: 'V2PlatformController' },
+  { input: 'v2-platform-admin.controller.ts', output: 'v2-platform-admin.worker.ts', key: 'platformAdmin', controller: 'V2PlatformAdminController' },
   { input: 'v2-lab-operations.controller.ts', output: 'v2-lab-operations.worker.ts', key: 'lab', controller: 'V2LabOperationsController' },
   { input: 'v2-scientific.controller.ts', output: 'v2-scientific.worker.ts', key: 'scientific', controller: 'V2ScientificController' },
   { input: 'v2-model-dataset.controller.ts', output: 'v2-model-dataset.worker.ts', key: 'modelDataset', controller: 'V2ModelDatasetController' },

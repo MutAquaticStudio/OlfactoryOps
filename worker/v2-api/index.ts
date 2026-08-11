@@ -8,6 +8,7 @@ export type V2ApiWorkerEnv = V2ApiServiceEnv & {
   RELEASE_GIT_SHA?: string
   V2_API_PUBLIC_HOSTNAME: string
   V2_PUBLIC_PAGES_HOSTNAME?: string
+  V2_PLATFORM_ADMIN_HOSTNAME?: string
 }
 
 function json(status: number, body: Record<string, unknown>) {
@@ -34,7 +35,7 @@ export default {
       const stream = await agentEventStreamResponse({
         request,
         services: streamServices,
-        config: { publicHostname: env.V2_API_PUBLIC_HOSTNAME, publicPageHostname: env.V2_PUBLIC_PAGES_HOSTNAME, tenantBaseDomain: env.V2_WORKSPACE_BASE_DOMAIN },
+        config: { publicHostname: env.V2_API_PUBLIC_HOSTNAME, publicPageHostname: env.V2_PUBLIC_PAGES_HOSTNAME, platformAdminHostname: env.V2_PLATFORM_ADMIN_HOSTNAME, tenantBaseDomain: env.V2_WORKSPACE_BASE_DOMAIN },
         onClose: () => disconnectV2ApiServices(streamServices),
       })
       if (stream) {
@@ -51,7 +52,7 @@ export default {
         request,
         route: matched.route,
         params: matched.params,
-        config: { publicHostname: env.V2_API_PUBLIC_HOSTNAME, publicPageHostname: env.V2_PUBLIC_PAGES_HOSTNAME, tenantBaseDomain: env.V2_WORKSPACE_BASE_DOMAIN },
+        config: { publicHostname: env.V2_API_PUBLIC_HOSTNAME, publicPageHostname: env.V2_PUBLIC_PAGES_HOSTNAME, platformAdminHostname: env.V2_PLATFORM_ADMIN_HOSTNAME, tenantBaseDomain: env.V2_WORKSPACE_BASE_DOMAIN },
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : ''

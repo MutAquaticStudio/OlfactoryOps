@@ -104,6 +104,15 @@ export class V2PlatformController {
   @Post('auth/logout')
   async logout(@Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) { const { context } = await this.context(request); await this.platform.logout(context); clearSessionCookie(reply, this.platform.cookieName); return { loggedOut: true } }
 
+  @Post('auth/csrf/bootstrap')
+  async bootstrapCsrf(@Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
+    if (!requestOriginAllowed(request)) throw new PlatformError('ORIGIN_DENIED', 'Request origin is not allowed.', 403)
+    const result = await this.platform.bootstrapCsrf(cookieValue(request, this.platform.cookieName) ?? '', requestHost(request))
+    setSessionCookie(reply, this.platform.cookieName, result.rawSessionToken)
+    setCsrfCookie(reply, result.csrfToken)
+    return { csrfToken: result.csrfToken, session: result.session }
+  }
+
   @Post('auth/email-verification/confirm')
   async verifyEmail(@Body() body: { token?: string }) { return this.platform.verifyEmail(body.token ?? '') }
 

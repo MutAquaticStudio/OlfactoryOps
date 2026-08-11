@@ -6,6 +6,7 @@ import { V2MaterialEvidenceController } from '../../server/src/routes/v2-materia
 import { V2ModelDatasetController } from '../../server/src/routes/v2-model-dataset.worker.js'
 import { V2OlfactoryIntelligenceController } from '../../server/src/routes/v2-olfactory-intelligence.worker.js'
 import { V2PlatformController } from '../../server/src/routes/v2-platform.worker.js'
+import { V2PlatformAdminController } from '../../server/src/routes/v2-platform-admin.worker.js'
 import { V2ScientificController } from '../../server/src/routes/v2-scientific.worker.js'
 import { generatedRouteSpecs } from './generated-route-specs.js'
 import type { V2ApiServices } from './service-container.js'
@@ -29,6 +30,7 @@ export type ControllerRoute = {
 export function v2ControllerRoutes(services: V2ApiServices): ControllerRoute[] {
   const instances: Record<string, object> = {
     platform: new V2PlatformController(services.platform, services.databaseHealth),
+    platformAdmin: new V2PlatformAdminController(services.platformAdmin, services.platform),
     lab: new V2LabOperationsController(services.platform, services.lab),
     scientific: new V2ScientificController(services.platform, services.scientific),
     modelDataset: new V2ModelDatasetController(services.platform, services.modelDataset),

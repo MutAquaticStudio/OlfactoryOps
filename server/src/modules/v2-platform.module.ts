@@ -5,6 +5,8 @@ import { PlatformService } from '../../../services/platform/src/service.js'
 import type { PlatformRepository } from '../../../services/platform/src/repository.js'
 import { PrismaPlatformRepository } from '../../../services/platform/src/prisma-repository.js'
 import { V2PlatformController } from '../routes/v2-platform.controller.js'
+import { V2PlatformAdminController } from '../routes/v2-platform-admin.controller.js'
+import { PlatformAdminService } from '../../../services/platform/src/platform-admin-service.js'
 
 function unavailableRepository(): PlatformRepository {
   return new Proxy({} as PlatformRepository, {
@@ -15,7 +17,7 @@ function unavailableRepository(): PlatformRepository {
 }
 
 @Module({
-  controllers: [V2PlatformController],
+  controllers: [V2PlatformController, V2PlatformAdminController],
   providers: [
     {
       provide: PlatformService,
@@ -29,6 +31,11 @@ function unavailableRepository(): PlatformRepository {
           passwordPepper: process.env.V2_PASSWORD_PEPPER,
         })
       },
+    },
+    {
+      provide: PlatformAdminService,
+      inject: [PlatformService],
+      useFactory: (platform: PlatformService) => new PlatformAdminService(new PrismaClient(), platform),
     },
   ],
   exports: [PlatformService],

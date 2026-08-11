@@ -9,6 +9,7 @@ The Worker imports generated decorator-free controller delegates; all business l
 | platform | POST | `/api/v1/v2/platform/auth/signup` |
 | platform | POST | `/api/v1/v2/platform/auth/login` |
 | platform | POST | `/api/v1/v2/platform/auth/logout` |
+| platform | POST | `/api/v1/v2/platform/auth/csrf/bootstrap` |
 | platform | POST | `/api/v1/v2/platform/auth/email-verification/confirm` |
 | platform | POST | `/api/v1/v2/platform/auth/invitations/accept` |
 | platform | POST | `/api/v1/v2/platform/auth/email-verification/resend` |
@@ -41,6 +42,18 @@ The Worker imports generated decorator-free controller delegates; all business l
 | platform | GET | `/api/v1/v2/platform/workspace/roles/:role/permissions` |
 | platform | PATCH | `/api/v1/v2/platform/workspace/roles/:role/permissions` |
 | platform | POST | `/api/v1/v2/platform/workspace/domains/custom` |
+| platformAdmin | GET | `/api/v1/v2/admin/me` |
+| platformAdmin | GET | `/api/v1/v2/admin/overview` |
+| platformAdmin | GET | `/api/v1/v2/admin/workspaces` |
+| platformAdmin | GET | `/api/v1/v2/admin/workspaces/:id` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/suspend` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/reactivate` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/archive` |
+| platformAdmin | PATCH | `/api/v1/v2/admin/workspaces/:id/entitlements` |
+| platformAdmin | GET | `/api/v1/v2/admin/operators` |
+| platformAdmin | PATCH | `/api/v1/v2/admin/operators/:id/status` |
+| platformAdmin | GET | `/api/v1/v2/admin/infrastructure` |
+| platformAdmin | GET | `/api/v1/v2/admin/audit` |
 | lab | GET | `/api/v1/v2/lab/materials` |
 | lab | POST | `/api/v1/v2/lab/materials` |
 | lab | PATCH | `/api/v1/v2/lab/materials/:id/status` |
@@ -154,16 +167,3 @@ The Worker imports generated decorator-free controller delegates; all business l
 - Agent event streaming is served by the Worker Web Streams transport. It replays the same persisted Agent events as the controller and does not create a second event store.
 - Phase 7+ Trial/Sensory, Production, Commerce, and Advanced routes remain outside the public staging cutover.
 - This matrix does not authorize a production deployment.
-
-## Final Remote Parity Evidence
-
-Protected dispatcher run `31530804517` checked out application source
-`4da6dfa061fc5ca818238c555e3320fc77a858b5` and reported:
-
-```text
-PUBLIC_V2_WORKER_ROUTE_COVERAGE=100% 143/143
-```
-
-The probe was unauthenticated and non-mutating. It validates the current public
-Phase 1-6 Worker boundary only and does not add Phase 7+ routes to this
-cutover.

@@ -199,6 +199,18 @@ export class PlatformService {
   async revokeSession(context: PlatformContext, sessionId: string) { await this.scoped(context, async (tx) => { await tx.revokeSession(sessionId, context.organizationId, 'user_requested'); await tx.appendAudit({ organizationId: context.organizationId, actorUserId: context.userId, action: 'platform.session.revoke', outcome: 'allowed', subjectType: 'session', subjectId: sessionId, correlationId: correlationId() }) }) }
   async revokeAllSessions(context: PlatformContext, keepCurrent = true) { await this.scoped(context, async (tx) => { await tx.revokeAllSessions(context.userId, context.organizationId, keepCurrent ? context.sessionId : undefined, 'user_requested'); await tx.appendAudit({ organizationId: context.organizationId, actorUserId: context.userId, action: 'platform.session.revoke_all', outcome: 'allowed', subjectType: 'user', subjectId: context.userId, correlationId: correlationId() }) }) }
   async assertCsrf(context: PlatformContext, rawToken: string, csrfToken: string | undefined) { if (!csrfToken || hashSecret(csrfToken, this.sessionPepper) !== (await this.repository.findSessionByHash(hashSecret(rawToken, this.sessionPepper)))?.csrfVerifierHash) throw new PlatformError('CSRF_DENIED', 'Security verification failed. Refresh and try again.', 403) }
+  /**
+   * A workspace has a distinct browser origin from the public sign-in page.
+   * Rotate the opaque API-host session at that boundary so the workspace gets a
+   * verifier from an authenticated, exact-Origin request instead of inheriting
+   * a public-origin localStorage value.
+   */
+  async bootstrapCsrf(rawToken: string, hostname: string) {
+    const resolved = await this.contextFromToken(rawToken, hostname)
+    const rotated = await this.rotateSession(resolved.context, rawToken, 'csrf_bootstrap')
+    await this.scoped(resolved.context, (tx) => tx.appendAudit({ organizationId: resolved.context.organizationId, actorUserId: resolved.context.userId, action: 'platform.csrf.bootstrap', outcome: 'allowed', subjectType: 'session', subjectId: rotated.session.id, correlationId: correlationId() }))
+    return rotated
+  }
   async verifyEmail(token: string) { const record = await this.repository.findVerification(hashSecret(token, this.sessionPepper)); if (!record || record.revokedAt || record.verifiedAt) throw new PlatformError('INVALID_CREDENTIALS', 'This verification link is no longer valid.', 400); if (new Date(record.expiresAt).getTime() <= Date.now()) throw new PlatformError('INVALID_CREDENTIALS', 'This verification link has expired.', 400); const completedAt = iso(); await this.repository.transaction(async (tx) => { await tx.markVerificationComplete(record.id, completedAt); await tx.markUserVerified(record.userId, completedAt); await tx.appendAudit({ organizationId: record.organizationId, actorUserId: record.userId, action: 'platform.email.verify', outcome: 'allowed', subjectType: 'user', subjectId: record.userId, correlationId: correlationId() }) }, { organizationId: record.organizationId, userId: record.userId }); return { verified: true, verifiedAt: completedAt } }
   async verificationStatus(rawToken: string, hostname: string) { const resolved = await this.contextFromToken(rawToken, hostname, { allowUnverified: true }); return { verified: Boolean(resolved.user.verifiedAt), email: resolved.user.email } }
   async resendVerification(rawToken: string, hostname: string) {

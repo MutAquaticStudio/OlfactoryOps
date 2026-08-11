@@ -14,6 +14,13 @@ test('V2 login is isolated, keyboard reachable, and responsive', async ({ page }
   await expectNoHorizontalOverflow(page)
 })
 
+test('canonical public auth aliases render the same V2 authority', async ({ page }) => {
+  for (const path of ['/login', '/signup', '/v2/login', '/v2/signup']) {
+    await page.goto(path)
+    await expect(page.getByTestId('v2-auth-card')).toBeVisible()
+  }
+})
+
 test('V2 protected workspace fails closed without a session', async ({ page }) => {
   await page.goto('/v2/workspace')
   await expect(page).toHaveURL(/\/v2\/login$/)

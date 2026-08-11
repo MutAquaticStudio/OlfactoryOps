@@ -17953,7 +17953,11 @@ function LabBackdrop() {
 }
 
 function App() {
-  return window.location.pathname.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
+  const path = window.location.pathname
+  // V2 owns the public authentication entrypoints as well as the workspace.
+  // Keeping this decision at the application boundary prevents the legacy
+  // shell from taking authority for a direct /login or /signup navigation.
+  return path === '/login' || path === '/signup' || path.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
 }
 
 export default App

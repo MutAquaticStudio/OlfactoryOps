@@ -45,6 +45,17 @@ describe('V2 platform security core', () => {
     await expect(service.contextFromToken(signup.rawSessionToken, 'security.olfactoryops.com')).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
   })
 
+  it('rotates the verifier through an authenticated workspace bootstrap', async () => {
+    const { service } = makeService()
+    const signup = await service.signup({ organizationName: 'Bootstrap', workspaceSlug: 'bootstrap', email: 'bootstrap@example.test', displayName: 'Bootstrap', password: 'Correct Horse Battery 12!' })
+    await service.verifyEmail(signup.verificationToken)
+    const bootstrapped = await service.bootstrapCsrf(signup.rawSessionToken, signup.hostname.hostname)
+    expect(bootstrapped.rawSessionToken).not.toBe(signup.rawSessionToken)
+    const resolved = await service.contextFromToken(bootstrapped.rawSessionToken, signup.hostname.hostname)
+    await service.assertCsrf(resolved.context, bootstrapped.rawSessionToken, bootstrapped.csrfToken)
+    await expect(service.contextFromToken(signup.rawSessionToken, signup.hostname.hostname)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
+  })
+
   it('verifies Web Crypto password hashes with constant-time comparison and rejects malformed hashes', async () => {
     const hash = await hashPassword('person@example.test', 'Correct Horse Battery 12!', 'pepper')
     expect(await verifyPassword('person@example.test', 'Correct Horse Battery 12!', hash, 'pepper')).toBe(true)

@@ -83,6 +83,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0019_cloud_scientific_dispatch.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0016_platform_control_plane.sql')
 }
 
 function resetDisposableSchema() {

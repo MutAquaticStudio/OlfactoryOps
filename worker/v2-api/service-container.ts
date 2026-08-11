@@ -4,6 +4,7 @@ import { DurableAgentService } from '../../services/agent-runtime/src/durable-ag
 import { FormulaService } from '../../services/formula/src/formula-service.js'
 import { LabOperationsService } from '../../services/lab-ops/src/service.js'
 import { PlatformService } from '../../services/platform/src/service.js'
+import { PlatformAdminService } from '../../services/platform/src/platform-admin-service.js'
 import type { V2DatabaseHealth } from '../../server/src/routes/v2-platform.worker.js'
 import { PrismaPlatformRepository } from '../../services/platform/src/prisma-repository.js'
 import { MaterialEvidenceService } from '../../services/rag/src/material-evidence-service.js'
@@ -20,6 +21,7 @@ export type V2ApiServiceEnv = {
   V2_WORKSPACE_BASE_DOMAIN: string
   V2_API_PUBLIC_HOSTNAME?: string
   V2_PUBLIC_PAGES_HOSTNAME?: string
+  V2_PLATFORM_ADMIN_HOSTNAME?: string
   V2_SESSION_PEPPER: string
   V2_PASSWORD_PEPPER: string
   V2_INVITATION_ENCRYPTION_KEY: string
@@ -29,6 +31,7 @@ export type V2ApiServices = {
   prisma: PrismaClient
   databaseHealth: V2DatabaseHealth
   platform: PlatformService
+  platformAdmin: PlatformAdminService
   lab: LabOperationsService
   scientific: ScientificFeatureService
   modelDataset: ModelDatasetService
@@ -70,6 +73,7 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
       }
     },
     platform,
+    platformAdmin: new PlatformAdminService(prisma, platform),
     lab,
     scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable(), new CloudflareScientificDispatcher(env)),
     modelDataset: new ModelDatasetService(prisma, platform),
