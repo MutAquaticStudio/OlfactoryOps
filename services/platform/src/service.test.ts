@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { pbkdf2Sync } from 'node:crypto'
 import { MemoryPlatformRepository } from './memory-repository.js'
 import { hashPassword, hashSecret, openSecret, verifyPassword } from './crypto.js'
 import { PlatformError, PlatformService } from './service.js'
@@ -44,11 +45,14 @@ describe('V2 platform security core', () => {
     await expect(service.contextFromToken(signup.rawSessionToken, 'security.olfactoryops.com')).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
   })
 
-  it('verifies password hashes with constant-time comparison and rejects malformed hashes', () => {
-    const hash = hashPassword('person@example.test', 'Correct Horse Battery 12!', 'pepper')
-    expect(verifyPassword('person@example.test', 'Correct Horse Battery 12!', hash, 'pepper')).toBe(true)
-    expect(verifyPassword('person@example.test', 'wrong password', hash, 'pepper')).toBe(false)
-    expect(verifyPassword('person@example.test', 'Correct Horse Battery 12!', 'not-a-hash', 'pepper')).toBe(false)
+  it('verifies Web Crypto password hashes with constant-time comparison and rejects malformed hashes', async () => {
+    const hash = await hashPassword('person@example.test', 'Correct Horse Battery 12!', 'pepper')
+    expect(await verifyPassword('person@example.test', 'Correct Horse Battery 12!', hash, 'pepper')).toBe(true)
+    expect(await verifyPassword('person@example.test', 'wrong password', hash, 'pepper')).toBe(false)
+    expect(await verifyPassword('person@example.test', 'Correct Horse Battery 12!', 'not-a-hash', 'pepper')).toBe(false)
+    const legacySalt = Buffer.alloc(16).toString('base64url')
+    const legacyDigest = pbkdf2Sync('pepper:person@example.test:Correct Horse Battery 12!', legacySalt, 120_000, 32, 'sha256').toString('base64url')
+    expect(await verifyPassword('person@example.test', 'Correct Horse Battery 12!', `pbkdf2:v2:sha256:120000:${legacySalt}:${legacyDigest}`, 'pepper')).toBe(true)
     expect(hashSecret('session', 'pepper')).not.toContain('session')
   })
 

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
 const PASSWORD_ITERATIONS = 120_000
 const PASSWORD_KEY_LENGTH = 32
@@ -11,23 +11,73 @@ export function hashSecret(value: string, pepper = '') {
   return createHash('sha256').update(`${pepper}:${value}`).digest('hex')
 }
 
-export function hashPassword(email: string, password: string, pepper = '') {
-  const salt = randomBytes(16).toString('base64url')
-  const digest = pbkdf2Sync(`${pepper}:${email.toLowerCase()}:${password}`, salt, PASSWORD_ITERATIONS, PASSWORD_KEY_LENGTH, 'sha256').toString('base64url')
-  return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${digest}`
+function passwordInput(email: string, password: string, pepper: string) {
+  return new TextEncoder().encode(`${pepper}:${email.toLowerCase()}:${password}`)
 }
 
-export function verifyPassword(email: string, password: string, encoded: string, pepper = '') {
+function bytesToBase64Url(value: Uint8Array) {
+  let binary = ''
+  for (const byte of value) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function base64UrlToBytes(value: string) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=')
+  const binary = atob(padded)
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+function asArrayBuffer(value: Uint8Array) {
+  return Uint8Array.from(value).buffer as ArrayBuffer
+}
+
+function subtleCrypto() {
+  const crypto = globalThis.crypto
+  if (!crypto?.subtle || !crypto.getRandomValues) throw new Error('WEB_CRYPTO_UNAVAILABLE')
+  return crypto
+}
+
+async function passwordDigest(email: string, password: string, salt: Uint8Array, iterations: number, pepper: string) {
+  const crypto = subtleCrypto()
+  const key = await crypto.subtle.importKey('raw', passwordInput(email, password, pepper), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: asArrayBuffer(salt), iterations }, key, PASSWORD_KEY_LENGTH * 8)
+  return new Uint8Array(bits)
+}
+
+function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
+  if (left.length !== right.length) return false
+  let difference = 0
+  for (let index = 0; index < left.length; index += 1) difference |= left[index]! ^ right[index]!
+  return difference === 0
+}
+
+// Web Crypto is available in both Node and Cloudflare Workers. Keeping the
+// existing encoded format makes pre-cutover credentials verifiable.
+export async function hashPassword(email: string, password: string, pepper = '') {
+  const crypto = subtleCrypto()
+  const saltBytes = crypto.getRandomValues(new Uint8Array(16))
+  const salt = bytesToBase64Url(saltBytes)
+  // v2 historically passed the encoded salt string into Node's PBKDF2. Keep
+  // that representation so credentials created before the Worker cutover stay
+  // valid, while the entropy source itself remains a 128-bit random value.
+  const digest = await passwordDigest(email, password, new TextEncoder().encode(salt), PASSWORD_ITERATIONS, pepper)
+  return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
+}
+
+export async function verifyPassword(email: string, password: string, encoded: string, pepper = '') {
   const parts = encoded.split(':')
   if (parts.length !== 6 || parts[0] !== 'pbkdf2' || parts[1] !== 'v2') return false
   const iterations = Number(parts[3])
   const salt = parts[4]
   const expected = parts[5]
   if (!Number.isSafeInteger(iterations) || iterations < 100_000 || !salt || !expected) return false
-  const candidate = pbkdf2Sync(`${pepper}:${email.toLowerCase()}:${password}`, salt, iterations, PASSWORD_KEY_LENGTH, 'sha256').toString('base64url')
-  const left = Buffer.from(candidate)
-  const right = Buffer.from(expected)
-  return left.length === right.length && timingSafeEqual(left, right)
+  try {
+    const candidate = await passwordDigest(email, password, new TextEncoder().encode(salt), iterations, pepper)
+    return constantTimeEqual(candidate, base64UrlToBytes(expected))
+  } catch {
+    return false
+  }
 }
 
 export function hashIp(value: string | undefined, pepper = '') {

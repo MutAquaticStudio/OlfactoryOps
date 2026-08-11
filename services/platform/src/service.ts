@@ -89,7 +89,7 @@ export class PlatformService {
     const createdAt = iso()
     let passwordHash: string
     try {
-      passwordHash = hashPassword(email, input.password, this.passwordPepper)
+      passwordHash = await hashPassword(email, input.password, this.passwordPepper)
     } catch {
       throw new PlatformRuntimeFailure('SIGNUP_PASSWORD_HASH_FAILED')
     }
@@ -130,7 +130,7 @@ export class PlatformService {
   async login(input: LoginInput): Promise<PlatformAuthResponse & { rawSessionToken: string }> {
     const email = normalizeEmail(input.email)
     const user = await this.repository.findUserByEmail(email)
-    if (!user || user.status !== 'ACTIVE' || !verifyPassword(email, input.password, user.passwordHash, this.passwordPepper)) throw new PlatformError('INVALID_CREDENTIALS', 'Email or password is incorrect.', 401)
+    if (!user || user.status !== 'ACTIVE' || !await verifyPassword(email, input.password, user.passwordHash, this.passwordPepper)) throw new PlatformError('INVALID_CREDENTIALS', 'Email or password is incorrect.', 401)
     const memberships = await this.repository.transaction((tx) => tx.listMemberships(user.id), { userId: user.id })
     if (!memberships.length) throw new PlatformError('TENANT_ACCESS_DENIED', 'No active workspace membership was found.', 403)
     let membership = input.organizationId ? memberships.find((item) => item.organizationId === input.organizationId) : undefined
@@ -195,8 +195,8 @@ export class PlatformService {
     await this.requirePermission(context, 'security.profile.changePassword')
     if (nextPassword.length < 12) throw new PlatformError('INVALID_CREDENTIALS', 'Use a password of at least 12 characters.', 422)
     const user = await this.scoped(context, (tx) => tx.findUserById(context.userId))
-    if (!user || !verifyPassword(user.email, currentPassword, user.passwordHash, this.passwordPepper)) throw new PlatformError('REAUTH_REQUIRED', 'Confirm your current password to continue.', 403)
-    await this.scoped(context, (tx) => tx.updatePassword(context.userId, hashPassword(user.email, nextPassword, this.passwordPepper)))
+    if (!user || !await verifyPassword(user.email, currentPassword, user.passwordHash, this.passwordPepper)) throw new PlatformError('REAUTH_REQUIRED', 'Confirm your current password to continue.', 403)
+    await this.scoped(context, async (tx) => tx.updatePassword(context.userId, await hashPassword(user.email, nextPassword, this.passwordPepper)))
     const rotated = await this.rotateSession(context, rawToken, 'credential_change')
     await this.scoped(context, (tx) => tx.appendAudit({ organizationId: context.organizationId, actorUserId: context.userId, action: 'platform.password.change', outcome: 'allowed', subjectType: 'user', subjectId: context.userId, correlationId: correlationId() }))
     return rotated
@@ -206,11 +206,11 @@ export class PlatformService {
     await this.requirePermission(context, 'security.profile.changeEmail')
     const user = await this.scoped(context, (tx) => tx.findUserById(context.userId))
     const email = normalizeEmail(nextEmail)
-    if (!user || !verifyPassword(user.email, currentPassword, user.passwordHash, this.passwordPepper)) throw new PlatformError('REAUTH_REQUIRED', 'Confirm your current password to continue.', 403)
+    if (!user || !await verifyPassword(user.email, currentPassword, user.passwordHash, this.passwordPepper)) throw new PlatformError('REAUTH_REQUIRED', 'Confirm your current password to continue.', 403)
     if (!email.includes('@')) throw new PlatformError('INVALID_CREDENTIALS', 'Use a valid email address.', 422)
     const existing = await this.repository.findUserByEmail(email)
     if (existing && existing.id !== context.userId) throw new PlatformError('HOSTNAME_CONFLICT', 'That email is already in use.', 409)
-    await this.scoped(context, async (tx) => { await tx.updateEmail(context.userId, email); await tx.updatePassword(context.userId, hashPassword(email, currentPassword, this.passwordPepper)); await tx.markUserUnverified(context.userId); await tx.revokeVerifications(context.userId, context.organizationId) })
+    await this.scoped(context, async (tx) => { await tx.updateEmail(context.userId, email); await tx.updatePassword(context.userId, await hashPassword(email, currentPassword, this.passwordPepper)); await tx.markUserUnverified(context.userId); await tx.revokeVerifications(context.userId, context.organizationId) })
     const token = randomSecret('verify_')
     const createdAt = iso()
     await this.scoped(context, async (tx) => { await tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId: context.userId, organizationId: context.organizationId, email, tokenHash: hashSecret(token, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt }); await tx.enqueueNotification({ userId: context.userId, organizationId: context.organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${context.userId}:${createdAt}`, payload: { email, verificationRequired: true } }) })
@@ -282,10 +282,10 @@ export class PlatformService {
     if (email !== invitation.email) throw new PlatformError('INVITATION_INVALID', 'Use the invited email address to accept this invitation.', 403)
     if (input.password.length < 12) throw new PlatformError('INVALID_CREDENTIALS', 'Use a password of at least 12 characters.', 422)
     let user = await this.repository.findUserByEmail(email)
-    if (user && !verifyPassword(email, input.password, user.passwordHash, this.passwordPepper)) throw new PlatformError('INVALID_CREDENTIALS', 'Email or password is incorrect.', 401)
+    if (user && !await verifyPassword(email, input.password, user.passwordHash, this.passwordPepper)) throw new PlatformError('INVALID_CREDENTIALS', 'Email or password is incorrect.', 401)
     const acceptedAt = iso()
     const userId = user?.id ?? `usr_${randomUUID().slice(0, 12)}`
-    if (!user) user = { id: userId, email, displayName: input.displayName.trim().slice(0, 160), passwordHash: hashPassword(email, input.password, this.passwordPepper), status: 'ACTIVE', verifiedAt: acceptedAt }
+    if (!user) user = { id: userId, email, displayName: input.displayName.trim().slice(0, 160), passwordHash: await hashPassword(email, input.password, this.passwordPepper), status: 'ACTIVE', verifiedAt: acceptedAt }
     const host = await this.repository.transaction((tx) => tx.findDefaultHostname(invitation.organizationId), { organizationId: invitation.organizationId, userId })
     if (!host) throw new PlatformError('TENANT_NOT_FOUND', 'Workspace address was not found.', 404)
     const sessionTokens = this.newSession(userId, invitation.organizationId, host.hostname, undefined, undefined, undefined, undefined)
