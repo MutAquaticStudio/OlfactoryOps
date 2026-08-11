@@ -55,6 +55,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Cloud-runtime deployment configuration | BLOCKED | The immutable scientific image digests, release SHA, and rendered Hyperdrive binding have not been recorded. |
 | PostgreSQL migration chain | PASS | `0018` applied on disposable loopback PostgreSQL. |
 | PostgreSQL RLS workflow | PASS | Tenant isolation and cross-domain V2 verification completed on disposable loopback PostgreSQL. |
+| Current local PostgreSQL re-run | BLOCKED | On 2026-08-11, `npm.cmd run v2:postgres:verify` could not reach `127.0.0.1:5432` (`P1001`). No local database was started or substituted; staging verification remains remote-only. |
 | Role matrix | PASS | 12 of 12 isolated roles passed. |
 | Scientific model runtime | BLOCKED | Remote Linux image build is intentionally required for this staging cutover; no local Windows image was built. |
 | Client secret scan | PASS | `npm.cmd run security:client-bundle`. |
@@ -101,6 +102,10 @@ RUNTIME_ROLE_BYPASSRLS = NO
 RUNTIME_ROLE_CREATEDB = NO
 RUNTIME_ROLE_CREATEROLE = NO
 RUNTIME_ROLE_PRIVILEGED_MEMBERSHIP = NONE
+RLS_STAGING = BLOCKED
+TENANT_ISOLATION_STAGING = BLOCKED
+ROLE_E2E_STAGING = BLOCKED
+PUBLIC_V2_WORKER_ROUTE_COVERAGE = BLOCKED
 REMOTE_SCIENTIFIC_BUILD = PASS
 SCIENTIFIC_CONTAINER_STAGING = BLOCKED
 REMOTE_STAGING_ACCEPTANCE = BLOCKED
