@@ -5,6 +5,7 @@ import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
 import { loadPrivateScientificInput, sha256 } from './scientific-input.js'
 import { completeCloudScientificFeature } from '../../services/scientific/src/cloud-completion.js'
+import { safeScientificContainerError } from './scientific-container-error.js'
 
 export type CloudScientificEnv = {
   HYPERDRIVE: Hyperdrive
@@ -51,7 +52,7 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
         headers: { 'content-type': 'application/json', 'x-olfactoryops-scientific-key': scientificContainerSharedSecret },
         body: JSON.stringify(request),
       })
-      if (!response.ok) throw new Error(response.status === 503 ? 'SCIENTIFIC_CONTAINER_UNAVAILABLE' : 'SCIENTIFIC_CONTAINER_FAILED')
+      if (!response.ok) throw new Error(await safeScientificContainerError(response))
       const parsed = await response.json() as unknown
       if (!isContainerResponse(parsed)) throw new Error('SCIENTIFIC_CONTAINER_INVALID_RESPONSE')
       const serialized = JSON.stringify(parsed)
