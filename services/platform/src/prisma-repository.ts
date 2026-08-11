@@ -89,7 +89,18 @@ export class PrismaPlatformRepository implements PlatformRepository {
       `)
     }
     await signupWrite('SUBSCRIPTION', () => this.client.subscription.create({ data: { id: `sub_${input.organization.id}`, organizationId: input.organization.id, planId: 'managed_beta', status: input.billing.status } }))
-    for (const [capability, enabled] of Object.entries(input.billing.capabilities)) await signupWrite('ENTITLEMENT', () => this.client.entitlement.create({ data: { id: `ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`, organizationId: input.organization.id, capability, enabled, source: 'MANAGED_BETA' } }))
+    for (const [capability, enabled] of Object.entries(input.billing.capabilities)) {
+      await signupWrite('ENTITLEMENT', () => this.client.$executeRaw`
+        INSERT INTO v2_entitlements (id, organization_id, capability, enabled, source)
+        VALUES (
+          ${`ent_${input.organization.id}_${capability.replace(/[^a-z0-9]/gi, '_')}`},
+          ${input.organization.id},
+          ${capability},
+          ${enabled},
+          'MANAGED_BETA'
+        )
+      `)
+    }
     return { user: input.user, organization: input.organization, membership: input.membership, hostname: input.hostname }
   }
   async listMemberships(userId: string) { const rows = await this.client.membership.findMany({ where: { userId, status: 'ACTIVE' }, include: { organization: true } }); return rows.map((row) => this.membership(row)) }
