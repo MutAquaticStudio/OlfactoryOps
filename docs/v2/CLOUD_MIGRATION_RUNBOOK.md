@@ -58,12 +58,11 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    role must have no membership escalation, schema `CREATE`, superuser, or
    `BYPASSRLS` privilege.
 
-   Current staging evidence: the migration chain completed in GitHub run
-   `31477033801`, but Supabase rejected the role hardening step because
-   `hyperdrive_user` is itself a `SUPERUSER`. The GitHub migration credential
-   must not bypass that restriction. An owner-level Supabase administration
-   action is required to replace the superuser configuration before this gate
-   can pass.
+   Current staging evidence: GitHub run `31479091142` applied/verified the
+   role policy. `hyperdrive_user` can log in but is not a superuser, cannot
+   bypass RLS, cannot create databases or roles, cannot replicate, and has no
+   inherited privileged membership. The workflow preserves database grants and
+   RLS rather than treating safe role attributes as proof of access control.
 4. Make the protected workflow available on the repository default branch
    before manual dispatch. GitHub requires a `workflow_dispatch` file on that
    branch; do not merge unrelated cloud-runtime work merely to satisfy this
@@ -85,6 +84,13 @@ Current staging evidence: Linux build and compatibility checks completed in
 GitHub run `31477266765`, but `wrangler containers push` returned `403
 Forbidden` from the staging Cloudflare token. Do not retry Cloudflare mutations
 until its Container Registry permission/scope is corrected.
+
+The separate exact-SHA API Worker deployment also returned Cloudflare
+authentication error `10000` in GitHub run `31480119688` before mutating the
+Worker. Correct the `staging` Environment token in place; it needs account
+`Workers Scripts: Write` and zone `Workers Routes: Write` for
+`labofscents.org`. Retain the protected Environment boundary and use account
+`Containers: Write` only for the scientific publish job.
 
 ## 6. Containerized workloads
 

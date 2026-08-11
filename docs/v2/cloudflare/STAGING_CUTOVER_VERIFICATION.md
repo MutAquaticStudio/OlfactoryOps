@@ -68,9 +68,10 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
 | GitHub staging Environment and dispatch | PASS | The `staging` Environment exists with the approved secret names, and default-branch dispatchers validate exact staging SHAs before entering it. |
 | Staging migration chain | PASS | GitHub run `31477033801` completed the immutable V2 migration chain. |
-| Hyperdrive runtime role hardening | BLOCKED | The configured `hyperdrive_user` is a `SUPERUSER`; Supabase rejected the migration credential's least-privilege `ALTER ROLE` with `42501`. |
+| Hyperdrive runtime role hardening | PASS | GitHub run `31479091142` applied/verified the current role policy: `LOGIN=true`; `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, and `REPLICATION` are false; no inherited privileged memberships. No credential value was read or recorded. |
 | Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. Remote RLS fixtures must wait for `RUNTIME_DB_PRIVILEGES=PASS`. |
-| API Worker staging deployment | PASS | `olfactoryops-v2-api-staging` was uploaded with Hyperdrive only, three Cloudflare-managed secret bindings, a Cloudflare-managed `api-beta` custom domain/certificate, and an exact route that excludes the legacy wildcard router. |
+| API Worker staging deployment at approved SHA | BLOCKED | GitHub run `31480119688` reached Wrangler but Cloudflare returned authentication error `10000` before a Worker mutation. The currently reachable health endpoint is a prior revision and does not report the required approved release SHA. |
+| Remote route parity for the 143-route source matrix | BLOCKED | It must be verified only after the approved API Worker SHA is deployed; a prior staging revision and local route generation are not parity evidence. |
 | Tenant-router wildcard and Pages deployment | BLOCKED | The PostgreSQL hostname registry/RLS gate and staging Pages deployment remain outstanding. |
 | R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Control-plane PUT/delete passed, but raw GET and tenant-denial require the deployed Worker. |
 | Vectorize Worker tenant isolation | BLOCKED | Control-plane metadata filters passed; application authorization still requires the deployed Worker and fixture tenant. |
@@ -93,13 +94,27 @@ REMOTE_POSTGRES_REQUIRED = PASS
 HYPERDRIVE_EXISTS = PASS
 HYPERDRIVE_STAGING = PASS
 MIGRATIONS_STAGING = PASS
-RUNTIME_DB_PRIVILEGES = BLOCKED
+RUNTIME_DB_PRIVILEGES = PASS
+RUNTIME_ROLE_LOGIN = PASS
+RUNTIME_ROLE_SUPERUSER = NO
+RUNTIME_ROLE_BYPASSRLS = NO
+RUNTIME_ROLE_CREATEDB = NO
+RUNTIME_ROLE_CREATEROLE = NO
+RUNTIME_ROLE_PRIVILEGED_MEMBERSHIP = NONE
 REMOTE_SCIENTIFIC_BUILD = PASS
 SCIENTIFIC_CONTAINER_STAGING = BLOCKED
 REMOTE_STAGING_ACCEPTANCE = BLOCKED
 PRODUCTION_DEPLOYED = NOT_APPLICABLE
 V2_CLOUDFLARE_STAGING_READY = BLOCKED
 ```
+
+The staging Environment token must first be replaced or corrected without
+changing its scope boundary. The minimal deploy scope is account `Workers
+Scripts: Write`; because the Worker config owns an `api-beta` route, grant
+zone `Workers Routes: Write` for `labofscents.org` as well. Container publishing
+also remains blocked until the token has account `Containers: Write`. After
+that, re-run the exact-SHA API deployment, remote API-to-
+Hyperdrive tenant verifier, and staging scientific publish in that order.
 
 The tag `v2-cloudflare-staging-ready` must not be created until every blocked
 remote staging gate is independently verified.

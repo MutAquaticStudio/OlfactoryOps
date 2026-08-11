@@ -22,7 +22,7 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | Worker | `olfactoryops-api` | NOT_APPLICABLE | Existing production/legacy surface; unchanged. |
 | Worker | `olfactoryops-api-test` | NOT_APPLICABLE | Existing test surface; unchanged. |
 | Worker | `olfactoryops-tenant-router` | NOT_APPLICABLE | Legacy D1 router; unchanged. |
-| Worker | `olfactoryops-v2-api-staging` | PASS | Staging-only Hyperdrive Worker uploaded through Cloudflare MCP; no production Worker changed. |
+| Worker | `olfactoryops-v2-api-staging` | BLOCKED | The existing staging-only Hyperdrive Worker remains reachable, but GitHub run `31480119688` could not deploy the approved SHA because its staging token returned Cloudflare authentication error `10000` before mutation. |
 | Pages | `olfactoryops-beta` | PASS | Existing staging Pages project; no deployment/config mutation in this cutover yet. |
 | Vectorize | Existing material-evidence indexes | NOT_APPLICABLE | Not repurposed for isolated staging. |
 | Hyperdrive | `olfactoryops-staging-hyperdrive` | PASS | Cloudflare API GET confirmed configuration `d7ac83bd79944e9dbd1f6eef30518dc3`, a non-local Supabase origin, and no credential value was read. |
@@ -67,20 +67,23 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | GitHub staging environment secrets | PASS | The protected `staging` Environment contains only `STAGING_DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`; values were not read. |
 | Default-branch protected dispatch | PASS | Default branch dispatchers validate an exact `codex/cloudflare-cloud-native-runtime` SHA before the staging Environment is entered. |
 | Staging migration chain | PASS | GitHub run `31477033801` applied the immutable V2 migration chain before role hardening began. |
-| Hyperdrive runtime role hardening | BLOCKED | `hyperdrive_user` is currently a Supabase-managed `SUPERUSER`; the approved migration credential cannot alter a superuser role (`42501`). No privilege was weakened or changed. |
+| Hyperdrive runtime role hardening | PASS | GitHub run `31479091142` verified `LOGIN=true`, no `SUPERUSER`, `BYPASSRLS`, `CREATEDB`, `CREATEROLE`, `REPLICATION`, or inherited privileged membership. Least-privilege runtime grants and PostgreSQL RLS were preserved. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
 ## Activation Sequence
 
-1. In Supabase staging with an owner-level database administration session,
-   replace the current superuser configuration of `hyperdrive_user` with the
-   least-privilege role required by `scripts/configure-v2-runtime-role.mjs`.
-   The GitHub migration credential intentionally cannot make this change.
-2. Re-run the protected `V2 Staging PostgreSQL Migration` dispatcher for the
-   exact current staging SHA and require `RUNTIME_DB_PRIVILEGES=PASS`.
-3. Deploy the separate `*.beta.labofscents.org` tenant-router only after the
-   PostgreSQL hostname registry/RLS gate passes.
+1. Correct only the `staging` Environment Cloudflare API token, which currently
+   returns `10000` before updating the staging API Worker. Grant account
+   `Workers Scripts: Write`, zone `Workers Routes: Write` for
+`labofscents.org`, and account `Containers: Write` for the
+   separate scientific publish dispatcher. Do not move the secret or grant
+   production scope.
+2. Re-run the protected exact-SHA API deployment and require a health response
+   whose `releaseGitSha` matches the approved staging SHA before remote tests.
+3. Run the remote API Worker-to-Hyperdrive tenant verifier, then deploy the
+   separate `*.beta.labofscents.org` tenant-router only after the PostgreSQL
+   hostname registry/RLS gate passes.
 4. Configure and deploy the existing `olfactoryops-beta` Pages project with
    `.env.staging.example` values.
 5. Run remote resource and browser acceptance tests. Production remains out of
@@ -95,9 +98,9 @@ MCP_STAGING_MUTATION_AUTHORIZED = PASS
 REMOTE_POSTGRES_REQUIRED = PASS
 HYPERDRIVE_EXISTS = PASS
 HYPERDRIVE_STAGING = PASS
-STAGING_API_WORKER = PASS
+STAGING_API_WORKER = BLOCKED
 MIGRATIONS_STAGING = PASS
-RUNTIME_DB_PRIVILEGES = BLOCKED
+RUNTIME_DB_PRIVILEGES = PASS
 STAGING_DNS_AND_ROUTES = BLOCKED
 MATERIAL_EVIDENCE_VECTORIZE = PASS
 MOLECULAR_VECTORIZE = NOT_APPLICABLE
