@@ -73,6 +73,8 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
       - name: Render the non-secret staging Worker configuration
         run: node scripts/render-v2-api-staging-config.mjs
+      - name: Generate the checked-in controller transport delegates
+        run: npm run generate:v2-worker-transport
       - name: Deploy the exact staging API Worker revision
         run: npx wrangler deploy --config .qa/wrangler.v2-api-staging.toml --keep-vars
       - name: Verify deployed Hyperdrive health and revision
