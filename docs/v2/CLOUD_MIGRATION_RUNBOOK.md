@@ -43,7 +43,13 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 | Vectorize control-plane tenant filter | PASS | Disposable two-tenant BGE-M3 1024D metadata-filter test passed and cleaned up. |
 | Queue control-plane fixture | PASS | Disposable publish/preview/acknowledgement test passed and left zero backlog. |
 | Staging API DNS and Worker route | PASS | `api-beta.labofscents.org` uses a Cloudflare-managed Worker custom domain plus a more-specific route that bypasses the legacy wildcard router. |
-| Staging tenant wildcard and Pages deploy | BLOCKED | Requires migrated PostgreSQL hostname data, RLS verification, then the isolated tenant router and Pages deployment. |
+| Staging Pages deploy | PASS | `beta.labofscents.org` is active on `olfactoryops-beta`; protected Pages run `31509284274` deployed source SHA `29b2233d09840dae34cb92802c34dfc5feea89a2`. |
+| Staging API and Cloud Runtime deploy | PASS | Protected staging dispatchers deployed the same source SHA through Hyperdrive, private containers, R2, Queues, and Workflow. |
+| Remote tenancy and role verification | PASS | GitHub run `31509892505` passed RLS, tenant isolation, direct-ID denial, membership validation, and all twelve roles through API Worker to Hyperdrive to Supabase PostgreSQL. |
+| Public API route parity | PASS | GitHub run `31510839527` verified `143/143` public Phase 1-6 V2 routes at the exact source SHA. |
+| Staging tenant wildcard browser acceptance | BLOCKED | A fixture tenant hostname and unknown/archived-host browser evidence remains required. |
+| Queue/DLQ terminal failure | BLOCKED | The consumer/DLQ binding is deployed and success flow passed; terminal retry-to-DLQ delivery is not yet evidenced. |
+| Reviewed model serving E2E | BLOCKED | The runtime intentionally returns `NOT_CONFIGURED` until a reviewed tenant model artifact and serving dispatch contract are available. |
 | Production deployment | NOT_APPLICABLE | Explicitly excluded. |
 
 ## 4. Configuration and CI

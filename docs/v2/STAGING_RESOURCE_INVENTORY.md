@@ -6,6 +6,14 @@ This inventory covers only the V2 staging cutover for `beta.labofscents.org`.
 It does not authorize production deployment, production DNS or Worker changes,
 production PostgreSQL access, or changes to unrelated Cloudflare resources.
 
+## Current Acceptance Status
+
+The current staging evidence record is
+[`STAGING_FINAL_ACCEPTANCE_2026-08-11.md`](cloudflare/STAGING_FINAL_ACCEPTANCE_2026-08-11.md).
+It supersedes earlier deployment-blocker entries below. The verified runtime
+source SHA is `29b2233d09840dae34cb92802c34dfc5feea89a2`; remaining final
+acceptance gates are `BLOCKED`, not inferred from resource configuration.
+
 ## Control Plane
 
 | Check | Status | Evidence |
