@@ -1,0 +1,65 @@
+name: V2 Staging Public Route Parity
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of codex/cloudflare-cloud-native-runtime.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type VERIFY_ROUTE_PARITY to issue non-mutating public route probes.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-public-route-parity
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        name: Validate the approved staging revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "VERIFY_ROUTE_PARITY"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  verify-public-route-parity:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      V2_STAGING_ROUTE_PARITY_APPROVED: VERIFY_ROUTE_PARITY
+      V2_STAGING_ROUTE_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify every generated Phase 1-6 public API route without credentials or mutation
+        run: node scripts/verify-v2-staging-route-parity.mjs
