@@ -43,13 +43,13 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 | Vectorize control-plane tenant filter | PASS | Disposable two-tenant BGE-M3 1024D metadata-filter test passed and cleaned up. |
 | Queue control-plane fixture | PASS | Disposable publish/preview/acknowledgement test passed and left zero backlog. |
 | Staging API DNS and Worker route | PASS | `api-beta.labofscents.org` uses a Cloudflare-managed Worker custom domain plus a more-specific route that bypasses the legacy wildcard router. |
-| Staging Pages deploy | PASS | `beta.labofscents.org` is active on `olfactoryops-beta`; protected Pages run `31509284274` deployed source SHA `29b2233d09840dae34cb92802c34dfc5feea89a2`. |
-| Staging API and Cloud Runtime deploy | PASS | Protected staging dispatchers deployed the same source SHA through Hyperdrive, private containers, R2, Queues, and Workflow. |
-| Remote tenancy and role verification | PASS | GitHub run `31509892505` passed RLS, tenant isolation, direct-ID denial, membership validation, and all twelve roles through API Worker to Hyperdrive to Supabase PostgreSQL. |
-| Public API route parity | PASS | GitHub run `31510839527` verified `143/143` public Phase 1-6 V2 routes at the exact source SHA. |
-| Staging tenant wildcard browser acceptance | BLOCKED | A fixture tenant hostname and unknown/archived-host browser evidence remains required. |
-| Queue/DLQ terminal failure | BLOCKED | The consumer/DLQ binding is deployed and success flow passed; terminal retry-to-DLQ delivery is not yet evidenced. |
-| Reviewed model serving E2E | BLOCKED | The runtime intentionally returns `NOT_CONFIGURED` until a reviewed tenant model artifact and serving dispatch contract are available. |
+| Staging Pages deploy | PASS | `beta.labofscents.org` is active on `olfactoryops-beta`; protected Pages run `31531996514` deployed source SHA `4da6dfa061fc5ca818238c555e3320fc77a858b5` and the release manifest reports `environment: staging`. |
+| Staging API, Tenant Router, and Cloud Runtime deploy | PASS | Protected dispatchers `31529476648`, `31529476750`, and `31529167424` deployed the verified source through Hyperdrive, private containers, R2, Queues, and Workflow. |
+| Remote tenancy and role verification | PASS | GitHub run `31529928571` passed RLS, tenant isolation, direct-ID denial, membership validation, authentication, and all twelve roles through API Worker to Hyperdrive to Supabase PostgreSQL. |
+| Public API route parity | PASS | GitHub run `31530804517` verified `100% 143/143` public Phase 1-6 V2 routes at the exact source SHA. |
+| Staging tenant wildcard browser acceptance | PASS | GitHub run `31532127144` passed fixture known and unknown tenant browser/TLS/router behavior on `<workspace>.api-beta.labofscents.org`. |
+| Queue/DLQ terminal failure | PASS | GitHub run `31529596072` submitted one staging-only fixture, observed natural attempts 1-3, DLQ arrival, exact-message cleanup, and zero test backlog. |
+| Reviewed model serving E2E | NOT_APPLICABLE_SCOPE_DEFERRED | The runtime intentionally returns `NOT_CONFIGURED` until a reviewed tenant model artifact and serving dispatch contract are in scope. |
 | Production deployment | NOT_APPLICABLE | Explicitly excluded. |
 
 ## 4. Configuration and CI
@@ -86,17 +86,14 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    - active image digest
    - known-good backup digest
 
-Current staging evidence: Linux build and compatibility checks completed in
-GitHub run `31477266765`, but `wrangler containers push` returned `403
-Forbidden` from the staging Cloudflare token. Do not retry Cloudflare mutations
-until its Container Registry permission/scope is corrected.
-
-The separate exact-SHA API Worker deployment also returned Cloudflare
-authentication error `10000` in GitHub run `31480119688` before mutating the
-Worker. Correct the `staging` Environment token in place; it needs account
-`Workers Scripts: Write` and zone `Workers Routes: Write` for
-`labofscents.org`. Retain the protected Environment boundary and use account
-`Containers: Write` only for the scientific publish job.
+Current staging evidence: GitHub Linux build and compatibility checks completed
+in `31526728004`; staging-only publish `31527078581` recorded immutable feature
+digest `sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42`
+and model digest
+`sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe`.
+The staging Environment secret boundary remains unchanged: build jobs receive
+no Cloudflare credential, while the manual publish job alone receives the
+`staging` Environment.
 
 ## 6. Containerized workloads
 
@@ -118,10 +115,11 @@ Worker. Correct the `staging` Environment token in place; it needs account
    direct links.
 4. Create the remote staging Hyperdrive binding first. Then apply the exact
    `api-beta.labofscents.org/*` API route and the independent
-   `*.beta.labofscents.org/*` tenant route declared in the two staging Wrangler
-   templates. The wildcard cannot match `api-beta`.
-5. Add only proxied staging DNS for `api-beta` and `*.beta`; preserve the
-   existing `beta.labofscents.org` Pages hostname for public staging.
+   `*.api-beta.labofscents.org/*` tenant route. The exact API route is more
+   specific and therefore cannot be captured by the tenant wildcard.
+5. Keep `beta.labofscents.org` as the Pages hostname. The active staging
+   tenant fallback is proxied `*.api-beta.labofscents.org` because the active
+   Advanced Certificate covers that wildcard, not `*.beta.labofscents.org`.
 
 ## 8. Data services integration
 
@@ -152,3 +150,35 @@ Rollback command stays:
 - `git switch <source-branch>`
 - create recovery branch from `pre-cloudflare-cloud-native-migration-20260810`.
 - Do not delete the pre-migration tag.
+
+## 12. Final Staging Acceptance (2026-08-11)
+
+This final section supersedes earlier historical blocker notes in this runbook.
+The verified application/runtime source is
+`4da6dfa061fc5ca818238c555e3320fc77a858b5`; all protected dispatchers checked
+out that exact revision before using the staging Environment.
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Pages, API, Tenant Router, Cloud Runtime | PASS | Dispatchers `31531996514`, `31529476648`, `31529476750`, and `31529167424`. |
+| Remote RLS, tenant isolation, role E2E, authentication | PASS | Remote verifier `31529928571` through API Worker -> Hyperdrive -> Supabase PostgreSQL. |
+| Public Worker route parity | PASS | `31530804517`: `100% 143/143`. |
+| Scientific Queue -> Workflow -> private Container -> R2 | PASS | `31529268097`; immutable feature image `sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42`. |
+| Terminal Queue -> DLQ retry | PASS | `31529596072`: one internal-only fixture failed naturally on attempts 1-3, reached the configured DLQ, and left both test backlogs at zero. |
+| Tenant wildcard DNS, route, and TLS | PASS | Staging fallback `<workspace>.api-beta.labofscents.org`; proxied wildcard DNS and active certificate cover the route. |
+| Known and unknown tenant browser | PASS | `31532127144`: browser TLS, trusted server-side resolution, public-header denial, controlled unknown-host response, and no fatal console/network errors. |
+| Model serving | NOT_APPLICABLE_SCOPE_DEFERRED | The compatibility runtime is live, but no reviewed tenant serving model or serving dispatch contract is in scope. |
+| Production deployment | NOT_APPLICABLE | Explicitly prohibited. |
+
+```text
+CLOUD_NATIVE_ARCHITECTURE_READY = YES
+REMOTE_SCIENTIFIC_BUILD_READY = YES
+STAGING_READY = YES
+SAFE_TO_DEPLOY_LABOFSCENTS = YES
+BOT_FIGHT_MODE_REENABLE_REQUIRED = YES
+PRODUCTION_DEPLOYED = NO
+```
+
+`SAFE_TO_DEPLOY_LABOFSCENTS=YES` is a completed staging gate, not an executed
+production deployment. Re-enable Bot Fight Mode after this acceptance record is
+committed.

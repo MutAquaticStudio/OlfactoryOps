@@ -11,8 +11,9 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 The current staging evidence record is
 [`STAGING_FINAL_ACCEPTANCE_2026-08-11.md`](cloudflare/STAGING_FINAL_ACCEPTANCE_2026-08-11.md).
 It supersedes earlier deployment-blocker entries below. The verified runtime
-source SHA is `29b2233d09840dae34cb92802c34dfc5feea89a2`; remaining final
-acceptance gates are `BLOCKED`, not inferred from resource configuration.
+source SHA is `4da6dfa061fc5ca818238c555e3320fc77a858b5`; final acceptance
+is complete only because the remote fixture, route, TLS, and browser evidence
+below were independently recorded.
 
 ## Control Plane
 
@@ -30,11 +31,14 @@ acceptance gates are `BLOCKED`, not inferred from resource configuration.
 | Worker | `olfactoryops-api` | NOT_APPLICABLE | Existing production/legacy surface; unchanged. |
 | Worker | `olfactoryops-api-test` | NOT_APPLICABLE | Existing test surface; unchanged. |
 | Worker | `olfactoryops-tenant-router` | NOT_APPLICABLE | Legacy D1 router; unchanged. |
-| Worker | `olfactoryops-v2-api-staging` | BLOCKED | The existing staging-only Hyperdrive Worker remains reachable, but GitHub run `31480119688` could not deploy the approved SHA because its staging token returned Cloudflare authentication error `10000` before mutation. |
-| Pages | `olfactoryops-beta` | PASS | Existing staging Pages project; no deployment/config mutation in this cutover yet. |
+| Worker | `olfactoryops-v2-api-staging` | PASS | Protected dispatcher `31529476648` deployed application source `4da6dfa061fc5ca818238c555e3320fc77a858b5` through Hyperdrive. |
+| Worker | `olfactoryops-v2-tenant-router-staging` | PASS | Protected dispatcher `31529476750` deployed the PostgreSQL-backed staging router. |
+| Pages | `olfactoryops-beta` | PASS | Protected Pages dispatcher `31531996514` deployed the same verified source and its release manifest reports `environment: staging`. |
 | Vectorize | Existing material-evidence indexes | NOT_APPLICABLE | Not repurposed for isolated staging. |
 | Hyperdrive | `olfactoryops-staging-hyperdrive` | PASS | Cloudflare API GET confirmed configuration `d7ac83bd79944e9dbd1f6eef30518dc3`, a non-local Supabase origin, and no credential value was read. |
-| KV, Durable Objects, AI Gateway, Containers | Existing account inventory | NOT_APPLICABLE | No additional binding is needed before the blocked remote dependencies are satisfied. |
+| KV, Durable Objects, AI Gateway | Existing account inventory | NOT_APPLICABLE | No current staging binding is required. |
+| Feature Container | Private staging application | PASS | Immutable feature image digest `sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42` completed the remote scientific flow. |
+| Model Container | Private staging application | PASS | Immutable compatibility image digest `sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe` is registered; serving remains scope-deferred. |
 
 ## Isolated Staging Resources
 
@@ -50,28 +54,28 @@ acceptance gates are `BLOCKED`, not inferred from resource configuration.
 | Notification DLQ | `olfactoryops-v2-notifications-dlq-staging` | `229957f9dffd4c2eb2aabdc1a684dbd3` | PASS |
 | Molecular Vectorize | None | No fixed serving dimension | NOT_APPLICABLE |
 | Odor Vectorize | None | `RESEARCH_ONLY` | NOT_APPLICABLE |
-| Workflow | `olfactoryops-v2-scientific-staging` | Needs a deployed Worker with real image digests | BLOCKED |
-| Feature/Model Containers | None | Need private immutable images and Hyperdrive-backed runtime | BLOCKED |
+| Workflow | `olfactoryops-v2-scientific-staging` | API Worker -> Queue -> Workflow -> private Container -> R2 -> PostgreSQL metadata | PASS |
+| Feature/Model Containers | Private staging applications | Immutable published image digests above; no production binding | PASS |
 
 ## Runtime And Verification Boundaries
 
 | Gate | Status | Detail |
 | --- | --- | --- |
 | V2 API Worker local build | PASS | Decorator-free transport generated from 143 in-scope controller routes; Hyperdrive only. |
-| V2 tenant-router local build | PASS | `*.beta.labofscents.org` PostgreSQL resolver; no D1 path. |
+| V2 tenant-router local build | PASS | `*.api-beta.labofscents.org` PostgreSQL resolver; no D1 path. |
 | Exact-Origin CORS / CSRF transport tests | PASS | API host, exact `beta` Pages origin, one-label tenant origin, unsafe mutation denial, and preflight pass. |
 | Agent Web Streams transport | PASS | Persisted event replay, trusted-origin session resolution, and cleanup are unit-tested. |
 | R2 control-plane fixture cleanup | PASS | Isolated object PUT and cleanup completed; the MCP wrapper cannot consume raw object GET bytes. |
-| R2 tenant lifecycle | BLOCKED | Hash/provenance and tenant-denial must run through the deployed Worker. |
+| R2 tenant lifecycle | PASS | Deployed scientific flow persisted private artifact/provenance through the Worker binding. |
 | Vectorize control-plane tenant filter | PASS | Two 1024D fixture vectors propagated, each exact-origin metadata filter returned only its own tenant record, and both were deleted. |
 | Queue control-plane fixture | PASS | Scientific queue publish, preview, acknowledgement, and zero-backlog cleanup completed. |
-| Queue retry, consumer idempotency, DLQ | BLOCKED | HTTP pull is not enabled and no consumer Worker is deployed. |
-| Workflow terminal failure | BLOCKED | Needs deployed Workflow and private Container images. |
-| Container authorized/unauthorized invocation | BLOCKED | Needs private immutable image digests and Worker secret storage. |
+| Queue retry, consumer idempotency, DLQ | PASS | Run `31529596072` exercised one internal-only terminal failure naturally through three retries into the scientific DLQ, then removed only that reference. |
+| Workflow terminal failure | NOT_APPLICABLE | The terminal DLQ probe deliberately fails in the Queue consumer before a Workflow starts; a separate workflow-terminal fixture is not required for this staging acceptance. |
+| Container authorized/unauthorized invocation | NOT_APPLICABLE | The Container has no public invocation surface. The deployed private Workflow invocation is PASS, while a public authorized/unauthorized probe would test a route that deliberately does not exist. |
 | Remote staging PostgreSQL | PASS | `GET https://api-beta.labofscents.org/health` completed `SELECT 1` through the deployed Hyperdrive Worker. No origin credential was read. |
 | Hyperdrive runtime path | PASS | The staging API Worker reports `database: hyperdrive` only after its PostgreSQL `SELECT 1` succeeds. |
 | API Worker custom domain and exact route | PASS | Cloudflare-managed `api-beta.labofscents.org` custom domain/certificate and a more-specific Worker route bypass the legacy `*.labofscents.org` router. |
-| Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
+| Staging tenant-router wildcard | PASS | Proxied `*.api-beta.labofscents.org` routes only to `olfactoryops-v2-tenant-router-staging`; browser tests passed known and unknown hosts with server-side resolution. |
 | GitHub staging environment secrets | PASS | The protected `staging` Environment contains only `STAGING_DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_API_TOKEN`; values were not read. |
 | Default-branch protected dispatch | PASS | Default branch dispatchers validate an exact `codex/cloudflare-cloud-native-runtime` SHA before the staging Environment is entered. |
 | Staging migration chain | PASS | GitHub run `31481271211` verified the 18-migration immutable V2 chain for approved staging source SHA `7cabd0a1bfc42366404e446ea6bd305d79fd5a36`. |
@@ -79,23 +83,19 @@ acceptance gates are `BLOCKED`, not inferred from resource configuration.
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
-## Activation Sequence
+## Final Acceptance Evidence
 
-1. Correct only the `staging` Environment Cloudflare API token, which currently
-   returns `10000` before updating the staging API Worker. Grant account
-   `Workers Scripts: Write`, zone `Workers Routes: Write` for
-`labofscents.org`, and account `Containers: Write` for the
-   separate scientific publish dispatcher. Do not move the secret or grant
-   production scope.
-2. Re-run the protected exact-SHA API deployment and require a health response
-   whose `releaseGitSha` matches the approved staging SHA before remote tests.
-3. Run the remote API Worker-to-Hyperdrive tenant verifier, then deploy the
-   separate `*.beta.labofscents.org` tenant-router only after the PostgreSQL
-   hostname registry/RLS gate passes.
-4. Configure and deploy the existing `olfactoryops-beta` Pages project with
-   `.env.staging.example` values.
-5. Run remote resource and browser acceptance tests. Production remains out of
-   scope throughout.
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Exact API route | PASS | `api-beta.labofscents.org/*` -> `olfactoryops-v2-api-staging`. |
+| Tenant wildcard route | PASS | `*.api-beta.labofscents.org/*` -> `olfactoryops-v2-tenant-router-staging`; the exact API route remains protected. |
+| Tenant wildcard TLS | PASS | Active Advanced Certificate covers `api-beta.labofscents.org` and `*.api-beta.labofscents.org`. |
+| Known tenant browser | PASS | Run `31532127144` passed TLS, router, server-side resolution, and no fatal console/network errors. |
+| Unknown tenant browser | PASS | The same run produced a controlled unknown-workspace response with no tenant fallback or loop. |
+| Remote RLS, tenant isolation, role E2E, auth | PASS | Run `31529928571` through API Worker -> Hyperdrive -> Supabase PostgreSQL. |
+| Public route parity | PASS | Run `31530804517` reported `100% 143/143`. |
+| Model serving | NOT_APPLICABLE_SCOPE_DEFERRED | No reviewed tenant serving artifact or serving dispatch contract is in scope; compatibility runtime remains operational. |
+| Production deployment | NOT_APPLICABLE | Explicitly prohibited. |
 
 ## Current Verdict
 
@@ -106,15 +106,15 @@ MCP_STAGING_MUTATION_AUTHORIZED = PASS
 REMOTE_POSTGRES_REQUIRED = PASS
 HYPERDRIVE_EXISTS = PASS
 HYPERDRIVE_STAGING = PASS
-STAGING_API_WORKER = BLOCKED
+STAGING_API_WORKER = PASS
 MIGRATIONS_STAGING = PASS
 RUNTIME_DB_PRIVILEGES = PASS
-STAGING_DNS_AND_ROUTES = BLOCKED
+STAGING_DNS_AND_ROUTES = PASS
 MATERIAL_EVIDENCE_VECTORIZE = PASS
 MOLECULAR_VECTORIZE = NOT_APPLICABLE
 ODOR_VECTORIZE = NOT_APPLICABLE
 QUEUE_AND_DLQ_RESOURCES = PASS
-REMOTE_STAGING_ACCEPTANCE = BLOCKED
+REMOTE_STAGING_ACCEPTANCE = PASS
 PRODUCTION_DEPLOYED = NOT_APPLICABLE
-STAGING_READY = BLOCKED
+STAGING_READY = YES
 ```

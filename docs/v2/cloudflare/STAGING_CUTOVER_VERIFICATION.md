@@ -31,9 +31,9 @@ customer data, and unrelated Cloudflare projects were not changed.
 | V2 API Worker boundary | PASS | 143 decorator-derived controller routes use shared Platform/domain services through Hyperdrive only. |
 | Session, CSRF, exact-Origin CORS | PASS | Unit tests cover `beta` Pages, tenant-specific origins, unsafe mutation denial, and preflight. |
 | Agent event stream | PASS | Worker Web Streams replay persisted events through the existing governed Agent service; no second event store. |
-| V2 tenant router | PASS | `*.beta.labofscents.org` resolver queries PostgreSQL through Hyperdrive and returns `404` for unknown/archived hosts. |
+| V2 tenant router | PASS | `*.api-beta.labofscents.org` resolver queries PostgreSQL through Hyperdrive and returns `404` for unknown/archived hosts. |
 | D1 as V2 substitute | PASS | No V2 API or staging tenant-router D1 binding exists. |
-| API/wildcard route separation | PASS | Exact `api-beta.labofscents.org/*` and separate `*.beta.labofscents.org/*` route declarations are checked in the staging templates. |
+| API/wildcard route separation | PASS | Exact `api-beta.labofscents.org/*` and separate `*.api-beta.labofscents.org/*` route declarations are checked in the staging templates. |
 | Phase 7+ public staging API | NOT_APPLICABLE | Trial/Sensory, Production, Commerce, and Advanced controllers are absent from the Worker matrix. |
 | Phase 7+ staging UI boundary source | PASS | Staging Pages build flag hides them and bounds direct paths; lazy chunks keep them out of initial load. |
 | Staging Pages build source | PASS | Build passed with `VITE_API_BASE_URL`, `VITE_V2_WORKSPACE_BASE_DOMAIN`, and `VITE_V2_STAGING_PUBLIC_CUTOVER`. |
@@ -62,7 +62,11 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Dependency audit | PASS | `npm.cmd audit --omit=dev --audit-level=high` reports zero vulnerabilities. |
 | Git diff whitespace | PASS | `git diff --check`. |
 
-## Remote Staging Acceptance
+## Remote Staging Acceptance (Historical Pre-final Snapshot)
+
+The following snapshot records the state before the final staging reruns. It is
+retained for the cutover timeline only; the authoritative result is the
+`Final Acceptance Override - 2026-08-11` section below.
 
 | Gate | Status | Reason |
 | --- | --- | --- |
@@ -85,7 +89,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Browser authenticated staging flow | BLOCKED | No isolated remote role fixture may be created until the least-privilege Hyperdrive role gate passes. |
 | Production deployment | NOT_APPLICABLE | Explicitly prohibited in this cutover. |
 
-## Verdict
+## Verdict (Historical Pre-final Snapshot)
 
 ```text
 SOURCE_CUTOVER = PASS
@@ -124,3 +128,40 @@ Hyperdrive tenant verifier, and staging scientific publish in that order.
 
 The tag `v2-cloudflare-staging-ready` must not be created until every blocked
 remote staging gate is independently verified.
+
+## Final Acceptance Override - 2026-08-11
+
+The preceding sections retain the historical cutover sequence. The following
+table is the authoritative final staging result after all previously blocked
+remote gates were independently rerun at application source
+`4da6dfa061fc5ca818238c555e3320fc77a858b5`.
+
+| Gate | Status | Final evidence |
+| --- | --- | --- |
+| Cloud-runtime deployment configuration | PASS | `31529167424` rendered immutable scientific image bindings. |
+| API Worker, Pages, and tenant router deployment | PASS | `31529476648`, `31531996514`, and `31529476750` validated the exact source revision. |
+| Remote Hyperdrive RLS and tenancy | PASS | `31529928571` passed remote RLS, cross-tenant denial, direct-ID denial, membership/role-policy scope, auth, and all twelve roles. |
+| Public V2 route parity | PASS | `31530804517` reported `100% 143/143`. |
+| R2, Queue, Workflow, and private Container | PASS | `31529268097` completed the bounded remote scientific lifecycle. |
+| Scientific DLQ terminal retry | PASS | `31529596072` exercised natural attempt 1-3 failures, DLQ arrival, exact test-message cleanup, and zero source/DLQ test backlog. |
+| Tenant wildcard browser acceptance | PASS | `31532127144` passed known and unknown tenant browser/TLS/router tests using `<workspace>.api-beta.labofscents.org`. |
+| Model serving E2E | NOT_APPLICABLE_SCOPE_DEFERRED | No reviewed tenant serving model or serving dispatch contract is required by the current Phase 4-5 scope. |
+| Production deployment | NOT_APPLICABLE | Explicitly prohibited. |
+
+```text
+RLS_STAGING = PASS
+TENANT_ISOLATION_STAGING = PASS
+ROLE_E2E_STAGING = PASS
+PUBLIC_V2_WORKER_ROUTE_COVERAGE = PASS (100% 143/143)
+DLQ_STAGING = PASS
+STAGING_KNOWN_TENANT_HOST = PASS
+STAGING_UNKNOWN_TENANT_HOST = PASS
+STAGING_MODEL_E2E = NOT_APPLICABLE_SCOPE_DEFERRED
+V2_CLOUDFLARE_STAGING_READY = YES
+PRODUCTION_DEPLOYED = NO
+```
+
+The detailed DLQ and final acceptance records are
+`STAGING_DLQ_ACCEPTANCE_2026-08-11.md` and
+`STAGING_FINAL_ACCEPTANCE_2026-08-11.md`. Bot Fight Mode must be re-enabled
+after the final evidence commit.

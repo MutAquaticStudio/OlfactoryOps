@@ -154,3 +154,16 @@ The Worker imports generated decorator-free controller delegates; all business l
 - Agent event streaming is served by the Worker Web Streams transport. It replays the same persisted Agent events as the controller and does not create a second event store.
 - Phase 7+ Trial/Sensory, Production, Commerce, and Advanced routes remain outside the public staging cutover.
 - This matrix does not authorize a production deployment.
+
+## Final Remote Parity Evidence
+
+Protected dispatcher run `31530804517` checked out application source
+`4da6dfa061fc5ca818238c555e3320fc77a858b5` and reported:
+
+```text
+PUBLIC_V2_WORKER_ROUTE_COVERAGE=100% 143/143
+```
+
+The probe was unauthenticated and non-mutating. It validates the current public
+Phase 1-6 Worker boundary only and does not add Phase 7+ routes to this
+cutover.
