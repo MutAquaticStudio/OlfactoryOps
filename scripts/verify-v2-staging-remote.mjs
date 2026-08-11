@@ -26,6 +26,15 @@ const inventoryViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Lab Techni
 
 function fail(code) { throw new Error(`REMOTE_STAGING_E2E=FAIL ${code}`) }
 function assert(condition, code) { if (!condition) fail(code) }
+function postgresFailureCategory(error) {
+  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : ''
+  if (code === '42501') return 'RLS_OR_PERMISSION'
+  if (code === '23505') return 'CONFLICT'
+  if (code === '23514') return 'CHECK'
+  if (code === '23503') return 'FOREIGN_KEY'
+  if (code === '23502') return 'NOT_NULL'
+  return 'DATABASE'
+}
 
 function setCookies(response) {
   const values = typeof response.headers.getSetCookie === 'function'
@@ -81,6 +90,24 @@ async function main() {
   const fixtureUserIds = []
   const roleResults = []
 
+  async function verifyRuntimeRoleWriteProbe() {
+    const probeId = `probe_${suffix}`
+    await client.query('BEGIN')
+    try {
+      await client.query('SET LOCAL ROLE "hyperdrive_user"')
+      await client.query("SELECT set_config('app.organization_id', $1, true)", [probeId])
+      await client.query('INSERT INTO v2_organizations (id, slug, name, status) VALUES ($1, $2, $3, $4)', [probeId, `probe-${suffix}`, 'Staging runtime role rollback probe', 'ACTIVE'])
+      const context = await client.query("SELECT current_user = 'hyperdrive_user' AS runtime_role, current_setting('app.organization_id', true) = $1 AS tenant_context", [probeId])
+      assert(context.rows[0]?.runtime_role === true && context.rows[0]?.tenant_context === true, 'runtime_role_write_probe_context_invalid')
+      await client.query('ROLLBACK')
+      console.log(JSON.stringify({ runtimeRoleWriteProbe: 'PASS' }))
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      console.log(JSON.stringify({ runtimeRoleWriteProbe: 'FAIL', category: postgresFailureCategory(error) }))
+      fail('runtime_role_write_probe_failed')
+    }
+  }
+
   async function verifyUser(userId) {
     await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
   }
@@ -115,6 +142,7 @@ async function main() {
   try {
     await client.connect()
     await client.query('SELECT 1')
+    await verifyRuntimeRoleWriteProbe()
 
     const first = await signup('tenant-a', ownerA)
     const second = await signup('tenant-b', ownerB)
