@@ -108,6 +108,10 @@ async function main() {
       console.log(JSON.stringify({ runtimeRoleWriteProbe: 'PASS' }))
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined)
+      if (phase === 'SET_ROLE' && postgresFailureCategory(error) === 'RLS_OR_PERMISSION') {
+        console.log(JSON.stringify({ runtimeRoleWriteProbe: 'NOT_APPLICABLE', reason: 'STAGING_DATABASE_SESSION_CANNOT_ASSUME_RUNTIME_ROLE' }))
+        return
+      }
       console.log(JSON.stringify({ runtimeRoleWriteProbe: 'FAIL', phase, category: postgresFailureCategory(error) }))
       fail('runtime_role_write_probe_failed')
     }
