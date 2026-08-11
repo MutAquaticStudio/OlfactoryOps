@@ -36,13 +36,13 @@ customer data, and unrelated Cloudflare projects were not changed.
 | API/wildcard route separation | PASS | Exact `api-beta.labofscents.org/*` and separate `*.beta.labofscents.org/*` route declarations are checked in the staging templates. |
 | Phase 7+ public staging API | NOT_APPLICABLE | Trial/Sensory, Production, Commerce, and Advanced controllers are absent from the Worker matrix. |
 | Phase 7+ staging UI boundary source | PASS | Staging Pages build flag hides them and bounds direct paths; lazy chunks keep them out of initial load. |
-| Staging Pages build | PASS | Build passed with `VITE_API_BASE_URL`, `VITE_V2_WORKSPACE_BASE_DOMAIN`, and `VITE_V2_STAGING_PUBLIC_CUTOVER`. |
+| Staging Pages build source | PASS | Build passed with `VITE_API_BASE_URL`, `VITE_V2_WORKSPACE_BASE_DOMAIN`, and `VITE_V2_STAGING_PUBLIC_CUTOVER`. |
 
 ## Local Verification
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| Unit and integration tests | PASS | 70 files, 393 tests. |
+| Unit and integration tests | PASS | 70 files, 394 tests. |
 | Cloud runtime/transport focused tests | PASS | 4 files, 12 tests. |
 | Lint | PASS | Completed with three pre-existing non-blocking warnings outside the staging transport files. |
 | V2 typecheck | PASS | `npm.cmd run typecheck:v2`. |
@@ -51,11 +51,12 @@ customer data, and unrelated Cloudflare projects were not changed.
 | API build | PASS | `npm.cmd run build:api`. |
 | API Worker dry-run | PASS | `npm.cmd run build:v2-api-worker`. |
 | Tenant-router dry-run | PASS | `npm.cmd run build:v2-tenant-router`. |
-| Cloud-runtime dry-run | PASS | Bundles with only the approved Material Evidence Vectorize binding; deployment placeholders remain intentionally blocked. |
+| Cloud-runtime bundle dry-run | PASS | The declared Worker, queue, R2, Vectorize, Hyperdrive, Workflow, and Container bindings bundle without deployment. |
+| Cloud-runtime deployment configuration | BLOCKED | The immutable scientific image digests, release SHA, and rendered Hyperdrive binding have not been recorded. |
 | PostgreSQL migration chain | PASS | `0018` applied on disposable loopback PostgreSQL. |
 | PostgreSQL RLS workflow | PASS | Tenant isolation and cross-domain V2 verification completed on disposable loopback PostgreSQL. |
 | Role matrix | PASS | 12 of 12 isolated roles passed. |
-| Scientific model runtime | PASS | Local pinned compatibility image and runtime test completed. |
+| Scientific model runtime | BLOCKED | Remote Linux image build is intentionally required for this staging cutover; no local Windows image was built. |
 | Client secret scan | PASS | `npm.cmd run security:client-bundle`. |
 | Dependency audit | PASS | `npm.cmd audit --omit=dev --audit-level=high` reports zero vulnerabilities. |
 | Git diff whitespace | PASS | `git diff --check`. |
@@ -65,7 +66,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Gate | Status | Reason |
 | --- | --- | --- |
 | Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
-| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only; approved migrations, minimum runtime-role grants, and remote RLS fixtures have not run. |
+| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only. The protected workflow is ready, but the GitHub `staging` environment and its `STAGING_DATABASE_URL` secret do not exist, and remote RLS fixtures have not run. |
 | API Worker staging deployment | PASS | `olfactoryops-v2-api-staging` was uploaded with Hyperdrive only, three Cloudflare-managed secret bindings, a Cloudflare-managed `api-beta` custom domain/certificate, and an exact route that excludes the legacy wildcard router. |
 | Tenant-router wildcard and Pages deployment | BLOCKED | The PostgreSQL hostname registry/RLS gate and staging Pages deployment remain outstanding. |
 | R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Control-plane PUT/delete passed, but raw GET and tenant-denial require the deployed Worker. |
@@ -74,7 +75,7 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
 | GitHub scientific image publishing | BLOCKED | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets are absent. |
 | AI Gateway | NOT_APPLICABLE | No approved provider policy or staging provider credential. |
-| Browser staging checks | BLOCKED | `beta`, `api-beta`, and fixture tenant host deployment is intentionally not active. |
+| Browser staging checks | BLOCKED | `api-beta` is active, but `beta` still serves a prior Pages deployment whose CSP excludes `api-beta`; the current staging Pages build has not been deployed and no fixture tenant hostname exists. |
 | Production deployment | NOT_APPLICABLE | Explicitly prohibited in this cutover. |
 
 ## Verdict

@@ -32,7 +32,7 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 
 | Type | Name | Identifier or contract | Status |
 | --- | --- | --- | --- |
-| Private R2 | `olfactoryops-v2-artifacts-staging` | APAC, standard storage | PASS |
+| Private R2 | `olfactoryops-v2-artifacts-staging` | Private, standard storage | PASS |
 | Vectorize | `olfactoryops-v2-material-evidence-staging` | BGE-M3, 1024D, cosine; metadata indexes: `organizationId`, `embeddingVersion`, `modelVersion`, `status`, `sourceKind` | PASS |
 | Scientific queue | `olfactoryops-v2-scientific-staging` | `27cfb24e0ec44399a499c60d4d39623b` | PASS |
 | Scientific DLQ | `olfactoryops-v2-scientific-dlq-staging` | `e951f2834df84f3890d3021fdac21884` | PASS |
@@ -64,16 +64,18 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | Hyperdrive runtime path | PASS | The staging API Worker reports `database: hyperdrive` only after its PostgreSQL `SELECT 1` succeeds. |
 | API Worker custom domain and exact route | PASS | Cloudflare-managed `api-beta.labofscents.org` custom domain/certificate and a more-specific Worker route bypass the legacy `*.labofscents.org` router. |
 | Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
-| GitHub Cloudflare and migration secrets | BLOCKED | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and the canonical staging database secret are absent from repository secrets. |
+| GitHub Cloudflare and migration secrets | BLOCKED | The GitHub `staging` environment does not yet exist. The checked-in migration workflow requires its `STAGING_DATABASE_URL`; `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` are also absent from repository secrets. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
 ## Activation Sequence
 
-1. Provide the approved staging migration/admin connection through secure
-   configuration without placing its value in source control or chat.
+1. Create the protected GitHub `staging` environment and provide the approved
+   staging migration/admin connection as `STAGING_DATABASE_URL`, without
+   placing its value in source control or chat.
 2. Apply the approved V2 migration baseline and restrict the `hyperdrive_user`
-   role before exposing any tenant-routed or authenticated workflow.
+   role with the protected manual `V2 Staging PostgreSQL Migration` workflow
+   before exposing any tenant-routed or authenticated workflow.
 3. Deploy the separate `*.beta.labofscents.org` tenant-router only after the
    PostgreSQL hostname registry/RLS gate passes.
 4. Configure and deploy the existing `olfactoryops-beta` Pages project with

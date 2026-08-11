@@ -49,8 +49,15 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 ## 4. Configuration and CI
 
 1. Add/update Wrangler configs for migration previews.
-2. Add `scientific-container.yml` and `cloud-verification.yml` workflows.
-3. Keep deployment workflow manual and non-production.
+2. Add `scientific-container.yml`, `cloud-verification.yml`, and the protected
+   manual `v2-staging-postgres.yml` workflow.
+3. Create the protected GitHub `staging` environment, then configure its
+   `STAGING_DATABASE_URL` secret for the migration/admin connection. The
+   workflow applies `0001` through `0018`, then restricts the existing
+   `hyperdrive_user` role without reading or printing credentials. The runtime
+   role has no membership escalation, schema `CREATE`, superuser, or
+   `BYPASSRLS` privilege.
+4. Keep deployment workflow manual and non-production.
 
 ## 5. Remote scientific build
 
