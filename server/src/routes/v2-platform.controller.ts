@@ -42,6 +42,20 @@ function requestOriginAllowed(request: FastifyRequest) {
   return allowed.has(origin)
 }
 
+function platformRuntimeFailureCode(error: unknown) {
+  if (!error || typeof error !== 'object') return 'UNKNOWN'
+  const candidate = error as { code?: unknown; message?: unknown; name?: unknown }
+  const code = typeof candidate.code === 'string' ? candidate.code : ''
+  if (/^P\d{4}$/.test(code)) return `PRISMA_${code}`
+  if (/^[A-Z][A-Z0-9_]{2,80}$/.test(code)) return code
+  const message = typeof candidate.message === 'string' ? candidate.message : ''
+  if (/row-level security/i.test(message)) return 'POSTGRES_RLS_DENIED'
+  if (/permission denied/i.test(message)) return 'POSTGRES_PERMISSION_DENIED'
+  if (/transaction/i.test(message)) return 'POSTGRES_TRANSACTION_FAILED'
+  if (/connection|hyperdrive|database/i.test(message)) return 'POSTGRES_CONNECTION_FAILED'
+  return 'UNCLASSIFIED'
+}
+
 @Catch(PlatformError)
 class V2PlatformErrorFilter implements ExceptionFilter {
   catch(error: PlatformError, host: ArgumentsHost) {
@@ -218,5 +232,12 @@ export class V2PlatformController {
   private async platformCapabilities(context: PlatformContext) {
     return this.platform.capabilityProjection(context)
   }
-  private normalize(error: unknown) { if (error instanceof PlatformError) return error; if (error instanceof Error && error.message === 'V2_DATABASE_NOT_CONFIGURED') return new PlatformError('V2_DATABASE_NOT_CONFIGURED', 'V2 platform database is not configured for this environment.', 503); return new PlatformError('NOT_CONFIGURED', 'The platform request could not be completed.', 503) }
+  private normalize(error: unknown) {
+    if (error instanceof PlatformError) return error
+    const code = platformRuntimeFailureCode(error)
+    // Deliberately log only a stable classification: request data and provider details stay out of Worker logs.
+    console.error(JSON.stringify({ event: 'v2_platform_runtime_failure', code }))
+    if (error instanceof Error && error.message === 'V2_DATABASE_NOT_CONFIGURED') return new PlatformError('V2_DATABASE_NOT_CONFIGURED', 'V2 platform database is not configured for this environment.', 503)
+    return new PlatformError('NOT_CONFIGURED', 'The platform request could not be completed.', 503)
+  }
 }
