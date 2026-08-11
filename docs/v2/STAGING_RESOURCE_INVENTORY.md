@@ -22,9 +22,11 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | Worker | `olfactoryops-api` | NOT_APPLICABLE | Existing production/legacy surface; unchanged. |
 | Worker | `olfactoryops-api-test` | NOT_APPLICABLE | Existing test surface; unchanged. |
 | Worker | `olfactoryops-tenant-router` | NOT_APPLICABLE | Legacy D1 router; unchanged. |
+| Worker | `olfactoryops-v2-api-staging` | PASS | Staging-only Hyperdrive Worker uploaded through Cloudflare MCP; no production Worker changed. |
 | Pages | `olfactoryops-beta` | PASS | Existing staging Pages project; no deployment/config mutation in this cutover yet. |
 | Vectorize | Existing material-evidence indexes | NOT_APPLICABLE | Not repurposed for isolated staging. |
-| KV, Durable Objects, AI Gateway, Containers, Hyperdrive | Existing account inventory | NOT_APPLICABLE | No additional binding is needed before the blocked remote dependencies are satisfied. |
+| Hyperdrive | `olfactoryops-staging-hyperdrive` | PASS | Cloudflare API GET confirmed configuration `d7ac83bd79944e9dbd1f6eef30518dc3`, a non-local Supabase origin, and no credential value was read. |
+| KV, Durable Objects, AI Gateway, Containers | Existing account inventory | NOT_APPLICABLE | No additional binding is needed before the blocked remote dependencies are satisfied. |
 
 ## Isolated Staging Resources
 
@@ -49,32 +51,34 @@ production PostgreSQL access, or changes to unrelated Cloudflare resources.
 | --- | --- | --- |
 | V2 API Worker local build | PASS | Decorator-free transport generated from 143 in-scope controller routes; Hyperdrive only. |
 | V2 tenant-router local build | PASS | `*.beta.labofscents.org` PostgreSQL resolver; no D1 path. |
-| Exact-Origin CORS / CSRF transport tests | PASS | API host plus one-label tenant-origin tests and preflight pass. |
+| Exact-Origin CORS / CSRF transport tests | PASS | API host, exact `beta` Pages origin, one-label tenant origin, unsafe mutation denial, and preflight pass. |
 | Agent Web Streams transport | PASS | Persisted event replay, trusted-origin session resolution, and cleanup are unit-tested. |
-| R2 remote object lifecycle | BLOCKED | Requires deployed staging Worker; object APIs are not a Cloudflare control-plane mutation surface. |
-| Vectorize remote tenant isolation | BLOCKED | Requires deployed staging Worker and a disposable tenant fixture. |
-| Queue delivery, retry, DLQ | BLOCKED | Queues exist but no consumer Worker is deployed. |
+| R2 control-plane fixture cleanup | PASS | Isolated object PUT and cleanup completed; the MCP wrapper cannot consume raw object GET bytes. |
+| R2 tenant lifecycle | BLOCKED | Hash/provenance and tenant-denial must run through the deployed Worker. |
+| Vectorize control-plane tenant filter | PASS | Two 1024D fixture vectors propagated, each exact-origin metadata filter returned only its own tenant record, and both were deleted. |
+| Queue control-plane fixture | PASS | Scientific queue publish, preview, acknowledgement, and zero-backlog cleanup completed. |
+| Queue retry, consumer idempotency, DLQ | BLOCKED | HTTP pull is not enabled and no consumer Worker is deployed. |
 | Workflow terminal failure | BLOCKED | Needs deployed Workflow and private Container images. |
 | Container authorized/unauthorized invocation | BLOCKED | Needs private immutable image digests and Worker secret storage. |
-| Remote staging PostgreSQL | BLOCKED | No approved remote staging origin is configured in the secure environment. |
-| Hyperdrive | BLOCKED | Must be created only after an approved non-production PostgreSQL origin exists. |
-| GitHub Cloudflare secrets | BLOCKED | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are absent from repository secrets. |
+| Remote staging PostgreSQL | PASS | `GET https://api-beta.labofscents.org/health` completed `SELECT 1` through the deployed Hyperdrive Worker. No origin credential was read. |
+| Hyperdrive runtime path | PASS | The staging API Worker reports `database: hyperdrive` only after its PostgreSQL `SELECT 1` succeeds. |
+| API Worker custom domain and exact route | PASS | Cloudflare-managed `api-beta.labofscents.org` custom domain/certificate and a more-specific Worker route bypass the legacy `*.labofscents.org` router. |
+| Staging tenant-router wildcard | BLOCKED | The PostgreSQL hostname registry must be migrated and RLS-verified before `*.beta.labofscents.org` can be routed publicly. |
+| GitHub Cloudflare and migration secrets | BLOCKED | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and the canonical staging database secret are absent from repository secrets. |
 | AI Gateway | NOT_APPLICABLE | Inventory only; provider credentials and approved policy are absent. |
 | Production deployment | NOT_APPLICABLE | Explicitly out of scope. |
 
 ## Activation Sequence
 
-1. Approve a remote staging PostgreSQL origin without placing its connection
-   string in source control or chat.
-2. Create Hyperdrive through Cloudflare MCP, apply the approved V2 migration
-   baseline, and verify RLS/tenant role fixtures through the deployed Worker.
-3. Set staging-only Worker secrets in Cloudflare secret storage.
-4. Apply the exact `api-beta.labofscents.org` API route and the separate
-   `*.beta.labofscents.org` tenant-router route, then add only their staging
-   DNS records.
-5. Configure and deploy the existing `olfactoryops-beta` Pages project with
+1. Provide the approved staging migration/admin connection through secure
+   configuration without placing its value in source control or chat.
+2. Apply the approved V2 migration baseline and restrict the `hyperdrive_user`
+   role before exposing any tenant-routed or authenticated workflow.
+3. Deploy the separate `*.beta.labofscents.org` tenant-router only after the
+   PostgreSQL hostname registry/RLS gate passes.
+4. Configure and deploy the existing `olfactoryops-beta` Pages project with
    `.env.staging.example` values.
-6. Run remote resource and browser acceptance tests. Production remains out of
+5. Run remote resource and browser acceptance tests. Production remains out of
    scope throughout.
 
 ## Current Verdict
@@ -84,7 +88,9 @@ CLOUDFLARE_MCP_CONNECTED = PASS
 LABOFSCENTS_ZONE_FOUND = PASS
 MCP_STAGING_MUTATION_AUTHORIZED = PASS
 REMOTE_POSTGRES_REQUIRED = PASS
-HYPERDRIVE_STAGING = BLOCKED
+HYPERDRIVE_EXISTS = PASS
+HYPERDRIVE_STAGING = PASS
+STAGING_API_WORKER = PASS
 STAGING_DNS_AND_ROUTES = BLOCKED
 MATERIAL_EVIDENCE_VECTORIZE = PASS
 MOLECULAR_VECTORIZE = NOT_APPLICABLE

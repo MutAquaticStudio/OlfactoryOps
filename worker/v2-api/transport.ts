@@ -46,7 +46,7 @@ function tenantOriginHost(origin: string | null, config: V2TransportConfig) {
   try { parsed = new URL(origin) } catch { throw new PlatformError('ORIGIN_DENIED', 'Request origin is not allowed.', 403) }
   const host = hostname(parsed.hostname)
   const base = hostname(config.tenantBaseDomain)
-  if (parsed.protocol !== 'https:' || !host || (host !== hostname(config.publicHostname) && !new RegExp(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).test(host))) {
+  if (parsed.protocol !== 'https:' || !host || (host !== hostname(config.publicHostname) && host !== base && !new RegExp(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).test(host))) {
     throw new PlatformError('ORIGIN_DENIED', 'Request origin is not allowed.', 403)
   }
   return host

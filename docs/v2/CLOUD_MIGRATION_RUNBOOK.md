@@ -38,8 +38,12 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 | Staging Material Evidence Vectorize | PASS | `olfactoryops-v2-material-evidence-staging` is BGE-M3 1024D cosine with tenant/model/status indexes. |
 | Staging queues and DLQs | PASS | Scientific, RAG, and notification queues plus DLQs exist. |
 | Molecular/odor Vectorize | NOT_APPLICABLE | Molecular has no fixed serving dimension; odor is `RESEARCH_ONLY`. |
-| Remote staging PostgreSQL / Hyperdrive | BLOCKED | No approved remote staging origin is configured. |
-| Staging DNS, Worker routes, and Pages deploy | BLOCKED | Must follow Hyperdrive and staging-secret configuration. |
+| Hyperdrive configuration | PASS | `olfactoryops-staging-hyperdrive` is a configured non-local Supabase origin. |
+| Remote staging PostgreSQL runtime path | PASS | The staging-only `api-beta` Worker health check completed PostgreSQL `SELECT 1` through Hyperdrive. Migration, role, and RLS gates remain separate. |
+| Vectorize control-plane tenant filter | PASS | Disposable two-tenant BGE-M3 1024D metadata-filter test passed and cleaned up. |
+| Queue control-plane fixture | PASS | Disposable publish/preview/acknowledgement test passed and left zero backlog. |
+| Staging API DNS and Worker route | PASS | `api-beta.labofscents.org` uses a Cloudflare-managed Worker custom domain plus a more-specific route that bypasses the legacy wildcard router. |
+| Staging tenant wildcard and Pages deploy | BLOCKED | Requires migrated PostgreSQL hostname data, RLS verification, then the isolated tenant router and Pages deployment. |
 | Production deployment | NOT_APPLICABLE | Explicitly excluded. |
 
 ## 4. Configuration and CI

@@ -19,14 +19,17 @@ customer data, and unrelated Cloudflare projects were not changed.
 | Molecular Vectorize | NOT_APPLICABLE | No fixed serving dimension. |
 | Odor Vectorize | NOT_APPLICABLE | `RESEARCH_ONLY`. |
 | KV and AI Gateway | NOT_APPLICABLE | Inventory completed; no binding is required in the current staging cutover. |
-| Durable Objects, Workflows, Hyperdrive, Containers | BLOCKED | Inventory completed; the declared scientific runtime bindings require an approved PostgreSQL origin and immutable private images. |
+| Hyperdrive configuration | PASS | Cloudflare API GET confirmed `olfactoryops-staging-hyperdrive` with a configured, non-local Supabase origin; credentials were not read. |
+| Durable Objects, Workflows, Containers | BLOCKED | The declared scientific runtime bindings require immutable private images and a deployed runtime. |
+| Vectorize control-plane tenant filter | PASS | Two disposable BGE-M3 1024D vectors returned only their matching `organizationId` filter and were deleted. |
+| Queue control-plane fixture | PASS | Publish, preview, acknowledgement, and zero-backlog cleanup completed without a consumer. |
 
 ## Source Cutover
 
 | Check | Status | Evidence |
 | --- | --- | --- |
 | V2 API Worker boundary | PASS | 143 decorator-derived controller routes use shared Platform/domain services through Hyperdrive only. |
-| Session, CSRF, exact-Origin CORS | PASS | Unit tests cover tenant-specific origins, unsafe mutation denial, and preflight. |
+| Session, CSRF, exact-Origin CORS | PASS | Unit tests cover `beta` Pages, tenant-specific origins, unsafe mutation denial, and preflight. |
 | Agent event stream | PASS | Worker Web Streams replay persisted events through the existing governed Agent service; no second event store. |
 | V2 tenant router | PASS | `*.beta.labofscents.org` resolver queries PostgreSQL through Hyperdrive and returns `404` for unknown/archived hosts. |
 | D1 as V2 substitute | PASS | No V2 API or staging tenant-router D1 binding exists. |
@@ -61,11 +64,12 @@ customer data, and unrelated Cloudflare projects were not changed.
 
 | Gate | Status | Reason |
 | --- | --- | --- |
-| Remote staging PostgreSQL origin | BLOCKED | No approved non-production connection is configured. |
-| Hyperdrive provisioning and Worker transaction/RLS smoke | BLOCKED | Requires the approved remote staging PostgreSQL origin. |
-| API Worker, tenant-router, DNS, and Pages deployment | BLOCKED | Requires Hyperdrive, staging-only Worker secrets, and completed remote migration checks. |
-| R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Requires the deployed staging Worker and disposable fixture tenant. |
-| Vectorize two-tenant upsert/query cleanup | BLOCKED | Requires the deployed staging Worker and disposable fixture tenant. |
+| Remote staging PostgreSQL origin | PASS | `api-beta` Worker health completed `SELECT 1` through the configured non-local Supabase Hyperdrive origin. |
+| Hyperdrive Worker transaction/RLS smoke | BLOCKED | Health proves connectivity only; approved migrations, minimum runtime-role grants, and remote RLS fixtures have not run. |
+| API Worker staging deployment | PASS | `olfactoryops-v2-api-staging` was uploaded with Hyperdrive only, three Cloudflare-managed secret bindings, a Cloudflare-managed `api-beta` custom domain/certificate, and an exact route that excludes the legacy wildcard router. |
+| Tenant-router wildcard and Pages deployment | BLOCKED | The PostgreSQL hostname registry/RLS gate and staging Pages deployment remain outstanding. |
+| R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Control-plane PUT/delete passed, but raw GET and tenant-denial require the deployed Worker. |
+| Vectorize Worker tenant isolation | BLOCKED | Control-plane metadata filters passed; application authorization still requires the deployed Worker and fixture tenant. |
 | Queue retry/DLQ and Workflow terminal-failure smoke | BLOCKED | No consumer Worker or Workflow is deployed. |
 | Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
 | GitHub scientific image publishing | BLOCKED | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets are absent. |
@@ -80,7 +84,8 @@ SOURCE_CUTOVER = PASS
 ISOLATED_CLOUDFLARE_RESOURCES = PASS
 LOCAL_ACCEPTANCE = PASS
 REMOTE_POSTGRES_REQUIRED = PASS
-HYPERDRIVE_STAGING = BLOCKED
+HYPERDRIVE_EXISTS = PASS
+HYPERDRIVE_STAGING = PASS
 REMOTE_STAGING_ACCEPTANCE = BLOCKED
 PRODUCTION_DEPLOYED = NOT_APPLICABLE
 V2_CLOUDFLARE_STAGING_READY = BLOCKED

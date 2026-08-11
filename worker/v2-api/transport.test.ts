@@ -46,6 +46,18 @@ describe('V2 Worker transport', () => {
     expect(observed).toEqual(['tenant-a.beta.labofscents.org', 'item-1', { value: 1 }, 'csrf'])
   })
 
+  it('accepts the exact public staging Pages origin for cookie-authenticated mutations', async () => {
+    const route: ControllerRoute = { method: 'POST', path: '/v2/example', handler: 'write', controller: { async write() { return { ok: true } } }, parameters: [] }
+    const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {
+      method: 'POST',
+      headers: { Origin: 'https://beta.labofscents.org', 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    const response = await invokeControllerRoute({ request, route, params: {}, config })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('access-control-allow-origin')).toBe('https://beta.labofscents.org')
+  })
+
   it('rejects mutations without an exact trusted staging origin', async () => {
     const route: ControllerRoute = { method: 'POST', path: '/v2/example', handler: 'write', controller: { async write() { return { ok: true } } }, parameters: [] }
     const response = await invokeControllerRoute({ request: new Request('https://api-beta.labofscents.org/api/v1/v2/example', { method: 'POST' }), route, params: {}, config })
