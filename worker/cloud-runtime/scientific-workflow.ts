@@ -4,6 +4,7 @@ import { PrivateArtifactStore } from './artifact-store.js'
 import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
 import { loadPrivateScientificInput, sha256 } from './scientific-input.js'
+import { completeCloudScientificFeature } from '../../services/scientific/src/cloud-completion.js'
 
 export type CloudScientificEnv = {
   HYPERDRIVE: Hyperdrive
@@ -79,6 +80,22 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
           modelVersion: artifact.modelVersion,
         },
       }), bytes)
+      if (job.jobType === 'SCIENTIFIC_FEATURE') {
+        const completionClient = createHyperdrivePrisma(this.env)
+        try {
+          await completeCloudScientificFeature(completionClient, {
+            organizationId: job.organizationId,
+            actorUserId: job.actorUserId,
+            jobId: job.jobId,
+            correlationId: job.correlationId,
+            resultArtifactRef: saved.key,
+            runtimeVersion: artifact.runtimeVersion,
+            payload: artifact.payload,
+          })
+        } finally {
+          await completionClient.$disconnect()
+        }
+      }
       await ledger.complete(job, saved.key)
       return { resultArtifactRef: saved.key }
     })
