@@ -38,6 +38,27 @@ jobs:
         run: |
           docker buildx build --platform linux/amd64 --load --file services/scientific/runtime/Dockerfile --tag olfactoryops-scientific-feature:${IMAGE_TAG} services/scientific/runtime
           docker run --rm -e SCIENTIFIC_SERVICE_SHARED_SECRET=scientific-http-test-secret --entrypoint python olfactoryops-scientific-feature:${IMAGE_TAG} -m unittest discover -s /app/tests -p 'test_*.py'
+      - name: Verify Linux feature runtime startup through its image entrypoint
+        run: |
+          set -euo pipefail
+          container_name="olfactoryops-scientific-feature-health"
+          cleanup() {
+            docker rm --force "$container_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$container_name" --publish 127.0.0.1:18099:8099 \
+            --env SCIENTIFIC_SERVICE_SHARED_SECRET=scientific-http-test-secret \
+            --env SCIENTIFIC_SERVICE_HOST=0.0.0.0 \
+            olfactoryops-scientific-feature:${IMAGE_TAG} >/dev/null
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18099/health > feature-health.json; then
+              node -e "const health=require('./feature-health.json'); if (health.status !== 'ok' || typeof health.runtimeVersion !== 'string') process.exit(1)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'Feature runtime did not expose its bounded health response.' >&2
+          exit 1
       - name: Build and run Linux model compatibility checks
         run: |
           docker buildx build --platform linux/amd64 --load --file services/scientific/model-runtime/Dockerfile --tag olfactoryops-scientific-model:${IMAGE_TAG} services/scientific/model-runtime

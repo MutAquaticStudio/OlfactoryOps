@@ -77,7 +77,7 @@ jobs:
       - name: Prisma schema validation
         env:
           DATABASE_URL: postgresql://ci:ci@localhost:5432/olfactoryops_ci
-        run: npm run prisma:validate
+        run: npm run prisma:validate:v2
 
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=high

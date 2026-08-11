@@ -31,6 +31,15 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
     )
   }
 
+  override onStart(): void {
+    console.log(
+      JSON.stringify({
+        event: 'scientific_container_ready',
+        container: this.diagnosticContainer,
+      }),
+    )
+  }
+
   override onStop({ exitCode, reason }: StopParams): void {
     console.log(
       JSON.stringify({

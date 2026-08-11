@@ -38,5 +38,19 @@ describe('scientificContainerEnvironment', () => {
       code: 'SCIENTIFIC_CONTAINER_PORT_UNAVAILABLE',
       exitCode: null,
     })
+    expect(scientificContainerDiagnostic(new Error('outer opaque', {
+      cause: new Error('There is no container instance that can be provided to this Durable Object'),
+    }))).toEqual({
+      code: 'SCIENTIFIC_CONTAINER_NO_INSTANCE',
+      exitCode: null,
+    })
+    expect(scientificContainerDiagnostic({ message: 'You are requesting too many containers per second' })).toEqual({
+      code: 'SCIENTIFIC_CONTAINER_RATE_LIMITED',
+      exitCode: null,
+    })
+    expect(scientificContainerDiagnostic(new Error('Container crashed while checking for ports, did you start the container and setup the entrypoint correctly?'))).toEqual({
+      code: 'SCIENTIFIC_CONTAINER_CRASHED_DURING_STARTUP',
+      exitCode: null,
+    })
   })
 })

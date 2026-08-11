@@ -8,7 +8,7 @@
     "build:test": "tsc -b && vite build --mode test && node scripts/release-manifest.mjs page-artifact dist",
     "dev:api": "tsx watch --tsconfig server/tsconfig.json server/src/main.ts",
     "build": "tsc -b && vite build && node scripts/release-manifest.mjs page-artifact dist",
-    "build:api": "tsc -p server/tsconfig.json",
+    "build:api": "npm run prisma:generate:v2 && tsc -p server/tsconfig.json",
     "generate:v2-worker-transport": "tsx scripts/generate-v2-worker-transport.ts",
     "typecheck:worker": "npm run prisma:generate:v2 && npm run generate:v2-worker-transport && tsc -p tsconfig.worker.json",
     "build:v2-api-worker": "npm run prisma:generate:v2 && npm run generate:v2-worker-transport && wrangler deploy --dry-run --config wrangler.v2-api-staging.example.toml --outdir dist-v2-api-worker",
@@ -60,6 +60,7 @@
     "prisma:generate": "prisma generate",
     "prisma:generate:v2": "prisma generate --schema infra/postgres/prisma/schema.prisma",
     "prisma:validate": "prisma validate",
+    "prisma:validate:v2": "prisma validate --schema infra/postgres/prisma/schema.prisma",
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
