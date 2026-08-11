@@ -122,12 +122,18 @@ jobs:
 
           const releaseSha = bindings.find((binding) => binding?.name === 'RELEASE_GIT_SHA' && binding?.type === 'plain_text')
           const hyperdrive = bindings.find((binding) => binding?.name === 'HYPERDRIVE' && binding?.type === 'hyperdrive')
+          const artifacts = bindings.find((binding) => binding?.name === 'R2_ARTIFACTS' && binding?.type === 'r2_bucket')
+          const runtime = bindings.find((binding) => binding?.name === 'CLOUD_RUNTIME' && binding?.type === 'service')
           if (releaseSha?.text !== process.env.STAGING_SHA) throw new Error('active Worker release SHA does not match the approved staging revision')
           if (hyperdrive?.id !== process.env.STAGING_HYPERDRIVE_ID) throw new Error('active Worker Hyperdrive binding does not match staging')
+          if (!artifacts || artifacts?.bucket_name !== 'olfactoryops-v2-artifacts-staging') throw new Error('active Worker R2 artifact binding does not match staging')
+          if (!runtime || runtime?.service !== 'olfactoryops-v2-cloud-runtime-staging') throw new Error('active Worker Cloud Runtime service binding does not match staging')
 
           console.log(`STAGING_API_ACTIVE_VERSION=PASS ${process.env.DEPLOYED_VERSION_ID}`)
           console.log('STAGING_API_RELEASE_BINDING=PASS')
           console.log('STAGING_API_HYPERDRIVE_BINDING=PASS')
+          console.log('STAGING_API_R2_BINDING=PASS')
+          console.log('STAGING_API_CLOUD_RUNTIME_BINDING=PASS')
           NODE
       - name: Probe public health without treating a GitHub bot challenge as deployment truth
         env:
