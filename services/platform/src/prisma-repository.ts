@@ -6,28 +6,37 @@ import type { ConsentRecord, ExportRequest, HostnameRecord, InvitationRecord, Me
 type PrismaLike = PrismaClient
 const iso = (value: Date | string) => value instanceof Date ? value.toISOString() : value
 
+export function signupWriteFailureCategory(error: unknown) {
+  const message = error instanceof Error ? error.message : ''
+  const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : ''
+  const nested = error && typeof error === 'object' && 'cause' in error
+    ? (error as { cause?: unknown }).cause
+    : undefined
+  const databaseCode = [error, nested].find((candidate) => candidate && typeof candidate === 'object' && 'meta' in candidate
+    && typeof (candidate as { meta?: { code?: unknown } }).meta?.code === 'string') as { meta?: { code?: string } } | undefined
+  const causeCode = nested && typeof nested === 'object' && 'code' in nested && typeof (nested as { code?: unknown }).code === 'string'
+    ? (nested as { code: string }).code
+    : ''
+  const sqlState = databaseCode?.meta?.code ?? causeCode
+  if (sqlState === '42501' || /row-level security/i.test(message)) return 'RLS'
+  if (/permission denied/i.test(message)) return 'PERMISSION'
+  if (sqlState === '23503' || /foreign key/i.test(message) || code === 'P2003') return 'FOREIGN_KEY'
+  if (sqlState === '23505' || /unique constraint/i.test(message) || code === 'P2002') return 'CONFLICT'
+  if (sqlState === '23502' || /not-null constraint/i.test(message) || code === 'P2011') return 'NOT_NULL'
+  if (sqlState === '23514' || /check constraint/i.test(message) || code === 'P2004') return 'CHECK'
+  if (sqlState === '22P02' || /invalid input syntax/i.test(message) || code === 'P2000') return 'INVALID'
+  if (code === 'P2021' || code === 'P2022' || /relation .* does not exist|column .* does not exist/i.test(message)) return 'SCHEMA'
+  if (code === 'P2010' || /prepared statement|bind message|postgres/i.test(message)) return 'DATABASE'
+  return 'FAILED'
+}
+
 async function signupWrite<T>(step: string, operation: () => Promise<T>) {
   try {
     return await operation()
   } catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
-      ? (error as { code: string }).code
-      : ''
-    const databaseCode = error && typeof error === 'object' && 'meta' in error
-      && (error as { meta?: { code?: unknown } }).meta
-      && typeof (error as { meta: { code?: unknown } }).meta.code === 'string'
-      ? (error as { meta: { code: string } }).meta.code
-      : ''
-    const category = databaseCode === '42501' || /row-level security/i.test(message) ? 'RLS'
-      : /permission denied/i.test(message) ? 'PERMISSION'
-        : databaseCode === '23503' || /foreign key/i.test(message) || code === 'P2003' ? 'FOREIGN_KEY'
-          : databaseCode === '23505' || /unique constraint/i.test(message) || code === 'P2002' ? 'CONFLICT'
-            : databaseCode === '23502' || /not-null constraint/i.test(message) || code === 'P2011' ? 'NOT_NULL'
-              : databaseCode === '23514' || /check constraint/i.test(message) ? 'CHECK'
-                : databaseCode === '22P02' || /invalid input syntax/i.test(message) ? 'INVALID'
-                  : 'FAILED'
-    throw new SignupWriteError(`SIGNUP_WRITE_${step}_${category}`)
+    throw new SignupWriteError(`SIGNUP_WRITE_${step}_${signupWriteFailureCategory(error)}`)
   }
 }
 
@@ -49,6 +58,10 @@ export class PrismaPlatformRepository implements PlatformRepository {
   async createSignup(input: { user: PlatformUser; organization: OrganizationRecord; membership: MembershipRecord; hostname: HostnameRecord; rolePermissions: string[]; rolePolicies?: Record<string, string[]>; billing: BillingRecord }): Promise<SignupSeed> {
     await signupWrite('CONTEXT_ORGANIZATION', () => this.client.$executeRaw`SELECT set_config('app.organization_id', ${input.organization.id}, true)`)
     await signupWrite('CONTEXT_USER', () => this.client.$executeRaw`SELECT set_config('app.user_id', ${input.user.id}, true)`)
+    const [context] = await signupWrite('CONTEXT_READ', () => this.client.$queryRaw<Array<{ organizationId: string | null; userId: string | null }>>`SELECT current_setting('app.organization_id', true) AS "organizationId", current_setting('app.user_id', true) AS "userId"`)
+    if (context?.organizationId !== input.organization.id || context.userId !== input.user.id) {
+      throw new SignupWriteError('SIGNUP_WRITE_CONTEXT_MISMATCH')
+    }
     await signupWrite('ORGANIZATION', () => this.client.organization.create({ data: { id: input.organization.id, slug: input.organization.slug, name: input.organization.name, status: input.organization.status } }))
     await signupWrite('USER', () => this.client.user.create({ data: { id: input.user.id, email: input.user.email, displayName: input.user.displayName, passwordHash: input.user.passwordHash, status: input.user.status } }))
     await signupWrite('MEMBERSHIP', () => this.client.membership.create({ data: { id: input.membership.id, organizationId: input.membership.organizationId, userId: input.membership.userId, roleKey: input.membership.role, status: input.membership.status } }))
