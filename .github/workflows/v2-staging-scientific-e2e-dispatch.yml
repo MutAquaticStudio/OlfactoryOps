@@ -98,10 +98,10 @@ jobs:
               const source = readFileSync(process.env.TAIL_FILE, "utf8")
               const diagnostics = []
               for (const line of source.split(/\r?\n/)) {
-                const event = /scientific_container_(?:error|stop)/.exec(line)?.[0]
+                const event = /scientific_container_(?:error|ready|stop)/.exec(line)?.[0]
                 if (!event) continue
                 const container = /container\\?"\s*:\s*\\?"(feature|model)/.exec(line)?.[1] ?? "unknown"
-                const code = /SCIENTIFIC_CONTAINER_(?:EXITED_BEFORE_HEALTHY|PORT_UNAVAILABLE|STARTUP_FAILED|RUNTIME_ERROR)/.exec(line)?.[0] ?? null
+                const code = /SCIENTIFIC_CONTAINER_(?:CRASHED_DURING_STARTUP|EXITED_BEFORE_HEALTHY|NO_INSTANCE|PORT_UNAVAILABLE|RATE_LIMITED|REQUEST_ABORTED|RUNTIME_SIGNALLED|STARTUP_FAILED|RUNTIME_ERROR)/.exec(line)?.[0] ?? null
                 const exitCode = /exitCode\\?"\s*:\s*(-?\d+)/.exec(line)?.[1] ?? null
                 const secretConfigured = /secretConfigured\\?"\s*:\s*(true|false)/.exec(line)?.[1] ?? null
                 diagnostics.push({ event, container, code, exitCode, secretConfigured })
