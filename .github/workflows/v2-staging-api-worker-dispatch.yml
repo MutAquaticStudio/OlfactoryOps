@@ -90,7 +90,13 @@ jobs:
             healthUrl.searchParams.set('staging_verify', `${Date.now()}-${attempt}`)
 
             try {
-              const response = await fetch(healthUrl, { cache: 'no-store' })
+              const response = await fetch(healthUrl, {
+                cache: 'no-store',
+                headers: {
+                  accept: 'application/json',
+                  'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
+                },
+              })
               const body = await response.json().catch(() => undefined)
               const ready = response.ok
                 && body?.status === 'ok'
@@ -103,7 +109,7 @@ jobs:
                 process.exit(0)
               }
 
-              lastResult = `status=${response.status} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`
+              lastResult = `status=${response.status} mitigated=${response.headers.get('cf-mitigated') ?? 'none'} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`
             } catch (error) {
               lastResult = error instanceof Error ? error.message : 'health request failed'
             }
