@@ -10,7 +10,7 @@ created, changed, or deleted while producing it.
 | Pages `labofscents` | LEGACY | Current public Pages release predates the accepted V2 staging SHA. |
 | API Worker `olfactoryops-api` | LEGACY | `api.labofscents.org/*` is served by the D1-era Worker. |
 | Tenant Router `olfactoryops-tenant-router` | LEGACY | `*.labofscents.org/*` remains the D1-era router. |
-| Production D1 `olfactoryops-production` | PRODUCTION_ACTIVE | Meaningful legacy data exists; no migration or overwrite is authorized. |
+| Production D1 `olfactoryops-production` | PRODUCTION_ACTIVE | D1 migration head `0044`, 121 tables and meaningful legacy data; no migration or overwrite is authorized. |
 | Production V2 Hyperdrive | MISSING | A dedicated production PostgreSQL origin and Hyperdrive configuration are required. |
 | Production GitHub Environment | MISSING | Only the `staging` Environment was present during preflight. |
 | V2 R2 / Queue / Workflow / Container bindings | MISSING | Candidate names exist only in non-deployable templates. |
