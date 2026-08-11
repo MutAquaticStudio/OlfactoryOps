@@ -81,4 +81,35 @@ jobs:
         env:
           STAGING_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
         run: |
-          node --input-type=module -e "const response=await fetch('https://api-beta.labofscents.org/health'); if(!response.ok) throw new Error('staging API health request failed'); const body=await response.json(); if(body.status!=='ok'||body.environment!=='staging'||body.database!=='hyperdrive'||body.releaseGitSha!==process.env.STAGING_SHA) throw new Error('staging API deployment verification failed'); console.log('STAGING_API_DEPLOY=PASS');"
+          node --input-type=module <<'NODE'
+          const expectedSha = process.env.STAGING_SHA
+          let lastResult = 'no response received'
+
+          for (let attempt = 1; attempt <= 20; attempt += 1) {
+            const healthUrl = new URL('https://api-beta.labofscents.org/health')
+            healthUrl.searchParams.set('staging_verify', `${Date.now()}-${attempt}`)
+
+            try {
+              const response = await fetch(healthUrl, { cache: 'no-store' })
+              const body = await response.json().catch(() => undefined)
+              const ready = response.ok
+                && body?.status === 'ok'
+                && body?.environment === 'staging'
+                && body?.database === 'hyperdrive'
+                && body?.releaseGitSha === expectedSha
+
+              if (ready) {
+                console.log('STAGING_API_DEPLOY=PASS')
+                process.exit(0)
+              }
+
+              lastResult = `status=${response.status} release=${body?.releaseGitSha ?? 'missing'} database=${body?.database ?? 'missing'}`
+            } catch (error) {
+              lastResult = error instanceof Error ? error.message : 'health request failed'
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 3_000))
+          }
+
+          throw new Error(`staging API deployment verification timed out: ${lastResult}`)
+          NODE
