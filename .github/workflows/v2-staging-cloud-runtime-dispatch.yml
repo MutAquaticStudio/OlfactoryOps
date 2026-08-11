@@ -63,8 +63,40 @@ jobs:
           echo "feature_digest=$FEATURE_DIGEST" >> "$GITHUB_OUTPUT"
           echo "model_digest=$MODEL_DIGEST" >> "$GITHUB_OUTPUT"
 
-  deploy-staging-cloud-runtime:
+  verify-staging-r2-read:
     needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      STAGING_R2_BUCKET: olfactoryops-v2-artifacts-staging
+    steps:
+      - name: Verify the exact staging R2 bucket metadata read
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          response_json="$(mktemp)"
+          trap 'rm -f "$response_json"' EXIT
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$STAGING_R2_BUCKET" \
+            --output "$response_json"
+          RESPONSE_JSON="$response_json" EXPECTED_BUCKET="$STAGING_R2_BUCKET" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const body = JSON.parse(readFileSync(process.env.RESPONSE_JSON, 'utf8'))
+          if (body?.success !== true || body?.result?.name !== process.env.EXPECTED_BUCKET) {
+            throw new Error('staging R2 bucket metadata verification failed')
+          }
+          console.log('CLOUDFLARE_STAGING_TOKEN=PASS')
+          console.log('R2_RUNTIME_BINDING=PASS')
+          NODE
+
+  deploy-staging-cloud-runtime:
+    needs: [validate-staging-revision, verify-staging-r2-read]
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: staging
