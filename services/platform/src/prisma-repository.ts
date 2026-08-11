@@ -54,6 +54,12 @@ export class PrismaPlatformRepository implements PlatformRepository {
       if (context?.organizationId) await tx.$executeRaw`SELECT set_config('app.organization_id', ${context.organizationId}, true)`
       if (context?.userId) await tx.$executeRaw`SELECT set_config('app.user_id', ${context.userId}, true)`
       return callback(new PrismaPlatformRepository(tx as unknown as PrismaClient))
+    }, {
+      // Signup seeds a complete tenant, security state, and default policies.
+      // The Worker-to-Hyperdrive round trips can exceed Prisma's 5s default
+      // interactive-transaction budget, while remaining below the Worker CPU cap.
+      maxWait: 10_000,
+      timeout: 20_000,
     })
   }
 
