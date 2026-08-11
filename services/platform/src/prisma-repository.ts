@@ -9,8 +9,18 @@ const iso = (value: Date | string) => value instanceof Date ? value.toISOString(
 async function signupWrite<T>(step: string, operation: () => Promise<T>) {
   try {
     return await operation()
-  } catch {
-    throw new SignupWriteError(`SIGNUP_WRITE_${step}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : ''
+    const category = /row-level security/i.test(message) ? 'RLS'
+      : /permission denied/i.test(message) ? 'PERMISSION'
+        : /foreign key/i.test(message) || code === 'P2003' ? 'FOREIGN_KEY'
+          : /unique constraint/i.test(message) || code === 'P2002' ? 'CONFLICT'
+            : /not-null constraint/i.test(message) || code === 'P2011' ? 'NOT_NULL'
+              : 'FAILED'
+    throw new SignupWriteError(`SIGNUP_WRITE_${step}_${category}`)
   }
 }
 
