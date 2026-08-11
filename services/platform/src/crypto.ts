@@ -1,10 +1,12 @@
-import { createCipheriv, createDecipheriv, createHash, pbkdf2, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { pbkdf2Async } from '@noble/hashes/pbkdf2.js'
+import { sha256 } from '@noble/hashes/sha256.js'
 
 const PASSWORD_ITERATIONS = 120_000
 const PASSWORD_KEY_LENGTH = 32
 
 export class PasswordCryptoError extends Error {
-  constructor(readonly code: 'PASSWORD_NODE_PBKDF2_FAILED') { super(code) }
+  constructor(readonly code: 'PASSWORD_PBKDF2_FAILED') { super(code) }
 }
 
 export function randomSecret(prefix = '') {
@@ -30,14 +32,9 @@ function base64UrlToBytes(value: string) {
 
 async function passwordDigest(email: string, password: string, salt: string, iterations: number, pepper: string) {
   try {
-    return await new Promise<Uint8Array>((resolve, reject) => {
-      pbkdf2(`${pepper}:${email.toLowerCase()}:${password}`, salt, iterations, PASSWORD_KEY_LENGTH, 'sha256', (error, value) => {
-        if (error) reject(error)
-        else resolve(new Uint8Array(value))
-      })
-    })
+    return await pbkdf2Async(sha256, `${pepper}:${email.toLowerCase()}:${password}`, salt, { c: iterations, dkLen: PASSWORD_KEY_LENGTH, asyncTick: 2_000 })
   } catch {
-    throw new PasswordCryptoError('PASSWORD_NODE_PBKDF2_FAILED')
+    throw new PasswordCryptoError('PASSWORD_PBKDF2_FAILED')
   }
 }
 
@@ -48,7 +45,7 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
   return difference === 0
 }
 
-// The asynchronous Node Crypto API is Worker-compatible under nodejs_compat.
+// This RFC 2898 implementation avoids relying on provider-specific KDF shims.
 // Keeping the existing encoded format makes pre-cutover credentials verifiable.
 export async function hashPassword(email: string, password: string, pepper = '') {
   try {
@@ -57,7 +54,7 @@ export async function hashPassword(email: string, password: string, pepper = '')
     return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
   } catch (error) {
     if (error instanceof PasswordCryptoError) throw error
-    throw new PasswordCryptoError('PASSWORD_NODE_PBKDF2_FAILED')
+    throw new PasswordCryptoError('PASSWORD_PBKDF2_FAILED')
   }
 }
 
