@@ -30,6 +30,5 @@
 
 ## Checkpoint status
 
-- Architecture and step contract: PASS
-- Runtime workflow bindings in worker/router: BLOCKED (post-cutover validation pending)
-
+- Scientific Workflow implementation: PASS (dry-run bundle and private input contract tests)
+- Staging Workflow/Container invocation: BLOCKED (no staging bindings or image digest)

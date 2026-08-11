@@ -13,6 +13,22 @@ The frozen legacy baseline remains release candidate `0.1.0-rc.1` with migration
 
 Read the source pack in [`docs/v2/README.md`](docs/v2/README.md), then [`docs/v2/PHASE_0_BASELINE.md`](docs/v2/PHASE_0_BASELINE.md) and [`docs/v2/PHASE_0_IMPLEMENTATION_REPORT.md`](docs/v2/PHASE_0_IMPLEMENTATION_REPORT.md). Run the shared contract checks with `npm.cmd test` and `npm.cmd run typecheck:v2`.
 
+## Cloudflare runtime checkpoint
+
+The branch `codex/cloudflare-cloud-native-runtime` keeps PostgreSQL as V2
+source-of-truth and adds an isolated Cloudflare Worker runtime for Hyperdrive,
+private R2 artifacts, the approved Material Evidence Vectorize space, Queue/Workflow job
+delivery, and private scientific Containers. Routine `npm.cmd run dev`, test,
+typecheck and build commands do not require Docker.
+
+`npm.cmd run build:cloud-runtime` bundles the Worker from a deliberately
+non-deployable staging template. Render a staging-only configuration with
+`npm.cmd run cloud-runtime:render-staging` only after providing an approved
+staging Hyperdrive UUID and immutable scientific image digests. Remote build and
+staging status remain `BLOCKED` until those external resources and GitHub
+Cloudflare secrets are configured; no production deployment is performed from
+this checkpoint. See [`docs/v2/CLOUDFLARE_CLOUD_NATIVE_ARCHITECTURE.md`](docs/v2/CLOUDFLARE_CLOUD_NATIVE_ARCHITECTURE.md).
+
 ## Trang thai V2 Phase 2
 
 Phase 2 Lab Operations da `PASS` tren branch `codex/v2-phase2-lab-operations` voi PostgreSQL disposable. PostgreSQL la source of truth cho Material tenant-private, Supplier Profile/Offer, document reference, price history, lot inventory, immutable ledger, FEFO, Lab Weighing, reservation, procurement request/PO/shipment, quarantine, inspection, return va landed cost. V2 khong import Lluch, Global Master Materials hay legacy Formula R&D. Tai lieu va evidence nam trong [`docs/v2/phase-2`](docs/v2/phase-2/). Production deploy va remote migration van `NOT_APPLICABLE` cho checkpoint local nay.

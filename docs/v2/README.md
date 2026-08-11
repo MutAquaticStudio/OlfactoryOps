@@ -27,6 +27,21 @@ Phase 1 Platform Security Core is implemented on `codex/v2-phase1-platform-secur
 
 Static/build/schema/RLS gates, the authenticated 12-role matrix, member invitation workflow, and notification retry worker are `PASS` on disposable infrastructure. Cloudflare provisioning, remote migrations, and production deployment are `NOT_APPLICABLE` for this checkpoint. See `phase-1/PHASE_1_IMPLEMENTATION_REPORT.md` and `phase-1/ROLE_E2E_MATRIX.md` for evidence.
 
+## Cloud-native runtime checkpoint
+
+The Cloudflare runtime branch adds `worker/cloud-runtime/**`: Hyperdrive-backed
+Prisma connectivity, private R2 artifact storage, the approved BGE-M3 1024D
+Material Evidence Vectorize space, idempotent Queue-to-Workflow dispatch, and
+private scientific Container Durable Objects. `wrangler.v2-cloud-runtime.example.toml` is a dry-run-only template;
+the renderer refuses to create a staging configuration without a real approved
+Hyperdrive UUID and immutable image digests. Local Docker remains manual-only.
+
+Repository-local binding and build checks are `PASS`. The isolated staging R2,
+Material Evidence Vectorize index, and scientific/RAG/notification queues are
+`PASS`. Remote PostgreSQL/Hyperdrive, deployed Worker/Pages routing, remote
+scientific digest evidence, and staging smoke are `BLOCKED`; production
+deployment is `NOT_APPLICABLE`.
+
 ## Phase 2 status
 
 Phase 2 Lab Operations is `PASS` on `codex/v2-phase2-lab-operations` using disposable PostgreSQL verification. The V2 source of truth remains PostgreSQL. The additive migration creates tenant-only Materials, Supplier Profiles/Offers, lots, immutable movements, reservations, Lab Weighing sessions, request/PO/shipment lifecycle, receipt/inspection/return and landed-cost records. V2 does not import Lluch, Global Master Materials, or legacy scientific assumptions. See `phase-2/` for domain documentation and checkpoint evidence.

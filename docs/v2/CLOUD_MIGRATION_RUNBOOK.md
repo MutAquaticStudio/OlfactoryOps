@@ -28,13 +28,27 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 - Verify cleanup script:
   - `scripts/cleanup-olfactoryops-docker.ps1`
 
-## 3. Configuration and CI
+## 3. Staging Control Plane
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Cloudflare MCP connection | PASS | Authorized account and `labofscents.org` zone inventory completed. |
+| Reversible R2 write test | PASS | Dedicated private test bucket was created, verified, deleted, and confirmed absent. |
+| Staging R2 | PASS | `olfactoryops-v2-artifacts-staging` exists and is private. |
+| Staging Material Evidence Vectorize | PASS | `olfactoryops-v2-material-evidence-staging` is BGE-M3 1024D cosine with tenant/model/status indexes. |
+| Staging queues and DLQs | PASS | Scientific, RAG, and notification queues plus DLQs exist. |
+| Molecular/odor Vectorize | NOT_APPLICABLE | Molecular has no fixed serving dimension; odor is `RESEARCH_ONLY`. |
+| Remote staging PostgreSQL / Hyperdrive | BLOCKED | No approved remote staging origin is configured. |
+| Staging DNS, Worker routes, and Pages deploy | BLOCKED | Must follow Hyperdrive and staging-secret configuration. |
+| Production deployment | NOT_APPLICABLE | Explicitly excluded. |
+
+## 4. Configuration and CI
 
 1. Add/update Wrangler configs for migration previews.
 2. Add `scientific-container.yml` and `cloud-verification.yml` workflows.
 3. Keep deployment workflow manual and non-production.
 
-## 4. Remote scientific build
+## 5. Remote scientific build
 
 1. Use immutable image tag format:
    - `olfactoryops-scientific:<git-sha>`
@@ -44,13 +58,32 @@ Use this runbook for the Cloudflare cloud-native migration branch:
    - active image digest
    - known-good backup digest
 
-## 5. Containerized workloads
+## 6. Containerized workloads
 
 - Scientific inference remains outside Workers.
 - API submits jobs and validates completion state via durable queue/workflow evidence.
 - Container jobs return bounded, structured artifacts only.
 
-## 6. Data services integration
+## 7. API and Tenant Router Cutover
+
+1. Build the V2 API Worker with `npm.cmd run build:v2-api-worker` and the
+   staging router with `npm.cmd run build:v2-tenant-router`.
+2. The generated route matrix at
+   `docs/v2/cloudflare/V2_WORKER_ROUTE_MATRIX.md` is authoritative for the
+   in-scope Worker transport. It contains the Platform, Lab Ops/Procurement,
+   Formula/Design, Evidence/RAG, Scientific, Olfactory, Consumer, Model/Dataset
+   and Agent boundaries, including persisted Agent Web Stream replay.
+3. Do not add Phase 7+ routes to this public cutover. The Pages staging build
+   uses `VITE_V2_STAGING_PUBLIC_CUTOVER=true` to hide those entries and bound
+   direct links.
+4. Create the remote staging Hyperdrive binding first. Then apply the exact
+   `api-beta.labofscents.org/*` API route and the independent
+   `*.beta.labofscents.org/*` tenant route declared in the two staging Wrangler
+   templates. The wildcard cannot match `api-beta`.
+5. Add only proxied staging DNS for `api-beta` and `*.beta`; preserve the
+   existing `beta.labofscents.org` Pages hostname for public staging.
+
+## 8. Data services integration
 
 - R2: artifact payload references, provenance records, tenant metadata.
 - Vectorize: separated indexes by semantic family.
@@ -58,7 +91,7 @@ Use this runbook for the Cloudflare cloud-native migration branch:
 - Workflows: explicit state machine and retry policy.
 - Hyperdrive: adapter-first connectivity to PostgreSQL.
 
-## 7. Release gate before local cleanup
+## 9. Release gate before local cleanup
 
 Do not remove local Docker resources until:
 - remote build workflow exists and can execute,
@@ -66,17 +99,16 @@ Do not remove local Docker resources until:
 - migration verification and architecture checks pass,
 - commit/tag is safely pushed.
 
-## 8. Local Docker decommission
+## 10. Local Docker decommission
 
 - Use `scripts/cleanup-olfactoryops-docker.ps1`.
 - Run default dry-run first.
 - Only run with `-Apply` when approved.
 - Never use global prune.
 
-## 9. Rollback
+## 11. Rollback
 
 Rollback command stays:
 - `git switch <source-branch>`
 - create recovery branch from `pre-cloudflare-cloud-native-migration-20260810`.
 - Do not delete the pre-migration tag.
-

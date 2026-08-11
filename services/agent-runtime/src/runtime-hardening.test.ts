@@ -149,6 +149,7 @@ class ConfirmationSagaClient {
   runStatus = 'WAITING_FOR_CONFIRMATION'
   effectCreated = false
   effectClaimHash: string | null = null
+  readonly expiresAt = new Date(Date.now() + 60_000)
   private operation: { requestHash: string; response: unknown } | undefined
 
   async $transaction<T>(action: (tx: this) => Promise<T>) {
@@ -167,7 +168,7 @@ class ConfirmationSagaClient {
       return [{ id: 'idem_saga' }]
     }
     if (sql.includes('i.action_payload AS "actionPayload"')) return [{
-      id: 'confirmation_saga', status: this.confirmationStatus, actionKey: 'CANDIDATE_SAVE_DRAFT', expiresAt: new Date('2026-08-11T00:00:00.000Z'), resultRef: null,
+      id: 'confirmation_saga', status: this.confirmationStatus, actionKey: 'CANDIDATE_SAVE_DRAFT', expiresAt: this.expiresAt, resultRef: null,
       decidedBy: null, intentId: 'intent_saga', runNodeId: 'node_saga', actionPayload: { candidateId: 'candidate_saga', formulaProjectId: 'project_saga', adapterKey: 'formula.candidate_save_draft' },
     }]
     if (sql.includes('SELECT status FROM v2_agent_runs') && sql.includes('FOR UPDATE')) return [{ status: this.runStatus }]
@@ -183,7 +184,7 @@ class ConfirmationSagaClient {
       return [{ status: 'APPLYING', resultRef: null, claimTokenHash: this.effectClaimHash }]
     }
     if (sql.includes('i.run_node_id AS "runNodeId"')) return [{
-      id: 'confirmation_saga', status: this.confirmationStatus, actionKey: 'CANDIDATE_SAVE_DRAFT', expiresAt: new Date('2026-08-11T00:00:00.000Z'), resultRef: null, decidedBy: null, intentId: 'intent_saga', runNodeId: 'node_saga',
+      id: 'confirmation_saga', status: this.confirmationStatus, actionKey: 'CANDIDATE_SAVE_DRAFT', expiresAt: this.expiresAt, resultRef: null, decidedBy: null, intentId: 'intent_saga', runNodeId: 'node_saga',
     }]
     if (sql.includes("UPDATE v2_agent_runs SET status = 'SUCCEEDED'") && sql.includes('RETURNING id')) {
       this.runStatus = 'SUCCEEDED'

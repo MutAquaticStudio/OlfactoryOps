@@ -60,6 +60,29 @@ class Handler(BaseHTTPRequestHandler):
                     raise ScientificRuntimeError("SCIENTIFIC_RUNTIME_INVALID_FEATURE_REQUEST")
                 target_context = payload.get("targetContext")
                 result = self.runtime.generate_features(str(payload.get("canonicalSmiles", "")), kinds, target_context if isinstance(target_context, dict) else None)
+            elif self.path == "/v1/jobs":
+                job_id = payload.get("jobId")
+                artifact_ref = payload.get("artifactRef")
+                operation = payload.get("operation")
+                canonical_smiles = payload.get("canonicalSmiles")
+                kinds = payload.get("featureKinds")
+                if not isinstance(job_id, str) or not job_id or not isinstance(artifact_ref, str) or not artifact_ref or operation not in {"STRUCTURE_NORMALIZE", "FEATURE_GENERATE"}:
+                    raise ScientificRuntimeError("SCIENTIFIC_RUNTIME_INVALID_JOB_REQUEST")
+                if operation == "STRUCTURE_NORMALIZE":
+                    if not isinstance(canonical_smiles, str):
+                        raise ScientificRuntimeError("SCIENTIFIC_RUNTIME_INVALID_JOB_REQUEST")
+                    result = self.runtime.normalize(canonical_smiles)
+                else:
+                    if not isinstance(canonical_smiles, str) or not isinstance(kinds, list) or not all(isinstance(value, str) for value in kinds):
+                        raise ScientificRuntimeError("SCIENTIFIC_RUNTIME_INVALID_JOB_REQUEST")
+                    result = self.runtime.generate_features(canonical_smiles, kinds)
+                self._respond(HTTPStatus.OK, {
+                    "resultArtifactRef": f"{artifact_ref}/result",
+                    "payload": result,
+                    "runtimeVersion": self.runtime.runtime_version,
+                    "componentVersions": {artifact["componentKey"]: artifact["componentVersion"] for artifact in result.get("artifacts", [])},
+                })
+                return
             else:
                 self._respond(HTTPStatus.NOT_FOUND, {"error": "NOT_FOUND"})
                 return

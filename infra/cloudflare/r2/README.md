@@ -25,12 +25,11 @@
 
 ## Bucket naming (examples)
 
-- `olfactoryops-artifacts-prod`
-- `olfactoryops-artifacts-stage`
-- `olfactoryops-artifacts-test`
+- `olfactoryops-v2-artifacts-staging`
 
 ## Acceptance status
 
 - Architecture docs: PASS
-- Worker binding + bucket provisioning in migration branch: BLOCKED (remote env setup pending)
-
+- Private Worker adapter: PASS
+- Private staging bucket: PASS
+- Deployed Worker binding and live tenant read/write smoke: BLOCKED

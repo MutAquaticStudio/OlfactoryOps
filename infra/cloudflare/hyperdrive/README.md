@@ -15,8 +15,11 @@
 
 ## Migration notes
 
-- The current checkpoint is architecture-first and does not switch all runtime call sites to
-  Hyperdrive yet.
+- `worker/cloud-runtime/hyperdrive.ts` is the implemented Worker adapter and
+  creates Prisma's PostgreSQL adapter from `env.HYPERDRIVE.connectionString`.
+- The staging API Worker and staging tenant router use only Hyperdrive in their
+  source adapters. They are not remotely deployed until a non-production
+  PostgreSQL origin is approved.
 - Keep D1 migration history untouched (`0001-0017`).
 - Before enabling production cutover:
   1. Validate PostgreSQL socket + transaction behavior with a disposable local smoke tenant.
@@ -31,7 +34,6 @@
 
 ## Acceptance status
 
-- Architecture docs: PASS
-- Binding configuration in production workers: BLOCKED (credentials/service binding pending)
-- D1 cutover safety verification: BLOCKED
-
+- Isolated Worker adapter: PASS (typecheck and dry-run bundle)
+- Staging Hyperdrive connectivity/RLS: BLOCKED
+- Remote API/tenant-router cutover: BLOCKED

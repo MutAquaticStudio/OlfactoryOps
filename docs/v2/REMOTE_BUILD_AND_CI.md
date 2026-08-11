@@ -25,10 +25,16 @@ Expected pipeline:
 5. run provenance/license checks
 6. tag image with immutable git SHA
 7. push to Cloudflare managed registry
-8. publish image digest output
+8. record image tags and registry listing as build evidence; the staging render
+   command accepts only immutable `sha256:` digests, never a mutable tag
 
 If credentials are absent, the workflow reports:
 `CLOUDFLARE_CI_CREDENTIALS = MANUAL_SETUP_REQUIRED`.
+
+The workflow does not build images on a developer Windows machine. It runs
+Linux/amd64 builds, native feature tests, model compatibility tests, provenance
+comparison, then `wrangler containers push` only on an explicitly requested
+manual workflow dispatch with configured GitHub secrets.
 
 ## Cloud verification
 
@@ -53,4 +59,3 @@ Runs a gated verification set:
 
 - All deployment actions in CI are preview/test-oriented.
 - No production traffic, DNS, or production PostgreSQL writes in this checkpoint.
-

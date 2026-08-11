@@ -47,7 +47,9 @@ Do not continue feature development while this architecture checkpoint is active
 - Record tenant, type, hash, version, provenance metadata for each object.
 
 ### Vectorize
-- Separate logical indexes for material evidence, molecular embeddings, and odor embeddings.
+- The staging cutover binds only the approved Material Evidence index.
+- Molecular embedding serving dimensionality is not pinned and odor remains
+  `RESEARCH_ONLY`, so neither is bound or provisioned.
 - Tenant filtering enforced at query boundary and RLS/re-check in API domain logic.
 
 ### Queues + Workflows
@@ -62,17 +64,32 @@ Do not continue feature development while this architecture checkpoint is active
 
 ## Current state
 
-- Architectural docs and migration structure are being established in this checkpoint.
-- Existing runtime code still uses D1 local adapters in many paths.
-- Hyperdrive migration and runtime adapter swap are not yet complete.
+- `worker/cloud-runtime/**` is the isolated V2 Worker entrypoint. It creates
+  PostgreSQL clients from the `HYPERDRIVE` binding, not a browser URL or D1.
+- The existing `worker/index.ts` and tenant router remain legacy/live
+  compatibility paths; this migration does not hot-swap production traffic.
+- R2 writes are private, hash/provenance-carrying and tenant-prefixed.
+- Vectorize is fixed to the BGE-M3 1024D cosine Material Evidence binding. The
+  caller cannot select another binding and tenant/model/status filtering is
+  checked again in Worker code.
+- Queue delivery has a PostgreSQL idempotency record, a unique Workflow id,
+  append-only lifecycle events, bounded retry/DLQ state, and a
+  hash-verified Workflow-to-container-to-R2 path for science.
+- `wrangler.v2-cloud-runtime.example.toml` deliberately contains non-deployable
+  staging placeholders. `cloud-runtime:render-staging` requires a real staging
+  Hyperdrive UUID and immutable image digests before rendering a deployable file.
+- The staging-only API Worker now derives 143 in-scope routes from the V2
+  controller metadata and invokes the same shared application services through
+  Hyperdrive. It is not deployed until a remote staging PostgreSQL origin and
+  Hyperdrive configuration are approved.
 
 ## Acceptance status
 
 | Item | Status |
 |---|---|
 | Cloudflare migration docs | PASS |
-| CI container build pipeline | PASS (configured) |
-| Remote cloud-worker/queue/workflow runtime adapter | BLOCKED |
-| Hyperdrive cutover from D1 usage | BLOCKED |
-| Production Docker default removal in CI/dev loop | In progress |
-
+| Isolated V2 Worker bindings/adapters | PASS |
+| Staging API and tenant-router source cutover | PASS |
+| Remote cloud-worker/queue/workflow runtime | BLOCKED |
+| Hyperdrive staging connectivity | BLOCKED |
+| Local Docker required for normal development | PASS |

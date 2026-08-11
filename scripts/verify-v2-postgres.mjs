@@ -23,6 +23,7 @@ const migrations = [
   'infra/postgres/migrations/0015_phase9_agentic_ai_platform.sql',
   'infra/postgres/migrations/0016_phase10_commerce_fulfillment.sql',
   'infra/postgres/migrations/0017_phase11_advanced_optimizer_imports.sql',
+  'infra/postgres/migrations/0018_cloud_native_runtime.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -125,6 +126,20 @@ try {
       'v2_finished_good_ledger_entries', 'v2_production_genealogy_edges', 'v2_production_document_snapshots',
       'v2_production_deviation_evidence',
     ]
+    const cloudRuntimeTables = ['v2_cloud_job_dispatches', 'v2_cloud_job_events']
+    const cloudRuntimeRls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, cloudRuntimeTables)
+    if (cloudRuntimeRls.length !== cloudRuntimeTables.length || cloudRuntimeRls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Cloud runtime dispatch tables or forced RLS policy is missing')
+    }
+    const cloudRuntimeTrigger = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger
+      WHERE tgrelid = 'v2_cloud_job_events'::regclass AND tgname = 'v2_cloud_job_events_append_only_trigger' AND NOT tgisinternal
+    `)
+    if (cloudRuntimeTrigger.length !== 1) throw new Error('Cloud runtime job event append-only trigger is missing')
     const phase8Rls = await client.$queryRawUnsafe(`
       SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
       FROM pg_class c

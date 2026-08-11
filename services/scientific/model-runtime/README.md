@@ -17,7 +17,9 @@ docker run --rm olfactoryops-model-runtime-phase4
 ```
 
 The test builds a tiny KGCNN GCN and runs one forward pass. It also exercises
-Transformer-CNN SMILES augmentation and its position layer. It does not load a
-tenant checkpoint, train on a dataset, expose an HTTP endpoint, or emit a
-scientific conclusion. Transformer-CNN remains `REVIEW_REQUIRED` until its
-license evidence has independent legal review.
+Transformer-CNN SMILES augmentation and its position layer. The image now has a
+private `/v1/jobs` endpoint used only by the Cloudflare Workflow's internal
+Container binding. It does not load a tenant checkpoint, train on a dataset, or
+emit a scientific conclusion: until a reviewed model artifact is registered it
+returns an explicit `NOT_CONFIGURED` evidence payload. Transformer-CNN remains
+`REVIEW_REQUIRED` until its license evidence has independent legal review.

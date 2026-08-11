@@ -30,6 +30,6 @@ Message body should include:
 
 ## Checkpoint status
 
-- Schema + operational contract: PASS
-- Producer/consumer integration: BLOCKED (migration rollout pending)
-
+- Producer/consumer plus durable idempotency/event ledger: PASS
+- Staging scientific/RAG/notification queues and DLQs: PASS
+- Deployed consumer delivery, retry, and DLQ smoke: BLOCKED

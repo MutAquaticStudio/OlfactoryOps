@@ -1,0 +1,90 @@
+# Cloudflare Staging Runtime Cutover Verification
+
+## Scope And Safety Boundary
+
+This verification covers `beta.labofscents.org` staging source and isolated
+Cloudflare resources only. Production DNS, routes, Workers, PostgreSQL,
+customer data, and unrelated Cloudflare projects were not changed.
+
+## Control Plane And Resources
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Cloudflare MCP connection | PASS | Authenticated account inventory completed. |
+| `labofscents.org` zone | PASS | Active zone `aab925895e9a7871978c43f90ad5a72c` found. |
+| Reversible MCP R2 test | PASS | Unique private bucket create, verify, delete, and post-delete absence check completed. |
+| Private artifact bucket | PASS | `olfactoryops-v2-artifacts-staging` created in APAC. |
+| Material Evidence Vectorize | PASS | `olfactoryops-v2-material-evidence-staging`, BGE-M3 1024D cosine, required tenant/model/status metadata indexes. |
+| Scientific, RAG, notification queues/DLQs | PASS | Isolated staging queue pairs created. |
+| Molecular Vectorize | NOT_APPLICABLE | No fixed serving dimension. |
+| Odor Vectorize | NOT_APPLICABLE | `RESEARCH_ONLY`. |
+| KV and AI Gateway | NOT_APPLICABLE | Inventory completed; no binding is required in the current staging cutover. |
+| Durable Objects, Workflows, Hyperdrive, Containers | BLOCKED | Inventory completed; the declared scientific runtime bindings require an approved PostgreSQL origin and immutable private images. |
+
+## Source Cutover
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| V2 API Worker boundary | PASS | 143 decorator-derived controller routes use shared Platform/domain services through Hyperdrive only. |
+| Session, CSRF, exact-Origin CORS | PASS | Unit tests cover tenant-specific origins, unsafe mutation denial, and preflight. |
+| Agent event stream | PASS | Worker Web Streams replay persisted events through the existing governed Agent service; no second event store. |
+| V2 tenant router | PASS | `*.beta.labofscents.org` resolver queries PostgreSQL through Hyperdrive and returns `404` for unknown/archived hosts. |
+| D1 as V2 substitute | PASS | No V2 API or staging tenant-router D1 binding exists. |
+| API/wildcard route separation | PASS | Exact `api-beta.labofscents.org/*` and separate `*.beta.labofscents.org/*` route declarations are checked in the staging templates. |
+| Phase 7+ public staging API | NOT_APPLICABLE | Trial/Sensory, Production, Commerce, and Advanced controllers are absent from the Worker matrix. |
+| Phase 7+ staging UI boundary source | PASS | Staging Pages build flag hides them and bounds direct paths; lazy chunks keep them out of initial load. |
+| Staging Pages build | PASS | Build passed with `VITE_API_BASE_URL`, `VITE_V2_WORKSPACE_BASE_DOMAIN`, and `VITE_V2_STAGING_PUBLIC_CUTOVER`. |
+
+## Local Verification
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Unit and integration tests | PASS | 70 files, 393 tests. |
+| Cloud runtime/transport focused tests | PASS | 4 files, 12 tests. |
+| Lint | PASS | Completed with three pre-existing non-blocking warnings outside the staging transport files. |
+| V2 typecheck | PASS | `npm.cmd run typecheck:v2`. |
+| Worker typecheck | PASS | `npm.cmd run typecheck:worker`. |
+| Frontend build | PASS | Default and staging-variable builds completed; Phase surfaces are lazy-loaded. |
+| API build | PASS | `npm.cmd run build:api`. |
+| API Worker dry-run | PASS | `npm.cmd run build:v2-api-worker`. |
+| Tenant-router dry-run | PASS | `npm.cmd run build:v2-tenant-router`. |
+| Cloud-runtime dry-run | PASS | Bundles with only the approved Material Evidence Vectorize binding; deployment placeholders remain intentionally blocked. |
+| PostgreSQL migration chain | PASS | `0018` applied on disposable loopback PostgreSQL. |
+| PostgreSQL RLS workflow | PASS | Tenant isolation and cross-domain V2 verification completed on disposable loopback PostgreSQL. |
+| Role matrix | PASS | 12 of 12 isolated roles passed. |
+| Scientific model runtime | PASS | Local pinned compatibility image and runtime test completed. |
+| Client secret scan | PASS | `npm.cmd run security:client-bundle`. |
+| Dependency audit | PASS | `npm.cmd audit --omit=dev --audit-level=high` reports zero vulnerabilities. |
+| Git diff whitespace | PASS | `git diff --check`. |
+
+## Remote Staging Acceptance
+
+| Gate | Status | Reason |
+| --- | --- | --- |
+| Remote staging PostgreSQL origin | BLOCKED | No approved non-production connection is configured. |
+| Hyperdrive provisioning and Worker transaction/RLS smoke | BLOCKED | Requires the approved remote staging PostgreSQL origin. |
+| API Worker, tenant-router, DNS, and Pages deployment | BLOCKED | Requires Hyperdrive, staging-only Worker secrets, and completed remote migration checks. |
+| R2 Worker PUT/GET/metadata/hash/tenant-denial/delete fixture | BLOCKED | Requires the deployed staging Worker and disposable fixture tenant. |
+| Vectorize two-tenant upsert/query cleanup | BLOCKED | Requires the deployed staging Worker and disposable fixture tenant. |
+| Queue retry/DLQ and Workflow terminal-failure smoke | BLOCKED | No consumer Worker or Workflow is deployed. |
+| Private Container authorized/unauthorized calls | BLOCKED | Immutable remote images and Cloudflare secret storage are not available. |
+| GitHub scientific image publishing | BLOCKED | `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets are absent. |
+| AI Gateway | NOT_APPLICABLE | No approved provider policy or staging provider credential. |
+| Browser staging checks | BLOCKED | `beta`, `api-beta`, and fixture tenant host deployment is intentionally not active. |
+| Production deployment | NOT_APPLICABLE | Explicitly prohibited in this cutover. |
+
+## Verdict
+
+```text
+SOURCE_CUTOVER = PASS
+ISOLATED_CLOUDFLARE_RESOURCES = PASS
+LOCAL_ACCEPTANCE = PASS
+REMOTE_POSTGRES_REQUIRED = PASS
+HYPERDRIVE_STAGING = BLOCKED
+REMOTE_STAGING_ACCEPTANCE = BLOCKED
+PRODUCTION_DEPLOYED = NOT_APPLICABLE
+V2_CLOUDFLARE_STAGING_READY = BLOCKED
+```
+
+The tag `v2-cloudflare-staging-ready` must not be created until every blocked
+remote staging gate is independently verified.

@@ -2,13 +2,15 @@
 
 ## Purpose
 
-- Enable semantic search for molecular/odor/multiple evidence families in separate logical indexes.
+- Enable tenant-scoped Material Evidence retrieval in the one approved staging
+  serving index.
 
-## Planned index families
+## Staging index family
 
-1. `material-evidence`
-2. `molecular-embedding`
-3. `odor-embedding`
+1. `material-evidence`: BGE-M3, 1024D, cosine.
+
+Molecular serving dimensionality is not pinned and odor retrieval is
+`RESEARCH_ONLY`; neither is provisioned or bound in this cutover.
 
 ## Data governance rules
 
@@ -30,6 +32,7 @@
 
 ## Acceptance status
 
-- Contract and runbook: PASS
-- Provisioned indexes and runtime hooks: BLOCKED (env/provisioning pending)
-
+- Material Evidence Worker adapter: PASS
+- Staging Material Evidence index: PASS
+- Live tenant query smoke: BLOCKED
+- Molecular/odor staging indexes: NOT_APPLICABLE

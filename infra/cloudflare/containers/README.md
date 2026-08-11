@@ -39,6 +39,11 @@ Run CPU/GPU-bound scientific workloads outside Cloudflare Workers using Cloudfla
 
 ## Checkpoint status
 
-- Remote build pipeline: PASS (documented)
-- Container deployment bindings: BLOCKED (cloud env setup pending)
-
+- Local Container class and private Worker/Workflow invocation contract: PASS
+- Input integrity: Worker reads a tenant-scoped R2 artifact, checks its hash,
+  and sends only the validated bounded scientific fields with an internal
+  shared-secret header. The returned payload is persisted by the Worker; a
+  Container never receives database credentials or performs a direct write.
+- Remote Linux/amd64 build workflow: PASS (configured, credential-gated)
+- Registry image digest and Container deployment: BLOCKED (staging
+  credentials/resources are not configured)

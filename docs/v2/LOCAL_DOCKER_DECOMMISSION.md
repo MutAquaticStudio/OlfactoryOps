@@ -70,5 +70,7 @@ Typical removals only:
 
 - Design/documentation in place: **PASS**
 - Script execution policy (dry-run by default): **PASS**
-- Resource destruction: **NOT_APPLIED** until approved
-
+- Remote scientific build gate: **BLOCKED** until CI credentials and
+  immutable registry image digests exist
+- Resource destruction: **PENDING_ENGINE** when Docker Desktop is unavailable;
+  no local resource was touched
