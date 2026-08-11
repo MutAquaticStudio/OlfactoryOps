@@ -2,6 +2,7 @@ import { Container, type StopParams } from '@cloudflare/containers'
 import {
   scientificContainerDiagnostic,
   scientificContainerEnvironment,
+  scientificFeatureContainerEntrypoint,
   scientificContainerHealthEndpoint,
   scientificContainerStartupPollIntervalMs,
   scientificContainerStartupTimeoutMs,
@@ -74,6 +75,9 @@ export class ScientificFeatureContainer extends ScientificContainer {
   readonly diagnosticContainer = 'feature'
   defaultPort = 8099
   requiredPorts = [8099]
+  // Bypass the micromamba image shell entrypoint. The Container runtime starts
+  // this exact pinned interpreter command, matching the production service.
+  entrypoint = [...scientificFeatureContainerEntrypoint]
   pingEndpoint = scientificContainerHealthEndpoint
   sleepAfter = '10m'
   enableInternet = false

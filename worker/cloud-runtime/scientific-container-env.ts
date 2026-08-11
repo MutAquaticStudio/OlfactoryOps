@@ -5,6 +5,7 @@
 export const scientificContainerHealthEndpoint = 'localhost/health'
 export const scientificContainerStartupTimeoutMs = 90_000
 export const scientificContainerStartupPollIntervalMs = 1_000
+export const scientificFeatureContainerEntrypoint = ['/opt/conda/bin/python', '-m', 'scientific_runtime.server']
 
 export type ScientificContainerDiagnostic = {
   code:

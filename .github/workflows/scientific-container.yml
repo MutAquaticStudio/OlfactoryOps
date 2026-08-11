@@ -49,7 +49,8 @@ jobs:
           docker run --detach --name "$container_name" --publish 127.0.0.1:18099:8099 \
             --env SCIENTIFIC_SERVICE_SHARED_SECRET=scientific-http-test-secret \
             --env SCIENTIFIC_SERVICE_HOST=0.0.0.0 \
-            olfactoryops-scientific-feature:${IMAGE_TAG} >/dev/null
+            --entrypoint /opt/conda/bin/python \
+            olfactoryops-scientific-feature:${IMAGE_TAG} -m scientific_runtime.server >/dev/null
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18099/health > feature-health.json; then
               node -e "const health=require('./feature-health.json'); if (health.status !== 'ok' || typeof health.runtimeVersion !== 'string') process.exit(1)"

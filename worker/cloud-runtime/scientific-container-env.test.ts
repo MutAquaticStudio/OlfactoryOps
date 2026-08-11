@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   scientificContainerDiagnostic,
   scientificContainerEnvironment,
+  scientificFeatureContainerEntrypoint,
   scientificContainerHealthEndpoint,
   scientificContainerStartupPollIntervalMs,
   scientificContainerStartupTimeoutMs,
@@ -12,6 +13,7 @@ describe('scientificContainerEnvironment', () => {
     expect(scientificContainerHealthEndpoint).toBe('localhost/health')
     expect(scientificContainerStartupTimeoutMs).toBe(90_000)
     expect(scientificContainerStartupPollIntervalMs).toBe(1_000)
+    expect(scientificFeatureContainerEntrypoint).toEqual(['/opt/conda/bin/python', '-m', 'scientific_runtime.server'])
   })
 
   it('maps the runtime secret only to the image service variable', () => {
