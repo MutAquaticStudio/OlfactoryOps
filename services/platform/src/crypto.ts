@@ -32,10 +32,6 @@ function base64UrlToBytes(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
-function asArrayBuffer(value: Uint8Array) {
-  return Uint8Array.from(value).buffer as ArrayBuffer
-}
-
 function subtleCrypto() {
   const crypto = globalThis.crypto
   if (!crypto?.subtle || !crypto.getRandomValues) throw new PasswordCryptoError('PASSWORD_WEB_CRYPTO_UNAVAILABLE')
@@ -46,13 +42,13 @@ async function passwordDigest(email: string, password: string, salt: Uint8Array,
   const crypto = subtleCrypto()
   let key: CryptoKey
   try {
-    key = await crypto.subtle.importKey('raw', passwordInput(email, password, pepper), 'PBKDF2', false, ['deriveBits'])
+    key = await crypto.subtle.importKey('raw', passwordInput(email, password, pepper) as unknown as BufferSource, 'PBKDF2', false, ['deriveBits'])
   } catch {
     throw new PasswordCryptoError('PASSWORD_PBKDF2_IMPORT_FAILED')
   }
   let bits: ArrayBuffer
   try {
-    bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: asArrayBuffer(salt), iterations }, key, PASSWORD_KEY_LENGTH * 8)
+    bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt as unknown as BufferSource, iterations }, key, PASSWORD_KEY_LENGTH * 8)
   } catch {
     throw new PasswordCryptoError('PASSWORD_PBKDF2_DERIVE_FAILED')
   }
