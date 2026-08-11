@@ -11,6 +11,9 @@ export function signupWriteFailureCategory(error: unknown) {
   const code = error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
     ? (error as { code: string }).code
     : ''
+  const name = error && typeof error === 'object' && 'name' in error && typeof (error as { name?: unknown }).name === 'string'
+    ? (error as { name: string }).name
+    : ''
   const nested = error && typeof error === 'object' && 'cause' in error
     ? (error as { cause?: unknown }).cause
     : undefined
@@ -29,6 +32,9 @@ export function signupWriteFailureCategory(error: unknown) {
   if (sqlState === '22P02' || /invalid input syntax/i.test(message) || code === 'P2000') return 'INVALID'
   if (code === 'P2021' || code === 'P2022' || /relation .* does not exist|column .* does not exist/i.test(message)) return 'SCHEMA'
   if (code === 'P2010' || /prepared statement|bind message|postgres/i.test(message)) return 'DATABASE'
+  if (/driveradapter|adapter/i.test(name)) return 'ADAPTER'
+  if (/prismaclient.*request/i.test(name)) return 'PRISMA_REQUEST'
+  if (name === 'TypeError') return 'TYPE'
   return 'FAILED'
 }
 
