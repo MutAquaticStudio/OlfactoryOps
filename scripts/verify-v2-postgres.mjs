@@ -29,6 +29,7 @@ const migrations = [
   'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql',
   'infra/postgres/migrations/0022_platform_control_plane.sql',
   'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
+  'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -490,9 +491,9 @@ try {
       'v2_platform_workspace_directory', 'v2_platform_workspace_detail', 'v2_platform_overview_snapshot',
       'v2_platform_revoke_workspace_sessions', 'v2_platform_request_workspace_action',
       'v2_platform_set_workspace_entitlement', 'v2_platform_assign_workspace_plan', 'v2_platform_set_workspace_limit',
-      'v2_platform_set_operator_status', 'v2_platform_set_operator_role',
+      'v2_platform_set_operator_status', 'v2_platform_set_operator_role', 'v2_platform_set_tenant_state',
     ])
-    if (platformControlFunctions.length !== 10 || platformControlFunctions.some((row) => !row.security_definer)) {
+    if (platformControlFunctions.length !== 11 || platformControlFunctions.some((row) => !row.security_definer)) {
       throw new Error('Platform control-plane bounded security-definer functions are missing')
     }
     const platformControlTriggers = await client.$queryRawUnsafe(`

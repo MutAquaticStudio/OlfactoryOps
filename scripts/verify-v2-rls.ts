@@ -85,6 +85,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0022_platform_control_plane.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0023_platform_control_plane_operations.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql')
 }
 
 function resetDisposableSchema() {
@@ -125,7 +126,7 @@ async function configureApplicationRole() {
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO v2_app')
-  await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT) TO v2_app')
+  await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT), public.v2_platform_set_tenant_state(TEXT, TEXT, TEXT, TEXT, TEXT) TO v2_app')
   const roles = await adminClient.$queryRawUnsafe<Array<{ rolbypassrls: boolean; rolsuper: boolean }>>("SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'v2_app'")
   if (roles.length !== 1 || roles[0].rolbypassrls || roles[0].rolsuper) throw new Error('V2_RLS=FAIL application role is not constrained by RLS.')
 }
@@ -439,6 +440,49 @@ try {
     await tx.$executeRawUnsafe('INSERT INTO v2_users (id, email, display_name, password_hash) VALUES ($1, $2, $3, $4)', panelistUserId!, `${panelistUserId}@example.test`, 'Panelist QA', 'not-a-login')
     await tx.$executeRawUnsafe('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', `mem_${panelistUserId}`, firstOrganizationId!, panelistUserId!, 'Sensory Panelist', 'ACTIVE')
   })
+
+  // Exercise the bounded platform state procedure as the constrained app role.
+  // This catches ambiguous PL/pgSQL output-field references that schema-only
+  // migration checks cannot observe.
+  const platformTransitionOperatorId = `pop_rls_transition_${suffix.replace(/[^a-z0-9]/gi, '')}`
+  await adminClient!.$executeRawUnsafe(
+    `INSERT INTO v2_platform_operators (id, user_id, role_key, status, mfa_required, created_by)
+     VALUES ($1, $2, 'PLATFORM_OWNER', 'ACTIVE', false, $2)`,
+    platformTransitionOperatorId,
+    firstUserId!,
+  )
+  const platformTransition = await appClient!.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.platform_user_id', $1, true)", firstUserId!)
+    const suspended = await tx.$queryRawUnsafe<Array<{ organization_id: string; status: string }>>(
+      'SELECT * FROM public.v2_platform_set_tenant_state($1, $2, $3, $4, $5)',
+      firstOrganizationId!,
+      'SUSPENDED',
+      'Disposable platform lifecycle procedure verification.',
+      `rls-platform-suspend-${suffix}`,
+      `rls-platform-correlation-${suffix}`,
+    )
+    const replay = await tx.$queryRawUnsafe<Array<{ organization_id: string; status: string }>>(
+      'SELECT * FROM public.v2_platform_set_tenant_state($1, $2, $3, $4, $5)',
+      firstOrganizationId!,
+      'SUSPENDED',
+      'Disposable platform lifecycle procedure verification.',
+      `rls-platform-suspend-${suffix}`,
+      `rls-platform-correlation-replay-${suffix}`,
+    )
+    const active = await tx.$queryRawUnsafe<Array<{ organization_id: string; status: string }>>(
+      'SELECT * FROM public.v2_platform_set_tenant_state($1, $2, $3, $4, $5)',
+      firstOrganizationId!,
+      'ACTIVE',
+      'Restore disposable platform lifecycle verification workspace.',
+      `rls-platform-reactivate-${suffix}`,
+      `rls-platform-reactivate-correlation-${suffix}`,
+    )
+    return { suspended: suspended[0], replay: replay[0], active: active[0] }
+  })
+  const platformTransitionPass = platformTransition.suspended?.organization_id === firstOrganizationId
+    && platformTransition.suspended?.status === 'SUSPENDED'
+    && platformTransition.replay?.status === 'SUSPENDED'
+    && platformTransition.active?.status === 'ACTIVE'
 
   let crossTenantDenied = false
   try {
@@ -2032,9 +2076,11 @@ try {
     && crossTenantImportDenied
     && crossTenantBulkDenied
 
-  if (!crossTenantDenied || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass || !phase10Pass || !phase11Pass) {
+  if (!crossTenantDenied || !platformTransitionPass || unscopedMemberships !== 0 || firstTenantMemberships !== 3 || secondTenantVisibleFromFirstContext !== 0 || !phase2Pass || !phase3Pass || !phase4Pass || !phase5bPass || !phase6Pass || !phase7Pass || !phase8Pass || !phase9Pass || !phase10Pass || !phase11Pass) {
     throw new Error(`V2_RLS=FAIL unexpected isolation result: ${JSON.stringify({
       crossTenantDenied,
+      platformTransition,
+      platformTransitionPass,
       unscopedMemberships,
       firstTenantMemberships,
       secondTenantVisibleFromFirstContext,
