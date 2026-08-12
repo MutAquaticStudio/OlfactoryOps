@@ -26,6 +26,7 @@ const migrations = [
   'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
   'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql',
   'infra/postgres/migrations/0022_platform_control_plane.sql',
+  'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL

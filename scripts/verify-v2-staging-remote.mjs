@@ -89,6 +89,7 @@ async function main() {
   const ownerA = credentials(suffix, 'Owner A')
   const ownerB = credentials(suffix, 'Owner B')
   const fixtureOrganizationIds = []
+  const platformOperatorFixtureIds = []
   const roleResults = []
 
   async function verifyRuntimeRoleWriteProbe() {
@@ -154,6 +155,15 @@ async function main() {
         await client.query("UPDATE v2_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = COALESCE(revoke_reason, 'STAGING_FIXTURE_ARCHIVED') WHERE organization_id = $1", [organizationId])
         await client.query("UPDATE v2_workspace_hostnames SET status = 'ARCHIVED', updated_at = now() WHERE organization_id = $1", [organizationId])
         await client.query("UPDATE v2_organizations SET status = 'ARCHIVED', updated_at = now() WHERE id = $1", [organizationId])
+      }
+      if (platformOperatorFixtureIds.length) {
+        await client.query("UPDATE v2_platform_operators SET status = 'DISABLED', updated_at = now() WHERE id = ANY($1::text[])", [platformOperatorFixtureIds])
+        await client.query(
+          `INSERT INTO v2_platform_audit_events (id, actor_role, action, outcome, subject_type, subject_id, reason, correlation_id)
+           SELECT 'pae_cleanup_' || substr(md5(operator_id || clock_timestamp()::text), 1, 20), 'PLATFORM_OWNER', 'platform.fixture.cleanup', 'ALLOWED', 'platform_operator', operator_id, 'staging fixture cleanup', $2
+           FROM unnest($1::text[]) AS entries(operator_id)`,
+          [platformOperatorFixtureIds, `staging-cleanup-${suffix}`],
+        )
       }
       await client.query('COMMIT')
       console.log(JSON.stringify({ remoteStagingFixtureCleanup: 'ARCHIVED', organizations: fixtureOrganizationIds.length }))
@@ -237,9 +247,53 @@ async function main() {
     await expectStatus('/v2/lab/materials', { origin: viewerA.origin, cookie: viewerA.cookie }, 403, 'tenant_a_role_policy_not_scoped')
     await expectStatus('/v2/lab/materials', { origin: viewerB.origin, cookie: viewerB.cookie }, 200, 'tenant_b_role_policy_leaked')
 
+    // Platform authority is a separate PostgreSQL assignment. A tenant Owner
+    // remains denied until this staging-only fixture receives an explicit
+    // PlatformOperator row; no email or tenant role is used as authority.
+    await expectStatus('/v2/admin/me', { origin: viewerA.origin, cookie: viewerA.cookie }, 403, 'tenant_owner_platform_access_not_denied')
+    const controlPlane = await signup('platform-control', credentials(suffix, 'Platform control'))
+    await client.query(
+      `INSERT INTO v2_platform_operators (id, user_id, role_key, status, mfa_required, created_by)
+       VALUES ($1, $2, 'PLATFORM_OWNER', 'ACTIVE', false, $2), ($3, $4, 'PLATFORM_SUPPORT', 'ACTIVE', false, $2)`,
+      [`pop_remote_owner_${suffix}`, first.userId, `pop_remote_support_${suffix}`, second.userId],
+    )
+    platformOperatorFixtureIds.push(`pop_remote_owner_${suffix}`, `pop_remote_support_${suffix}`)
+    const platformOwner = await login(first, publicPagesHost)
+    const platformSupport = await login(second, publicPagesHost)
+    const adminMe = await expectStatus('/v2/admin/me', { origin: platformOwner.origin, cookie: platformOwner.cookie }, 200, 'platform_owner_me_failed')
+    assert(adminMe.body?.operator?.role === 'PLATFORM_OWNER', 'platform_owner_projection_invalid')
+    const supportOverview = await expectStatus('/v2/admin/overview', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 200, 'platform_support_overview_failed')
+    assert(Number.isInteger(supportOverview.body?.activeWorkspaces), 'platform_overview_projection_invalid')
+    await expectStatus('/v2/admin/audit', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 403, 'platform_support_audit_not_denied')
+    const adminDirectory = await expectStatus('/v2/admin/workspaces', { origin: platformOwner.origin, cookie: platformOwner.cookie }, 200, 'platform_workspace_directory_failed')
+    assert(Array.isArray(adminDirectory.body?.workspaces) && adminDirectory.body.workspaces.some((item) => item.id === controlPlane.organizationId), 'platform_workspace_directory_projection_invalid')
+    await expectStatus(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}`, { origin: platformOwner.origin, cookie: platformOwner.cookie }, 200, 'platform_workspace_detail_failed')
+    const platformMutation = (path, method, body, key) => expectStatus(path, {
+      method, origin: platformOwner.origin, cookie: platformOwner.cookie, csrf: platformOwner.csrf, idempotencyKey: key,
+      body: { ...body, confirmation: 'CONFIRM_PLATFORM_ACTION' },
+    }, 200, `platform_${key}_failed`)
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/suspend`, 'POST', { reason: 'Isolated staging suspension fixture.' }, `platform-suspend-${suffix}`)
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/reactivate`, 'POST', { reason: 'Isolated staging reactivation fixture.' }, `platform-reactivate-${suffix}`)
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/entitlements`, 'PATCH', { capability: 'workspace.access', enabled: true, expiresAt: null, reason: 'Isolated staging entitlement fixture.' }, `platform-entitlement-${suffix}`)
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/plan`, 'PATCH', { planId: 'managed_beta', endsAt: null, reason: 'Isolated staging plan fixture.' }, `platform-plan-${suffix}`)
+    const platformLimit = await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/limits`, 'PATCH', { key: 'members', value: 25, reason: 'Isolated staging usage-limit fixture.' }, `platform-limit-${suffix}`)
+    assert(platformLimit.body?.key === 'members' && platformLimit.body?.value === 25, 'platform_limit_projection_invalid')
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/export`, 'POST', { reason: 'Isolated staging export review fixture.' }, `platform-export-${suffix}`)
+    await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/erasure-review`, 'POST', { reason: 'Isolated staging erasure review fixture.' }, `platform-erasure-${suffix}`)
+    const hostnameRefresh = await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/hostname-refresh`, 'POST', { reason: 'Isolated staging hostname refresh fixture.' }, `platform-hostname-${suffix}`)
+    assert(hostnameRefresh.body?.status === 'NOT_CONFIGURED', 'platform_hostname_refresh_not_honest')
+    const revoke = await platformMutation(`/v2/admin/workspaces/${encodeURIComponent(controlPlane.organizationId)}/revoke-sessions`, 'POST', { reason: 'Isolated staging session revocation fixture.' }, `platform-revoke-${suffix}`)
+    assert(Number.isInteger(revoke.body?.revokedSessions), 'platform_session_revoke_projection_invalid')
+    const operatorRole = await platformMutation(`/v2/admin/operators/${encodeURIComponent(`pop_remote_support_${suffix}`)}/role`, 'PATCH', { role: 'PLATFORM_SECURITY_AUDITOR', reason: 'Isolated staging operator role rotation fixture.' }, `platform-operator-role-${suffix}`)
+    assert(operatorRole.body?.role === 'PLATFORM_SECURITY_AUDITOR', 'platform_operator_role_projection_invalid')
+    await platformMutation(`/v2/admin/operators/${encodeURIComponent(`pop_remote_support_${suffix}`)}/status`, 'PATCH', { status: 'DISABLED', reason: 'Isolated staging operator disable fixture.' }, `platform-operator-disable-${suffix}`)
+    await expectStatus('/v2/admin/me', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 403, 'disabled_platform_operator_not_denied')
+    const platformAudit = await expectStatus('/v2/admin/audit', { origin: platformOwner.origin, cookie: platformOwner.cookie }, 200, 'platform_audit_failed')
+    assert(Array.isArray(platformAudit.body?.events) && platformAudit.body.events.some((event) => event.action === 'platform.workspace.suspended'), 'platform_audit_projection_invalid')
+
     console.log(JSON.stringify({
       remoteStaging: 'PASS', apiWorker: 'PASS', hyperdrive: 'PASS', rlsStaging: 'PASS',
-      tenantIsolationStaging: 'PASS', roleE2eStaging: 'PASS', roles: roleResults,
+      tenantIsolationStaging: 'PASS', roleE2eStaging: 'PASS', platformAdminStaging: 'PASS', roles: roleResults,
     }))
   } catch (error) {
     executionError = error

@@ -55,7 +55,10 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
   const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.HYPERDRIVE.connectionString }) })
   const platform = new PlatformService(new PrismaPlatformRepository(prisma), {
     baseDomain: env.V2_WORKSPACE_BASE_DOMAIN,
-    publicHostnames: [env.V2_API_PUBLIC_HOSTNAME, env.V2_PUBLIC_PAGES_HOSTNAME].filter((value): value is string => Boolean(value)),
+    // The platform-admin host is public application surface, never a tenant
+    // hostname. Including it here keeps the server-side session resolver from
+    // treating admin.labofscents.org as an untrusted workspace hostname.
+    publicHostnames: [env.V2_API_PUBLIC_HOSTNAME, env.V2_PUBLIC_PAGES_HOSTNAME, env.V2_PLATFORM_ADMIN_HOSTNAME].filter((value): value is string => Boolean(value)),
     sessionPepper: required(env.V2_SESSION_PEPPER, 'V2_SESSION_PEPPER'),
     passwordPepper: required(env.V2_PASSWORD_PEPPER, 'V2_PASSWORD_PEPPER'),
     invitationEncryptionKey: required(env.V2_INVITATION_ENCRYPTION_KEY, 'V2_INVITATION_ENCRYPTION_KEY'),

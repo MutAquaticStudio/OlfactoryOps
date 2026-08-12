@@ -198,3 +198,17 @@ gate tuong ung chay thanh cong tren source/migration hien tai.
 | Tenant isolation/RBAC/idempotency | Forced RLS, composite tenant foreign keys, operation idempotency, cross-tenant denial, and independent 12-role browser matrix | PASS |
 | Live carrier integration | Provider-neutral carrier/service/tracking boundary only; no configured test credential | BLOCKED |
 | Remote migration and production deployment | No remote target or deployment is part of this local checkpoint | NOT_APPLICABLE |
+
+## Production go-live preflight (2026-08-12)
+
+| Requirement family | Current evidence boundary | Status |
+|---|---|---|
+| Canonical V2 auth routes | `/login`, `/signup`, and V2 aliases use one V2 UI/API authority with bounded internal redirects and cross-subdomain CSRF bootstrap | PASS (local) |
+| Platform authorization domain | Explicit PostgreSQL PlatformOperator roles remain separate from tenant membership; no runtime email allowlist authority | PASS (local) |
+| Platform control-plane mutations | Bounded SECURITY DEFINER operations, forced RLS, CSRF, reason, idempotency receipt, append-only audit/state evidence, MFA-step-up guard and server capability checks | PASS (local) |
+| Platform Control Panel | Overview, workspace metadata/lifecycle requests, sessions, plan/entitlement/limit controls, operator status/role controls, infrastructure projection and audit UI | PASS (local) |
+| Dedicated production PostgreSQL / Hyperdrive | Dedicated Supabase origin and production Hyperdrive have metadata-only separation evidence; migration/runtime verification is not authorized yet | BLOCKED |
+| Legacy production D1 | Archive preparation is complete, but retention/migration decision and archive execution are not approved | BLOCKED |
+| First production deployment secret boundary | Four exposed runtime values must rotate through the protected production Environment and be revalidated at the exact release SHA | BLOCKED |
+| Staging release-candidate revalidation | Required because auth/control-plane code changes the accepted staging runtime SHA | BLOCKED |
+| Production deployment | No production migration, candidate, DNS, Worker, Pages, Router, or Cloud Runtime deployment was performed | NOT_APPLICABLE |

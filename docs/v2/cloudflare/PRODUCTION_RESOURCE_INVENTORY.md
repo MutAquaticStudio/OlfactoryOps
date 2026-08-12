@@ -35,11 +35,37 @@ are present; their values were neither requested nor retrieved:
 - `SCIENTIFIC_CONTAINER_SHARED_SECRET`
 
 `PRODUCTION_SECRET_VALUES_REQUIRED = NO` for the existing protected
-Environment. The default-branch dispatcher change is pending human review in
-PR [#14](https://github.com/MutAquaticStudio/OlfactoryOps/pull/14); it does
-not authorize a production deployment.
+Environment. Protected production dispatchers were merged in
+[#14](https://github.com/MutAquaticStudio/OlfactoryOps/pull/14); they do not
+authorize a production deployment.
+
+## Mandatory pre-go-live security gate
+
+The production Environment currently contains the required runtime secret
+names, but their values have not been inspected, changed, or rotated in this
+preflight. The accepted temporary exposure risk does not authorize first
+production deployment.
+
+`ROTATE_EXPOSED_PRODUCTION_RUNTIME_SECRETS_BEFORE_FIRST_PRODUCTION_DEPLOY = YES`
+
+The following values must be replaced through the protected production
+Environment, rebound to the production Workers without logging them, and then
+the Environment must be revalidated for the exact release SHA before any
+production deployment:
+
+- `V2_SESSION_PEPPER`
+- `V2_PASSWORD_PEPPER`
+- `V2_INVITATION_ENCRYPTION_KEY`
+- `SCIENTIFIC_CONTAINER_SHARED_SECRET`
+
+The merged dispatchers require both
+`PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA` and
+`PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA` to match the requested
+release SHA. These non-secret markers must only be set after that rotation and
+revalidation have actually completed.
 
 Production deployment, migrations, DNS changes, and tag promotion remain
 blocked until the protected production runtime-role SQL verification,
-legacy-data migration decision, release-candidate staging revalidation, and
-rollback evidence are available.
+legacy-data retention decision, release-candidate staging revalidation,
+rollback evidence, and the mandatory runtime-secret rotation gate are
+available.

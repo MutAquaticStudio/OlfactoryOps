@@ -35,18 +35,22 @@ try {
     await client.query(`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM ${identifier}`)
     await client.query(`GRANT USAGE ON SCHEMA public TO ${identifier}`)
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${identifier}`)
-    await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT), public.v2_resolve_active_workspace_hostname(TEXT), public.v2_platform_has_role(TEXT[]), public.v2_platform_set_tenant_state(TEXT, TEXT, TEXT, TEXT, TEXT) TO ${identifier}`)
+    await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT), public.v2_resolve_active_workspace_hostname(TEXT), public.v2_platform_has_role(TEXT[]), public.v2_platform_set_tenant_state(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT) TO ${identifier}`)
     await client.query('COMMIT')
   } catch (error) { await client.query('ROLLBACK').catch(() => undefined); throw error }
   const { rows } = await client.query(`
     SELECT r.rolcanlogin, r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolinherit, r.rolbypassrls, r.rolreplication,
       has_schema_privilege($1, 'public', 'USAGE') AS schema_usage,
       has_schema_privilege($1, 'public', 'CREATE') AS schema_create,
-      has_table_privilege($1, 'v2_organizations', 'SELECT,INSERT,UPDATE,DELETE') AS table_access
+      has_table_privilege($1, 'v2_organizations', 'SELECT,INSERT,UPDATE,DELETE') AS table_access,
+      has_function_privilege($1, 'public.v2_platform_overview_snapshot()', 'EXECUTE') AS platform_overview_execute,
+      has_function_privilege($1, 'public.v2_platform_workspace_directory(text)', 'EXECUTE') AS platform_directory_execute,
+      has_function_privilege($1, 'public.v2_platform_set_workspace_limit(text, text, integer)', 'EXECUTE') AS platform_limit_execute,
+      has_function_privilege($1, 'public.v2_platform_set_operator_role(text, text)', 'EXECUTE') AS platform_operator_role_execute
     FROM pg_roles r WHERE r.rolname = $1
   `, [role])
   const parentRoleCount = (await client.query('SELECT COUNT(*)::int AS count FROM pg_auth_members membership JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1', [role])).rows[0].count
   const result = rows[0]
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
   console.log(JSON.stringify({ productionRuntimePrivileges: 'PASS', role, superuser: false, bypassRls: false, privilegedMembership: 'NONE' }))
 } finally { await client.end().catch(() => undefined) }

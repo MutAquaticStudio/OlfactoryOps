@@ -37,3 +37,24 @@ No customer, formula, credential, session, or audit row content was read.
 Until that decision is approved:
 
 `PRODUCTION_DATA_GATE = BLOCKED_LEGACY_D1_DECISION`
+
+## Archive preparation boundary
+
+The archive operation is prepared but deliberately not executed. Its execution
+record must contain only object counts, checksums, timestamps, retention owner,
+and restore-test evidence; it must not expose customer rows in GitHub logs or
+repository documentation.
+
+1. An authorized operator exports the exact D1 database to an approved,
+   encrypted retention location outside the public release workflow.
+2. Record the export manifest hash, source database ID, migration head, table
+   and aggregate-count snapshot, retention owner, and retention expiry.
+3. Restore the archive into an isolated, non-production validation target and
+   reconcile schema, table counts, and manifest hash without browsing customer
+   content.
+4. Record a signed archive decision: retain read-only, selective migration, or
+   full migration. Only that decision can clear `PRODUCTION_DATA_GATE`.
+
+`PRODUCTION_D1_ARCHIVE_PREPARATION = PASS`
+
+`PRODUCTION_D1_ARCHIVE_EXECUTION = BLOCKED_RETENTION_OWNER_DECISION`

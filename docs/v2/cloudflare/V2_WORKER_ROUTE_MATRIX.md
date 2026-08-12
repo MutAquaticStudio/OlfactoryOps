@@ -49,9 +49,16 @@ The Worker imports generated decorator-free controller delegates; all business l
 | platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/suspend` |
 | platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/reactivate` |
 | platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/archive` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/revoke-sessions` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/export` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/erasure-review` |
+| platformAdmin | POST | `/api/v1/v2/admin/workspaces/:id/hostname-refresh` |
 | platformAdmin | PATCH | `/api/v1/v2/admin/workspaces/:id/entitlements` |
+| platformAdmin | PATCH | `/api/v1/v2/admin/workspaces/:id/plan` |
+| platformAdmin | PATCH | `/api/v1/v2/admin/workspaces/:id/limits` |
 | platformAdmin | GET | `/api/v1/v2/admin/operators` |
 | platformAdmin | PATCH | `/api/v1/v2/admin/operators/:id/status` |
+| platformAdmin | PATCH | `/api/v1/v2/admin/operators/:id/role` |
 | platformAdmin | GET | `/api/v1/v2/admin/infrastructure` |
 | platformAdmin | GET | `/api/v1/v2/admin/audit` |
 | lab | GET | `/api/v1/v2/lab/materials` |

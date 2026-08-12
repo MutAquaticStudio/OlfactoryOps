@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Headers, Param, Patch, Post, Query, Req } from '@nestjs/common'
 import type { FastifyRequest } from 'fastify'
-import { platformEntitlementUpdateSchema, platformOperatorStatusUpdateSchema, platformWorkspaceActionSchema } from '../../../packages/contracts/src/platform-admin.js'
+import { platformEntitlementUpdateSchema, platformLimitUpdateSchema, platformOperatorRoleUpdateSchema, platformOperatorStatusUpdateSchema, platformPlanAssignmentSchema, platformWorkspaceActionSchema, platformWorkspaceRequestSchema } from '../../../packages/contracts/src/platform-admin.js'
 import { PlatformAdminService } from '../../../services/platform/src/platform-admin-service.js'
 import { PlatformError, PlatformService } from '../../../services/platform/src/service.js'
 
@@ -50,25 +50,70 @@ export class V2PlatformAdminController {
   @Post('workspaces/:id/archive')
   async archive(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') idempotencyKey?: string) { return this.transition(request, id, 'ARCHIVED', body, idempotencyKey) }
 
+  @Post('workspaces/:id/revoke-sessions')
+  async revokeSessions(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
+    this.mutationShapeGuard(request, idempotencyKey)
+    const body = platformWorkspaceActionSchema.parse(raw)
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.revokeWorkspaceSessions(resolved.context, resolved.operator, id, body.reason, idempotencyKey!)
+  }
+
+  @Post('workspaces/:id/export')
+  async requestExport(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) { return this.workspaceRequest(request, id, raw, idempotencyKey, 'WORKSPACE_EXPORT') }
+
+  @Post('workspaces/:id/erasure-review')
+  async requestErasureReview(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) { return this.workspaceRequest(request, id, raw, idempotencyKey, 'ERASURE_REVIEW') }
+
+  @Post('workspaces/:id/hostname-refresh')
+  async requestHostnameRefresh(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) { return this.workspaceRequest(request, id, raw, idempotencyKey, 'HOSTNAME_REFRESH') }
+
   @Patch('workspaces/:id/entitlements')
   async entitlement(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
     this.mutationShapeGuard(request, idempotencyKey)
     const body = platformEntitlementUpdateSchema.parse(raw)
     const resolved = await this.resolve(request)
     await this.mutationCsrfGuard(request, resolved.context)
-    return this.admin.setEntitlement(resolved.context, resolved.operator, id, body.capability, body.enabled, body.expiresAt ?? null, body.reason)
+    return this.admin.setEntitlement(resolved.context, resolved.operator, id, body.capability, body.enabled, body.expiresAt ?? null, body.reason, idempotencyKey!)
+  }
+
+  @Patch('workspaces/:id/plan')
+  async plan(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
+    this.mutationShapeGuard(request, idempotencyKey)
+    const body = platformPlanAssignmentSchema.parse(raw)
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.assignPlan(resolved.context, resolved.operator, id, body.planId, body.endsAt ?? null, body.reason, idempotencyKey!)
+  }
+
+  @Patch('workspaces/:id/limits')
+  async limit(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
+    this.mutationShapeGuard(request, idempotencyKey)
+    const body = platformLimitUpdateSchema.parse(raw)
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.setLimit(resolved.context, resolved.operator, id, body.key, body.value, body.reason, idempotencyKey!)
   }
 
   @Get('operators')
   async operators(@Req() request: FastifyRequest) { const resolved = await this.resolve(request); return { operators: await this.admin.operators(resolved.context, resolved.operator) } }
 
   @Patch('operators/:id/status')
-  async operatorStatus(@Req() request: FastifyRequest, @Param('id') _id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
+  async operatorStatus(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
     this.mutationShapeGuard(request, idempotencyKey)
-    // Status rotation is intentionally not active until the TOTP enrollment
-    // and recovery ceremony are provisioned in the production environment.
-    platformOperatorStatusUpdateSchema.parse(raw)
-    throw new PlatformError('NOT_CONFIGURED', 'Platform operator rotation requires the production MFA enrollment ceremony.', 503)
+    const body = platformOperatorStatusUpdateSchema.parse(raw)
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.setOperatorStatus(resolved.context, resolved.operator, id, body.status, body.reason, idempotencyKey!)
+  }
+
+  @Patch('operators/:id/role')
+  async operatorRole(@Req() request: FastifyRequest, @Param('id') id: string, @Body() raw: unknown, @Headers('idempotency-key') idempotencyKey?: string) {
+    this.mutationShapeGuard(request, idempotencyKey)
+    const body = platformOperatorRoleUpdateSchema.parse(raw)
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.setOperatorRole(resolved.context, resolved.operator, id, body.role, body.reason, idempotencyKey!)
   }
 
   @Get('infrastructure')
@@ -87,6 +132,14 @@ export class V2PlatformAdminController {
     const resolved = await this.resolve(request)
     await this.mutationCsrfGuard(request, resolved.context)
     return this.admin.transition(resolved.context, resolved.operator, id, status, body.reason, idempotencyKey!)
+  }
+
+  private async workspaceRequest(request: FastifyRequest, id: string, raw: unknown, idempotencyKey: string | undefined, expectedKind: 'WORKSPACE_EXPORT' | 'ERASURE_REVIEW' | 'HOSTNAME_REFRESH') {
+    this.mutationShapeGuard(request, idempotencyKey)
+    const body = platformWorkspaceRequestSchema.parse({ ...(raw as Record<string, unknown>), kind: expectedKind })
+    const resolved = await this.resolve(request)
+    await this.mutationCsrfGuard(request, resolved.context)
+    return this.admin.requestWorkspaceAction(resolved.context, resolved.operator, id, body.kind, body.reason, idempotencyKey!)
   }
 
   private async resolve(request: FastifyRequest) { return this.admin.authenticated(cookieValue(request, this.platform.cookieName), requestHost(request)) }

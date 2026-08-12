@@ -21,8 +21,26 @@ export const platformEntitlementUpdateSchema = platformMutationSchema.extend({
   expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
 })
 
+export const platformPlanAssignmentSchema = platformMutationSchema.extend({
+  planId: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/),
+  endsAt: z.string().datetime({ offset: true }).nullable().optional(),
+})
+
+export const platformLimitUpdateSchema = platformMutationSchema.extend({
+  key: z.string().regex(/^[a-z][a-z0-9_.]{1,119}$/),
+  value: z.number().int().min(0).max(1_000_000_000),
+})
+
+export const platformWorkspaceRequestSchema = platformMutationSchema.extend({
+  kind: z.enum(['WORKSPACE_EXPORT', 'ERASURE_REVIEW', 'HOSTNAME_REFRESH']),
+})
+
 export const platformOperatorStatusUpdateSchema = platformMutationSchema.extend({
   status: platformOperatorStatusSchema,
+})
+
+export const platformOperatorRoleUpdateSchema = platformMutationSchema.extend({
+  role: platformOperatorRoleSchema,
 })
 
 export const platformAdminErrorCodeSchema = z.enum(['PLATFORM_ACCESS_DENIED', 'PLATFORM_MFA_REQUIRED', 'PLATFORM_OPERATOR_DISABLED', 'PLATFORM_NOT_CONFIGURED', 'PLATFORM_ACTION_CONFLICT'])

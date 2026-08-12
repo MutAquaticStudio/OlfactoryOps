@@ -84,6 +84,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0022_platform_control_plane.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0023_platform_control_plane_operations.sql')
 }
 
 function resetDisposableSchema() {
@@ -124,6 +125,7 @@ async function configureApplicationRole() {
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO v2_app')
+  await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT) TO v2_app')
   const roles = await adminClient.$queryRawUnsafe<Array<{ rolbypassrls: boolean; rolsuper: boolean }>>("SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'v2_app'")
   if (roles.length !== 1 || roles[0].rolbypassrls || roles[0].rolsuper) throw new Error('V2_RLS=FAIL application role is not constrained by RLS.')
 }

@@ -28,6 +28,7 @@ const migrations = [
   'infra/postgres/migrations/0020_staging_dlq_terminal_probe.sql',
   'infra/postgres/migrations/0021_trusted_workspace_hostname_resolver.sql',
   'infra/postgres/migrations/0022_platform_control_plane.sql',
+  'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -469,6 +470,35 @@ try {
     if (phase11FormulaOrigin.length !== 1 || !String(phase11FormulaOrigin[0].definition).includes("'REFORMULATION_OPTIMIZER'")) {
       throw new Error('Phase 11 Formula origin type is not registered')
     }
+    const platformControlTables = [
+      'v2_platform_operators', 'v2_platform_audit_events', 'v2_platform_feature_overrides',
+      'v2_platform_tenant_state_events', 'v2_platform_mutation_receipts', 'v2_platform_workspace_requests',
+    ]
+    const platformControlRls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, platformControlTables)
+    if (platformControlRls.length !== platformControlTables.length || platformControlRls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Platform control-plane tables or forced RLS policies are missing')
+    }
+    const platformControlFunctions = await client.$queryRawUnsafe(`
+      SELECT p.proname, p.prosecdef AS security_definer
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = ANY($1::text[])
+    `, [
+      'v2_platform_workspace_directory', 'v2_platform_workspace_detail', 'v2_platform_overview_snapshot',
+      'v2_platform_revoke_workspace_sessions', 'v2_platform_request_workspace_action',
+      'v2_platform_set_workspace_entitlement', 'v2_platform_assign_workspace_plan', 'v2_platform_set_workspace_limit',
+      'v2_platform_set_operator_status', 'v2_platform_set_operator_role',
+    ])
+    if (platformControlFunctions.length !== 10 || platformControlFunctions.some((row) => !row.security_definer)) {
+      throw new Error('Platform control-plane bounded security-definer functions are missing')
+    }
+    const platformControlTriggers = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+    `, ['v2_platform_audit_events_append_only', 'v2_platform_tenant_state_events_append_only', 'v2_platform_mutation_receipts_append_only'])
+    if (platformControlTriggers.length !== 3) throw new Error('Platform control-plane immutable evidence triggers are missing')
   } finally {
     await client.$disconnect()
   }

@@ -16,6 +16,12 @@ rather than executable rollback evidence.
    compatible application version and use a forward corrective migration after
    the incident is contained.
 
+No candidate deployment or public cutover may begin until
+`ROTATE_EXPOSED_PRODUCTION_RUNTIME_SECRETS_BEFORE_FIRST_PRODUCTION_DEPLOY = YES`
+has been satisfied by an actual protected-Environment rotation and exact-SHA
+revalidation. The rotation markers are a deployment guard, not rollback
+evidence.
+
 The legacy D1 production database is not a rollback target for V2. It must be
 backed up and given an explicit approved migration/retention decision before
 any public production cutover.

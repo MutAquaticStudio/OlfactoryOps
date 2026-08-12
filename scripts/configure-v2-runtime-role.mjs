@@ -68,6 +68,7 @@ try {
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_platform_has_role(TEXT[]) TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_platform_set_tenant_state(TEXT, TEXT, TEXT, TEXT, TEXT) TO ${identifier}`)
+    await client.query(`GRANT EXECUTE ON FUNCTION public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT) TO ${identifier}`)
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)
@@ -82,7 +83,11 @@ try {
       has_function_privilege($1, 'public.v2_resolve_sensory_public_link(text)', 'EXECUTE') AS sensory_link_execute,
       has_function_privilege($1, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS hostname_resolver_execute,
       has_function_privilege($1, 'public.v2_platform_has_role(text[])', 'EXECUTE') AS platform_role_execute,
-      has_function_privilege($1, 'public.v2_platform_set_tenant_state(text, text, text, text, text)', 'EXECUTE') AS platform_state_execute
+      has_function_privilege($1, 'public.v2_platform_set_tenant_state(text, text, text, text, text)', 'EXECUTE') AS platform_state_execute,
+      has_function_privilege($1, 'public.v2_platform_overview_snapshot()', 'EXECUTE') AS platform_overview_execute,
+      has_function_privilege($1, 'public.v2_platform_workspace_directory(text)', 'EXECUTE') AS platform_directory_execute,
+      has_function_privilege($1, 'public.v2_platform_set_workspace_limit(text, text, integer)', 'EXECUTE') AS platform_limit_execute,
+      has_function_privilege($1, 'public.v2_platform_set_operator_role(text, text)', 'EXECUTE') AS platform_operator_role_execute
     FROM pg_roles r
     WHERE r.rolname = $1
   `, [role])
@@ -93,7 +98,7 @@ try {
     JOIN pg_roles member ON member.oid = membership.member
     WHERE member.rolname = $1
   `, [role])).rows[0].count
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute || !result.platform_role_execute || !result.platform_state_execute) {
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute || !result.platform_role_execute || !result.platform_state_execute || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) {
     throw new Error('RUNTIME_DB_PRIVILEGES=FAIL least-privilege verification failed')
   }
   console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'NONE' }))
