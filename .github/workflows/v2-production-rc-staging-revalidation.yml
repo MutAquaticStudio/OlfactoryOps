@@ -1,0 +1,202 @@
+name: V2 Production RC Staging Revalidation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact current SHA of codex/v2-production-go-live.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type REVALIDATE_PRODUCTION_RC_STAGING to deploy only staging and run isolated fixtures.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-rc-staging-revalidation
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+  FEATURE_IMAGE_DIGEST: sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42
+  MODEL_IMAGE_DIGEST: sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "REVALIDATE_PRODUCTION_RC_STAGING"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      RELEASE_SHA: ${{ needs.validate-release.outputs.release_sha }}
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-release.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected staging inputs without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_DATABASE_URL"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Apply and verify the exact staging PostgreSQL schema and runtime role
+        shell: bash
+        env:
+          V2_STAGING_MIGRATION_APPROVED: APPLY_STAGING
+        run: |
+          set -euo pipefail
+          node scripts/apply-v2-staging-migrations.mjs
+          node scripts/configure-v2-runtime-role.mjs
+      - name: Render and deploy the private staging Cloud Runtime
+        shell: bash
+        env:
+          CLOUD_RUNTIME_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          CLOUD_RUNTIME_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+          SCIENTIFIC_FEATURE_IMAGE_DIGEST: sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42
+          SCIENTIFIC_MODEL_IMAGE_DIGEST: sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe
+          CLOUD_RUNTIME_STAGING_CONFIG: .qa/wrangler.v2-cloud-runtime.staging.toml
+          CLOUD_RUNTIME_REQUIRE_READY: "true"
+        run: |
+          set -euo pipefail
+          node scripts/render-cloud-runtime-staging-config.mjs
+          node scripts/validate-cloud-runtime-config.mjs "$CLOUD_RUNTIME_STAGING_CONFIG"
+          npx wrangler deploy --config "$CLOUD_RUNTIME_STAGING_CONFIG" --keep-vars
+          secrets="$(npx wrangler secret list --config "$CLOUD_RUNTIME_STAGING_CONFIG")"
+          node --input-type=module -e 'const rows = JSON.parse(process.argv[1]); if (!rows.some((row) => row.name === "SCIENTIFIC_CONTAINER_SHARED_SECRET")) throw new Error("staging scientific secret binding is absent"); console.log("STAGING_SCIENTIFIC_SECRET_BINDING=PASS")' "$secrets"
+      - name: Render and deploy the staging API Worker and Tenant Router
+        shell: bash
+        env:
+          V2_API_STAGING_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          V2_API_STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+          V2_TENANT_ROUTER_STAGING_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          V2_TENANT_ROUTER_STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+        run: |
+          set -euo pipefail
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          node scripts/render-v2-api-staging-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-api-staging.toml --keep-vars
+          node scripts/render-v2-tenant-router-staging-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-staging.toml --keep-vars
+      - name: Build and deploy only the beta Pages branch
+        shell: bash
+        env:
+          RELEASE_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          RELEASE_ENVIRONMENT: staging
+          VITE_API_BASE_URL: https://api-beta.labofscents.org/api/v1
+          VITE_V2_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+          VITE_V2_STAGING_PUBLIC_CUTOVER: "true"
+        run: |
+          set -euo pipefail
+          npm run build
+          npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta --commit-hash "$RELEASE_GIT_SHA" --commit-message "production RC staging $RELEASE_GIT_SHA" --commit-dirty=false
+
+  verify-staging:
+    needs: [validate-release, deploy-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    env:
+      RELEASE_SHA: ${{ needs.validate-release.outputs.release_sha }}
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
+      V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
+      V2_STAGING_PUBLIC_ORIGIN: https://beta.labofscents.org
+      V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+      V2_STAGING_EXPECTED_SHA: ${{ needs.validate-release.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-release.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Verify canonical V2 auth routes and exact staging health
+        env:
+          V2_STAGING_AUTH_ROUTE_APPROVED: VERIFY_STAGING_AUTH_ROUTES
+        run: node scripts/verify-v2-staging-auth-routes.mjs
+      - name: Verify all public V2 routes without mutation
+        env:
+          V2_STAGING_ROUTE_PARITY_APPROVED: VERIFY_ROUTE_PARITY
+          V2_STAGING_ROUTE_SHA: ${{ needs.validate-release.outputs.release_sha }}
+        run: node scripts/verify-v2-staging-route-parity.mjs
+      - name: Verify live API to Hyperdrive RLS, all tenant roles, and Platform Control Panel fixtures
+        env:
+          V2_STAGING_REMOTE_APPROVED: RUN_REMOTE_STAGING_E2E
+        run: node scripts/verify-v2-staging-remote.mjs
+      - name: Verify Queue, Workflow, private Scientific Container, and R2 evidence
+        shell: bash
+        env:
+          V2_STAGING_SCIENTIFIC_APPROVED: RUN_REMOTE_SCIENTIFIC_E2E
+        run: |
+          set -euo pipefail
+          result_ref="$(mktemp)"
+          result_file="$(mktemp)"
+          trap 'rm -f "$result_ref" "$result_file"' EXIT
+          export V2_STAGING_SCIENTIFIC_RESULT_REF_PATH="$result_ref"
+          node scripts/verify-v2-staging-scientific.mjs
+          artifact_ref="$(tr -d '\r\n' < "$result_ref")"
+          [[ "$artifact_ref" =~ ^v2/[A-Za-z0-9_-]+/scientific/[a-f0-9]{64}$ ]]
+          npx wrangler r2 object get "olfactoryops-v2-artifacts-staging/$artifact_ref" --remote --file "$result_file"
+          RESULT_FILE="$result_file" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const result = JSON.parse(readFileSync(process.env.RESULT_FILE, 'utf8'))
+          if (!Array.isArray(result?.artifacts) || result.artifacts.length < 3) throw new Error('scientific result evidence is incomplete')
+          console.log('STAGING_SCIENTIFIC_E2E=PASS')
+          console.log('QUEUE_STAGING=PASS')
+          console.log('WORKFLOW_STAGING=PASS')
+          console.log('SCIENTIFIC_CONTAINER_STAGING=PASS')
+          console.log('R2_STAGING=PASS')
+          NODE
+      - name: Verify known and unknown tenant hosts through real TLS/browser routing
+        env:
+          V2_STAGING_ENVIRONMENT: staging
+          V2_STAGING_TENANT_HOST_APPROVED: RUN_STAGING_TENANT_HOST_E2E
+          V2_STAGING_TENANT_EVIDENCE_DIR: ${{ runner.temp }}/production-rc-tenant-host-evidence
+        run: node scripts/verify-v2-staging-tenant-hosts.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-rc-staging-tenant-host-evidence-${{ needs.validate-release.outputs.release_sha }}
+          path: ${{ runner.temp }}/production-rc-tenant-host-evidence
+          if-no-files-found: error
+          retention-days: 14
