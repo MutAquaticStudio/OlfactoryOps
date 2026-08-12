@@ -1,0 +1,80 @@
+name: V2 Production PostgreSQL Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact approved SHA from codex/v2-production-go-live or a v2-production tag.
+        required: true
+        type: string
+      confirm_production:
+        description: Type APPLY_PRODUCTION to apply immutable migrations and restrict the production runtime role.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-postgres-migration
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate-production-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: revision
+        name: Validate the approved production revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_PRODUCTION" = "APPLY_PRODUCTION"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
+            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
+          fi
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  migrate-production:
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      V2_PRODUCTION_MIGRATION_APPROVED: APPLY_PRODUCTION
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require the protected production database secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+      - name: Apply the immutable V2 production migration chain
+        run: npm run migrate:v2-production
+      - name: Restrict and verify the production Hyperdrive runtime role
+        run: npm run configure:v2-production-runtime-role

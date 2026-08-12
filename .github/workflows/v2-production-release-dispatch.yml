@@ -1,0 +1,293 @@
+name: V2 Production Release Dispatcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact approved SHA from codex/v2-production-go-live or a v2-production tag.
+        required: true
+        type: string
+      operation:
+        description: One bounded release operation. No arbitrary command input is accepted.
+        required: true
+        type: choice
+        options:
+          - api
+          - tenant-router
+          - pages
+          - cloud-runtime
+          - smoke
+      confirm_production:
+        description: Type the exact confirmation required for the selected operation.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-release-dispatch
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate-production-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+      operation: ${{ steps.revision.outputs.operation }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      OPERATION: ${{ inputs.operation }}
+      CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: revision
+        name: Validate the approved production revision and bounded operation
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "$OPERATION" in
+            api) expected_confirmation=DEPLOY_PRODUCTION_API ;;
+            tenant-router) expected_confirmation=DEPLOY_PRODUCTION_TENANT_ROUTER ;;
+            pages) expected_confirmation=DEPLOY_PRODUCTION_PAGES ;;
+            cloud-runtime) expected_confirmation=DEPLOY_PRODUCTION_CLOUD_RUNTIME ;;
+            smoke) expected_confirmation=RUN_PRODUCTION_SMOKE ;;
+            *) exit 1 ;;
+          esac
+          test "$CONFIRM_PRODUCTION" = "$expected_confirmation"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
+            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
+          fi
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+
+  deploy-production-api:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'api' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+      V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+      V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+      V2_API_PRODUCTION_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      V2_API_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected production deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$V2_API_PRODUCTION_HYPERDRIVE_ID"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$V2_API_PRODUCTION_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_API_PRODUCTION_GIT_SHA"
+      - name: Render and deploy the exact production API candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          node scripts/render-v2-api-production-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-api-production.toml --keep-vars
+      - name: Bind rotated production API secrets without logging values
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            secret_value="${!secret_name}"
+            test -n "$secret_value"
+            printf '%s' "$secret_value" | npx wrangler secret put "$secret_name" --config .qa/wrangler.v2-api-production.toml
+            unset secret_value
+          done
+      - name: Verify production API secret binding names only
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_names="$(npx wrangler secret list --config .qa/wrangler.v2-api-production.toml)"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            grep -Fq "\"$secret_name\"" <<< "$secret_names"
+          done
+
+  deploy-production-tenant-router:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'tenant-router' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_TENANT_ROUTER_PRODUCTION_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN: ${{ vars.PRODUCTION_CANDIDATE_PAGES_ORIGIN }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected production deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID"
+          test -n "$V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
+      - name: Render and deploy the exact production tenant-router candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run prisma:generate:v2
+          node scripts/render-v2-tenant-router-production-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production.toml --keep-vars
+
+  deploy-production-pages:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'pages' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      VITE_API_BASE_URL: https://api.labofscents.org/api/v1
+      VITE_V2_WORKSPACE_BASE_DOMAIN: labofscents.org
+      PRODUCTION_PAGES_PROJECT: ${{ vars.PRODUCTION_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected production deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$PRODUCTION_PAGES_PROJECT"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "${{ needs.validate-production-revision.outputs.release_sha }}"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "${{ needs.validate-production-revision.outputs.release_sha }}"
+      - name: Build and deploy the exact production Pages candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          npx wrangler pages deploy dist --project-name "$PRODUCTION_PAGES_PROJECT" --branch production --commit-hash "${{ needs.validate-production-revision.outputs.release_sha }}" --commit-message "production candidate ${{ needs.validate-production-revision.outputs.release_sha }}" --commit-dirty=false
+
+  deploy-production-cloud-runtime:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'cloud-runtime' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUD_RUNTIME_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      CLOUD_RUNTIME_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
+      SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
+      SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
+      SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+      SCIENTIFIC_CONTAINER_SHARED_SECRET: ${{ secrets.SCIENTIFIC_CONTAINER_SHARED_SECRET }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected production deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$CLOUD_RUNTIME_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$CLOUD_RUNTIME_GIT_SHA"
+      - name: Render and deploy the exact private production Cloud Runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run prisma:generate:v2
+          npm run cloud-runtime:render-production
+          node scripts/validate-cloud-runtime-config.mjs .qa/wrangler.v2-cloud-runtime.production.toml
+          npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production.toml --keep-vars
+      - name: Bind the rotated internal scientific secret without logging its value
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
+          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config .qa/wrangler.v2-cloud-runtime.production.toml
+      - name: Verify the private runtime secret binding name only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler secret list --config .qa/wrangler.v2-cloud-runtime.production.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
+
+  smoke-production:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'smoke' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_SMOKE_APP_URL: ${{ vars.PRODUCTION_SMOKE_APP_URL }}
+      PRODUCTION_SMOKE_TENANT_URL: ${{ vars.PRODUCTION_SMOKE_TENANT_URL }}
+      PRODUCTION_SMOKE_API_URL: ${{ vars.PRODUCTION_SMOKE_API_URL }}
+      PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
+      PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run the bounded production smoke harness
+        run: npm run test:qa:production-smoke
