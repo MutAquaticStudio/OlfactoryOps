@@ -1,0 +1,314 @@
+name: V2 Isolated Production Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact approved release SHA from codex/v2-production-go-live or a v2-production tag.
+        required: true
+        type: string
+      operation:
+        description: Isolated candidate operation.
+        required: true
+        type: choice
+        options:
+          - pages
+          - cloud-runtime
+          - api
+          - tenant-router
+          - smoke
+      confirm_candidate:
+        description: Type DEPLOY_ISOLATED_PRODUCTION_CANDIDATE to deploy an isolated candidate only.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-${{ inputs.operation }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  CANDIDATE_PAGES_HOSTNAME: next.labofscents.org
+  CANDIDATE_API_HOSTNAME: api-next.labofscents.org
+  CANDIDATE_ADMIN_HOSTNAME: admin-next.labofscents.org
+  CANDIDATE_TENANT_ROUTE: "workspace-*-next.labofscents.org/*"
+
+jobs:
+  validate-candidate-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+      operation: ${{ steps.revision.outputs.operation }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      OPERATION: ${{ inputs.operation }}
+      CONFIRM_CANDIDATE: ${{ inputs.confirm_candidate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: revision
+        name: Validate the isolated candidate revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_CANDIDATE" = "DEPLOY_ISOLATED_PRODUCTION_CANDIDATE"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "$OPERATION" in pages|cloud-runtime|api|tenant-router|smoke) ;; *) exit 2 ;; esac
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
+            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
+          fi
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+
+  deploy-candidate-pages:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'pages' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      VITE_API_BASE_URL: https://api-next.labofscents.org/api/v1
+      VITE_V2_WORKSPACE_BASE_DOMAIN: labofscents.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require isolated candidate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+      - name: Deploy the non-public Pages candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          npx wrangler pages deploy dist --project-name "$PRODUCTION_CANDIDATE_PAGES_PROJECT" --branch production-candidate --commit-hash "$RELEASE_SHA" --commit-message "isolated production candidate $RELEASE_SHA" --commit-dirty=false
+
+  deploy-candidate-cloud-runtime:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'cloud-runtime' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      SCIENTIFIC_CONTAINER_SHARED_SECRET: ${{ secrets.SCIENTIFIC_CONTAINER_SHARED_SECRET }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Render only an isolated Cloud Runtime service
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
+          for value in "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST"; do test -n "$value"; done
+          node --input-type=module <<'EOF'
+          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          let config = readFileSync('wrangler.v2-cloud-runtime-production.example.toml', 'utf8')
+          config = config.replace('name = "olfactoryops-v2-cloud-runtime-production"', 'name = "olfactoryops-v2-cloud-runtime-production-candidate"')
+          config = config.replaceAll('REPLACE_WITH_GIT_SHA', process.env.RELEASE_SHA)
+          config = config.replaceAll('REPLACE_WITH_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
+          config = config.replaceAll('REPLACE_WITH_FEATURE_IMAGE', process.env.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE)
+          config = config.replaceAll('REPLACE_WITH_MODEL_IMAGE', process.env.PRODUCTION_SCIENTIFIC_MODEL_IMAGE)
+          config = config.replaceAll('REPLACE_WITH_FEATURE_IMAGE_DIGEST', process.env.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST)
+          config = config.replaceAll('REPLACE_WITH_MODEL_IMAGE_DIGEST', process.env.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST)
+          if (config.includes('REPLACE_WITH_')) throw new Error('candidate Cloud Runtime config has unresolved placeholders')
+          mkdirSync('.qa', { recursive: true })
+          writeFileSync('.qa/wrangler.v2-cloud-runtime.production-candidate.toml', config)
+          EOF
+          npm run prisma:generate:v2
+          node scripts/validate-cloud-runtime-config.mjs .qa/wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml --keep-vars
+      - name: Bind the rotated private runtime secret by name only
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler secret list --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
+
+  deploy-candidate-api:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'api' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+      V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+      V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Render only the isolated API route
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do test -n "${!secret_name}"; done
+          node --input-type=module <<'EOF'
+          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          let config = readFileSync('wrangler.v2-api-production.example.toml', 'utf8')
+          config = config.replace('name = "olfactoryops-v2-api-production"', 'name = "olfactoryops-v2-api-production-candidate"')
+          config = config.replace('api.labofscents.org/*', 'api-next.labofscents.org/*')
+          config = config.replaceAll('REPLACE_WITH_VERIFIED_RELEASE_SHA', process.env.RELEASE_SHA)
+          config = config.replaceAll('REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
+          config = config.replace('V2_API_PUBLIC_HOSTNAME = "api.labofscents.org"', 'V2_API_PUBLIC_HOSTNAME = "api-next.labofscents.org"')
+          config = config.replace('V2_PUBLIC_PAGES_HOSTNAME = "labofscents.org"', 'V2_PUBLIC_PAGES_HOSTNAME = "next.labofscents.org"')
+          config = config.replace('V2_PLATFORM_ADMIN_HOSTNAME = "admin.labofscents.org"', 'V2_PLATFORM_ADMIN_HOSTNAME = "admin-next.labofscents.org"')
+          config = config.replace('service = "olfactoryops-v2-cloud-runtime-production"', 'service = "olfactoryops-v2-cloud-runtime-production-candidate"')
+          if (config.includes('api.labofscents.org/*') || config.includes('REPLACE_WITH_')) throw new Error('candidate API config could capture a public route')
+          mkdirSync('.qa', { recursive: true })
+          writeFileSync('.qa/wrangler.v2-api-production-candidate.toml', config)
+          EOF
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          npx wrangler deploy --config .qa/wrangler.v2-api-production-candidate.toml --keep-vars
+      - name: Bind rotated API secrets without logging values
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            printf '%s' "${!secret_name}" | npx wrangler secret put "$secret_name" --config .qa/wrangler.v2-api-production-candidate.toml
+          done
+          secret_names="$(npx wrangler secret list --config .qa/wrangler.v2-api-production-candidate.toml)"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do grep -Fq "\"$secret_name\"" <<< "$secret_names"; done
+
+  deploy-candidate-tenant-router:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'tenant-router' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Render only the suffixed candidate tenant wildcard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
+          candidate_pages_origin="https://production-candidate.${PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev"
+          node --input-type=module <<'EOF'
+          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          let config = readFileSync('wrangler.v2-tenant-router-production.example.toml', 'utf8')
+          config = config.replace('name = "olfactoryops-v2-tenant-router-production"', 'name = "olfactoryops-v2-tenant-router-production-candidate"')
+          config = config.replace('*.labofscents.org/*', 'workspace-*-next.labofscents.org/*')
+          config = config.replaceAll('REPLACE_WITH_VERIFIED_RELEASE_SHA', process.env.RELEASE_SHA)
+          config = config.replaceAll('REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
+          config = config.replace('https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN', process.env.CANDIDATE_PAGES_ORIGIN)
+          if (config.includes('*.labofscents.org/*') || config.includes('REPLACE_WITH_')) throw new Error('candidate router config could capture a public route')
+          mkdirSync('.qa', { recursive: true })
+          writeFileSync('.qa/wrangler.v2-tenant-router-production-candidate.toml', config)
+          EOF
+          npm run prisma:generate:v2
+          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production-candidate.toml --keep-vars
+        env:
+          CANDIDATE_PAGES_ORIGIN: https://production-candidate.${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}.pages.dev
+
+  smoke-candidate:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'smoke' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_SMOKE_APP_URL: https://next.labofscents.org
+      PRODUCTION_SMOKE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}
+      PRODUCTION_SMOKE_API_URL: https://api-next.labofscents.org
+      PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
+      PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run bounded isolated candidate smoke only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+          test -n "$PRODUCTION_SMOKE_TENANT_URL"
+          case "$PRODUCTION_SMOKE_TENANT_URL" in https://workspace-*-next.labofscents.org/*) ;; *) exit 2 ;; esac
+          npm run test:qa:production-smoke
