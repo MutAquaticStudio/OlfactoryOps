@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs'
 import pg from 'pg'
 
 const { Client } = pg
-
 const migrations = [
   'infra/postgres/migrations/0001_platform_security_core.sql',
   'infra/postgres/migrations/0002_phase1_members_notifications.sql',
@@ -28,30 +27,23 @@ const migrations = [
   'infra/postgres/migrations/0022_platform_control_plane.sql',
 ]
 
-const databaseUrl = process.env.STAGING_DATABASE_URL
-const allowLoopbackTest = process.env.V2_STAGING_ALLOW_LOOPBACK_TEST === 'true' && process.env.V2_QA_ENVIRONMENT === 'test'
-
-if (process.env.V2_STAGING_MIGRATION_APPROVED !== 'APPLY_STAGING') throw new Error('STAGING_MIGRATIONS=BLOCKED explicit approval is required')
-if (!databaseUrl) throw new Error('STAGING_MIGRATIONS=BLOCKED STAGING_DATABASE_URL is required')
-
+const databaseUrl = process.env.PRODUCTION_DATABASE_URL
+if (process.env.V2_PRODUCTION_MIGRATION_APPROVED !== 'APPLY_PRODUCTION') throw new Error('PRODUCTION_MIGRATIONS=BLOCKED explicit production approval is required')
+if (!databaseUrl) throw new Error('PRODUCTION_MIGRATIONS=BLOCKED PRODUCTION_DATABASE_URL is required')
 const database = new URL(databaseUrl)
-if (database.protocol !== 'postgresql:' && database.protocol !== 'postgres:') throw new Error('STAGING_MIGRATIONS=FAIL PostgreSQL is required')
-if (['localhost', '127.0.0.1', '::1'].includes(database.hostname) && !allowLoopbackTest) throw new Error('STAGING_MIGRATIONS=FAIL loopback is permitted only for explicit test mode')
+if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('PRODUCTION_MIGRATIONS=FAIL a non-loopback PostgreSQL origin is required')
 
 const client = new Client({ connectionString: databaseUrl })
-
 try {
   await client.connect()
   for (const migration of migrations) await client.query(readFileSync(migration, 'utf8'))
   const { rows } = await client.query(`
     SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = ANY($1::text[])
-  `, [['v2_organizations', 'v2_workspace_hostnames', 'v2_inventory_movements', 'v2_formula_versions', 'v2_cloud_job_dispatches', 'v2_cloud_job_events']])
-  if (rows.length !== 6 || rows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('STAGING_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
-  console.log(JSON.stringify({ stagingMigrations: 'PASS', migrationCount: migrations.length, rlsTablesVerified: rows.length, loopbackTest: allowLoopbackTest }))
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+  `, [['v2_organizations', 'v2_workspace_hostnames', 'v2_inventory_movements', 'v2_formula_versions', 'v2_cloud_job_dispatches', 'v2_cloud_job_events', 'v2_platform_operators']])
+  if (rows.length !== 7 || rows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('PRODUCTION_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
+  console.log(JSON.stringify({ productionMigrations: 'PASS', migrationCount: migrations.length, rlsTablesVerified: rows.length }))
 } finally {
   await client.end().catch(() => undefined)
 }

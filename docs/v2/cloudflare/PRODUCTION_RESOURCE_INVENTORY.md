@@ -12,7 +12,7 @@ created, changed, or deleted while producing it.
 | Tenant Router `olfactoryops-tenant-router` | LEGACY | `*.labofscents.org/*` remains the D1-era router. |
 | Production D1 `olfactoryops-production` | PRODUCTION_ACTIVE | D1 migration head `0044`, 121 tables and meaningful legacy data; no migration or overwrite is authorized. |
 | Production V2 Hyperdrive | PRODUCTION_CANDIDATE | `olfactoryops-production-hyperdrive` / `b415b7572d9f45058ebb4ec4166b8739`; its Supabase PostgreSQL origin hostname is distinct from staging. |
-| Production GitHub Environment | MISSING | Only the `staging` Environment was present during preflight. |
+| Production GitHub Environment | PRODUCTION_CANDIDATE | `production` exists with administrator bypass disabled and a required reviewer. Metadata-only verification confirmed the seven expected secret names; no values were read. |
 | V2 R2 / Queue / Workflow / Container bindings | MISSING | Candidate names exist only in non-deployable templates. |
 | `admin.labofscents.org` | MISSING | Requires certificate, DNS and candidate-routing preflight. |
 
@@ -21,6 +21,6 @@ created, changed, or deleted while producing it.
 `PRODUCTION_POSTGRES_ISOLATED_FROM_STAGING = YES`
 
 Production deployment, migrations, DNS changes, and tag promotion remain
-blocked until the protected GitHub Environment, production runtime-role SQL
-verification, legacy-data migration decision, and rollback evidence are
-available.
+blocked until the protected production runtime-role SQL verification,
+legacy-data migration decision, release-candidate staging revalidation, and
+rollback evidence are available.
