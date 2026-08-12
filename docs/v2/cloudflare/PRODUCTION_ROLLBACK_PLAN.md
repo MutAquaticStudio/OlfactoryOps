@@ -25,3 +25,6 @@ evidence.
 The legacy D1 production database is not a rollback target for V2. It must be
 backed up and given an explicit approved migration/retention decision before
 any public production cutover.
+
+The protected Platform Owner bootstrap remains a separate post-migration
+ceremony documented in [PLATFORM_OWNER_BOOTSTRAP_PREPARATION.md](PLATFORM_OWNER_BOOTSTRAP_PREPARATION.md). It must not run against staging or with the runtime Hyperdrive role.

@@ -4,10 +4,18 @@ import { PrismaClient } from '@prisma/client'
 const email = process.env.PLATFORM_OWNER_BOOTSTRAP_EMAIL?.trim().toLowerCase()
 const confirmation = process.env.CONFIRM_PLATFORM_OWNER_BOOTSTRAP
 const databaseUrl = process.env.PLATFORM_BOOTSTRAP_DATABASE_URL
+const environment = process.env.PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT
+const approval = process.env.V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED
 
-if (!email || confirmation !== 'ASSIGN_PLATFORM_OWNER' || !databaseUrl) {
+if (!email || confirmation !== 'ASSIGN_PLATFORM_OWNER' || !databaseUrl || environment !== 'production' || approval !== 'ASSIGN_PLATFORM_OWNER') {
   console.error('PLATFORM_OWNER_BOOTSTRAP=BLOCKED required protected inputs are unavailable')
   process.exit(2)
+}
+
+let parsedDatabase
+try { parsedDatabase = new URL(databaseUrl) } catch { throw new Error('PLATFORM_OWNER_BOOTSTRAP=FAIL PostgreSQL URL is invalid') }
+if (!['postgres:', 'postgresql:'].includes(parsedDatabase.protocol) || ['localhost', '127.0.0.1', '::1'].includes(parsedDatabase.hostname)) {
+  throw new Error('PLATFORM_OWNER_BOOTSTRAP=FAIL a non-loopback production PostgreSQL origin is required')
 }
 
 const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
