@@ -30,11 +30,20 @@ function json(status: number, body: unknown, headers = new Headers()) {
   return new Response(JSON.stringify(body), { status, headers })
 }
 
+function runtimeFailureCode(error: unknown) {
+  if (error instanceof PlatformError) return error.code
+  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'UNKNOWN'
+  return /^[0-9A-Z]{5}$/.test(code) ? `PG_${code}` : 'UNCLASSIFIED'
+}
+
 function errorResponse(error: unknown, headers: Headers) {
   if (error instanceof PlatformError) return json(error.status, { error: { code: error.code, message: error.message } }, headers)
   if (error instanceof SyntaxError) return json(422, { error: { code: 'INVALID_JSON', message: 'Request body must be valid JSON.' } }, headers)
   const message = error instanceof Error ? error.message : ''
   if (/NOT_CONFIGURED|HYPERDRIVE/i.test(message)) return json(503, { error: { code: 'RUNTIME_NOT_CONFIGURED', message: 'The staging runtime is not configured.' } }, headers)
+  // Emit only a stable category. SQL, credentials, request bodies, and tenant
+  // identifiers never leave the server error boundary or enter Worker logs.
+  console.error(JSON.stringify({ event: 'v2_platform_runtime_failure', code: runtimeFailureCode(error) }))
   return json(500, { error: { code: 'RUNTIME_UNAVAILABLE', message: 'The request could not be completed.' } }, headers)
 }
 

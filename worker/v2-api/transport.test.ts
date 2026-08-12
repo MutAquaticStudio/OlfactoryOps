@@ -72,6 +72,16 @@ describe('V2 Worker transport', () => {
     await expect(response.json()).resolves.toEqual({ error: expect.objectContaining({ code: 'ORIGIN_REQUIRED' }) })
   })
 
+  it('keeps unexpected runtime failures generic to the browser', async () => {
+    const route: ControllerRoute = { method: 'POST', path: '/v2/example', handler: 'write', controller: { async write() { throw Object.assign(new Error('database detail must not leak'), { code: '42501' }) } }, parameters: [] }
+    const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {
+      method: 'POST', headers: { Origin: 'https://beta.labofscents.org', 'Content-Type': 'application/json' }, body: '{}',
+    })
+    const response = await invokeControllerRoute({ request, route, params: {}, config })
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ error: { code: 'RUNTIME_UNAVAILABLE', message: 'The request could not be completed.' } })
+  })
+
   it('serves an exact-origin CORS preflight through the matched unsafe route', async () => {
     const route: ControllerRoute = { method: 'POST', path: '/v2/example', handler: 'write', controller: { async write() { return { ok: true } } }, parameters: [] }
     const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {
