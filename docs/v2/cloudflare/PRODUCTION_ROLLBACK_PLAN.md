@@ -17,7 +17,8 @@ public product remains the legacy Pages/Worker/D1 path.
 | Production V2 Hyperdrive | `olfactoryops-production-hyperdrive` / `b415b7572d9f45058ebb4ec4166b8739` | PROVISIONED, not publicly bound. |
 | Production PostgreSQL | RC2 protected run `31583751600` applied/verified 24 V2 migrations | BACKUP_REFERENCE_BLOCKED: no provider backup/export reference is recorded yet. |
 | Legacy D1 | Archive-only export recorded in [PRODUCTION_LEGACY_D1_RETENTION_PLAN.md](PRODUCTION_LEGACY_D1_RETENTION_PLAN.md) | PRESERVED; never a V2 rollback target. |
-| Production V2 Cloud Runtime / R2 / Vectorize / Queue / Workflow / Containers | Not provisioned | No V2 deployment exists to roll back. |
+| Production V2 backing resources | Private APAC bucket `olfactoryops-v2-artifacts-production`; `olfactoryops-v2-material-evidence-production` (`1024D` cosine); scientific/RAG/notification Queue/DLQ pairs | PROVISIONED but unbound; candidate has no public traffic and no V2 Worker deployment to roll back. |
+| Production candidate Pages | `olfactoryops-v2-production-candidate` / `cc37bd8d-f331-4e4d-b73b-3c95713d1c9c` | Project exists with no deployment or custom domain. |
 | RC2 candidate | `v2-production-rc2` / `5985834a0e14728c81c8c028a72122ded544bd6b` | Verified in staging only; not publicly deployed. |
 
 ## Current exact rollback command

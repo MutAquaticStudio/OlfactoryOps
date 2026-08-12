@@ -13,8 +13,11 @@ created, changed, or deleted while producing it.
 | Production D1 `olfactoryops-production` | PRODUCTION_ACTIVE | D1 migration head `0044`, 121 tables and meaningful legacy data; no migration or overwrite is authorized. |
 | Production V2 Hyperdrive | PRODUCTION_CANDIDATE | `olfactoryops-production-hyperdrive` / `b415b7572d9f45058ebb4ec4166b8739`; read-only Cloudflare inventory confirmed it is distinct from `olfactoryops-staging-hyperdrive`. |
 | Production GitHub Environment | PRODUCTION_CANDIDATE | `production` exists with administrator bypass disabled and a required reviewer. Metadata-only verification confirmed the seven expected secret names; no values were read. |
-| V2 R2 / Vectorize / Queue / Workflow / Container bindings | MISSING | Read-only Cloudflare inventory found staging-only OlfactoryOps V2 resources. No production V2 artifact bucket, Material Evidence index, queue/DLQ pair, Workflow, Container application, or Cloud Runtime Worker exists yet. |
-| Candidate Pages / API / router surfaces | MISSING | No `next`, `api-next`, `admin-next`, or `workspace-*-next` candidate surface exists. The existing public wildcard remains bound to the legacy router and must not be repointed as a workaround. |
+| Production V2 artifacts R2 | PRODUCTION_CANDIDATE | Private APAC bucket `olfactoryops-v2-artifacts-production` was created for the isolated candidate. It has no public custom domain and contains no customer artifact. |
+| Production Material Evidence Vectorize | PRODUCTION_CANDIDATE | `olfactoryops-v2-material-evidence-production`, BGE-M3 `1024D` cosine, has only the tenant/model/status/source metadata indexes required by the V2 runtime. |
+| Production V2 Queue/DLQ pairs | PRODUCTION_CANDIDATE | Empty scientific, RAG, and notification source/DLQ pairs were created with the canonical `-production` names; no Worker consumer is bound until the protected Cloud Runtime candidate deploy runs. |
+| Candidate Pages project | PRODUCTION_CANDIDATE | `olfactoryops-v2-production-candidate` / `cc37bd8d-f331-4e4d-b73b-3c95713d1c9c`, branch `production-candidate`; no deployment or custom domain exists yet. |
+| Candidate API / router / Cloud Runtime | MISSING | The protected dispatcher will create candidate-only Workers after required-reviewer approval. The existing public wildcard remains bound to the legacy router and must not be repointed as a workaround. |
 | `admin.labofscents.org` | MISSING | Requires a separately reviewed certificate, DNS, and candidate-routing preflight. |
 
 ## Release Gate
@@ -81,14 +84,17 @@ The merged dispatchers require both
 release SHA. These non-secret markers must only be set after that rotation and
 revalidation have actually completed.
 
-Read-only metadata shows the `production` Environment currently has no
-non-secret variables. Before an isolated candidate can be dispatched, an
-authorized operator must set, for the exact candidate SHA, the non-secret
-resource identifiers and markers required by the protected dispatcher. At
-minimum these include `PRODUCTION_HYPERDRIVE_ID`, the two rotation/revalidation
-SHA markers, the candidate Pages project/origin, pinned scientific image
-references and digests, and isolated smoke endpoints. No marker may be set
-until the corresponding real operation has completed.
+The production Environment now exposes the RC2-specific non-secret deployment
+markers and identifiers through `vars.*`, matching the candidate dispatcher:
+`PRODUCTION_HYPERDRIVE_ID`, both rotation/revalidation SHA markers, the
+candidate Pages project, and pinned scientific feature/model image references
+and digests. The feature image is
+`sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42`;
+the model image is
+`sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe`.
+Both were derived from Cloudflare Container Registry deployments, not guessed.
+`PRODUCTION_CANDIDATE_SMOKE_TENANT_URL` remains intentionally unset until a
+candidate-only fixture workspace and hostname exist.
 
 The protected Platform Owner ceremony needs the single manual secure identity
 input `PLATFORM_OWNER_BOOTSTRAP_EMAIL`. Its dedicated migration/admin database
@@ -101,10 +107,11 @@ runtime role. No email or connection value is stored in this repository.
 `342f53f4b4aa812e853a2005899049c822d3426e` after the staging revalidation
 passed. See [PRODUCTION_RC1_STAGING_REVALIDATION.md](PRODUCTION_RC1_STAGING_REVALIDATION.md).
 
-Production deployment, DNS changes, candidate deployment, and tag promotion remain
-blocked until production RLS/tenant isolation is proven through an isolated
-candidate, the Platform Owner ceremony is complete, a rollback backup reference
-is recorded, production-only Cloudflare bindings exist, and the mandatory
-runtime-secret rotation and exact-SHA Environment revalidation gate has passed.
+Production deployment, DNS changes, and tag promotion remain blocked until
+production RLS/tenant isolation is proven through an isolated candidate, the
+Platform Owner ceremony is complete, a rollback backup reference is recorded,
+and candidate acceptance passes. The mandatory runtime-secret rotation and
+exact-SHA Environment revalidation gate has passed for RC2; it must be repeated
+for any later release candidate.
 The Supabase-hosted compatibility correction and RC2 evidence are recorded
 in [PRODUCTION_SUPABASE_RUNTIME_ROLE_HARDENING.md](PRODUCTION_SUPABASE_RUNTIME_ROLE_HARDENING.md).
