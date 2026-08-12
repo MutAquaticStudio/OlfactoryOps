@@ -32,7 +32,12 @@ function json(status: number, body: unknown, headers = new Headers()) {
 
 function runtimeFailureCode(error: unknown) {
   if (error instanceof PlatformError) return error.code
-  const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'UNKNOWN'
+  const record = error && typeof error === 'object' ? error as { code?: unknown; meta?: { code?: unknown } } : undefined
+  const code = typeof record?.code === 'string' ? record.code : 'UNKNOWN'
+  // Prisma P2010 wraps the PostgreSQL SQLSTATE in meta.code. It is safe to
+  // classify that fixed-length code, but never log meta.message or the query.
+  const nestedCode = typeof record?.meta?.code === 'string' ? record.meta.code : ''
+  if (code === 'P2010' && /^[0-9A-Z]{5}$/.test(nestedCode)) return `PG_${nestedCode}`
   return /^[0-9A-Z]{5}$/.test(code) ? `PG_${code}` : 'UNCLASSIFIED'
 }
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { v2ControllerRoutes, type ControllerRoute } from './controller-registry.js'
 import { generatedRouteSpecs } from './generated-route-specs.js'
 import type { V2ApiServices } from './service-container.js'
@@ -80,6 +80,28 @@ describe('V2 Worker transport', () => {
     const response = await invokeControllerRoute({ request, route, params: {}, config })
     expect(response.status).toBe(500)
     await expect(response.json()).resolves.toEqual({ error: { code: 'RUNTIME_UNAVAILABLE', message: 'The request could not be completed.' } })
+  })
+
+  it('classifies a wrapped PostgreSQL failure without logging the database message', async () => {
+    const logger = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const route: ControllerRoute = {
+        method: 'POST', path: '/v2/example', handler: 'write', controller: {
+          async write() {
+            throw Object.assign(new Error('sensitive database message'), { code: 'P2010', meta: { code: '42P01', message: 'SELECT sensitive_column FROM secret_table' } })
+          },
+        }, parameters: [],
+      }
+      const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {
+        method: 'POST', headers: { Origin: 'https://beta.labofscents.org', 'Content-Type': 'application/json' }, body: '{}',
+      })
+      const response = await invokeControllerRoute({ request, route, params: {}, config })
+      expect(response.status).toBe(500)
+      expect(logger).toHaveBeenCalledWith(JSON.stringify({ event: 'v2_platform_runtime_failure', code: 'PG_42P01' }))
+      expect(JSON.stringify(logger.mock.calls)).not.toContain('sensitive_column')
+    } finally {
+      logger.mockRestore()
+    }
   })
 
   it('serves an exact-origin CORS preflight through the matched unsafe route', async () => {

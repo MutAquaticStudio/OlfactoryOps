@@ -52,12 +52,19 @@ async function request(path, { method = 'GET', origin, cookie, csrf, idempotency
   if (csrf) headers.set('X-CSRF-Token', csrf)
   if (idempotencyKey) headers.set('Idempotency-Key', idempotencyKey)
   if (body !== undefined) headers.set('Content-Type', 'application/json')
-  const response = await fetch(new URL(`/api/v1${path}`, api), {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    redirect: 'manual',
-  })
+  let response
+  try {
+    response = await fetch(new URL(`/api/v1${path}`, api), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') fail('api_request_timeout')
+    fail('api_request_transport_failure')
+  }
   const text = await response.text()
   let json
   try { json = text ? JSON.parse(text) : undefined } catch { fail('non_json_api_response') }
