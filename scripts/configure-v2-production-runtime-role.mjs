@@ -1,4 +1,10 @@
 import pg from 'pg'
+import {
+  assertHostedRoleIsNotPrivileged,
+  hostedSafeAlterRoleStatement,
+  quotePostgresIdentifier,
+  requiresSafeAttributeHardening,
+} from './production-runtime-role-hardening.mjs'
 
 const { Client } = pg
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
@@ -7,27 +13,37 @@ if (process.env.V2_PRODUCTION_MIGRATION_APPROVED !== 'APPLY_PRODUCTION') throw n
 if (!databaseUrl || !/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED protected production inputs are required')
 const database = new URL(databaseUrl)
 if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL a non-loopback PostgreSQL origin is required')
-const identifier = `"${role}"`
+const identifier = quotePostgresIdentifier(role)
 const client = new Client({ connectionString: databaseUrl })
 try {
   await client.connect()
   const roleResult = await client.query('SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = $1', [role])
   if (roleResult.rowCount !== 1) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED configured Hyperdrive role does not exist')
+  const roleState = roleResult.rows[0]
+  assertHostedRoleIsNotPrivileged(roleState)
   const ownership = await client.query(`
     SELECT COUNT(*)::int AS count
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    JOIN pg_roles r ON r.oid = c.relowner
-    WHERE n.nspname = 'public' AND r.rolname = $1 AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+    FROM (
+      SELECT c.oid
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_roles r ON r.oid = c.relowner
+      WHERE n.nspname = 'public' AND r.rolname = $1 AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+      UNION ALL
+      SELECT p.oid
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_roles r ON r.oid = p.proowner
+      WHERE n.nspname = 'public' AND r.rolname = $1
+    ) owned_objects
   `, [role])
   if (ownership.rows[0].count !== 0) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL runtime role owns V2 objects')
   const memberships = await client.query(`SELECT parent.rolname FROM pg_auth_members membership JOIN pg_roles parent ON parent.oid = membership.roleid JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1`, [role])
-  const quote = (value) => `"${value.replaceAll('"', '""')}"`
   await client.query('BEGIN')
   try {
     const databaseName = (await client.query('SELECT current_database() AS name')).rows[0].name
-    for (const membership of memberships.rows) await client.query(`REVOKE ${quote(membership.rolname)} FROM ${identifier}`)
-    await client.query(`ALTER ROLE ${identifier} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION`)
+    for (const membership of memberships.rows) await client.query(`REVOKE ${quotePostgresIdentifier(membership.rolname)} FROM ${identifier}`)
+    if (requiresSafeAttributeHardening(roleState)) await client.query(hostedSafeAlterRoleStatement(identifier))
     await client.query(`GRANT CONNECT ON DATABASE "${databaseName.replaceAll('"', '""')}" TO ${identifier}`)
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
     await client.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${identifier}`)
@@ -50,7 +66,23 @@ try {
     FROM pg_roles r WHERE r.rolname = $1
   `, [role])
   const parentRoleCount = (await client.query('SELECT COUNT(*)::int AS count FROM pg_auth_members membership JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1', [role])).rows[0].count
+  const finalOwnership = await client.query(`
+    SELECT COUNT(*)::int AS count
+    FROM (
+      SELECT c.oid
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_roles r ON r.oid = c.relowner
+      WHERE n.nspname = 'public' AND r.rolname = $1 AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+      UNION ALL
+      SELECT p.oid
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_roles r ON r.oid = p.proowner
+      WHERE n.nspname = 'public' AND r.rolname = $1
+    ) owned_objects
+  `, [role])
   const result = rows[0]
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || finalOwnership.rows[0].count !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
   console.log(JSON.stringify({ productionRuntimePrivileges: 'PASS', role, superuser: false, bypassRls: false, privilegedMembership: 'NONE' }))
 } finally { await client.end().catch(() => undefined) }

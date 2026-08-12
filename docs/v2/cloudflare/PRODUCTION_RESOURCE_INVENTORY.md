@@ -69,7 +69,10 @@ revalidation have actually completed.
 passed. See [PRODUCTION_RC1_STAGING_REVALIDATION.md](PRODUCTION_RC1_STAGING_REVALIDATION.md).
 
 Production deployment, migrations, DNS changes, and tag promotion remain
-blocked until the protected production runtime-role SQL verification,
+blocked until the protected production runtime-role SQL verification. The
+Supabase-hosted compatibility correction and required RC2 evidence are recorded
+in [PRODUCTION_SUPABASE_RUNTIME_ROLE_HARDENING.md](PRODUCTION_SUPABASE_RUNTIME_ROLE_HARDENING.md).
+They also remain blocked until the
 legacy-data retention decision, rollback evidence, and the mandatory
 runtime-secret rotation and exact-SHA Environment revalidation gate are
 available.
