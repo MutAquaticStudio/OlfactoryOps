@@ -146,7 +146,9 @@ jobs:
           test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
           for value in "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST"; do test -n "$value"; done
           node --input-type=module <<'EOF'
-          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-cloud-runtime.production-candidate.toml'
           let config = readFileSync('wrangler.v2-cloud-runtime-production.example.toml', 'utf8')
           config = config.replace('name = "olfactoryops-v2-cloud-runtime-production"', 'name = "olfactoryops-v2-cloud-runtime-production-candidate"')
           config = config.replaceAll('REPLACE_WITH_GIT_SHA', process.env.RELEASE_SHA)
@@ -156,18 +158,29 @@ jobs:
           config = config.replaceAll('REPLACE_WITH_FEATURE_IMAGE', process.env.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE)
           config = config.replaceAll('REPLACE_WITH_MODEL_IMAGE', process.env.PRODUCTION_SCIENTIFIC_MODEL_IMAGE)
           if (config.includes('REPLACE_WITH_')) throw new Error('candidate Cloud Runtime config has unresolved placeholders')
-          mkdirSync('.qa', { recursive: true })
-          writeFileSync('.qa/wrangler.v2-cloud-runtime.production-candidate.toml', config)
+          writeFileSync(configPath, config)
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate Cloud Runtime config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate Cloud Runtime entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
           EOF
           npm run prisma:generate:v2
-          node scripts/validate-cloud-runtime-config.mjs .qa/wrangler.v2-cloud-runtime.production-candidate.toml
-          npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml --keep-vars
+          node scripts/validate-cloud-runtime-config.mjs wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler deploy --config wrangler.v2-cloud-runtime.production-candidate.toml --keep-vars
       - name: Bind the rotated private runtime secret by name only
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml
-          npx wrangler secret list --config .qa/wrangler.v2-cloud-runtime.production-candidate.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
+          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler secret list --config wrangler.v2-cloud-runtime.production-candidate.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
 
   deploy-candidate-api:
     if: ${{ needs.validate-candidate-revision.outputs.operation == 'api' }}
