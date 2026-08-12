@@ -9,6 +9,11 @@ const hyperdriveId = 'a'.repeat(32)
 const candidateWorkspaceBaseDomain = 'next.labofscents.org'
 const candidateTenantRoute = '*.next.labofscents.org/*'
 
+function hostnameMatchesCandidateRoute(hostname) {
+  const suffix = `.${candidateWorkspaceBaseDomain}`
+  return hostname.endsWith(suffix) && hostname.slice(0, -suffix.length).split('.').length === 1
+}
+
 function rendererFor(jobName) {
   const jobStart = workflow.indexOf(`  ${jobName}:`)
   const marker = "node --input-type=module <<'EOF'"
@@ -120,4 +125,7 @@ test('candidate namespace is valid, coherent, and cannot target public productio
   expect(workflow).toContain('VITE_V2_WORKSPACE_BASE_DOMAIN: next.labofscents.org')
   expect(workflow).not.toContain('workspace-*-next.labofscents.org/*')
   expect(workflow).toContain('PRODUCTION_SMOKE_TENANT_URL must be one isolated workspace hostname under the candidate namespace')
+  expect(hostnameMatchesCandidateRoute('release-test.next.labofscents.org')).toBe(true)
+  expect(hostnameMatchesCandidateRoute('api-next.labofscents.org')).toBe(false)
+  expect(hostnameMatchesCandidateRoute('release-test.labofscents.org')).toBe(false)
 })
