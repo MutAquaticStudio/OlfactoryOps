@@ -13,6 +13,7 @@
     "bootstrap:platform-owner": "node scripts/bootstrap-platform-owner.mjs",
     "migrate:v2-production": "node scripts/apply-v2-production-migrations.mjs",
     "configure:v2-production-runtime-role": "node scripts/configure-v2-production-runtime-role.mjs",
+    "cloud-runtime:render-production": "node scripts/render-v2-cloud-runtime-production-config.mjs",
     "typecheck:worker": "npm run prisma:generate:v2 && npm run generate:v2-worker-transport && tsc -p tsconfig.worker.json",
     "build:v2-api-worker": "npm run prisma:generate:v2 && npm run generate:v2-worker-transport && wrangler deploy --dry-run --config wrangler.v2-api-staging.example.toml --outdir dist-v2-api-worker",
     "build:v2-tenant-router": "npm run prisma:generate:v2 && wrangler deploy --dry-run --config wrangler.v2-tenant-router-staging.example.toml --outdir dist-v2-tenant-router",

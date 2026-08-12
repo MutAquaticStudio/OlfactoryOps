@@ -13,8 +13,11 @@ dist-api
 dist-worker
 dist-v2-api-worker
 dist-v2-tenant-router
+dist-v2-api-production-check
+dist-v2-tenant-router-production-check
 dist-tenant-router
 dist-cloud-runtime
+dist-cloud-runtime-production-check
 dist-worker-test
 dist-ssr
 .wrangler
