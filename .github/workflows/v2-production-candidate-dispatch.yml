@@ -216,7 +216,9 @@ jobs:
           test -n "$PRODUCTION_HYPERDRIVE_ID"
           for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do test -n "${!secret_name}"; done
           node --input-type=module <<'EOF'
-          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-api-production-candidate.toml'
           let config = readFileSync('wrangler.v2-api-production.example.toml', 'utf8')
           config = config.replace('name = "olfactoryops-v2-api-production"', 'name = "olfactoryops-v2-api-production-candidate"')
           config = config.replace('api.labofscents.org/*', 'api-next.labofscents.org/*')
@@ -227,20 +229,31 @@ jobs:
           config = config.replace('V2_PLATFORM_ADMIN_HOSTNAME = "admin.labofscents.org"', 'V2_PLATFORM_ADMIN_HOSTNAME = "admin-next.labofscents.org"')
           config = config.replace('service = "olfactoryops-v2-cloud-runtime-production"', 'service = "olfactoryops-v2-cloud-runtime-production-candidate"')
           if (config.includes('api.labofscents.org/*') || config.includes('REPLACE_WITH_')) throw new Error('candidate API config could capture a public route')
-          mkdirSync('.qa', { recursive: true })
-          writeFileSync('.qa/wrangler.v2-api-production-candidate.toml', config)
+          writeFileSync(configPath, config)
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate API config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate API entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
           EOF
           npm run prisma:generate:v2
           npm run generate:v2-worker-transport
-          npx wrangler deploy --config .qa/wrangler.v2-api-production-candidate.toml --keep-vars
+          npx wrangler deploy --config wrangler.v2-api-production-candidate.toml --keep-vars
       - name: Bind rotated API secrets without logging values
         shell: bash
         run: |
           set -euo pipefail
           for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
-            printf '%s' "${!secret_name}" | npx wrangler secret put "$secret_name" --config .qa/wrangler.v2-api-production-candidate.toml
+            printf '%s' "${!secret_name}" | npx wrangler secret put "$secret_name" --config wrangler.v2-api-production-candidate.toml
           done
-          secret_names="$(npx wrangler secret list --config .qa/wrangler.v2-api-production-candidate.toml)"
+          secret_names="$(npx wrangler secret list --config wrangler.v2-api-production-candidate.toml)"
           for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do grep -Fq "\"$secret_name\"" <<< "$secret_names"; done
 
   deploy-candidate-tenant-router:
@@ -276,7 +289,9 @@ jobs:
           test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
           candidate_pages_origin="https://production-candidate.${PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev"
           node --input-type=module <<'EOF'
-          import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-tenant-router-production-candidate.toml'
           let config = readFileSync('wrangler.v2-tenant-router-production.example.toml', 'utf8')
           config = config.replace('name = "olfactoryops-v2-tenant-router-production"', 'name = "olfactoryops-v2-tenant-router-production-candidate"')
           config = config.replace('*.labofscents.org/*', 'workspace-*-next.labofscents.org/*')
@@ -284,11 +299,22 @@ jobs:
           config = config.replaceAll('REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
           config = config.replace('https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN', process.env.CANDIDATE_PAGES_ORIGIN)
           if (config.includes('*.labofscents.org/*') || config.includes('REPLACE_WITH_')) throw new Error('candidate router config could capture a public route')
-          mkdirSync('.qa', { recursive: true })
-          writeFileSync('.qa/wrangler.v2-tenant-router-production-candidate.toml', config)
+          writeFileSync(configPath, config)
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate router config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate router entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
           EOF
           npm run prisma:generate:v2
-          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production-candidate.toml --keep-vars
+          npx wrangler deploy --config wrangler.v2-tenant-router-production-candidate.toml --keep-vars
         env:
           CANDIDATE_PAGES_ORIGIN: https://production-candidate.${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}.pages.dev
 
