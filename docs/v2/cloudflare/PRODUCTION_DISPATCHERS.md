@@ -17,6 +17,21 @@ Every production job uses the GitHub `production` Environment, which must
 retain a required reviewer and disabled administrator bypass. Secret values are
 never logged or copied into source.
 
+## First-deployment secret rotation gate
+
+`ROTATE_EXPOSED_PRODUCTION_RUNTIME_SECRETS_BEFORE_FIRST_PRODUCTION_DEPLOY = YES`
+
+Before a first production API or Cloud Runtime deployment, an authorized
+operator must rotate the following GitHub Environment secrets outside the
+repository: `V2_SESSION_PEPPER`, `V2_PASSWORD_PEPPER`,
+`V2_INVITATION_ENCRYPTION_KEY`, and `SCIENTIFIC_CONTAINER_SHARED_SECRET`.
+The operator must then set both non-secret Environment variables
+`PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA` and
+`PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA` to the exact release SHA.
+The dispatcher refuses an API or Cloud Runtime deployment unless both values
+match its validated input SHA. It writes the rotated secret values only through
+Cloudflare's protected Worker secret API and verifies binding names only.
+
 Before a dispatcher may be approved, operators must set the required
 production Environment variables for the exact candidate: `PRODUCTION_HYPERDRIVE_ID`,
 `PRODUCTION_CANDIDATE_PAGES_ORIGIN`, `PRODUCTION_PAGES_PROJECT`, pinned

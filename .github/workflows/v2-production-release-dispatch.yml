@@ -81,8 +81,13 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+      V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+      V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
       V2_API_PRODUCTION_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
       V2_API_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -99,6 +104,8 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$V2_API_PRODUCTION_HYPERDRIVE_ID"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$V2_API_PRODUCTION_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_API_PRODUCTION_GIT_SHA"
       - name: Render and deploy the exact production API candidate
         shell: bash
         run: |
@@ -107,6 +114,24 @@ jobs:
           npm run generate:v2-worker-transport
           node scripts/render-v2-api-production-config.mjs
           npx wrangler deploy --config .qa/wrangler.v2-api-production.toml --keep-vars
+      - name: Bind rotated production API secrets without logging values
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            secret_value="${!secret_name}"
+            test -n "$secret_value"
+            printf '%s' "$secret_value" | npx wrangler secret put "$secret_name" --config .qa/wrangler.v2-api-production.toml
+            unset secret_value
+          done
+      - name: Verify production API secret binding names only
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret_names="$(npx wrangler secret list --config .qa/wrangler.v2-api-production.toml)"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            grep -Fq "\"$secret_name\"" <<< "$secret_names"
+          done
 
   deploy-production-tenant-router:
     if: ${{ needs.validate-production-revision.outputs.operation == 'tenant-router' }}
@@ -120,6 +145,8 @@ jobs:
       V2_TENANT_ROUTER_PRODUCTION_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
       V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
       V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN: ${{ vars.PRODUCTION_CANDIDATE_PAGES_ORIGIN }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -137,6 +164,8 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID"
           test -n "$V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
       - name: Render and deploy the exact production tenant-router candidate
         shell: bash
         run: |
@@ -157,6 +186,8 @@ jobs:
       VITE_API_BASE_URL: https://api.labofscents.org/api/v1
       VITE_V2_WORKSPACE_BASE_DOMAIN: labofscents.org
       PRODUCTION_PAGES_PROJECT: ${{ vars.PRODUCTION_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -173,6 +204,8 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$PRODUCTION_PAGES_PROJECT"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "${{ needs.validate-production-revision.outputs.release_sha }}"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "${{ needs.validate-production-revision.outputs.release_sha }}"
       - name: Build and deploy the exact production Pages candidate
         shell: bash
         run: |
@@ -195,6 +228,9 @@ jobs:
       SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
       SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
       SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+      SCIENTIFIC_CONTAINER_SHARED_SECRET: ${{ secrets.SCIENTIFIC_CONTAINER_SHARED_SECRET }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -210,6 +246,8 @@ jobs:
           set -euo pipefail
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test -n "$CLOUDFLARE_API_TOKEN"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$CLOUD_RUNTIME_GIT_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$CLOUD_RUNTIME_GIT_SHA"
       - name: Render and deploy the exact private production Cloud Runtime
         shell: bash
         run: |
@@ -218,6 +256,17 @@ jobs:
           npm run cloud-runtime:render-production
           node scripts/validate-cloud-runtime-config.mjs .qa/wrangler.v2-cloud-runtime.production.toml
           npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production.toml --keep-vars
+      - name: Bind the rotated internal scientific secret without logging its value
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
+          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config .qa/wrangler.v2-cloud-runtime.production.toml
+      - name: Verify the private runtime secret binding name only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler secret list --config .qa/wrangler.v2-cloud-runtime.production.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
 
   smoke-production:
     if: ${{ needs.validate-production-revision.outputs.operation == 'smoke' }}
