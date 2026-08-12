@@ -294,7 +294,15 @@ async function main() {
     const operatorRole = await platformMutation(`/v2/admin/operators/${encodeURIComponent(`pop_remote_support_${suffix}`)}/role`, 'PATCH', { role: 'PLATFORM_SECURITY_AUDITOR', reason: 'Isolated staging operator role rotation fixture.' }, `platform-operator-role-${suffix}`)
     assert(operatorRole.body?.role === 'PLATFORM_SECURITY_AUDITOR', 'platform_operator_role_projection_invalid')
     await platformMutation(`/v2/admin/operators/${encodeURIComponent(`pop_remote_support_${suffix}`)}/status`, 'PATCH', { status: 'DISABLED', reason: 'Isolated staging operator disable fixture.' }, `platform-operator-disable-${suffix}`)
-    await expectStatus('/v2/admin/me', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 403, 'disabled_platform_operator_not_denied')
+    // Disabling an operator revokes their active sessions. The next request may
+    // therefore be rejected during authentication (401) rather than later in
+    // platform authorization (403); either response is a server-enforced deny.
+    const disabledOperator = await request('/v2/admin/me', { origin: platformSupport.origin, cookie: platformSupport.cookie })
+    assert(
+      (disabledOperator.status === 401 && disabledOperator.body?.error?.code === 'SESSION_EXPIRED')
+        || (disabledOperator.status === 403 && disabledOperator.body?.error?.code === 'TENANT_ACCESS_DENIED'),
+      'disabled_platform_operator_not_denied',
+    )
     const platformAudit = await expectStatus('/v2/admin/audit', { origin: platformOwner.origin, cookie: platformOwner.cookie }, 200, 'platform_audit_failed')
     assert(Array.isArray(platformAudit.body?.events) && platformAudit.body.events.some((event) => event.action === 'platform.workspace.suspended'), 'platform_audit_projection_invalid')
 
