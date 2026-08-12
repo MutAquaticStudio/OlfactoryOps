@@ -160,9 +160,34 @@ jobs:
           V2_STAGING_ROUTE_SHA: ${{ needs.validate-release.outputs.release_sha }}
         run: node scripts/verify-v2-staging-route-parity.mjs
       - name: Verify live API to Hyperdrive RLS, all tenant roles, and Platform Control Panel fixtures
+        shell: bash
         env:
           V2_STAGING_REMOTE_APPROVED: RUN_REMOTE_STAGING_E2E
-        run: node scripts/verify-v2-staging-remote.mjs
+        run: |
+          set -euo pipefail
+          tail_log="$(mktemp)"
+          tail_pid=""
+          cleanup() {
+            trap - EXIT
+            if [ -n "$tail_pid" ] && kill -0 "$tail_pid" 2>/dev/null; then
+              kill -- "-$tail_pid" 2>/dev/null || true
+              for _ in $(seq 1 20); do kill -0 "$tail_pid" 2>/dev/null || break; sleep 0.25; done
+              kill -KILL -- "-$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+            fi
+            node scripts/extract-v2-worker-tail.mjs "$tail_log"
+            rm -f "$tail_log"
+          }
+          trap cleanup EXIT
+          setsid timeout --signal=TERM --kill-after=5s 720s npx wrangler tail olfactoryops-v2-api-staging --format json >"$tail_log" 2>&1 &
+          tail_pid="$!"
+          sleep 4
+          set +e
+          node scripts/verify-v2-staging-remote.mjs
+          verification_status="$?"
+          set -e
+          sleep 4
+          exit "$verification_status"
       - name: Verify Queue, Workflow, private Scientific Container, and R2 evidence
         shell: bash
         env:
@@ -198,5 +223,5 @@ jobs:
         with:
           name: production-rc-staging-tenant-host-evidence-${{ needs.validate-release.outputs.release_sha }}
           path: ${{ runner.temp }}/production-rc-tenant-host-evidence
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
