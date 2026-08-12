@@ -64,8 +64,12 @@ The merged dispatchers require both
 release SHA. These non-secret markers must only be set after that rotation and
 revalidation have actually completed.
 
+`v2-production-rc1` was created at
+`342f53f4b4aa812e853a2005899049c822d3426e` after the staging revalidation
+passed. See [PRODUCTION_RC1_STAGING_REVALIDATION.md](PRODUCTION_RC1_STAGING_REVALIDATION.md).
+
 Production deployment, migrations, DNS changes, and tag promotion remain
 blocked until the protected production runtime-role SQL verification,
-legacy-data retention decision, release-candidate staging revalidation,
-rollback evidence, and the mandatory runtime-secret rotation gate are
+legacy-data retention decision, rollback evidence, and the mandatory
+runtime-secret rotation and exact-SHA Environment revalidation gate are
 available.
