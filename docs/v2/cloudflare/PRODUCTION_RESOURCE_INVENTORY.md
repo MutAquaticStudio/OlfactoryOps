@@ -20,6 +20,25 @@ created, changed, or deleted while producing it.
 
 `PRODUCTION_POSTGRES_ISOLATED_FROM_STAGING = YES`
 
+## GitHub production Environment
+
+The GitHub `production` Environment exists. Metadata-only verification found a
+required reviewer and disabled administrator bypass. The following secret names
+are present; their values were neither requested nor retrieved:
+
+- `PRODUCTION_DATABASE_URL`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+- `V2_SESSION_PEPPER`
+- `V2_PASSWORD_PEPPER`
+- `V2_INVITATION_ENCRYPTION_KEY`
+- `SCIENTIFIC_CONTAINER_SHARED_SECRET`
+
+`PRODUCTION_SECRET_VALUES_REQUIRED = NO` for the existing protected
+Environment. The default-branch dispatcher change is pending human review in
+PR [#14](https://github.com/MutAquaticStudio/OlfactoryOps/pull/14); it does
+not authorize a production deployment.
+
 Production deployment, migrations, DNS changes, and tag promotion remain
 blocked until the protected production runtime-role SQL verification,
 legacy-data migration decision, release-candidate staging revalidation, and
