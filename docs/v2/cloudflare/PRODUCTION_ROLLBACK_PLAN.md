@@ -22,9 +22,10 @@ has been satisfied by an actual protected-Environment rotation and exact-SHA
 revalidation. The rotation markers are a deployment guard, not rollback
 evidence.
 
-The legacy D1 production database is not a rollback target for V2. It must be
-backed up and given an explicit approved migration/retention decision before
-any public production cutover.
+The legacy D1 production database is not a rollback target for V2. Its
+archive-only decision and Cloudflare D1 export evidence are recorded in
+[PRODUCTION_LEGACY_D1_RETENTION_PLAN.md](PRODUCTION_LEGACY_D1_RETENTION_PLAN.md).
+It remains preserved separately and must never be pointed at Hyperdrive.
 
 The protected Platform Owner bootstrap remains a separate post-migration
 ceremony documented in [PLATFORM_OWNER_BOOTSTRAP_PREPARATION.md](PLATFORM_OWNER_BOOTSTRAP_PREPARATION.md). It must not run against staging or with the runtime Hyperdrive role.

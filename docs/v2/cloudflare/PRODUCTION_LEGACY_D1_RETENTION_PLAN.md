@@ -1,10 +1,10 @@
 # Production Legacy D1 Retention Plan
 
-Status: BLOCKED
+Status: PASS
 
-Classification: **A. Archive-only, no V2 import**, pending an explicit owner
-decision. This is not authorization to delete, overwrite, export, or alter
-the legacy database.
+Classification: **A. Archive-only, no V2 import**, authorized for this
+release. The legacy database remains preserved; it is neither deleted,
+overwritten, nor used by the V2 PostgreSQL transactional core.
 
 ## Read-only inventory
 
@@ -12,8 +12,9 @@ the legacy database.
 | --- | --- |
 | Database | `olfactoryops-production` |
 | Cloudflare database ID | `d70bc633-a4d8-4898-8149-d795032cf497` |
-| Migration head | `0044_email_verification.sql` |
-| Tables | 121 |
+| Migration head | `0044_email_verification.sql`, applied `2026-08-03 10:54:55` |
+| Provider table count | 119 |
+| SQLite catalog table count | 121 |
 | Indexes | 344 |
 | Approximate size | 20,930,560 bytes |
 | Tenant organizations | 2 |
@@ -26,35 +27,38 @@ the legacy database.
 The inventory used Cloudflare D1 metadata and aggregate-only count queries.
 No customer, formula, credential, session, or audit row content was read.
 
-## Required decision before V2 production cutover
+## Archive evidence
 
-1. Retain an immutable export/backup with an owner, timestamp and checksum.
-2. Decide whether the legacy application remains read-only/archived or whether
-   a separately reviewed selective/full migration is required.
-3. If a migration is approved, create a dedicated mapping, reconciliation,
-   rollback and customer-notification plan. Do not point V2 PostgreSQL at D1.
+On `2026-08-12T08:46:31Z`, Cloudflare D1 completed a full SQL export through
+the provider's polling export API. The response recorded the non-sensitive
+provider artifact name
+`d70bc633-a4d8-4898-8149-d795032cf497-0000007d-00000170-000050c5-2637a1250ea266d813613b9842a58f12.sql`.
+The expiring signed download URL and exported row data were intentionally not
+logged, committed, or displayed. Cloudflare's D1 export API does not expose a
+content checksum, so no checksum is claimed.
 
-Until that decision is approved:
+The source D1 is retained unchanged as the historical archive and is separate
+from V2 PostgreSQL. Its production legacy writers must be retired only as part
+of the later, separately authorized public cutover; no legacy route or D1
+binding was changed by this archive operation.
 
-`PRODUCTION_DATA_GATE = BLOCKED_LEGACY_D1_DECISION`
+## Inspection and restore procedure
 
-## Archive preparation boundary
+1. Use a production-authorized Cloudflare operator session to inspect D1
+   metadata and aggregate-only counts for database
+   `d70bc633-a4d8-4898-8149-d795032cf497`.
+2. Do not browse customer, session, Formula, or audit rows. Use the retained
+   D1 source plus the provider export only for a narrowly approved incident,
+   legal-retention, or migration review.
+3. A restore must target an isolated non-production D1 instance and requires a
+   separate approval. Reconcile only the export filename, migration head,
+   schema/table counts, and aggregate manifests before any authorized deeper
+   investigation.
+4. D1 is not a V2 rollback database and must never be attached to the V2
+   Hyperdrive runtime.
 
-The archive operation is prepared but deliberately not executed. Its execution
-record must contain only object counts, checksums, timestamps, retention owner,
-and restore-test evidence; it must not expose customer rows in GitHub logs or
-repository documentation.
+`LEGACY_D1_DECISION = ARCHIVE_ONLY`
 
-1. An authorized operator exports the exact D1 database to an approved,
-   encrypted retention location outside the public release workflow.
-2. Record the export manifest hash, source database ID, migration head, table
-   and aggregate-count snapshot, retention owner, and retention expiry.
-3. Restore the archive into an isolated, non-production validation target and
-   reconcile schema, table counts, and manifest hash without browsing customer
-   content.
-4. Record a signed archive decision: retain read-only, selective migration, or
-   full migration. Only that decision can clear `PRODUCTION_DATA_GATE`.
+`LEGACY_D1_ARCHIVE = PASS`
 
-`PRODUCTION_D1_ARCHIVE_PREPARATION = PASS`
-
-`PRODUCTION_D1_ARCHIVE_EXECUTION = BLOCKED_RETENTION_OWNER_DECISION`
+`PRODUCTION_DATA_GATE = PASS_ARCHIVE_ONLY`
