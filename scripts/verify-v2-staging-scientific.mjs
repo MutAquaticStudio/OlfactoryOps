@@ -46,112 +46,132 @@ async function expect(path, options, status, code) {
 }
 async function sleep(ms) { await new Promise((resolve) => setTimeout(resolve, ms)) }
 
+async function createFixture(client, suffix) {
+  const email = `scientific-${suffix}@staging.invalid`
+  const password = `Scientific-${suffix}-Password!47`
+  const signup = await expect('/v2/platform/auth/signup', {
+    method: 'POST', origin: `https://${publicPagesHost}`,
+    body: { organizationName: `Scientific staging ${suffix}`, workspaceSlug: `scientific-${suffix}`, email, password, displayName: 'Scientific staging owner' },
+  }, 200, 'signup_failed')
+  const organizationId = signup.body?.membership?.organizationId
+  const userId = signup.body?.user?.id
+  const hostname = signup.body?.hostname?.hostname
+  assert(typeof organizationId === 'string' && typeof userId === 'string' && typeof hostname === 'string' && hostname.endsWith(`.${workspaceBaseDomain}`), 'signup_projection_invalid')
+  await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
+  const login = await expect('/v2/platform/auth/login', { method: 'POST', origin: `https://${hostname}`, body: { email, password } }, 200, 'login_failed')
+  assert(login.cookie.includes('oo_v2_session=') && typeof login.body?.csrfToken === 'string', 'session_bootstrap_invalid')
+  const session = { origin: `https://${hostname}`, cookie: login.cookie, csrf: login.body.csrfToken }
+  const material = await expect('/v2/lab/materials', {
+    method: 'POST', ...session, idempotencyKey: `scientific-material-${suffix}`,
+    body: { name: `Scientific staging material ${suffix}`, internalCode: `SCI-${suffix}` },
+  }, 200, 'material_create_failed')
+  const materialId = material.body?.material?.id
+  assert(typeof materialId === 'string', 'material_projection_invalid')
+
+  // The fixture seeds only a resolved identity. Each Cloud Runtime dispatch is
+  // performed through the authenticated API route below.
+  const identityId = `scientific_identity_${suffix}`
+  const structureHash = 'a'.repeat(64)
+  await client.query('BEGIN')
+  try {
+    await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId])
+    await client.query(
+      `INSERT INTO v2_molecular_identities
+        (id, organization_id, resolution_status, canonical_smiles, inchikey, structure_hash, canonicalization_version, rdkit_version, created_by, inchi, input_hash, output_hash, standardization_version, molecular_graph, provenance)
+       VALUES ($1,$2,'RESOLVED','CCO','LFQSCWFLJHTTHZ-UHFFFAOYSA-N',$3,'fixture/1','fixture-rdkit',$4,'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3',$3,$3,'fixture/1','{"atoms":[],"bonds":[]}'::jsonb,'[]'::jsonb)`,
+      [identityId, organizationId, structureHash, userId],
+    )
+    await client.query('UPDATE v2_materials SET molecular_identity_id = $1, status = $2, updated_at = now() WHERE id = $3 AND organization_id = $4', [identityId, 'ACTIVE', materialId, organizationId])
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  }
+  return { organizationId, materialId, session, suffix }
+}
+
+async function queueFeatures(fixture, lane) {
+  const queued = await expect(`/v2/scientific/materials/${encodeURIComponent(fixture.materialId)}/features`, {
+    method: 'POST', ...fixture.session, idempotencyKey: `scientific-features-${fixture.suffix}-${lane}`,
+    body: { featureKinds: ['ECFP', 'BCFP', 'MOLFTP'] },
+  }, 200, 'scientific_dispatch_failed')
+  const jobId = queued.body?.job?.id
+  assert(typeof jobId === 'string' && queued.body?.job?.status === 'QUEUED', 'scientific_queue_projection_invalid')
+  return { ...fixture, jobId }
+}
+
+async function awaitCompletion(client, fixture) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const query = await client.query(
+      `SELECT dispatch.status AS dispatch_status, dispatch.failure_code AS dispatch_failure_code, dispatch.result_artifact_ref, job.status AS scientific_status, job.failure_code AS scientific_failure_code,
+        (SELECT count(*)::int FROM v2_scientific_artifacts artifact WHERE artifact.organization_id = job.organization_id AND artifact.job_id = job.id) AS artifact_count
+       FROM v2_scientific_jobs job
+       LEFT JOIN v2_cloud_job_dispatches dispatch ON dispatch.organization_id = job.organization_id AND dispatch.id = job.id
+       WHERE job.organization_id = $1 AND job.id = $2`,
+      [fixture.organizationId, fixture.jobId],
+    )
+    const row = query.rows[0]
+    if (row?.dispatch_status === 'SUCCEEDED' && row?.scientific_status === 'SUCCEEDED' && Number(row?.artifact_count) >= 3 && typeof row?.result_artifact_ref === 'string') return row
+    if (['FAILED', 'DLQ', 'CANCELLED'].includes(row?.dispatch_status) || ['FAILED', 'CANCELLED', 'BLOCKED'].includes(row?.scientific_status)) {
+      const safeCode = typeof row?.dispatch_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.dispatch_failure_code)
+        ? row.dispatch_failure_code
+        : (typeof row?.scientific_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.scientific_failure_code) ? row.scientific_failure_code : 'NO_STABLE_FAILURE_CODE')
+      console.log(JSON.stringify({ remoteScientificTerminalFailure: { dispatchStatus: row?.dispatch_status ?? null, scientificStatus: row?.scientific_status ?? null, code: safeCode } }))
+      fail(`scientific_workflow_terminal_${safeCode}`)
+    }
+    await sleep(3_000)
+  }
+  fail('scientific_workflow_timeout')
+}
+
+async function archiveFixture(client, organizationId) {
+  await client.query('BEGIN')
+  await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId])
+  await client.query("UPDATE v2_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = COALESCE(revoke_reason, 'STAGING_SCIENTIFIC_FIXTURE_ARCHIVED') WHERE organization_id = $1", [organizationId])
+  await client.query("UPDATE v2_workspace_hostnames SET status = 'ARCHIVED', updated_at = now() WHERE organization_id = $1", [organizationId])
+  await client.query("UPDATE v2_organizations SET status = 'ARCHIVED', updated_at = now() WHERE id = $1", [organizationId])
+  await client.query('COMMIT')
+}
+
 async function main() {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 18)
   const client = new Client({ connectionString: databaseUrl })
-  let organizationId
+  const organizationIds = []
   let executionError
   try {
     await client.connect()
-    const email = `scientific-${suffix}@staging.invalid`
-    const password = `Scientific-${suffix}-Password!47`
-    const signup = await expect('/v2/platform/auth/signup', {
-      method: 'POST', origin: `https://${publicPagesHost}`,
-      body: { organizationName: `Scientific staging ${suffix}`, workspaceSlug: `scientific-${suffix}`, email, password, displayName: 'Scientific staging owner' },
-    }, 200, 'signup_failed')
-    organizationId = signup.body?.membership?.organizationId
-    const userId = signup.body?.user?.id
-    const hostname = signup.body?.hostname?.hostname
-    assert(typeof organizationId === 'string' && typeof userId === 'string' && typeof hostname === 'string' && hostname.endsWith(`.${workspaceBaseDomain}`), 'signup_projection_invalid')
-    await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
-    const login = await expect('/v2/platform/auth/login', { method: 'POST', origin: `https://${hostname}`, body: { email, password } }, 200, 'login_failed')
-    assert(login.cookie.includes('oo_v2_session=') && typeof login.body?.csrfToken === 'string', 'session_bootstrap_invalid')
-    const session = { origin: `https://${hostname}`, cookie: login.cookie, csrf: login.body.csrfToken }
-
-    const material = await expect('/v2/lab/materials', {
-      method: 'POST', ...session, idempotencyKey: `scientific-material-${suffix}`,
-      body: { name: `Scientific staging material ${suffix}`, internalCode: `SCI-${suffix}` },
-    }, 200, 'material_create_failed')
-    const materialId = material.body?.material?.id
-    assert(typeof materialId === 'string', 'material_projection_invalid')
-
-    // The isolated fixture seeds only the already-resolved molecular identity
-    // precondition. The API request below is the tested Cloud Runtime action.
-    const identityId = `scientific_identity_${suffix}`
-    const structureHash = 'a'.repeat(64)
-    await client.query('BEGIN')
-    try {
-      await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId])
-      await client.query(
-        `INSERT INTO v2_molecular_identities
-          (id, organization_id, resolution_status, canonical_smiles, inchikey, structure_hash, canonicalization_version, rdkit_version, created_by, inchi, input_hash, output_hash, standardization_version, molecular_graph, provenance)
-         VALUES ($1,$2,'RESOLVED','CCO','LFQSCWFLJHTTHZ-UHFFFAOYSA-N',$3,'fixture/1','fixture-rdkit',$4,'InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3',$3,$3,'fixture/1','{"atoms":[],"bonds":[]}'::jsonb,'[]'::jsonb)`,
-        [identityId, organizationId, structureHash, userId],
-      )
-      await client.query('UPDATE v2_materials SET molecular_identity_id = $1, status = $2, updated_at = now() WHERE id = $3 AND organization_id = $4', [identityId, 'ACTIVE', materialId, organizationId])
-      await client.query('COMMIT')
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => undefined)
-      throw error
-    }
-
-    const queued = await expect(`/v2/scientific/materials/${encodeURIComponent(materialId)}/features`, {
-      method: 'POST', ...session, idempotencyKey: `scientific-features-${suffix}`,
-      body: { featureKinds: ['ECFP', 'BCFP', 'MOLFTP'] },
-    }, 200, 'scientific_dispatch_failed')
-    const jobId = queued.body?.job?.id
-    assert(typeof jobId === 'string' && queued.body?.job?.status === 'QUEUED', 'scientific_queue_projection_invalid')
-
-    let completed
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      const query = await client.query(
-        `SELECT dispatch.status AS dispatch_status, dispatch.failure_code AS dispatch_failure_code, dispatch.result_artifact_ref, job.status AS scientific_status, job.failure_code AS scientific_failure_code,
-          (SELECT count(*)::int FROM v2_scientific_artifacts artifact WHERE artifact.organization_id = job.organization_id AND artifact.job_id = job.id) AS artifact_count
-         FROM v2_scientific_jobs job
-         LEFT JOIN v2_cloud_job_dispatches dispatch ON dispatch.organization_id = job.organization_id AND dispatch.id = job.id
-         WHERE job.organization_id = $1 AND job.id = $2`,
-        [organizationId, jobId],
-      )
-      const row = query.rows[0]
-      if (row?.dispatch_status === 'SUCCEEDED' && row?.scientific_status === 'SUCCEEDED' && Number(row?.artifact_count) >= 3 && typeof row?.result_artifact_ref === 'string') {
-        completed = row
-        break
-      }
-      if (['FAILED', 'DLQ', 'CANCELLED'].includes(row?.dispatch_status) || ['FAILED', 'CANCELLED', 'BLOCKED'].includes(row?.scientific_status)) {
-        const safeCode = typeof row?.dispatch_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.dispatch_failure_code)
-          ? row.dispatch_failure_code
-          : (typeof row?.scientific_failure_code === 'string' && /^[A-Z][A-Z0-9_]{2,119}$/.test(row.scientific_failure_code) ? row.scientific_failure_code : 'NO_STABLE_FAILURE_CODE')
-        console.log(JSON.stringify({ remoteScientificTerminalFailure: { dispatchStatus: row?.dispatch_status ?? null, scientificStatus: row?.scientific_status ?? null, code: safeCode } }))
-        fail(`scientific_workflow_terminal_${safeCode}`)
-      }
-      await sleep(3_000)
-    }
-    assert(completed, 'scientific_workflow_timeout')
-    const job = await expect(`/v2/scientific/jobs/${encodeURIComponent(jobId)}`, session, 200, 'scientific_job_read_failed')
-    const artifacts = await expect(`/v2/scientific/materials/${encodeURIComponent(materialId)}/artifacts`, session, 200, 'scientific_artifact_read_failed')
-    assert(job.body?.job?.status === 'SUCCEEDED' && Array.isArray(artifacts.body?.artifacts) && artifacts.body.artifacts.length >= 3, 'scientific_projection_not_completed')
-    if (resultReferencePath) writeFileSync(resultReferencePath, `${completed.result_artifact_ref}\n`, { encoding: 'utf8', mode: 0o600 })
+    const first = await createFixture(client, `${suffix}a`)
+    organizationIds.push(first.organizationId)
+    const second = await createFixture(client, `${suffix}b`)
+    organizationIds.push(second.organizationId)
+    const jobs = await Promise.all([queueFeatures(first, 'lane-1'), queueFeatures(first, 'lane-2'), queueFeatures(second, 'lane-3')])
+    assert(new Set(jobs.map((job) => job.jobId)).size === 3 && new Set(jobs.map((job) => job.organizationId)).size === 2, 'scientific_parallel_fixture_invalid')
+    const completed = await Promise.all(jobs.map((job) => awaitCompletion(client, job)))
+    assert(new Set(completed.map((row) => row.result_artifact_ref)).size === 3, 'scientific_parallel_result_reference_not_unique')
+    await Promise.all(jobs.map(async (job) => {
+      const read = await expect(`/v2/scientific/jobs/${encodeURIComponent(job.jobId)}`, job.session, 200, 'scientific_job_read_failed')
+      const artifacts = await expect(`/v2/scientific/materials/${encodeURIComponent(job.materialId)}/artifacts`, job.session, 200, 'scientific_artifact_read_failed')
+      assert(read.body?.job?.status === 'SUCCEEDED' && Array.isArray(artifacts.body?.artifacts) && artifacts.body.artifacts.length >= 3, 'scientific_projection_not_completed')
+    }))
+    if (resultReferencePath) writeFileSync(resultReferencePath, `${completed[0].result_artifact_ref}\n`, { encoding: 'utf8', mode: 0o600 })
     console.log(JSON.stringify({
       stagingScientificE2e: 'PASS', apiWorker: 'PASS', queue: 'PASS', workflow: 'PASS', scientificContainer: 'PASS',
-      r2Result: 'PASS', postgresqlProjection: 'PASS', jobId,
+      r2Result: 'PASS', postgresqlProjection: 'PASS', parallelJobs: jobs.length, tenantCount: new Set(jobs.map((job) => job.organizationId)).size,
     }))
   } catch (error) {
     executionError = error
   }
-  try {
-    if (organizationId) {
-      await client.query('BEGIN')
-      await client.query("SELECT set_config('app.organization_id', $1, true)", [organizationId])
-      await client.query("UPDATE v2_sessions SET revoked_at = COALESCE(revoked_at, now()), revoke_reason = COALESCE(revoke_reason, 'STAGING_SCIENTIFIC_FIXTURE_ARCHIVED') WHERE organization_id = $1", [organizationId])
-      await client.query("UPDATE v2_workspace_hostnames SET status = 'ARCHIVED', updated_at = now() WHERE organization_id = $1", [organizationId])
-      await client.query("UPDATE v2_organizations SET status = 'ARCHIVED', updated_at = now() WHERE id = $1", [organizationId])
-      await client.query('COMMIT')
-      console.log(JSON.stringify({ remoteScientificFixtureCleanup: 'ARCHIVED' }))
+  let cleanupFailed = false
+  for (const organizationId of organizationIds) {
+    try {
+      await archiveFixture(client, organizationId)
+    } catch {
+      cleanupFailed = true
+      await client.query('ROLLBACK').catch(() => undefined)
     }
-  } catch {
-    await client.query('ROLLBACK').catch(() => undefined)
-    if (!executionError) executionError = new Error('REMOTE_SCIENTIFIC_E2E=FAIL fixture_cleanup_failed')
   }
+  if (organizationIds.length && !cleanupFailed) console.log(JSON.stringify({ remoteScientificFixtureCleanup: 'ARCHIVED', organizations: organizationIds.length }))
+  if (cleanupFailed && !executionError) executionError = new Error('REMOTE_SCIENTIFIC_E2E=FAIL fixture_cleanup_failed')
   await client.end().catch(() => undefined)
   if (executionError) throw executionError
 }

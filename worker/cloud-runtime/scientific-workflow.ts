@@ -6,22 +6,25 @@ import { CloudJobLedger } from './job-ledger.js'
 import { loadPrivateScientificInput, sha256 } from './scientific-input.js'
 import { completeCloudScientificFeature } from '../../services/scientific/src/cloud-completion.js'
 import { safeScientificContainerError } from './scientific-container-error.js'
+import { scientificContainerFor } from './scientific-container-routing.js'
+import type { ScientificFeatureContainer, ScientificModelContainer } from './scientific-containers.js'
 
 export type CloudScientificEnv = {
   HYPERDRIVE: Hyperdrive
   R2_ARTIFACTS: R2Bucket
-  SCIENTIFIC_FEATURE_CONTAINER: DurableObjectNamespace
-  SCIENTIFIC_MODEL_CONTAINER: DurableObjectNamespace
+  SCIENTIFIC_FEATURE_CONTAINER: DurableObjectNamespace<ScientificFeatureContainer>
+  SCIENTIFIC_MODEL_CONTAINER: DurableObjectNamespace<ScientificModelContainer>
   SCIENTIFIC_RUNTIME_IMAGE_DIGEST?: string
   RELEASE_GIT_SHA?: string
   SCIENTIFIC_CONTAINER_SHARED_SECRET?: string
 }
 
 type ContainerResponse = { payload: Record<string, unknown>; runtimeVersion?: string; componentVersions?: Record<string, string>; modelVersion?: string }
+type ScientificContainerStub = Pick<DurableObjectStub, 'fetch'>
 
-function containerFor(env: CloudScientificEnv, job: CloudJobEnvelope): DurableObjectStub {
-  const namespace = job.jobType === 'SCIENTIFIC_MODEL' ? env.SCIENTIFIC_MODEL_CONTAINER : env.SCIENTIFIC_FEATURE_CONTAINER
-  return namespace.get(namespace.idFromName(job.jobId))
+function containerFor(env: CloudScientificEnv, job: CloudJobEnvelope): Promise<ScientificContainerStub> {
+  if (job.jobType === 'SCIENTIFIC_MODEL') return scientificContainerFor(env.SCIENTIFIC_MODEL_CONTAINER)
+  return scientificContainerFor(env.SCIENTIFIC_FEATURE_CONTAINER)
 }
 
 export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv, CloudJobEnvelope> {
@@ -47,7 +50,8 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
         ...(job.jobType === 'SCIENTIFIC_MODEL' ? { modelVersion: scientificModelInputArtifactSchema.parse(input).modelVersion } : {}),
         operation: job.jobType === 'SCIENTIFIC_MODEL' ? 'MODEL_SMOKE' : 'FEATURE_GENERATE',
       })
-      const response = await containerFor(this.env, job).fetch('https://scientific.internal/v1/jobs', {
+      const container = await containerFor(this.env, job)
+      const response = await container.fetch('https://scientific.internal/v1/jobs', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-olfactoryops-scientific-key': scientificContainerSharedSecret },
         body: JSON.stringify(request),

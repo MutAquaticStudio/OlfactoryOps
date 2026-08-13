@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 from http import HTTPStatus
 from http.client import HTTPConnection
@@ -75,3 +76,24 @@ class ScientificRuntimeHttpTests(unittest.TestCase):
             })
         self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
         self.assertEqual(body["error"], "UNAUTHORIZED")
+
+    def test_parallel_private_jobs_preserve_each_artifact_reference(self) -> None:
+        payloads = [
+            {
+                "jobId": f"science-parallel-{index}",
+                "artifactRef": f"v2/org_parallel_{index}/scientific/input-{index}",
+                "operation": "FEATURE_GENERATE",
+                "canonicalSmiles": "CCO",
+                "featureKinds": ["ECFP"],
+            }
+            for index in range(16)
+        ]
+        with ThreadPoolExecutor(max_workers=len(payloads)) as executor:
+            results = list(executor.map(self.request, payloads))
+
+        self.assertEqual([status for status, _ in results], [HTTPStatus.OK] * len(payloads))
+        self.assertEqual(
+            {body["resultArtifactRef"] for _, body in results},
+            {f"{payload['artifactRef']}/result" for payload in payloads},
+        )
+        self.assertTrue(all("payload" in body and "runtimeVersion" in body for _, body in results))

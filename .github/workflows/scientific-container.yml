@@ -9,10 +9,10 @@ on:
         default: false
         type: boolean
   pull_request:
-    paths: ["services/scientific/**", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
+    paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
   push:
     branches: [main, master, "release-*", "codex/cloudflare-cloud-native-runtime"]
-    paths: ["services/scientific/**", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
+    paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
 
 permissions:
   contents: read
