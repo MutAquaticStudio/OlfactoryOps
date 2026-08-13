@@ -21,7 +21,7 @@ concurrency:
 
 env:
   DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
-  DIAGNOSTIC_SOURCE_SHA: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
+  DIAGNOSTIC_SOURCE_SHA: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f
   TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
   DIAGNOSTIC_WORKER_NAME: oo-v2-router-runtime-diag
@@ -47,7 +47,7 @@ jobs:
           node scripts/verify-v2-runtime-diagnostic-dispatcher.mjs
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
           test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
-          test "$DIAGNOSTIC_SOURCE_SHA" = "4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe"
+          test "$DIAGNOSTIC_SOURCE_SHA" = "681cc26d58bc1946cf5ec5a8e85f0e988c0a841f"
           suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
           slug="${FIXTURE_HOSTNAME%"$suffix"}"
           test "$slug" != "$FIXTURE_HOSTNAME"
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
+          ref: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -195,44 +195,41 @@ jobs:
           response="$(cat "$diagnostic_response_file")"
           RESPONSE="$response" RELEASE_SHA="$RELEASE_SHA" node --input-type=module <<'EOF'
           const body = JSON.parse(process.env.RESPONSE)
-          const requiredTrue = [
-            'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
+          const safeBooleanKeys = [
+            'databaseProbeCompleted', 'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
             'runtimeCurrentUserMatchesExpected', 'runtimeSessionUserMatchesExpected',
-            'workspaceHostnamesRls', 'workspaceHostnamesForceRls', 'organizationsRls', 'organizationsForceRls',
-            'runtimeExecuteGranted', 'resolverQueryExecuted',
-          ]
-          const requiredFalse = [
-            'runtimeDirectHostnameVisible', 'runtimeDirectOrganizationVisible', 'runtimeRequestHostnameContextPresent',
-            'runtimeOrganizationContextPresent', 'runtimeUserContextPresent',
-          ]
-          const evidenceKeys = [
-            ...requiredTrue, ...requiredFalse, 'runtimeResolverResult', 'resolverSecurityDefiner',
+            'sessionContextProbeCompleted', 'runtimeRequestHostnameContextPresent', 'runtimeOrganizationContextPresent',
+            'runtimeUserContextPresent', 'rlsMetadataProbeCompleted', 'workspaceHostnamesRls',
+            'workspaceHostnamesForceRls', 'organizationsRls', 'organizationsForceRls',
+            'resolverMetadataProbeCompleted', 'resolverExists', 'resolverSecurityDefiner',
             'functionOwnerOwnsWorkspaceHostnames', 'functionOwnerOwnsOrganizations', 'functionOwnerIsSuperuser',
-            'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained',
+            'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained', 'resolverPrivilegeProbeCompleted',
+            'runtimeExecuteGranted', 'directHostnameProbeCompleted', 'runtimeDirectHostnameVisible',
+            'directOrganizationProbeCompleted', 'runtimeDirectOrganizationVisible', 'resolverInvocationProbeCompleted',
+            'runtimeResolverResult',
           ]
-          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || evidenceKeys.some((key) => typeof body[key] !== 'boolean') || requiredTrue.some((key) => body[key] !== true) || requiredFalse.some((key) => body[key] !== false)) {
+          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || safeBooleanKeys.some((key) => typeof body[key] !== 'boolean')) {
             console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'SAFE_BOOLEAN_CONTRACT_FAILED' }))
             process.exit(2)
           }
+          const runtimeDiagnosticExecution = [
+            body.databaseProbeCompleted,
+            body.hyperdriveConnectionReachable,
+            body.hyperdriveProductionDatabaseMatch,
+            body.runtimeCurrentUserMatchesExpected,
+            body.runtimeSessionUserMatchesExpected,
+          ].every(Boolean) ? 'PASS' : 'FAIL'
+          const actualHyperdriveRuntimeResolver = !body.resolverInvocationProbeCompleted
+            ? 'UNPROVEN'
+            : body.runtimeResolverResult ? 'PASS' : 'FAIL'
           console.log(JSON.stringify({
-            runtimeDiagnosticExecution: 'PASS',
-            actualHyperdriveRuntimeResolver: body.runtimeResolverResult ? 'PASS' : 'FAIL',
+            runtimeDiagnosticExecution,
+            actualHyperdriveRuntimeResolver,
             targetReleaseSha: body.targetReleaseSha,
-            hyperdriveConnectionReachable: body.hyperdriveConnectionReachable,
-            hyperdriveProductionDatabaseMatch: body.hyperdriveProductionDatabaseMatch,
-            runtimeDirectHostnameVisible: body.runtimeDirectHostnameVisible,
-            runtimeDirectOrganizationVisible: body.runtimeDirectOrganizationVisible,
-            runtimeResolverResult: body.runtimeResolverResult,
-            runtimeRequestHostnameContextPresent: body.runtimeRequestHostnameContextPresent,
-            runtimeOrganizationContextPresent: body.runtimeOrganizationContextPresent,
-            runtimeUserContextPresent: body.runtimeUserContextPresent,
-            resolverSecurityDefiner: body.resolverSecurityDefiner,
-            functionOwnerOwnsWorkspaceHostnames: body.functionOwnerOwnsWorkspaceHostnames,
-            functionOwnerOwnsOrganizations: body.functionOwnerOwnsOrganizations,
-            functionOwnerIsSuperuser: body.functionOwnerIsSuperuser,
-            functionOwnerBypassRls: body.functionOwnerBypassRls,
-            functionOwnerForceRlsConstrained: body.functionOwnerForceRlsConstrained,
+            ...Object.fromEntries(safeBooleanKeys.map((key) => [key, body[key]])),
           }))
+          if (runtimeDiagnosticExecution !== 'PASS') process.exit(3)
+          if (actualHyperdriveRuntimeResolver !== 'PASS') process.exit(4)
           EOF
       - name: Delete the isolated diagnostic Worker and temporary token
         if: ${{ always() }}
