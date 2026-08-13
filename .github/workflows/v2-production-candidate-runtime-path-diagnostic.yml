@@ -63,7 +63,9 @@ jobs:
           test "$slug" != "$FIXTURE_HOSTNAME"
           test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
           [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
-          git fetch --no-tags origin "$RELEASE_BRANCH" "$DIAGNOSTIC_SOURCE_BRANCH"
+          git fetch --no-tags origin \
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH" \
+            "+refs/heads/$DIAGNOSTIC_SOURCE_BRANCH:refs/remotes/origin/$DIAGNOSTIC_SOURCE_BRANCH"
           release_branch_sha="$(git rev-parse "origin/$RELEASE_BRANCH")"
           git fetch --tags origin
           git cat-file -e "${RELEASE_SHA}^{commit}"
