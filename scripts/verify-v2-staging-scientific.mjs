@@ -147,7 +147,22 @@ async function main() {
     const jobs = await Promise.all([queueFeatures(first, 'lane-1'), queueFeatures(first, 'lane-2'), queueFeatures(second, 'lane-3')])
     assert(new Set(jobs.map((job) => job.jobId)).size === 3 && new Set(jobs.map((job) => job.organizationId)).size === 2, 'scientific_parallel_fixture_invalid')
     const completed = await Promise.all(jobs.map((job) => awaitCompletion(client, job)))
-    assert(new Set(completed.map((row) => row.result_artifact_ref)).size === 3, 'scientific_parallel_result_reference_not_unique')
+    const resultReferencesByOrganization = new Map()
+    for (const [index, row] of completed.entries()) {
+      const organizationId = jobs[index].organizationId
+      const resultArtifactRef = row.result_artifact_ref
+      assert(
+        typeof resultArtifactRef === 'string' && resultArtifactRef.startsWith(`v2/${organizationId}/scientific/`),
+        'scientific_parallel_result_reference_tenant_scope_invalid',
+      )
+      const references = resultReferencesByOrganization.get(organizationId) ?? new Set()
+      references.add(resultArtifactRef)
+      resultReferencesByOrganization.set(organizationId, references)
+    }
+    // R2 results are content-addressed. Repeated same-tenant input should
+    // deduplicate, while the tenant namespace keeps identical results apart.
+    assert([...resultReferencesByOrganization.values()].every((references) => references.size === 1), 'scientific_parallel_result_reference_dedupe_invalid')
+    assert(new Set([...resultReferencesByOrganization.values()].map((references) => [...references][0])).size === resultReferencesByOrganization.size, 'scientific_parallel_result_reference_cross_tenant_collision')
     await Promise.all(jobs.map(async (job) => {
       const read = await expect(`/v2/scientific/jobs/${encodeURIComponent(job.jobId)}`, job.session, 200, 'scientific_job_read_failed')
       const artifacts = await expect(`/v2/scientific/materials/${encodeURIComponent(job.materialId)}/artifacts`, job.session, 200, 'scientific_artifact_read_failed')
