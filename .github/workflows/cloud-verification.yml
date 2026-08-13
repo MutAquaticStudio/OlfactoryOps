@@ -40,18 +40,21 @@ jobs:
           npm run release:identity:check
           npm run release:docs:check
 
-      - name: Migration and manifest checks
-        run: |
-          npm run release:migrations:verify
-          npm run release:manifest:generate
-          npm run release:manifest:validate
+      - name: Migration inventory check
+        run: npm run release:migrations:verify
 
       - name: Worker and router build checks
         run: |
+          npm run build
           npm run build:api
           npm run build:worker
           npm run build:tenant-router
           npm run test
+
+      - name: Generate and validate built artifact manifest
+        run: |
+          npm run release:manifest:generate
+          npm run release:manifest:validate
 
       - name: Cloud integration availability check
         run: |
