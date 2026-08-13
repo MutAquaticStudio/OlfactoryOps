@@ -3,14 +3,6 @@ name: V2 Production Candidate Hyperdrive Runtime Diagnostic
 on:
   workflow_dispatch:
     inputs:
-      release_sha:
-        description: Exact immutable production-candidate revision being diagnosed.
-        required: true
-        type: string
-      diagnostic_source_sha:
-        description: Exact reviewed diagnostic Worker source revision from the bounded diagnostic branch.
-        required: true
-        type: string
       fixture_hostname:
         description: Exact isolated candidate workspace hostname under next.labofscents.org.
         required: true
@@ -28,8 +20,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
+  DIAGNOSTIC_SOURCE_SHA: 57d2921150888e233614b6087d51cb260e845179
+  TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
   DIAGNOSTIC_WORKER_NAME: olfactoryops-v2-tenant-router-production-candidate-runtime-diagnostic
 
@@ -38,12 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      release_sha: ${{ steps.validation.outputs.release_sha }}
-      diagnostic_source_sha: ${{ steps.validation.outputs.diagnostic_source_sha }}
       fixture_hostname: ${{ steps.validation.outputs.fixture_hostname }}
     env:
-      RELEASE_SHA: ${{ inputs.release_sha }}
-      DIAGNOSTIC_SOURCE_SHA: ${{ inputs.diagnostic_source_sha }}
       FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
       CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
     steps:
@@ -51,28 +40,24 @@ jobs:
         with:
           fetch-depth: 0
       - id: validation
-        name: Validate the immutable target and reviewed diagnostic source
+        name: Validate the pinned target and reviewed diagnostic source
         shell: bash
         run: |
           set -euo pipefail
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
-          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          [[ "$DIAGNOSTIC_SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
+          test "$DIAGNOSTIC_SOURCE_SHA" = "57d2921150888e233614b6087d51cb260e845179"
           suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
           slug="${FIXTURE_HOSTNAME%"$suffix"}"
           test "$slug" != "$FIXTURE_HOSTNAME"
           test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
           [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
           git fetch --no-tags origin \
-            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH" \
             "+refs/heads/$DIAGNOSTIC_SOURCE_BRANCH:refs/remotes/origin/$DIAGNOSTIC_SOURCE_BRANCH"
-          release_branch_sha="$(git rev-parse "origin/$RELEASE_BRANCH")"
           git fetch --tags origin
-          git cat-file -e "${RELEASE_SHA}^{commit}"
+          git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
           git cat-file -e "${DIAGNOSTIC_SOURCE_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
-            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
-          fi
+          test "$(git rev-parse 'v2-production-rc2^{}')" = "$TARGET_RELEASE_SHA"
           diagnostic_source_branch_sha="$(git rev-parse "origin/${DIAGNOSTIC_SOURCE_BRANCH}")"
           git merge-base --is-ancestor "$DIAGNOSTIC_SOURCE_SHA" "$diagnostic_source_branch_sha"
           git ls-tree -r --name-only "$DIAGNOSTIC_SOURCE_SHA" -- \
@@ -80,8 +65,6 @@ jobs:
             scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs \
             wrangler.v2-tenant-router-runtime-diagnostic.example.toml \
             | grep -Fxq 'worker/v2-tenant-router-runtime-diagnostic.ts'
-          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
-          echo "diagnostic_source_sha=$DIAGNOSTIC_SOURCE_SHA" >> "$GITHUB_OUTPUT"
           echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
 
   deploy-and-invoke-runtime-path-diagnostic:
@@ -94,13 +77,13 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
       PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+      RELEASE_SHA: ${{ env.TARGET_RELEASE_SHA }}
       DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
       V2_RUNTIME_DB_ROLE: hyperdrive_user
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate-diagnostic-input.outputs.diagnostic_source_sha }}
+          ref: ${{ env.DIAGNOSTIC_SOURCE_SHA }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -125,7 +108,7 @@ jobs:
       - name: Render and deploy the route-free diagnostic Worker
         shell: bash
         env:
-          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ env.TARGET_RELEASE_SHA }}
           V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
           V2_RUNTIME_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
           V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
@@ -169,22 +152,28 @@ jobs:
           response="$(curl --fail-with-body --silent --show-error --max-time 30 -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" "$diagnostic_url")"
           RESPONSE="$response" RELEASE_SHA="$RELEASE_SHA" node --input-type=module <<'EOF'
           const body = JSON.parse(process.env.RESPONSE)
-          const expected = [
+          const requiredTrue = [
             'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
             'runtimeCurrentUserMatchesExpected', 'runtimeSessionUserMatchesExpected',
-            'runtimeResolverResult', 'workspaceHostnamesRls', 'workspaceHostnamesForceRls',
-            'organizationsRls', 'organizationsForceRls', 'functionOwnerRlsSemantics', 'runtimeExecuteGranted',
+            'workspaceHostnamesRls', 'workspaceHostnamesForceRls', 'organizationsRls', 'organizationsForceRls',
+            'runtimeExecuteGranted', 'resolverQueryExecuted',
           ]
-          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || expected.some((key) => body[key] !== true)) {
+          const requiredFalse = [
+            'runtimeDirectHostnameVisible', 'runtimeDirectOrganizationVisible', 'runtimeRequestHostnameContextPresent',
+            'runtimeOrganizationContextPresent', 'runtimeUserContextPresent',
+          ]
+          const evidenceKeys = [
+            ...requiredTrue, ...requiredFalse, 'runtimeResolverResult', 'resolverSecurityDefiner',
+            'functionOwnerOwnsWorkspaceHostnames', 'functionOwnerOwnsOrganizations', 'functionOwnerIsSuperuser',
+            'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained',
+          ]
+          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || evidenceKeys.some((key) => typeof body[key] !== 'boolean') || requiredTrue.some((key) => body[key] !== true) || requiredFalse.some((key) => body[key] !== false)) {
             console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'SAFE_BOOLEAN_CONTRACT_FAILED' }))
             process.exit(2)
           }
-          if (body.runtimeDirectHostnameVisible !== false || body.runtimeDirectOrganizationVisible !== false || body.runtimeRequestHostnameContextPresent !== false || body.runtimeOrganizationContextPresent !== false || body.runtimeUserContextPresent !== false) {
-            console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'RLS_OR_CONTEXT_CONTRACT_FAILED' }))
-            process.exit(2)
-          }
           console.log(JSON.stringify({
-            candidateRuntimeDiagnostic: 'PASS',
+            runtimeDiagnosticExecution: 'PASS',
+            actualHyperdriveRuntimeResolver: body.runtimeResolverResult ? 'PASS' : 'FAIL',
             targetReleaseSha: body.targetReleaseSha,
             hyperdriveConnectionReachable: body.hyperdriveConnectionReachable,
             hyperdriveProductionDatabaseMatch: body.hyperdriveProductionDatabaseMatch,
@@ -194,6 +183,28 @@ jobs:
             runtimeRequestHostnameContextPresent: body.runtimeRequestHostnameContextPresent,
             runtimeOrganizationContextPresent: body.runtimeOrganizationContextPresent,
             runtimeUserContextPresent: body.runtimeUserContextPresent,
-            functionOwnerRlsSemantics: body.functionOwnerRlsSemantics,
+            resolverSecurityDefiner: body.resolverSecurityDefiner,
+            functionOwnerOwnsWorkspaceHostnames: body.functionOwnerOwnsWorkspaceHostnames,
+            functionOwnerOwnsOrganizations: body.functionOwnerOwnsOrganizations,
+            functionOwnerIsSuperuser: body.functionOwnerIsSuperuser,
+            functionOwnerBypassRls: body.functionOwnerBypassRls,
+            functionOwnerForceRlsConstrained: body.functionOwnerForceRlsConstrained,
           }))
           EOF
+      - name: Delete the isolated diagnostic Worker and temporary token
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .qa/candidate-runtime-diagnostic-token
+          worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
+          if [ "$worker_status" != "404" ]; then
+            npx wrangler delete "$DIAGNOSTIC_WORKER_NAME" --force
+          fi
+          worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
+          test "$worker_status" = "404"
+          echo 'DIAGNOSTIC_WORKER_CLEANUP=PASS'
