@@ -1,6 +1,39 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { verifyProductionDatabaseConnectivity } from "./verify-production-database-connectivity.mjs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterAll, describe, expect, it } from "vitest";
+
+const fixtureDirectory = mkdtempSync(join(tmpdir(), "olfactoryops-pg-probe-"));
+const fixtureScript = join(
+  fixtureDirectory,
+  "verify-production-database-connectivity.mjs",
+);
+const fixturePgPackage = join(fixtureDirectory, "node_modules", "pg");
+mkdirSync(fixturePgPackage, { recursive: true });
+writeFileSync(
+  join(fixturePgPackage, "package.json"),
+  JSON.stringify({ type: "module", exports: "./index.mjs" }),
+);
+writeFileSync(
+  join(fixturePgPackage, "index.mjs"),
+  "export default { Client: class {} };\n",
+);
+writeFileSync(
+  fixtureScript,
+  readFileSync("scripts/verify-production-database-connectivity.mjs", "utf8"),
+);
+const { verifyProductionDatabaseConnectivity } = await import(
+  pathToFileURL(fixtureScript).href
+);
+
+afterAll(() => rmSync(fixtureDirectory, { recursive: true, force: true }));
 
 function pgClient({ connect, query }) {
   const calls = { end: 0, options: undefined, query: [] };
@@ -35,8 +68,7 @@ function runProbe(options = {}) {
   return {
     lines,
     result: verifyProductionDatabaseConnectivity({
-      connectionString:
-        "postgresql://sensitive-user:sensitive-password@sensitive-host/sensitive-database",
+      connectionString: "sensitive-connection-string",
       output: (line) => lines.push(line),
       ...options,
     }),
@@ -123,6 +155,7 @@ describe("production database connectivity verifier", () => {
     const probe = runProbe({ pgModule: client.pgModule });
     await probe.result;
     const output = probe.lines.join("\n");
+    expect(output).not.toContain("sensitive-connection-string");
     expect(output).not.toMatch(/sensitive-(?:host|database|user|password)/);
     expect(output).not.toMatch(/Error:|at verify|stack/i);
     const source = readFileSync(
