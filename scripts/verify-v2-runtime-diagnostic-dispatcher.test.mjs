@@ -53,6 +53,28 @@ describe("RC9 route-free runtime diagnostic dispatcher", () => {
     );
   });
 
+  it("requires readiness before one bounded diagnosis invocation", () => {
+    expect(workflow).toContain(
+      "Wait for isolated Worker readiness before database diagnosis",
+    );
+    expect(workflow).toContain(
+      "Invoke the ready isolated Worker once and verify safe runtime-path evidence",
+    );
+    expect(workflow).toContain("readiness_window_seconds=90");
+    expect(workflow).toContain("max_attempts=10");
+    expect(workflow).toContain("max_request_timeout_seconds=15");
+    expect(workflow).toContain("404|500|503)");
+    expect(workflow).toContain("DIAGNOSTIC_READY_ATTEMPT=$attempt");
+    expect(workflow).toContain("DIAGNOSTIC_READY_HTTP_STATUS=$http_status");
+    expect(workflow).toContain("DIAGNOSTIC_EXECUTION_ESCAPED_SAFE_HANDLER=YES");
+    expect(workflow.indexOf("/ready")).toBeLessThan(
+      workflow.indexOf("/diagnose"),
+    );
+    expect(worker).toContain('if (path === "/ready") return ready()');
+    expect(worker).toContain('if (path !== "/diagnose") return notFound()');
+    expect(worker).toContain('candidateRuntimeDiagnostic: "READY"');
+  });
+
   it("passes the checked-in dispatcher contract verifier", () => {
     const output = execFileSync(
       process.execPath,
@@ -60,6 +82,7 @@ describe("RC9 route-free runtime diagnostic dispatcher", () => {
       { cwd: root, encoding: "utf8" },
     );
     expect(output).toContain("STAGED_DIAGNOSTIC_CONTRACT=PASS");
+    expect(output).toContain("DIAGNOSTIC_TWO_STAGE_CONTRACT=PASS");
     expect(output).toContain("DIAGNOSTIC_WORKER_CLEANUP_CONTRACT=PASS");
   });
 });

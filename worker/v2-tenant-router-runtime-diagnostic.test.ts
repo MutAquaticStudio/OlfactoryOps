@@ -77,6 +77,15 @@ async function inspect(
   return inspectCandidateRuntime(env, () => executor(overrides));
 }
 
+function diagnosticRequest(path: string, token?: string, method = "GET") {
+  return new Request(`https://diagnostic.example${path}`, {
+    method,
+    headers: token
+      ? { "x-olfactoryops-candidate-runtime-diagnostic": token }
+      : undefined,
+  });
+}
+
 describe("candidate tenant-router runtime diagnostic", () => {
   it("accepts one exact fixture hostname only", () => {
     expect(
@@ -180,7 +189,46 @@ describe("candidate tenant-router runtime diagnostic", () => {
     expect(diagnostic.resolverInvocationProbeCompleted).toBe(true);
   });
 
-  it("returns an authenticated complete safe matrix even when an expected probe fails", async () => {
+  it("returns controlled 404 responses for unauthorized and unsupported paths", async () => {
+    let inspectorCalls = 0;
+    const worker = createCandidateRuntimeDiagnostic(async (requestEnv) => {
+      inspectorCalls += 1;
+      return inspectCandidateRuntime(requestEnv, () => executor());
+    });
+
+    for (const request of [
+      diagnosticRequest("/ready"),
+      diagnosticRequest("/diagnose"),
+      diagnosticRequest("/ready", "wrong"),
+      diagnosticRequest("/diagnose", "wrong"),
+      diagnosticRequest("/other", "test-only-secret"),
+      diagnosticRequest("/ready", "test-only-secret", "POST"),
+    ]) {
+      expect((await worker.fetch(request, env)).status).toBe(404);
+    }
+    expect(inspectorCalls).toBe(0);
+  });
+
+  it("returns the exact authenticated readiness envelope without opening a database probe", async () => {
+    let inspectorCalls = 0;
+    const worker = createCandidateRuntimeDiagnostic(async (requestEnv) => {
+      inspectorCalls += 1;
+      return inspectCandidateRuntime(requestEnv, () => executor());
+    });
+
+    const response = await worker.fetch(
+      diagnosticRequest("/ready", "test-only-secret"),
+      env,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      candidateRuntimeDiagnostic: "READY",
+    });
+    expect(inspectorCalls).toBe(0);
+  });
+
+  it("returns an authenticated complete safe matrix from /diagnose when an expected probe fails", async () => {
     const inspector = async () =>
       inspect({
         resolverPrivilege: async () => {
@@ -188,27 +236,9 @@ describe("candidate tenant-router runtime diagnostic", () => {
         },
       });
     const worker = createCandidateRuntimeDiagnostic(inspector);
-    expect(
-      (await worker.fetch(new Request("https://diagnostic.example/"), env))
-        .status,
-    ).toBe(404);
-    expect(
-      (
-        await worker.fetch(
-          new Request("https://diagnostic.example/", {
-            headers: { "x-olfactoryops-candidate-runtime-diagnostic": "wrong" },
-          }),
-          env,
-        )
-      ).status,
-    ).toBe(404);
 
     const response = await worker.fetch(
-      new Request("https://diagnostic.example/", {
-        headers: {
-          "x-olfactoryops-candidate-runtime-diagnostic": "test-only-secret",
-        },
-      }),
+      diagnosticRequest("/diagnose", "test-only-secret"),
       env,
     );
     expect(response.status).toBe(200);
@@ -224,6 +254,25 @@ describe("candidate tenant-router runtime diagnostic", () => {
     expect(JSON.stringify(body)).not.toContain(expectedRuntimeRole);
     expect(JSON.stringify(body)).not.toContain(expectedOrganizationId);
     expect(JSON.stringify(body)).not.toContain("hidden");
+  });
+
+  it("returns a fixed safe 503 envelope for an unexpected /diagnose inspector failure", async () => {
+    const worker = createCandidateRuntimeDiagnostic(async () => {
+      throw new Error("database-or-secret-details");
+    });
+
+    const response = await worker.fetch(
+      diagnosticRequest("/diagnose", "test-only-secret"),
+      env,
+    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const body = await response.json();
+    expect(body).toEqual({
+      candidateRuntimeDiagnostic: "UNAVAILABLE",
+    });
+    expect(JSON.stringify(body)).not.toContain("database-or-secret-details");
+    expect(JSON.stringify(body)).not.toContain("test-only-secret");
   });
 
   it("keeps execution health independent from resolver outcome", async () => {

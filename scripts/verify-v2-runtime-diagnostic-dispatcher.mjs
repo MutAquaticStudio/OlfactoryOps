@@ -13,6 +13,10 @@ const template = readFileSync(
   resolve("wrangler.v2-tenant-router-runtime-diagnostic.example.toml"),
   "utf8",
 );
+const responseVerifier = readFileSync(
+  resolve("scripts/verify-v2-runtime-diagnostic-response.mjs"),
+  "utf8",
+);
 const workerMatch = workflow.match(
   /^\s*DIAGNOSTIC_WORKER_NAME:\s*([^\s#]+)\s*$/m,
 );
@@ -41,28 +45,36 @@ const requiredFragments = [
   "environment: production",
   "confirm_diagnostic",
   "node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",
+  "node scripts/verify-v2-runtime-diagnostic-response.mjs ready",
+  "node scripts/verify-v2-runtime-diagnostic-response.mjs matrix",
+  "node scripts/verify-v2-runtime-diagnostic-response.mjs unavailable",
   "grep -Eq '(^routes\\s*=|^\\[\\[routes\\]\\]|custom_domain\\s*=)'",
-  "max_attempts=8",
+  "readiness_window_seconds=90",
+  "max_attempts=10",
+  "max_request_timeout_seconds=15",
+  "max_delay_seconds=12",
+  "DIAGNOSTIC_READY_ATTEMPT=$attempt",
+  "DIAGNOSTIC_READY_HTTP_STATUS=$http_status",
+  "DIAGNOSTIC_WORKER_READINESS=PASS",
+  "DIAGNOSTIC_WORKER_READINESS=FAIL",
+  "ROOT_CAUSE=PERSISTENT_WORKER_STARTUP_OR_PLATFORM_FAILURE",
+  'case "$http_status" in',
+  "404|500|503)",
+  'ready_url="${DIAGNOSTIC_WORKERS_DEV_URL}/ready"',
+  'diagnose_url="${DIAGNOSTIC_WORKERS_DEV_URL}/diagnose"',
+  "DIAGNOSTIC_EXECUTION_ESCAPED_SAFE_HANDLER=YES",
+  "DIAGNOSTIC_SAFE_BOOLEAN_MATRIX=NOT_RECEIVED",
   "diagnostic_response_file=.qa/candidate-runtime-diagnostic-response.json",
-  'for attempt in $(seq 1 "$max_attempts")',
-  'if [ "$http_status" = "200" ]; then',
-  'if [ "$http_status" != "404" ]; then',
-  "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_404",
-  "DIAGNOSTIC_WORKERS_DEV_INVOCATION=PASS",
-  "const safeBooleanKeys = [",
-  "runtimeDiagnosticExecution",
-  "actualHyperdriveRuntimeResolver",
-  "resolverInvocationProbeCompleted",
-  "runtimeResolverOrganizationMatch",
   "delay_seconds=$((delay_seconds * 2))",
-  'if [ "$delay_seconds" -gt 12 ]; then',
   "rm -f .qa/candidate-runtime-diagnostic-token",
+  "rm -f .qa/candidate-runtime-diagnostic-ready-response.json",
   "rm -f .qa/candidate-runtime-diagnostic-response.json",
   "curl --silent --show-error --output /dev/null --write-out '%{http_code}'",
   "--request DELETE",
   "--data '{}'",
   'test "$worker_status" = "404"',
-  "echo 'DIAGNOSTIC_WORKER_CLEANUP=PASS'",
+  "echo 'TEMPORARY_DIAGNOSTIC_WORKER_CLEANUP=PASS'",
+  "echo 'ORPHAN_DIAGNOSTIC_WORKER_EXISTS=NO'",
 ];
 
 for (const fragment of requiredFragments) {
@@ -116,6 +128,9 @@ const requiredWorkerFragments = [
   "V2_EXPECTED_RUNTIME_ROLE_SHA",
   "runtimeResolverOrganizationMatch",
   "public.v2_resolve_active_workspace_hostname($1)",
+  'candidateRuntimeDiagnostic: "READY"',
+  'if (path === "/ready") return ready()',
+  'if (path !== "/diagnose") return notFound()',
   'candidateRuntimeDiagnostic: "COMPLETE"',
   "safeBooleanMatrix",
 ];
@@ -136,6 +151,18 @@ if (
 }
 
 if (
+  !responseVerifier.includes('mode === "ready"') ||
+  !responseVerifier.includes('mode === "unavailable"') ||
+  !responseVerifier.includes('mode === "matrix"') ||
+  !responseVerifier.includes("RUNTIME_DIAGNOSTIC_EXECUTION=") ||
+  !responseVerifier.includes("ACTUAL_HYPERDRIVE_RUNTIME_RESOLVER=")
+) {
+  throw new Error(
+    "runtime diagnostic response verifier must validate READY, UNAVAILABLE, and safe matrix contracts",
+  );
+}
+
+if (
   /(?:routes\s*=|\[\[routes\]\]|custom_domain\s*=)/.test(template) ||
   !/^workers_dev\s*=\s*true$/m.test(template)
 ) {
@@ -151,27 +178,61 @@ if (
   );
 }
 
-const retryBlock =
+const readinessBlock =
   workflow.match(
-    /- name: Invoke the isolated Worker and verify safe runtime-path evidence[\s\S]*?- name: Delete the isolated diagnostic Worker and temporary token/,
+    /- name: Wait for isolated Worker readiness before database diagnosis[\s\S]*?- name: Invoke the ready isolated Worker once and verify safe runtime-path evidence/,
   )?.[0] ?? "";
 if (
-  !retryBlock.includes('if [ "$http_status" != "404" ]; then') ||
-  !retryBlock.includes("delay_seconds=$((delay_seconds * 2))")
+  !readinessBlock.includes("readiness_window_seconds=90") ||
+  !readinessBlock.includes("max_attempts=10") ||
+  !readinessBlock.includes("max_request_timeout_seconds=15") ||
+  !readinessBlock.includes("404|500|503)") ||
+  !readinessBlock.includes("DIAGNOSTIC_READY_ATTEMPT=$attempt") ||
+  !readinessBlock.includes("DIAGNOSTIC_READY_HTTP_STATUS=$http_status") ||
+  !readinessBlock.includes("delay_seconds=$((delay_seconds * 2))") ||
+  readinessBlock.includes('if [ "$http_status" != "404" ]; then')
 ) {
   throw new Error(
-    "workers.dev readiness retry must retry only HTTP 404 responses",
+    "workers.dev readiness must retry only 404, 500, and 503 within the bounded contract",
   );
 }
 
 const delays = [];
 let delay = 1;
-for (let attempt = 1; attempt < 8; attempt += 1) {
+for (let attempt = 1; attempt < 10; attempt += 1) {
   delays.push(delay);
   delay = Math.min(delay * 2, 12);
 }
-if (delays.join(",") !== "1,2,4,8,12,12,12") {
+if (delays.join(",") !== "1,2,4,8,12,12,12,12,12") {
   throw new Error("workers.dev retry delay calculation changed unexpectedly");
+}
+
+const diagnoseBlock =
+  workflow.match(
+    /- name: Invoke the ready isolated Worker once and verify safe runtime-path evidence[\s\S]*?- name: Delete the isolated diagnostic Worker and temporary token/,
+  )?.[0] ?? "";
+if (
+  !diagnoseBlock.includes('"$diagnose_url"') ||
+  diagnoseBlock.split('"$diagnose_url"').length - 1 !== 1 ||
+  !diagnoseBlock.includes("DIAGNOSTIC_EXECUTION_ESCAPED_SAFE_HANDLER=YES") ||
+  !diagnoseBlock.includes(
+    "node scripts/verify-v2-runtime-diagnostic-response.mjs unavailable",
+  )
+) {
+  throw new Error(
+    "diagnose must run exactly once after readiness and classify escaped safe-handler failures",
+  );
+}
+
+if (
+  workflow.indexOf(
+    "Wait for isolated Worker readiness before database diagnosis",
+  ) >=
+  workflow.indexOf(
+    "Invoke the ready isolated Worker once and verify safe runtime-path evidence",
+  )
+) {
+  throw new Error("diagnose must not be invoked before readiness succeeds");
 }
 
 const deletePath = "workers/scripts/$DIAGNOSTIC_WORKER_NAME";
@@ -192,7 +253,8 @@ console.log(
   `DIAGNOSTIC_WORKER_NAME_LENGTH_GATE=PASS name=${workerName} length=${workerName.length}`,
 );
 console.log(
-  "DIAGNOSTIC_WORKERS_DEV_RETRY_CONTRACT=PASS attempts=8 backoff=1,2,4,8,12,12,12",
+  "DIAGNOSTIC_WORKERS_DEV_RETRY_CONTRACT=PASS attempts=10 window_seconds=90 backoff=1,2,4,8,12,12,12,12,12",
 );
+console.log("DIAGNOSTIC_TWO_STAGE_CONTRACT=PASS");
 console.log("STAGED_DIAGNOSTIC_CONTRACT=PASS");
 console.log("DIAGNOSTIC_WORKER_CLEANUP_CONTRACT=PASS");
