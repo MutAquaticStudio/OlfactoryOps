@@ -1,0 +1,196 @@
+name: V2 Staging Scientific Feature Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      maintenance_sha:
+        description: Exact current main SHA containing the temporary recovery worker.
+        required: true
+        type: string
+      confirm_recovery:
+        description: Type RECOVER_ONLY_PROVEN_STALE_STAGING_FEATURE_CONTAINERS.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-scientific-feature-recovery
+  cancel-in-progress: false
+
+env:
+  RECOVERY_WORKER_NAME: oo-staging-feature-recovery
+  STAGING_CLOUD_RUNTIME_SCRIPT: olfactoryops-v2-cloud-runtime-staging
+  FEATURE_APPLICATION_ID: a036640d-69ba-4a68-9446-8e990e051e76
+  SCIENTIFIC_QUEUE_ID: 27cfb24e0ec44399a499c60d4d39623b
+  SCIENTIFIC_DLQ_ID: e951f2834df84f3890d3021fdac21884
+  TARGET_1_NAME: sciencejob_cdcc54472dad4869ac5ced448aa2d8f9
+  TARGET_1_ID: a81ce16d83a0dc49ff25fc8befb815b1a587bbdf2013eb436ccde39abb67f94e
+  TARGET_2_NAME: sciencejob_b97a60d3aaab405f8e4612efb12e38bd
+  TARGET_2_ID: d93296bfdb9e18b246708de0303f9b157e611855750e27dba4adbc4884ce699d
+
+jobs:
+  validate-maintenance-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      maintenance_sha: ${{ steps.revision.outputs.maintenance_sha }}
+    env:
+      MAINTENANCE_SHA: ${{ inputs.maintenance_sha }}
+      CONFIRM_RECOVERY: ${{ inputs.confirm_recovery }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_RECOVERY" = "RECOVER_ONLY_PROVEN_STALE_STAGING_FEATURE_CONTAINERS"
+          [[ "$MAINTENANCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$MAINTENANCE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${MAINTENANCE_SHA}^{commit}"
+          git show "${MAINTENANCE_SHA}:worker/staging-feature-recovery.ts" | grep -F "$TARGET_1_ID"
+          git show "${MAINTENANCE_SHA}:worker/staging-feature-recovery.ts" | grep -F "$TARGET_2_ID"
+          echo "maintenance_sha=$MAINTENANCE_SHA" >> "$GITHUB_OUTPUT"
+
+  recover-proven-stale-instances:
+    needs: validate-maintenance-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      MAINTENANCE_SHA: ${{ needs.validate-maintenance-revision.outputs.maintenance_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-maintenance-revision.outputs.maintenance_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected staging credentials without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Re-prove exact stale target ownership and zero pending scientific work
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler containers info "$FEATURE_APPLICATION_ID" --json > "$RUNNER_TEMP/feature-before.json"
+          npx wrangler containers instances "$FEATURE_APPLICATION_ID" --json > "$RUNNER_TEMP/feature-instances-before.json"
+          npx wrangler workflows instances list olfactoryops-v2-scientific-staging --status running --per-page 100 > "$RUNNER_TEMP/workflows-running.txt"
+          npx wrangler workflows instances list olfactoryops-v2-scientific-staging --status queued --per-page 100 > "$RUNNER_TEMP/workflows-queued.txt"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const instances = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/feature-instances-before.json`, 'utf8'))
+          const expected = [
+            [process.env.TARGET_1_ID, process.env.TARGET_1_NAME],
+            [process.env.TARGET_2_ID, process.env.TARGET_2_NAME],
+          ]
+          for (const [id, name] of expected) {
+            const match = instances.find((instance) => instance.id === id && instance.name === name && instance.state === 'running')
+            if (!match) throw new Error('a proven stale target no longer matches the expected running instance')
+          }
+          const app = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/feature-before.json`, 'utf8'))
+          if (app?.health?.instances?.assigned !== 0 || app?.health?.instances?.active !== 2 || app?.health?.instances?.healthy !== 0) throw new Error('feature application is no longer in the approved stale state')
+          for (const path of [`${process.env.RUNNER_TEMP}/workflows-running.txt`, `${process.env.RUNNER_TEMP}/workflows-queued.txt`]) {
+            const text = readFileSync(path, 'utf8')
+            if (/Showing [1-9][0-9]* instances/.test(text)) throw new Error('scientific workflow owns active or queued work')
+          }
+          NODE
+          for queue in "$SCIENTIFIC_QUEUE_ID" "$SCIENTIFIC_DLQ_ID"; do
+            curl --fail-with-body --silent --show-error \
+              -H "authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/queues/$queue/metrics" > "$RUNNER_TEMP/$queue-metrics.json"
+            node --input-type=module -e 'import { readFileSync } from "node:fs"; const body=JSON.parse(readFileSync(process.argv[1], "utf8")); if (!body?.success || body?.result?.backlog_count !== 0) throw new Error("queue backlog is not zero")' "$RUNNER_TEMP/$queue-metrics.json"
+          done
+      - name: Verify the temporary worker is absent before deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$RECOVERY_WORKER_NAME")"
+          test "$status" = "404"
+      - name: Validate and deploy the temporary external Durable Object worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config wrangler.staging-feature-recovery.toml --dry-run
+          echo "RECOVERY_WORKER_DEPLOY_ATTEMPTED=true" >> "$GITHUB_ENV"
+          npx wrangler deploy --config wrangler.staging-feature-recovery.toml
+          echo "RECOVERY_WORKER_DEPLOYED=true" >> "$GITHUB_ENV"
+      - name: Bind a newly generated ephemeral recovery token
+        shell: bash
+        run: |
+          set -euo pipefail
+          recovery_token="$(openssl rand -hex 32)"
+          printf '%s' "$recovery_token" | npx wrangler secret put RECOVERY_TOKEN --config wrangler.staging-feature-recovery.toml
+          printf '%s' "$recovery_token" > "$RUNNER_TEMP/recovery-token"
+          chmod 600 "$RUNNER_TEMP/recovery-token"
+      - name: Invoke the exact recovery request once and collect its bounded response
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 10
+          subdomain="$(curl --fail-with-body --silent --show-error -H "authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{const body=JSON.parse(s); if(!body?.success || !body?.result?.subdomain) process.exit(1); process.stdout.write(body.result.subdomain)})')"
+          recovery_token="$(cat "$RUNNER_TEMP/recovery-token")"
+          curl --fail-with-body --silent --show-error --max-time 300 \
+            -X POST -H "authorization: Bearer $recovery_token" \
+            "https://$RECOVERY_WORKER_NAME.$subdomain.workers.dev/recover" > "$RUNNER_TEMP/recovery-response.json"
+          rm -f "$RUNNER_TEMP/recovery-token"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const response = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/recovery-response.json`, 'utf8'))
+          const keys = ['target1IdentityMatch', 'target1BeforeState', 'target1StopSent', 'target1DestroySent', 'target1AfterState', 'target2IdentityMatch', 'target2BeforeState', 'target2StopSent', 'target2DestroySent', 'target2AfterState']
+          if (JSON.stringify(Object.keys(response).sort()) !== JSON.stringify([...keys].sort())) throw new Error('recovery response shape is unsafe or unexpected')
+          if (response.target1IdentityMatch !== true || response.target2IdentityMatch !== true) throw new Error('target identity check failed')
+          if (!['stopped', 'stopped_with_code'].includes(response.target1AfterState) || !['stopped', 'stopped_with_code'].includes(response.target2AfterState)) throw new Error('target lifecycle did not reach a terminal stopped state')
+          console.log(JSON.stringify(response))
+          NODE
+      - name: Verify authoritative Container capacity after recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler containers info "$FEATURE_APPLICATION_ID" --json > "$RUNNER_TEMP/feature-after.json"
+          npx wrangler containers instances "$FEATURE_APPLICATION_ID" --json > "$RUNNER_TEMP/feature-instances-after.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const app = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/feature-after.json`, 'utf8'))
+          const instances = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/feature-instances-after.json`, 'utf8'))
+          const stale = instances.filter((instance) => [process.env.TARGET_1_ID, process.env.TARGET_2_ID].includes(instance.id) && instance.state === 'running')
+          const health = app?.health?.instances
+          if (stale.length !== 0 || health?.active >= 2 || (app.max_instances - health.active) < 1) throw new Error('authoritative container capacity was not released')
+          console.log(JSON.stringify({ staleFeatureInstances: stale.length, featureActive: health.active, featureHealthy: health.healthy, featureAvailableCapacity: app.max_instances - health.active }))
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: staging-feature-recovery-evidence-${{ needs.validate-maintenance-revision.outputs.maintenance_sha }}
+          path: |
+            ${{ runner.temp }}/feature-before.json
+            ${{ runner.temp }}/feature-instances-before.json
+            ${{ runner.temp }}/feature-after.json
+            ${{ runner.temp }}/feature-instances-after.json
+            ${{ runner.temp }}/recovery-response.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove the temporary worker and token with no application-wide action
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$RUNNER_TEMP/recovery-token"
+          if [ "${RECOVERY_WORKER_DEPLOY_ATTEMPTED:-false}" = "true" ]; then
+            curl --fail-with-body --silent --show-error -X DELETE \
+              -H "authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$RECOVERY_WORKER_NAME"
+          fi
+          status="$(curl --silent --output /dev/null --write-out '%{http_code}' -H "authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$RECOVERY_WORKER_NAME")"
+          test "$status" = "404"
+          echo "TEMPORARY_RECOVERY_WORKER_CLEANUP=PASS"
