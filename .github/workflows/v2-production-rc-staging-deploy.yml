@@ -1,0 +1,124 @@
+name: V2 Production RC Staging Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact tagged current SHA of codex/v2-production-go-live to deploy only to staging.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type DEPLOY_TAGGED_PRODUCTION_RC_TO_STAGING to deploy staging artifacts without running acceptance fixtures.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-rc-staging-deployment
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  STAGING_HYPERDRIVE_ID: d7ac83bd79944e9dbd1f6eef30518dc3
+  FEATURE_IMAGE_DIGEST: sha256:bc02e087740cfbc4289ab1e2d1960142438b63b9ce6fdf1adc47d0231fa57e42
+  MODEL_IMAGE_DIGEST: sha256:dac572f05fbc2fca9ee6b50ab57ed830ed2129b452118d7493dd268859bf0bbe
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "DEPLOY_TAGGED_PRODUCTION_RC_TO_STAGING"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git fetch --tags --force origin
+          git tag --points-at "$RELEASE_SHA" -l 'v2-production-rc*' | grep -qx 'v2-production-rc[0-9][0-9]*'
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      RELEASE_SHA: ${{ needs.validate-release.outputs.release_sha }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-release.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require protected staging Cloudflare inputs without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Render and deploy the private staging Cloud Runtime
+        shell: bash
+        env:
+          CLOUD_RUNTIME_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          CLOUD_RUNTIME_HYPERDRIVE_ID: ${{ env.STAGING_HYPERDRIVE_ID }}
+          SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ env.FEATURE_IMAGE_DIGEST }}
+          SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ env.MODEL_IMAGE_DIGEST }}
+          CLOUD_RUNTIME_STAGING_CONFIG: .qa/wrangler.v2-cloud-runtime.staging.toml
+          CLOUD_RUNTIME_REQUIRE_READY: "true"
+        run: |
+          set -euo pipefail
+          node scripts/render-cloud-runtime-staging-config.mjs
+          node scripts/validate-cloud-runtime-config.mjs "$CLOUD_RUNTIME_STAGING_CONFIG"
+          npx wrangler deploy --config "$CLOUD_RUNTIME_STAGING_CONFIG" --keep-vars
+          secrets="$(npx wrangler secret list --config "$CLOUD_RUNTIME_STAGING_CONFIG")"
+          node --input-type=module -e 'const rows = JSON.parse(process.argv[1]); if (!rows.some((row) => row.name === "SCIENTIFIC_CONTAINER_SHARED_SECRET")) throw new Error("staging scientific secret binding is absent"); console.log("STAGING_SCIENTIFIC_SECRET_BINDING=PASS")' "$secrets"
+      - name: Render and deploy the staging API Worker and Tenant Router
+        shell: bash
+        env:
+          V2_API_STAGING_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          V2_API_STAGING_HYPERDRIVE_ID: ${{ env.STAGING_HYPERDRIVE_ID }}
+          V2_TENANT_ROUTER_STAGING_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          V2_TENANT_ROUTER_STAGING_HYPERDRIVE_ID: ${{ env.STAGING_HYPERDRIVE_ID }}
+        run: |
+          set -euo pipefail
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          node scripts/render-v2-api-staging-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-api-staging.toml --keep-vars
+          node scripts/render-v2-tenant-router-staging-config.mjs
+          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-staging.toml --keep-vars
+      - name: Build and deploy only the beta Pages branch
+        shell: bash
+        env:
+          RELEASE_GIT_SHA: ${{ needs.validate-release.outputs.release_sha }}
+          RELEASE_ENVIRONMENT: staging
+          VITE_API_BASE_URL: https://api-beta.labofscents.org/api/v1
+          VITE_V2_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+          VITE_V2_STAGING_PUBLIC_CUTOVER: "true"
+        run: |
+          set -euo pipefail
+          npm run build
+          npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta --commit-hash "$RELEASE_GIT_SHA" --commit-message "production RC staging $RELEASE_GIT_SHA" --commit-dirty=false
+      - name: Record exact staging deployment boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "STAGING_RC_DEPLOY=PASS"
+          echo "STAGING_RC_DEPLOY_SHA=$RELEASE_SHA"
