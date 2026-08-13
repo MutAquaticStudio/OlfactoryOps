@@ -45,6 +45,8 @@
     "test:qa:fixtures": "vitest run scripts/qa-isolated-fixture-support.test.mjs",
     "test:qa:role-fixtures": "node scripts/create-isolated-role-fixtures.mjs",
     "test:qa:production-smoke": "node scripts/run-production-smoke.mjs",
+    "test:qa:v2-production-candidate-browser": "node scripts/verify-v2-production-candidate-browser.mjs",
+    "test:qa:v2-production-candidate-acceptance": "node scripts/verify-v2-production-candidate-acceptance.mjs",
     "test:role-e2e:strict": "cross-env QA_REQUIRE_ROLE_E2E=true playwright test --config playwright.ux.config.ts e2e/role-workflows.playwright.ts",
     "release:identity:check": "node scripts/release-identity-check.mjs",
     "release:manifest:generate": "node scripts/release-manifest.mjs generate",

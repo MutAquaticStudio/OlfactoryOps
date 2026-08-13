@@ -27,6 +27,7 @@ const migrations = [
   'infra/postgres/migrations/0022_platform_control_plane.sql',
   'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
   'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
+  'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
 ]
 
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
