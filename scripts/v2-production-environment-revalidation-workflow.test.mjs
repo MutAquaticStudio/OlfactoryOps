@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 const workflowPath =
@@ -26,7 +27,9 @@ describe("production environment revalidation workflow contract", () => {
 
   it("has only read-only production checks and does not mutate deployment state", () => {
     const workflow = readFileSync(workflowPath, "utf8");
-    expect(workflow).toContain("await client.query('SELECT 1')");
+    expect(workflow).toContain(
+      "scripts/verify-production-database-connectivity.mjs",
+    );
     expect(workflow).toContain(
       "node scripts/verify-cloudflare-production-token.mjs",
     );
@@ -41,24 +44,40 @@ describe("production environment revalidation workflow contract", () => {
     expect(workflow).not.toContain("pull_request_target:");
   });
 
-  it("runs the bounded database probe from the exact RC9 dependency worktree", () => {
+  it("copies and runs the bounded database probe from the exact RC9 dependency worktree", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     const databaseStep = workflow
       .split("- name: Verify production database connectivity read-only")[1]
       .split("- name: Scan exact RC9 source and generated client bundle")[0];
+    const databaseRun = databaseStep
+      .split("run: |\n")[1]
+      .replace(/^          /gm, "");
     expect(workflow).toContain('npm ci --prefix "$RC9_WORKTREE"');
+    expect(databaseStep).toContain(
+      'ops_directory="$RC9_WORKTREE/.ops-revalidation"',
+    );
+    expect(databaseStep).toContain(
+      "scripts/verify-production-database-connectivity.mjs",
+    );
+    expect(databaseStep).toContain(
+      '"$ops_directory/verify-production-database-connectivity.mjs"',
+    );
     expect(databaseStep).toContain('cd "$RC9_WORKTREE"');
     expect(databaseStep.indexOf('cd "$RC9_WORKTREE"')).toBeLessThan(
-      databaseStep.indexOf("import pg from 'pg'"),
+      databaseStep.indexOf(
+        "node .ops-revalidation/verify-production-database-connectivity.mjs",
+      ),
     );
-    expect(databaseStep).toContain("await client.query('SELECT 1')");
     expect(databaseStep).not.toContain("NODE_PATH");
-    expect(databaseStep).toContain("connectionTimeoutMillis: 15_000");
-    expect(databaseStep).toContain("query_timeout: 15_000");
-    expect(databaseStep).toContain("statement_timeout: 15_000");
-    expect(databaseStep).not.toMatch(
-      /console\.log\([^)]*(?:PRODUCTION_DATABASE_URL|error|stack|host|user)/i,
-    );
+    expect(databaseStep).not.toContain("node --input-type=module <<'NODE'");
+    expect(databaseStep).toContain("trap 'rm -rf \"$ops_directory\"' EXIT");
+    const localBash =
+      process.platform === "win32"
+        ? "C:\\Program Files\\Git\\bin\\bash.exe"
+        : "bash";
+    expect(() =>
+      execFileSync(localBash, ["-n", "-c", databaseRun]),
+    ).not.toThrow();
   });
 
   it("cleans up only the runner-local RC9 worktree", () => {
@@ -66,6 +85,7 @@ describe("production environment revalidation workflow contract", () => {
     expect(workflow).toContain("if: always()");
     expect(workflow).toContain('git worktree remove --force "$RC9_WORKTREE"');
     expect(workflow).toContain("git worktree prune");
+    expect(workflow).toContain("RUNNER_LOCAL_RC9_WORKTREE_CLEANUP=PASS");
   });
 
   it("keeps all required runtime secrets inside the protected job", () => {
