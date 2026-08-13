@@ -24,9 +24,16 @@ const roles = [
 ]
 const materialViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Perfumer', 'R&D Scientist', 'Lab Technician', 'Procurement', 'Viewer'])
 const inventoryViewRoles = new Set(['Owner', 'Admin', 'Lab Manager', 'Lab Technician', 'Viewer'])
+const databaseTimeouts = {
+  connectionTimeoutMillis: 10_000,
+  query_timeout: 30_000,
+  statement_timeout: 30_000,
+  lock_timeout: 10_000,
+}
 
 function fail(code) { throw new Error(`REMOTE_STAGING_E2E=FAIL ${code}`) }
 function assert(condition, code) { if (!condition) fail(code) }
+function reportPhase(phase) { console.log(JSON.stringify({ remoteStagingPhase: phase })) }
 function postgresFailureCategory(error) {
   const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : ''
   if (code === '42501') return 'RLS_OR_PERMISSION'
@@ -91,13 +98,14 @@ function credentials(suffix, label) {
 }
 
 async function main() {
-  const client = new Client({ connectionString: databaseUrl })
+  const client = new Client({ connectionString: databaseUrl, ...databaseTimeouts })
   const suffix = randomUUID().replaceAll('-', '').slice(0, 18)
   const ownerA = credentials(suffix, 'Owner A')
   const ownerB = credentials(suffix, 'Owner B')
   const fixtureOrganizationIds = []
   const platformOperatorFixtureIds = []
   const roleResults = []
+  let phase = 'DATABASE_CONNECT'
 
   async function verifyRuntimeRoleWriteProbe() {
     const probeId = `probe_${suffix}`
@@ -184,14 +192,20 @@ async function main() {
   let executionError
   try {
     await client.connect()
+    phase = 'DATABASE_READY'
     await client.query('SELECT 1')
+    phase = 'RUNTIME_ROLE_WRITE_PROBE'
     await verifyRuntimeRoleWriteProbe()
 
+    phase = 'SIGNUP_TENANT_A'
     const first = await signup('tenant-a', ownerA)
+    phase = 'SIGNUP_TENANT_B'
     const second = await signup('tenant-b', ownerB)
+    phase = 'LOGIN_TENANT_FIXTURES'
     const sessionA = await login(first, first.hostname)
     const sessionB = await login(second, second.hostname)
 
+    phase = 'CREATE_TENANT_MATERIAL_FIXTURES'
     const materialA = await expectStatus('/v2/lab/materials', {
       method: 'POST', origin: sessionA.origin, cookie: sessionA.cookie, csrf: sessionA.csrf,
       idempotencyKey: `remote-material-a-${suffix}`,
@@ -219,6 +233,7 @@ async function main() {
     }, 404, 'tenant_b_cross_write_not_denied')
     await expectStatus('/v2/platform/me', { origin: sessionB.origin, cookie: sessionA.cookie }, 403, 'session_host_mismatch_not_denied')
 
+    phase = 'CREATE_ROLE_FIXTURES'
     const identities = new Map([['Owner', first]])
     for (const role of roles.filter((role) => role !== 'Owner')) {
       const identity = await signup(`role-${role}`, credentials(suffix, role))
@@ -228,6 +243,7 @@ async function main() {
       identities.set(role, identity)
     }
 
+    phase = 'VERIFY_ROLE_MATRIX'
     for (const role of roles) {
       const identity = identities.get(role)
       assert(identity, 'role_identity_missing')
@@ -242,6 +258,7 @@ async function main() {
 
     const viewer = identities.get('Viewer')
     assert(viewer, 'viewer_identity_missing')
+    phase = 'VERIFY_ROLE_POLICY_SCOPE'
     await client.query('INSERT INTO v2_memberships (id, organization_id, user_id, role_key, status) VALUES ($1, $2, $3, $4, $5)', [
       `mem_remote_${suffix}_viewer_b`, second.organizationId, viewer.userId, 'Viewer', 'ACTIVE',
     ])
@@ -257,6 +274,7 @@ async function main() {
     // Platform authority is a separate PostgreSQL assignment. A tenant Owner
     // remains denied until this staging-only fixture receives an explicit
     // PlatformOperator row; no email or tenant role is used as authority.
+    phase = 'VERIFY_PLATFORM_ADMIN'
     await expectStatus('/v2/admin/me', { origin: viewerA.origin, cookie: viewerA.cookie }, 403, 'tenant_owner_platform_access_not_denied')
     const controlPlane = await signup('platform-control', credentials(suffix, 'Platform control'))
     await client.query(
@@ -311,6 +329,8 @@ async function main() {
       tenantIsolationStaging: 'PASS', roleE2eStaging: 'PASS', platformAdminStaging: 'PASS', roles: roleResults,
     }))
   } catch (error) {
+    reportPhase(phase)
+    console.log(JSON.stringify({ remoteStagingFailure: { phase, category: postgresFailureCategory(error) } }))
     executionError = error
   }
 
