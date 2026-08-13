@@ -41,6 +41,33 @@ describe("production environment revalidation workflow contract", () => {
     expect(workflow).not.toContain("pull_request_target:");
   });
 
+  it("runs the bounded database probe from the exact RC9 dependency worktree", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    const databaseStep = workflow
+      .split("- name: Verify production database connectivity read-only")[1]
+      .split("- name: Scan exact RC9 source and generated client bundle")[0];
+    expect(workflow).toContain('npm ci --prefix "$RC9_WORKTREE"');
+    expect(databaseStep).toContain('cd "$RC9_WORKTREE"');
+    expect(databaseStep.indexOf('cd "$RC9_WORKTREE"')).toBeLessThan(
+      databaseStep.indexOf("import pg from 'pg'"),
+    );
+    expect(databaseStep).toContain("await client.query('SELECT 1')");
+    expect(databaseStep).not.toContain("NODE_PATH");
+    expect(databaseStep).toContain("connectionTimeoutMillis: 15_000");
+    expect(databaseStep).toContain("query_timeout: 15_000");
+    expect(databaseStep).toContain("statement_timeout: 15_000");
+    expect(databaseStep).not.toMatch(
+      /console\.log\([^)]*(?:PRODUCTION_DATABASE_URL|error|stack|host|user)/i,
+    );
+  });
+
+  it("cleans up only the runner-local RC9 worktree", () => {
+    const workflow = readFileSync(workflowPath, "utf8");
+    expect(workflow).toContain("if: always()");
+    expect(workflow).toContain('git worktree remove --force "$RC9_WORKTREE"');
+    expect(workflow).toContain("git worktree prune");
+  });
+
   it("keeps all required runtime secrets inside the protected job", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     for (const name of [
