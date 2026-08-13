@@ -23,7 +23,7 @@ if (!validWorkerName || workerName.length > 63) {
 
 const requiredFragments = [
   "TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b",
-  "DIAGNOSTIC_SOURCE_SHA: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f",
+  "DIAGNOSTIC_SOURCE_SHA: 27c523a09cba866b98fc8a91930ca3c246626737",
   "environment: production",
   "confirm_diagnostic",
   "node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",

@@ -21,7 +21,7 @@ concurrency:
 
 env:
   DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
-  DIAGNOSTIC_SOURCE_SHA: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f
+  DIAGNOSTIC_SOURCE_SHA: 27c523a09cba866b98fc8a91930ca3c246626737
   TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
   DIAGNOSTIC_WORKER_NAME: oo-v2-router-runtime-diag
@@ -47,7 +47,7 @@ jobs:
           node scripts/verify-v2-runtime-diagnostic-dispatcher.mjs
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
           test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
-          test "$DIAGNOSTIC_SOURCE_SHA" = "681cc26d58bc1946cf5ec5a8e85f0e988c0a841f"
+          test "$DIAGNOSTIC_SOURCE_SHA" = "27c523a09cba866b98fc8a91930ca3c246626737"
           suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
           slug="${FIXTURE_HOSTNAME%"$suffix"}"
           test "$slug" != "$FIXTURE_HOSTNAME"
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f
+          ref: 27c523a09cba866b98fc8a91930ca3c246626737
       - uses: actions/setup-node@v4
         with:
           node-version: 24
