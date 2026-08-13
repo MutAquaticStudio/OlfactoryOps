@@ -29,4 +29,8 @@ describe('scientific container routing', () => {
       ])
     }
   })
+
+  it('keeps a pool lane at or below its matching Container instance cap', () => {
+    expect(scientificContainerPoolSize).toBeLessThanOrEqual(2)
+  })
 })
