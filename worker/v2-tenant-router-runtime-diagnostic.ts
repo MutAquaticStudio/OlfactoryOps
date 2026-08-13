@@ -1,5 +1,4 @@
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { Client, type QueryResultRow } from "pg";
 
 const diagnosticTokenHeader = "x-olfactoryops-candidate-runtime-diagnostic";
 const candidateBaseDomain = "next.labofscents.org";
@@ -126,51 +125,55 @@ function firstRow<T>(rows: T[]) {
   return rows[0];
 }
 
-function createPrismaRuntimeProbeExecutor(
+function createNodePostgresRuntimeProbeExecutor(
   env: V2TenantRouterRuntimeDiagnosticEnv,
   hostname: string,
 ): RuntimeDiagnosticProbeExecutor {
-  const prisma = new PrismaClient({
-    adapter: new PrismaPg({
-      connectionString: env.HYPERDRIVE.connectionString,
-    }),
+  const client = new Client({
+    connectionString: env.HYPERDRIVE.connectionString,
   });
+  let connected = false;
+
+  async function queryRow<T extends QueryResultRow>(
+    text: string,
+    values: unknown[] = [],
+  ) {
+    return firstRow((await client.query<T>(text, values)).rows);
+  }
 
   return {
     async databaseIdentity() {
-      return firstRow(
-        await prisma.$queryRaw<DatabaseIdentityRow[]>`
+      await client.connect();
+      connected = true;
+      return queryRow<DatabaseIdentityRow>(
+        `
         SELECT
           current_database() AS "databaseName",
-          current_user = ${env.V2_RUNTIME_DB_ROLE} AS "currentUserMatchesExpected",
-          session_user = ${env.V2_RUNTIME_DB_ROLE} AS "sessionUserMatchesExpected"
+          current_user = $1 AS "currentUserMatchesExpected",
+          session_user = $1 AS "sessionUserMatchesExpected"
       `,
+        [env.V2_RUNTIME_DB_ROLE],
       );
     },
     async sessionContext() {
-      return firstRow(
-        await prisma.$queryRaw<SessionContextRow[]>`
+      return queryRow<SessionContextRow>(`
         SELECT
           COALESCE(NULLIF(current_setting('app.request_hostname', true), ''), '') <> '' AS "requestHostnameContextPresent",
           COALESCE(NULLIF(current_setting('app.organization_id', true), ''), '') <> '' AS "organizationContextPresent",
           COALESCE(NULLIF(current_setting('app.user_id', true), ''), '') <> '' AS "userContextPresent"
-      `,
-      );
+      `);
     },
     async rlsMetadata() {
-      return firstRow(
-        await prisma.$queryRaw<RlsMetadataRow[]>`
+      return queryRow<RlsMetadataRow>(`
         SELECT
           COALESCE((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.v2_workspace_hostnames'::regclass), false) AS "workspaceHostnamesRlsEnabled",
           COALESCE((SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.v2_workspace_hostnames'::regclass), false) AS "workspaceHostnamesForceRls",
           COALESCE((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.v2_organizations'::regclass), false) AS "organizationsRlsEnabled",
           COALESCE((SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.v2_organizations'::regclass), false) AS "organizationsForceRls"
-      `,
-      );
+      `);
     },
     async resolverMetadata() {
-      return firstRow(
-        await prisma.$queryRaw<ResolverMetadataRow[]>`
+      return queryRow<ResolverMetadataRow>(`
         SELECT
           EXISTS (
             SELECT 1
@@ -251,57 +254,67 @@ function createPrismaRuntimeProbeExecutor(
               AND NOT function_owner.rolsuper
               AND NOT function_owner.rolbypassrls
           ) AS "functionOwnerForceRlsConstrained"
-      `,
-      );
+      `);
     },
     async resolverPrivilege() {
-      return firstRow(
-        await prisma.$queryRaw<{ runtimeExecuteGranted: boolean }[]>`
+      return (
+        await queryRow<{ runtimeExecuteGranted: boolean }>(`
         SELECT has_function_privilege(
           current_user,
           'public.v2_resolve_active_workspace_hostname(text)',
           'EXECUTE'
         ) AS "runtimeExecuteGranted"
-      `,
+      `)
       ).runtimeExecuteGranted;
     },
     async directHostnameVisibility() {
-      return firstRow(
-        await prisma.$queryRaw<{ visible: boolean }[]>`
+      return (
+        await queryRow<{ visible: boolean }>(
+          `
         SELECT EXISTS (
           SELECT 1
           FROM public.v2_workspace_hostnames hostname
-          WHERE hostname.hostname = ${hostname}
+          WHERE hostname.hostname = $1
             AND hostname.status = 'ACTIVE'
         ) AS "visible"
       `,
+          [hostname],
+        )
       ).visible;
     },
     async directOrganizationVisibility() {
-      return firstRow(
-        await prisma.$queryRaw<{ visible: boolean }[]>`
+      return (
+        await queryRow<{ visible: boolean }>(
+          `
         SELECT EXISTS (
           SELECT 1
           FROM public.v2_workspace_hostnames hostname
           INNER JOIN public.v2_organizations organization ON organization.id = hostname.organization_id
-          WHERE hostname.hostname = ${hostname}
+          WHERE hostname.hostname = $1
             AND hostname.status = 'ACTIVE'
             AND organization.status = 'ACTIVE'
         ) AS "visible"
       `,
+          [hostname],
+        )
       ).visible;
     },
     async resolverInvocation() {
-      return firstRow(
-        await prisma.$queryRaw<{ visible: boolean }[]>`
+      return (
+        await queryRow<{ visible: boolean }>(
+          `
         SELECT EXISTS (
           SELECT 1
-          FROM public.v2_resolve_active_workspace_hostname(${hostname})
+          FROM public.v2_resolve_active_workspace_hostname($1)
         ) AS "visible"
       `,
+          [hostname],
+        )
       ).visible;
     },
-    disconnect: () => prisma.$disconnect(),
+    disconnect: async () => {
+      if (connected) await client.end();
+    },
   };
 }
 
@@ -351,7 +364,7 @@ async function applyProbe<T>(run: () => Promise<T>, apply: (value: T) => void) {
 
 export async function inspectCandidateRuntime(
   env: V2TenantRouterRuntimeDiagnosticEnv,
-  createExecutor: RuntimeDiagnosticProbeExecutorFactory = createPrismaRuntimeProbeExecutor,
+  createExecutor: RuntimeDiagnosticProbeExecutorFactory = createNodePostgresRuntimeProbeExecutor,
 ): Promise<CandidateRuntimeDiagnostic> {
   const hostname = normalizedDiagnosticFixtureHostname(
     env.DIAGNOSTIC_FIXTURE_HOSTNAME,
