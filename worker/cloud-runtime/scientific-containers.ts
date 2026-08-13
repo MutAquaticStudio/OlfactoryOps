@@ -7,6 +7,7 @@ import {
   scientificContainerStartupPollIntervalMs,
   scientificContainerStartupTimeoutMs,
 } from './scientific-container-env.js'
+import { ScientificContainerStartup } from './scientific-container-startup.js'
 
 type CloudRuntimeSecretBindings = {
   SCIENTIFIC_CONTAINER_SHARED_SECRET?: string
@@ -14,6 +15,7 @@ type CloudRuntimeSecretBindings = {
 
 abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings> {
   abstract readonly diagnosticContainer: 'feature' | 'model'
+  private readonly startup = new ScientificContainerStartup()
 
   constructor(ctx: ConstructorParameters<typeof Container<CloudRuntimeSecretBindings>>[0], env: CloudRuntimeSecretBindings) {
     super(ctx, env)
@@ -42,6 +44,7 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
   }
 
   override onStop({ exitCode }: StopParams): void {
+    this.startup.reset()
     console.log(
       JSON.stringify({
         event: 'scientific_container_stop',
@@ -53,14 +56,18 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
 
   override async fetch(request: Request): Promise<Response> {
     if (this.defaultPort === undefined) throw new Error('SCIENTIFIC_CONTAINER_PORT_NOT_CONFIGURED')
-    await this.startAndWaitForPorts({
-      ports: this.defaultPort,
-      cancellationOptions: {
-        abort: request.signal,
-        instanceGetTimeoutMS: scientificContainerStartupTimeoutMs,
-        portReadyTimeoutMS: scientificContainerStartupTimeoutMs,
-        waitInterval: scientificContainerStartupPollIntervalMs,
-      },
+    await this.startup.ensure(async () => {
+      await this.startAndWaitForPorts({
+        ports: this.defaultPort,
+        // Startup belongs to the shared pool lane rather than a single
+        // request. A caller disconnecting must not abort the startup awaited
+        // by other authorized workflow deliveries.
+        cancellationOptions: {
+          instanceGetTimeoutMS: scientificContainerStartupTimeoutMs,
+          portReadyTimeoutMS: scientificContainerStartupTimeoutMs,
+          waitInterval: scientificContainerStartupPollIntervalMs,
+        },
+      })
     })
     return super.fetch(request)
   }
