@@ -168,7 +168,31 @@ jobs:
             | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{const value=JSON.parse(body)?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(value??""))process.exit(2);process.stdout.write(value)})')"
           diagnostic_token="$(cat .qa/candidate-runtime-diagnostic-token)"
           diagnostic_url="https://${DIAGNOSTIC_WORKER_NAME}.${subdomain}.workers.dev/"
-          response="$(curl --fail-with-body --silent --show-error --max-time 30 -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" "$diagnostic_url")"
+          diagnostic_response_file=.qa/candidate-runtime-diagnostic-response.json
+          max_attempts=8
+          delay_seconds=1
+          for attempt in $(seq 1 "$max_attempts"); do
+            http_status="$(curl --silent --show-error --max-time 30 --output "$diagnostic_response_file" --write-out '%{http_code}' \
+              -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" "$diagnostic_url")"
+            if [ "$http_status" = "200" ]; then
+              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=PASS attempts=$attempt"
+              break
+            fi
+            if [ "$http_status" != "404" ]; then
+              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_$http_status attempt=$attempt" >&2
+              exit 1
+            fi
+            if [ "$attempt" = "$max_attempts" ]; then
+              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_404 attempts=$attempt" >&2
+              exit 1
+            fi
+            sleep "$delay_seconds"
+            delay_seconds=$((delay_seconds * 2))
+            if [ "$delay_seconds" -gt 12 ]; then
+              delay_seconds=12
+            fi
+          done
+          response="$(cat "$diagnostic_response_file")"
           RESPONSE="$response" RELEASE_SHA="$RELEASE_SHA" node --input-type=module <<'EOF'
           const body = JSON.parse(process.env.RESPONSE)
           const requiredTrue = [
@@ -216,6 +240,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .qa/candidate-runtime-diagnostic-token
+          rm -f .qa/candidate-runtime-diagnostic-response.json
           worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"

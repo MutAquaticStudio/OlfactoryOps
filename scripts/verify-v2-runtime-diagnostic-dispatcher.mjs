@@ -28,7 +28,17 @@ const requiredFragments = [
   "confirm_diagnostic",
   "node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",
   "grep -Eq '(^routes\\s*=|^\\[\\[routes\\]\\]|custom_domain\\s*=)'",
+  "max_attempts=8",
+  "diagnostic_response_file=.qa/candidate-runtime-diagnostic-response.json",
+  'for attempt in $(seq 1 "$max_attempts")',
+  'if [ "$http_status" = "200" ]; then',
+  'if [ "$http_status" != "404" ]; then',
+  "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_404",
+  "DIAGNOSTIC_WORKERS_DEV_INVOCATION=PASS",
+  "delay_seconds=$((delay_seconds * 2))",
+  'if [ "$delay_seconds" -gt 12 ]; then',
   "rm -f .qa/candidate-runtime-diagnostic-token",
+  "rm -f .qa/candidate-runtime-diagnostic-response.json",
   "curl --silent --show-error --output /dev/null --write-out '%{http_code}'",
   "--request DELETE",
   "--data '{}'",
@@ -49,6 +59,29 @@ if (workflow.includes("wrangler delete")) {
   );
 }
 
+const retryBlock =
+  workflow.match(
+    /- name: Invoke the isolated Worker and verify safe runtime-path evidence[\s\S]*?- name: Delete the isolated diagnostic Worker and temporary token/,
+  )?.[0] ?? "";
+if (
+  !retryBlock.includes('if [ "$http_status" != "404" ]; then') ||
+  !retryBlock.includes("delay_seconds=$((delay_seconds * 2))")
+) {
+  throw new Error(
+    "workers.dev readiness retry must retry only HTTP 404 responses",
+  );
+}
+
+const delays = [];
+let delay = 1;
+for (let attempt = 1; attempt < 8; attempt += 1) {
+  delays.push(delay);
+  delay = Math.min(delay * 2, 12);
+}
+if (delays.join(",") !== "1,2,4,8,12,12,12") {
+  throw new Error("workers.dev retry delay calculation changed unexpectedly");
+}
+
 const deletePath = "workers/scripts/$DIAGNOSTIC_WORKER_NAME";
 const cleanupBlock =
   workflow.match(
@@ -65,5 +98,8 @@ if (
 
 console.log(
   `DIAGNOSTIC_WORKER_NAME_LENGTH_GATE=PASS name=${workerName} length=${workerName.length}`,
+);
+console.log(
+  "DIAGNOSTIC_WORKERS_DEV_RETRY_CONTRACT=PASS attempts=8 backoff=1,2,4,8,12,12,12",
 );
 console.log("DIAGNOSTIC_WORKER_CLEANUP_CONTRACT=PASS");
