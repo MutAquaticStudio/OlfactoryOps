@@ -80,6 +80,13 @@ test('candidate acceptance never rethrows database details or generated fixture 
   expect(safeExecutionFailure(new Error('PRODUCTION_CANDIDATE_ACCEPTANCE=FAIL password=candidate-abc')).message).toBe('PRODUCTION_CANDIDATE_ACCEPTANCE=FAIL DATABASE')
 })
 
+test('candidate platform-owner proof is explicitly isolated from a real owner', () => {
+  const verifier = readFileSync('scripts/verify-v2-production-candidate-acceptance.mjs', 'utf8')
+
+  expect(verifier).toContain("SELECT 1 FROM v2_platform_operators WHERE role_key = 'PLATFORM_OWNER' AND status = 'ACTIVE' LIMIT 1")
+  expect(verifier).toContain("'platform_owner_fixture_not_isolated'")
+})
+
 test('candidate Pages CSP explicitly permits only the candidate API origin', () => {
   const headers = readFileSync('public/_headers', 'utf8')
 

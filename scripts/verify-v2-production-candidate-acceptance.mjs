@@ -223,6 +223,8 @@ export async function verifyProductionCandidateAcceptance(environment = process.
 
     await expectStatus(config, '/v2/admin/me', { origin: viewerA.origin, cookie: viewerA.cookie }, 403, 'tenant_owner_platform_access_not_denied')
     const controlPlane = await signup('platform-control', credentials(suffix, 'Platform control'))
+    const activePlatformOwner = await client.query("SELECT 1 FROM v2_platform_operators WHERE role_key = 'PLATFORM_OWNER' AND status = 'ACTIVE' LIMIT 1")
+    assert(activePlatformOwner.rows.length === 0, 'platform_owner_fixture_not_isolated')
     await client.query(
       `INSERT INTO v2_platform_operators (id, user_id, role_key, status, mfa_required, created_by)
        VALUES ($1, $2, 'PLATFORM_OWNER', 'ACTIVE', false, $2), ($3, $4, 'PLATFORM_SUPPORT', 'ACTIVE', false, $2)`,
