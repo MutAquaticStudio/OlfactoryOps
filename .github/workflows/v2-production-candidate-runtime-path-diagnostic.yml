@@ -3,6 +3,10 @@ name: V2 Production Candidate Hyperdrive Runtime Diagnostic
 on:
   workflow_dispatch:
     inputs:
+      release_sha:
+        description: Exact immutable RC release SHA approved for this diagnostic.
+        required: true
+        type: string
       fixture_hostname:
         description: Exact isolated candidate workspace hostname under next.labofscents.org.
         required: true
@@ -20,19 +24,24 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
-  DIAGNOSTIC_SOURCE_SHA: 27c523a09cba866b98fc8a91930ca3c246626737
-  TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+  RELEASE_BRANCH: codex/v2-production-go-live
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  EXPECTED_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  EXPECTED_ORGANIZATION_ID_SHA: 9aa21989136c3edbd2f04466a25f38254f9611d1a251013f9106f2f8712f1a88
+  EXPECTED_RUNTIME_ROLE_SHA: 4a84d79d5970e7f76b4e6a11d34519a43c9a8301a20d75966737c7561352b9a9
+  EXPECTED_PRODUCTION_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
-  DIAGNOSTIC_WORKER_NAME: oo-v2-router-runtime-diag
+  DIAGNOSTIC_WORKER_NAME: oo-v2-router-rc9-runtime-diag
 
 jobs:
   validate-diagnostic-input:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      release_sha: ${{ steps.validation.outputs.release_sha }}
       fixture_hostname: ${{ steps.validation.outputs.fixture_hostname }}
     env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
       FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
       CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
     steps:
@@ -40,35 +49,38 @@ jobs:
         with:
           fetch-depth: 0
       - id: validation
-        name: Validate the pinned target and reviewed diagnostic source
+        name: Validate the exact RC9 target and route-free diagnostic contract
         shell: bash
         run: |
           set -euo pipefail
           node scripts/verify-v2-runtime-diagnostic-dispatcher.mjs
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
-          test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
-          test "$DIAGNOSTIC_SOURCE_SHA" = "27c523a09cba866b98fc8a91930ca3c246626737"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$EXPECTED_FIXTURE_HOSTNAME"
+          [[ "$TARGET_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ORGANIZATION_ID_SHA" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$EXPECTED_RUNTIME_ROLE_SHA" =~ ^[0-9a-f]{64}$ ]]
+          test "$EXPECTED_PRODUCTION_HYPERDRIVE_ID" = "b415b7572d9f45058ebb4ec4166b8739"
           suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
           slug="${FIXTURE_HOSTNAME%"$suffix"}"
           test "$slug" != "$FIXTURE_HOSTNAME"
           test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
           [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
           git fetch --no-tags origin \
-            "+refs/heads/$DIAGNOSTIC_SOURCE_BRANCH:refs/remotes/origin/$DIAGNOSTIC_SOURCE_BRANCH"
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
           git fetch --tags origin
           git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
-          git cat-file -e "${DIAGNOSTIC_SOURCE_SHA}^{commit}"
-          test "$(git rev-parse 'v2-production-rc2^{}')" = "$TARGET_RELEASE_SHA"
+          test "$(git rev-parse 'v2-production-rc9^{}')" = "$TARGET_RELEASE_SHA"
+          test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$TARGET_RELEASE_SHA"
           [[ "$DIAGNOSTIC_WORKER_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
           test "${#DIAGNOSTIC_WORKER_NAME}" -le 63
-          diagnostic_source_branch_sha="$(git rev-parse "origin/${DIAGNOSTIC_SOURCE_BRANCH}")"
-          git merge-base --is-ancestor "$DIAGNOSTIC_SOURCE_SHA" "$diagnostic_source_branch_sha"
           for required_file in \
             worker/v2-tenant-router-runtime-diagnostic.ts \
             scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs \
             wrangler.v2-tenant-router-runtime-diagnostic.example.toml; do
-            git cat-file -e "$DIAGNOSTIC_SOURCE_SHA:$required_file"
+            test -f "$required_file"
           done
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
 
   deploy-and-invoke-runtime-path-diagnostic:
@@ -81,13 +93,14 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
       PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+      RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
       DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
-      V2_RUNTIME_DB_ROLE: hyperdrive_user
+      V2_RUNTIME_DIAGNOSTIC_EXPECTED_ORGANIZATION_ID_SHA: ${{ env.EXPECTED_ORGANIZATION_ID_SHA }}
+      V2_RUNTIME_DIAGNOSTIC_EXPECTED_RUNTIME_ROLE_SHA: ${{ env.EXPECTED_RUNTIME_ROLE_SHA }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 27c523a09cba866b98fc8a91930ca3c246626737
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -99,6 +112,7 @@ jobs:
           set -euo pipefail
           test -n "$PRODUCTION_DATABASE_URL"
           test -n "$PRODUCTION_HYPERDRIVE_ID"
+          test "$PRODUCTION_HYPERDRIVE_ID" = "$EXPECTED_PRODUCTION_HYPERDRIVE_ID"
           node --input-type=module <<'EOF'
           import { appendFileSync } from 'node:fs'
           import { createHash } from 'node:crypto'
@@ -112,9 +126,11 @@ jobs:
       - name: Render and deploy the route-free diagnostic Worker
         shell: bash
         env:
-          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
           V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
           V2_RUNTIME_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+          V2_RUNTIME_DIAGNOSTIC_EXPECTED_ORGANIZATION_ID_SHA: ${{ env.EXPECTED_ORGANIZATION_ID_SHA }}
+          V2_RUNTIME_DIAGNOSTIC_EXPECTED_RUNTIME_ROLE_SHA: ${{ env.EXPECTED_RUNTIME_ROLE_SHA }}
           V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
         run: |
           set -euo pipefail
@@ -122,8 +138,8 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$V2_RUNTIME_DIAGNOSTIC_EXPECTED_DATABASE_NAME_SHA"
           test "$V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID" = "$PRODUCTION_HYPERDRIVE_ID"
-          npm run prisma:generate:v2
-          npm run generate:v2-worker-transport
+          test -n "$V2_RUNTIME_DIAGNOSTIC_EXPECTED_ORGANIZATION_ID_SHA"
+          test -n "$V2_RUNTIME_DIAGNOSTIC_EXPECTED_RUNTIME_ROLE_SHA"
           node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs
           DIAGNOSTIC_WORKER_NAME="$DIAGNOSTIC_WORKER_NAME" node --input-type=module <<'EOF'
           import { readFileSync, writeFileSync } from 'node:fs'
@@ -193,7 +209,7 @@ jobs:
             fi
           done
           response="$(cat "$diagnostic_response_file")"
-          RESPONSE="$response" RELEASE_SHA="$RELEASE_SHA" node --input-type=module <<'EOF'
+          RESPONSE="$response" node --input-type=module <<'EOF'
           const body = JSON.parse(process.env.RESPONSE)
           const safeBooleanKeys = [
             'databaseProbeCompleted', 'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
@@ -206,9 +222,9 @@ jobs:
             'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained', 'resolverPrivilegeProbeCompleted',
             'runtimeExecuteGranted', 'directHostnameProbeCompleted', 'runtimeDirectHostnameVisible',
             'directOrganizationProbeCompleted', 'runtimeDirectOrganizationVisible', 'resolverInvocationProbeCompleted',
-            'runtimeResolverResult',
+            'runtimeResolverResult', 'runtimeResolverOrganizationMatch',
           ]
-          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || safeBooleanKeys.some((key) => typeof body[key] !== 'boolean')) {
+          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || safeBooleanKeys.some((key) => typeof body[key] !== 'boolean')) {
             console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'SAFE_BOOLEAN_CONTRACT_FAILED' }))
             process.exit(2)
           }
@@ -221,11 +237,10 @@ jobs:
           ].every(Boolean) ? 'PASS' : 'FAIL'
           const actualHyperdriveRuntimeResolver = !body.resolverInvocationProbeCompleted
             ? 'UNPROVEN'
-            : body.runtimeResolverResult ? 'PASS' : 'FAIL'
+            : body.runtimeResolverResult && body.runtimeResolverOrganizationMatch ? 'PASS' : 'FAIL'
           console.log(JSON.stringify({
             runtimeDiagnosticExecution,
             actualHyperdriveRuntimeResolver,
-            targetReleaseSha: body.targetReleaseSha,
             ...Object.fromEntries(safeBooleanKeys.map((key) => [key, body[key]])),
           }))
           if (runtimeDiagnosticExecution !== 'PASS') process.exit(3)

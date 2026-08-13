@@ -5,6 +5,14 @@ const workflowPath = resolve(
   ".github/workflows/v2-production-candidate-runtime-path-diagnostic.yml",
 );
 const workflow = readFileSync(workflowPath, "utf8");
+const worker = readFileSync(
+  resolve("worker/v2-tenant-router-runtime-diagnostic.ts"),
+  "utf8",
+);
+const template = readFileSync(
+  resolve("wrangler.v2-tenant-router-runtime-diagnostic.example.toml"),
+  "utf8",
+);
 const workerMatch = workflow.match(
   /^\s*DIAGNOSTIC_WORKER_NAME:\s*([^\s#]+)\s*$/m,
 );
@@ -22,8 +30,14 @@ if (!validWorkerName || workerName.length > 63) {
 }
 
 const requiredFragments = [
-  "TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b",
-  "DIAGNOSTIC_SOURCE_SHA: 27c523a09cba866b98fc8a91930ca3c246626737",
+  "workflow_dispatch:",
+  "contents: read",
+  "TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7",
+  "EXPECTED_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org",
+  "EXPECTED_PRODUCTION_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739",
+  "v2-production-rc9^{}",
+  'test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$TARGET_RELEASE_SHA"',
+  "release_sha:",
   "environment: production",
   "confirm_diagnostic",
   "node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",
@@ -39,6 +53,7 @@ const requiredFragments = [
   "runtimeDiagnosticExecution",
   "actualHyperdriveRuntimeResolver",
   "resolverInvocationProbeCompleted",
+  "runtimeResolverOrganizationMatch",
   "delay_seconds=$((delay_seconds * 2))",
   'if [ "$delay_seconds" -gt 12 ]; then',
   "rm -f .qa/candidate-runtime-diagnostic-token",
@@ -61,6 +76,70 @@ if (workflow.includes("wrangler delete")) {
   throw new Error(
     "diagnostic cleanup must use the direct Workers Scripts DELETE API, never wrangler delete",
   );
+}
+
+if (
+  workflow.includes("5985834a0e14728c81c8c028a72122ded544bd6b") ||
+  workflow.includes("DIAGNOSTIC_SOURCE_SHA") ||
+  workflow.includes("DIAGNOSTIC_SOURCE_BRANCH")
+) {
+  throw new Error(
+    "diagnostic dispatcher must not retain RC2 or external-source pins",
+  );
+}
+
+if (
+  /(?:workers\/domains|workers\/routes|\.labofscents\.org\/\*)/.test(
+    workflow,
+  ) ||
+  /^\s*(?:routes\s*=|\[\[routes\]\]|custom_domain\s*=)/m.test(workflow)
+) {
+  throw new Error(
+    "diagnostic dispatcher must remain workers.dev only without routes or custom domains",
+  );
+}
+
+if (
+  /(?:gh\s+variable|gh\s+secret|wrangler\s+secret\s+delete|\b(?:INSERT\s+INTO|UPDATE\s+public|DELETE\s+FROM|ALTER\s+TABLE|GRANT\s+|REVOKE\s+))/i.test(
+    workflow,
+  )
+) {
+  throw new Error(
+    "diagnostic dispatcher must not mutate environment metadata or PostgreSQL",
+  );
+}
+
+const requiredWorkerFragments = [
+  'await client.query("BEGIN READ ONLY")',
+  'await client.query("ROLLBACK")',
+  "V2_EXPECTED_ORGANIZATION_ID_SHA",
+  "V2_EXPECTED_RUNTIME_ROLE_SHA",
+  "runtimeResolverOrganizationMatch",
+  "public.v2_resolve_active_workspace_hostname($1)",
+  'candidateRuntimeDiagnostic: "COMPLETE"',
+  "safeBooleanMatrix",
+];
+for (const fragment of requiredWorkerFragments) {
+  if (!worker.includes(fragment)) {
+    throw new Error(
+      `runtime diagnostic Worker missing required contract: ${fragment}`,
+    );
+  }
+}
+
+if (
+  /(?:INSERT\s+INTO|UPDATE\s+public|DELETE\s+FROM|ALTER\s+TABLE|GRANT\s+|REVOKE\s+)/i.test(
+    worker,
+  )
+) {
+  throw new Error("runtime diagnostic Worker must issue only read-only SQL");
+}
+
+if (
+  /(?:routes\s*=|\[\[routes\]\]|custom_domain\s*=)/.test(template) ||
+  !/^workers_dev\s*=\s*true$/m.test(template)
+) {
+  throw new Error("runtime diagnostic template must be workers.dev only");
 }
 
 if (
