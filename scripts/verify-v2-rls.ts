@@ -86,6 +86,7 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0022_platform_control_plane.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0023_platform_control_plane_operations.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql')
 }
 
 function resetDisposableSchema() {
@@ -451,6 +452,18 @@ try {
     platformTransitionOperatorId,
     firstUserId!,
   )
+  let duplicatePlatformOwnerDenied = false
+  try {
+    await adminClient!.$executeRawUnsafe(
+      `INSERT INTO v2_platform_operators (id, user_id, role_key, status, mfa_required, created_by)
+       VALUES ($1, $2, 'PLATFORM_OWNER', 'ACTIVE', false, $2)`,
+      `pop_rls_duplicate_${suffix.replace(/[^a-z0-9]/gi, '')}`,
+      second.user.id,
+    )
+  } catch {
+    duplicatePlatformOwnerDenied = true
+  }
+  if (!duplicatePlatformOwnerDenied) throw new Error('V2_RLS=FAIL active Platform Owner uniqueness invariant did not reject a second owner')
   const platformTransition = await appClient!.$transaction(async (tx) => {
     await tx.$executeRawUnsafe("SELECT set_config('app.platform_user_id', $1, true)", firstUserId!)
     const suspended = await tx.$queryRawUnsafe<Array<{ organization_id: string; status: string }>>(

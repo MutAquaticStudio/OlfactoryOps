@@ -30,6 +30,7 @@ const migrations = [
   'infra/postgres/migrations/0022_platform_control_plane.sql',
   'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
   'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
+  'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -500,6 +501,24 @@ try {
       SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname = ANY($1::text[])
     `, ['v2_platform_audit_events_append_only', 'v2_platform_tenant_state_events_append_only', 'v2_platform_mutation_receipts_append_only'])
     if (platformControlTriggers.length !== 3) throw new Error('Platform control-plane immutable evidence triggers are missing')
+    const platformOwnerInvariant = await client.$queryRawUnsafe(`
+      SELECT i.indisunique AS "isUnique", pg_get_expr(i.indpred, i.indrelid) AS predicate, pg_get_indexdef(i.indexrelid) AS definition
+      FROM pg_index i
+      JOIN pg_class index_class ON index_class.oid = i.indexrelid
+      JOIN pg_class table_class ON table_class.oid = i.indrelid
+      JOIN pg_namespace namespace ON namespace.oid = table_class.relnamespace
+      WHERE namespace.nspname = 'public'
+        AND table_class.relname = 'v2_platform_operators'
+        AND index_class.relname = 'v2_platform_operators_single_active_owner'
+    `)
+    const ownerInvariant = platformOwnerInvariant[0]
+    if (platformOwnerInvariant.length !== 1
+      || !ownerInvariant?.isUnique
+      || !String(ownerInvariant.predicate).includes("role_key = 'PLATFORM_OWNER'::text")
+      || !String(ownerInvariant.predicate).includes("status = 'ACTIVE'::text")
+      || !String(ownerInvariant.definition).includes('(role_key)')) {
+      throw new Error('Platform Owner active-role uniqueness invariant is missing')
+    }
   } finally {
     await client.$disconnect()
   }
