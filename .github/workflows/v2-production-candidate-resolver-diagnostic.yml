@@ -1,0 +1,166 @@
+name: V2 Production Candidate Tenant Resolver Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact approved production-candidate SHA.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated candidate workspace hostname under next.labofscents.org.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type VERIFY_CANDIDATE_TENANT_RESOLVER to run the read-only diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-tenant-resolver-diagnostic
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+
+jobs:
+  validate-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validation.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validation.outputs.fixture_hostname }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validation
+        name: Validate the approved read-only diagnostic inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_DIAGNOSTIC" = "VERIFY_CANDIDATE_TENANT_RESOLVER"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
+          slug="${FIXTURE_HOSTNAME%"$suffix"}"
+          test "$slug" != "$FIXTURE_HOSTNAME"
+          test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
+          [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
+            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
+          fi
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  diagnose-candidate-tenant-resolver:
+    needs: validate-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install the pinned PostgreSQL client without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Verify the fixture and trusted resolver through a read-only production transaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$FIXTURE_HOSTNAME"
+          node --input-type=module <<'EOF'
+          import pg from 'pg'
+
+          const { Client } = pg
+          const hostname = process.env.FIXTURE_HOSTNAME
+          const runtimeRole = process.env.V2_RUNTIME_DB_ROLE
+          const expectedSuffix = '.next.labofscents.org'
+          if (!hostname || !runtimeRole || !/^[a-z_][a-z0-9_]{0,62}$/.test(runtimeRole) || !hostname.endsWith(expectedSuffix) || hostname.includes('*')) {
+            console.log(JSON.stringify({ candidateTenantResolverDiagnostic: 'FAIL', reason: 'INVALID_NON_SECRET_INPUT' }))
+            process.exit(1)
+          }
+
+          const client = new Client({ connectionString: process.env.PRODUCTION_DATABASE_URL })
+          let transactionOpen = false
+          try {
+            await client.connect()
+            await client.query('BEGIN READ ONLY')
+            transactionOpen = true
+            const metadata = await client.query(`
+              SELECT
+                EXISTS (
+                  SELECT 1
+                  FROM public.v2_workspace_hostnames h
+                  WHERE h.hostname = $1 AND h.status = 'ACTIVE'
+                ) AS active_hostname_row,
+                EXISTS (
+                  SELECT 1
+                  FROM public.v2_workspace_hostnames h
+                  JOIN public.v2_organizations o ON o.id = h.organization_id
+                  WHERE h.hostname = $1 AND h.status = 'ACTIVE' AND o.status = 'ACTIVE'
+                ) AS active_linked_fixture,
+                EXISTS (
+                  SELECT 1 FROM public.v2_resolve_active_workspace_hostname($1)
+                ) AS resolver_as_migration_connection,
+                EXISTS (
+                  SELECT 1
+                  FROM pg_proc p
+                  JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public'
+                    AND p.proname = 'v2_resolve_active_workspace_hostname'
+                    AND pg_get_function_identity_arguments(p.oid) = 'p_hostname text'
+                    AND p.prosecdef
+                ) AS resolver_security_definer,
+                has_function_privilege($2, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS runtime_execute_granted
+            `, [hostname, runtimeRole])
+
+            await client.query(`SET LOCAL ROLE "${runtimeRole.replaceAll('"', '""')}"`)
+            const runtime = await client.query(`
+              SELECT EXISTS (
+                SELECT 1 FROM public.v2_resolve_active_workspace_hostname($1)
+              ) AS resolver_as_runtime_role
+            `, [hostname])
+            await client.query('ROLLBACK')
+            transactionOpen = false
+
+            const row = metadata.rows[0]
+            const result = {
+              candidateTenantResolverDiagnostic: 'COMPLETE',
+              activeHostnameRow: Boolean(row.active_hostname_row),
+              activeLinkedFixture: Boolean(row.active_linked_fixture),
+              resolverAsMigrationConnection: Boolean(row.resolver_as_migration_connection),
+              resolverSecurityDefiner: Boolean(row.resolver_security_definer),
+              runtimeExecuteGranted: Boolean(row.runtime_execute_granted),
+              resolverAsRuntimeRole: Boolean(runtime.rows[0]?.resolver_as_runtime_role),
+            }
+            console.log(JSON.stringify(result))
+            if (!Object.values(result).slice(1).every(Boolean)) process.exitCode = 2
+          } catch {
+            if (transactionOpen) await client.query('ROLLBACK').catch(() => undefined)
+            console.log(JSON.stringify({ candidateTenantResolverDiagnostic: 'FAIL', reason: 'READ_ONLY_DIAGNOSTIC_UNAVAILABLE' }))
+            process.exitCode = 1
+          } finally {
+            await client.end().catch(() => undefined)
+          }
+          EOF
