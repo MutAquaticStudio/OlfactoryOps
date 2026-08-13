@@ -9,7 +9,7 @@ import {
   scientificContainerStopPollAttempts,
   scientificContainerStopPollIntervalMs,
 } from './scientific-container-env.js'
-import { scientificContainerRequestSchema, scientificContainerResponseSchema, type ScientificContainerRequest } from './contracts.js'
+import { parseScientificContainerResponse, scientificContainerRequestSchema, type ScientificContainerRequest } from './contracts.js'
 import { ScientificContainerLane, type ScientificContainerLaneCleanup } from './scientific-container-lane.js'
 import { ScientificContainerStartup } from './scientific-container-startup.js'
 
@@ -90,7 +90,7 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
       if (!response.ok) return { status: response.status, body }
 
       try {
-        return { status: response.status, body: JSON.stringify(scientificContainerResponseSchema.parse(JSON.parse(body))) }
+        return { status: response.status, body: JSON.stringify(parseScientificContainerResponse(request, JSON.parse(body))) }
       } catch {
         throw new Error('SCIENTIFIC_CONTAINER_INVALID_RESPONSE')
       }

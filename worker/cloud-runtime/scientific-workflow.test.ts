@@ -71,7 +71,7 @@ describe('ScientificJobWorkflow container pool tenancy', () => {
       stub: {
         runScientificJob: async (request: Record<string, unknown>) => {
           state.containerRequests.push(request)
-          return { status: 200, body: JSON.stringify({ payload: { jobId: request.jobId }, runtimeVersion: 'scientific-test/1', componentVersions: {} }) }
+          return { status: 200, body: JSON.stringify({ resultArtifactRef: `${request.artifactRef}/result`, payload: { jobId: request.jobId }, runtimeVersion: 'scientific-test/1', componentVersions: {} }) }
         },
       } as unknown as DurableObjectStub,
     }
@@ -79,7 +79,7 @@ describe('ScientificJobWorkflow container pool tenancy', () => {
       stub: {
         runScientificJob: async (request: Record<string, unknown>) => {
           state.containerRequests.push(request)
-          return { status: 200, body: JSON.stringify({ payload: { evidenceStatus: 'NOT_CONFIGURED', jobId: request.jobId }, runtimeVersion: 'model-test/1', componentVersions: {} }) }
+          return { status: 200, body: JSON.stringify({ resultArtifactRef: `${request.artifactRef}/model-runtime`, payload: { evidenceStatus: 'NOT_CONFIGURED', jobId: request.jobId }, runtimeVersion: 'model-test/1', componentVersions: {} }) }
         },
       } as unknown as DurableObjectStub,
     }

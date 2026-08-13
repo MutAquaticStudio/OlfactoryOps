@@ -92,13 +92,26 @@ export const scientificContainerRequestSchema = z.object({
 }).strict()
 export type ScientificContainerRequest = z.infer<typeof scientificContainerRequestSchema>
 
+export function scientificContainerExpectedResultArtifactRef(input: Pick<ScientificContainerRequest, 'artifactRef' | 'operation'>) {
+  return `${input.artifactRef}/${input.operation === 'MODEL_SMOKE' ? 'model-runtime' : 'result'}`
+}
+
 export const scientificContainerResponseSchema = z.object({
+  resultArtifactRef: reference,
   payload: z.record(z.string(), z.unknown()),
   runtimeVersion: z.string().trim().min(1).max(160).optional(),
   componentVersions: z.record(z.string(), z.string().trim().min(1).max(160)).optional(),
   modelVersion: z.string().trim().min(1).max(160).optional(),
 }).strict()
 export type ScientificContainerResponse = z.infer<typeof scientificContainerResponseSchema>
+
+export function parseScientificContainerResponse(input: Pick<ScientificContainerRequest, 'artifactRef' | 'operation'>, value: unknown): ScientificContainerResponse {
+  const response = scientificContainerResponseSchema.parse(value)
+  if (response.resultArtifactRef !== scientificContainerExpectedResultArtifactRef(input)) {
+    throw new Error('SCIENTIFIC_CONTAINER_RESULT_REFERENCE_MISMATCH')
+  }
+  return response
+}
 
 export const scientificInputArtifactSchema = z.object({
   canonicalSmiles: z.string().trim().min(1).max(4096).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127), 'SMILES must not contain control characters.'),

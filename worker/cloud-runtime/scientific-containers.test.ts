@@ -8,7 +8,7 @@ describe('scientific Container lane lifecycle', () => {
     expect(source).toContain('async runScientificJob(input: ScientificContainerRequest, sharedSecret: string)')
     expect(source).toContain('scientificContainerRequestSchema.parse(input)')
     expect(source).toContain('const body = await readBoundedBody(response)')
-    expect(source).toContain('scientificContainerResponseSchema.parse(JSON.parse(body))')
+    expect(source).toContain('parseScientificContainerResponse(request, JSON.parse(body))')
     expect(source).toContain('scientificContainerMaximumResponseBytes = 1_000_000')
     expect(source).toContain('this.lane.run(async () =>')
     expect(source).toContain('return this.invokeContainer(request)')
