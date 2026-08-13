@@ -1,0 +1,99 @@
+name: V2 Staging RC Scientific Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact current SHA of codex/v2-production-go-live to verify without deployment.
+        required: true
+        type: string
+      confirm_canary:
+        description: Type RUN_ONE_RC6_SCIENTIFIC_CANARY to submit exactly one isolated staging job.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-rc-scientific-canary
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  STAGING_R2_BUCKET: olfactoryops-v2-artifacts-staging
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_CANARY: ${{ inputs.confirm_canary }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_CANARY" = "RUN_ONE_RC6_SCIENTIFIC_CANARY"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  run-one-canary:
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    env:
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_STAGING_SCIENTIFIC_CANARY_APPROVED: RUN_ONE_RC6_SCIENTIFIC_CANARY
+      V2_STAGING_EXPECTED_SHA: ${{ needs.validate-release.outputs.release_sha }}
+      V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org
+      V2_STAGING_PUBLIC_PAGES_HOST: beta.labofscents.org
+      V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require staging-only credentials without printing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STAGING_DATABASE_URL"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Submit exactly one normal RC scientific canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_ref="$(mktemp)"
+          result_file="$(mktemp)"
+          trap 'rm -f "$result_ref" "$result_file"' EXIT
+          export V2_STAGING_SCIENTIFIC_RESULT_REF_PATH="$result_ref"
+          node scripts/verify-v2-staging-scientific-canary.mjs
+          artifact_ref="$(tr -d '\r\n' < "$result_ref")"
+          [[ "$artifact_ref" =~ ^v2/[A-Za-z0-9_-]+/scientific/[a-f0-9]{64}$ ]]
+          npx wrangler r2 object get "$STAGING_R2_BUCKET/$artifact_ref" --remote --file "$result_file"
+          RESULT_FILE="$result_file" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs'
+          const result = JSON.parse(readFileSync(process.env.RESULT_FILE, 'utf8'))
+          if (!Array.isArray(result?.artifacts) || result.artifacts.length < 3) throw new Error('staging scientific canary R2 result is incomplete')
+          console.log('CANARY_QUEUE=PASS')
+          console.log('CANARY_WORKFLOW=PASS')
+          console.log('CANARY_CLOUD_RUNTIME=PASS')
+          console.log('CANARY_FEATURE_CONTAINER=PASS')
+          console.log('CANARY_MODEL_CONTAINER=NOT_REQUIRED')
+          console.log('CANARY_R2=PASS')
+          console.log('CANARY_SCIENTIFIC_RESULT=PASS')
+          NODE
