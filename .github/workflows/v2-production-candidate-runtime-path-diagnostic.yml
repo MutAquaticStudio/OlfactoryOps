@@ -21,7 +21,7 @@ concurrency:
 
 env:
   DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
-  DIAGNOSTIC_SOURCE_SHA: 57d2921150888e233614b6087d51cb260e845179
+  DIAGNOSTIC_SOURCE_SHA: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
   TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
   DIAGNOSTIC_WORKER_NAME: olfactoryops-v2-tenant-router-production-candidate-runtime-diagnostic
@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
           test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
-          test "$DIAGNOSTIC_SOURCE_SHA" = "57d2921150888e233614b6087d51cb260e845179"
+          test "$DIAGNOSTIC_SOURCE_SHA" = "4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe"
           suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
           slug="${FIXTURE_HOSTNAME%"$suffix"}"
           test "$slug" != "$FIXTURE_HOSTNAME"
@@ -60,11 +60,12 @@ jobs:
           test "$(git rev-parse 'v2-production-rc2^{}')" = "$TARGET_RELEASE_SHA"
           diagnostic_source_branch_sha="$(git rev-parse "origin/${DIAGNOSTIC_SOURCE_BRANCH}")"
           git merge-base --is-ancestor "$DIAGNOSTIC_SOURCE_SHA" "$diagnostic_source_branch_sha"
-          git ls-tree -r --name-only "$DIAGNOSTIC_SOURCE_SHA" -- \
+          for required_file in \
             worker/v2-tenant-router-runtime-diagnostic.ts \
             scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs \
-            wrangler.v2-tenant-router-runtime-diagnostic.example.toml \
-            | grep -Fxq 'worker/v2-tenant-router-runtime-diagnostic.ts'
+            wrangler.v2-tenant-router-runtime-diagnostic.example.toml; do
+            git cat-file -e "$DIAGNOSTIC_SOURCE_SHA:$required_file"
+          done
           echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
 
   deploy-and-invoke-runtime-path-diagnostic:
@@ -83,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 57d2921150888e233614b6087d51cb260e845179
+          ref: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
       - uses: actions/setup-node@v4
         with:
           node-version: 24
