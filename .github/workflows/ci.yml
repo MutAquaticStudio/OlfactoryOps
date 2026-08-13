@@ -68,6 +68,9 @@ jobs:
       - name: Tenant router dry build
         run: npm run build:tenant-router
 
+      - name: Cloud runtime dry build
+        run: npm run build:cloud-runtime
+
       - name: Release manifest schema
         run: npm run release:manifest:generate && npm run release:manifest:validate
 

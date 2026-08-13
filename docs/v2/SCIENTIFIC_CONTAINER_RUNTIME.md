@@ -39,6 +39,9 @@ No domain module imports Osmo repositories directly.
 - Workers enqueue jobs through Queues/Workflows.
 - Containers run bounded compute and return structured artifacts.
 - Workers persist artifact references and provenance in PostgreSQL.
+- The feature and model runtimes are stateless request processors. Each uses a
+  bounded two-instance Container pool, matching its `max_instances = 2`
+  deployment setting; routing never creates a warm Container per job or tenant.
 
 ## Security and tenancy
 
@@ -46,6 +49,9 @@ No domain module imports Osmo repositories directly.
 - Signed/internal service call boundaries only.
 - Containers never expose public APIs by default.
 - Tenant IDs are always validated at Worker boundary before and after container execution.
+- The Container process has no tenant session, application-specific Durable Object state,
+  or artifact-store authority. The Worker validates and loads the private input,
+  passes a bounded request, and persists the tenant-scoped result itself.
 
 ## Container artifact policy
 
