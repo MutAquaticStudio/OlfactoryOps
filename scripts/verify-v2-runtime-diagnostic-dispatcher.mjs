@@ -23,7 +23,7 @@ if (!validWorkerName || workerName.length > 63) {
 
 const requiredFragments = [
   "TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b",
-  "DIAGNOSTIC_SOURCE_SHA: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe",
+  "DIAGNOSTIC_SOURCE_SHA: 681cc26d58bc1946cf5ec5a8e85f0e988c0a841f",
   "environment: production",
   "confirm_diagnostic",
   "node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",
@@ -35,6 +35,10 @@ const requiredFragments = [
   'if [ "$http_status" != "404" ]; then',
   "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_404",
   "DIAGNOSTIC_WORKERS_DEV_INVOCATION=PASS",
+  "const safeBooleanKeys = [",
+  "runtimeDiagnosticExecution",
+  "actualHyperdriveRuntimeResolver",
+  "resolverInvocationProbeCompleted",
   "delay_seconds=$((delay_seconds * 2))",
   'if [ "$delay_seconds" -gt 12 ]; then',
   "rm -f .qa/candidate-runtime-diagnostic-token",
@@ -56,6 +60,15 @@ for (const fragment of requiredFragments) {
 if (workflow.includes("wrangler delete")) {
   throw new Error(
     "diagnostic cleanup must use the direct Workers Scripts DELETE API, never wrangler delete",
+  );
+}
+
+if (
+  workflow.includes("resolverQueryExecuted") ||
+  workflow.includes("const requiredTrue =")
+) {
+  throw new Error(
+    "diagnostic dispatcher must use the staged safe-matrix contract rather than the legacy monolithic gate",
   );
 }
 
@@ -102,4 +115,5 @@ console.log(
 console.log(
   "DIAGNOSTIC_WORKERS_DEV_RETRY_CONTRACT=PASS attempts=8 backoff=1,2,4,8,12,12,12",
 );
+console.log("STAGED_DIAGNOSTIC_CONTRACT=PASS");
 console.log("DIAGNOSTIC_WORKER_CLEANUP_CONTRACT=PASS");
