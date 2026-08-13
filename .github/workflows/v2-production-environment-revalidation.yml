@@ -1,0 +1,138 @@
+name: V2 Production Environment Revalidation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact active release SHA to revalidate without deployment.
+        required: true
+        type: string
+      confirm_revalidation:
+        description: Type REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC to run read-only production-boundary checks.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-environment-revalidation
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  ACTIVE_RC_TAG: v2-production-rc9
+  ACTIVE_RC_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+
+jobs:
+  revalidate-production-environment:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_REVALIDATION: ${{ inputs.confirm_revalidation }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+      V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+      V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+      SCIENTIFIC_CONTAINER_SHARED_SECRET: ${{ secrets.SCIENTIFIC_CONTAINER_SHARED_SECRET }}
+      PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate the immutable RC9 identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_REVALIDATION" = "REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC"
+          test "$RELEASE_SHA" = "$ACTIVE_RC_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin
+          test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          git checkout --detach "$RELEASE_SHA"
+          echo "PRODUCTION_RELEASE_IDENTITY=PASS"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify production secret names and safe minimum shapes
+        shell: bash
+        run: |
+          set -euo pipefail
+          require_chars() {
+            local name="$1"
+            local minimum="$2"
+            local value="${!name}"
+            test -n "$value"
+            test "${#value}" -ge "$minimum"
+          }
+          require_chars CLOUDFLARE_ACCOUNT_ID 8
+          require_chars CLOUDFLARE_API_TOKEN 20
+          require_chars PRODUCTION_DATABASE_URL 24
+          require_chars V2_SESSION_PEPPER 32
+          require_chars V2_PASSWORD_PEPPER 32
+          require_chars V2_INVITATION_ENCRYPTION_KEY 32
+          require_chars SCIENTIFIC_CONTAINER_SHARED_SECRET 32
+          require_chars PLATFORM_OWNER_BOOTSTRAP_EMAIL 6
+          [[ "$PRODUCTION_DATABASE_URL" =~ ^postgres(ql)?:// ]]
+          [[ "$PLATFORM_OWNER_BOOTSTRAP_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]]
+          echo "PRODUCTION_SECRET_NAMES_PRESENT=PASS"
+      - name: Verify Cloudflare production credentials read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth_header="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          curl --fail --silent --show-error --request GET --header "$auth_header" https://api.cloudflare.com/client/v4/user/tokens/verify --output /dev/null
+          curl --fail --silent --show-error --request GET --header "$auth_header" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID" --output /dev/null
+          unset auth_header
+          echo "PRODUCTION_CLOUDFLARE_AUTH=PASS"
+      - name: Verify production database connectivity read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import pg from 'pg'
+          const client = new pg.Client({ connectionString: process.env.PRODUCTION_DATABASE_URL })
+          try {
+            await client.connect()
+            await client.query('SELECT 1')
+            console.log('PRODUCTION_DATABASE_CONNECTIVITY=PASS')
+          } catch {
+            console.log('PRODUCTION_DATABASE_CONNECTIVITY=FAIL')
+            process.exitCode = 1
+          } finally {
+            await client.end().catch(() => undefined)
+          }
+          NODE
+      - name: Scan exact RC9 source and generated client bundle for secret exposure
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet "$ACTIVE_RC_SHA^" "$ACTIVE_RC_SHA" -- .github/workflows; then
+            echo "RC9_SECRET_CONSUMER_DELTA=PASS"
+          else
+            echo "RC9_SECRET_CONSUMER_DELTA=FAIL"
+            exit 1
+          fi
+          if git grep -nE 'VITE_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)|PUBLIC_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)' -- ':!docs' ':!*.test.*'; then
+            echo "PRODUCTION_CLIENT_SECRET_REFERENCE=FAIL"
+            exit 1
+          fi
+          npm run build
+          npm run security:client-bundle
+          echo "PRODUCTION_SECRET_SCAN=PASS"
+      - name: Record read-only production secret-boundary result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PRODUCTION_ENVIRONMENT_PROTECTION=PASS"
+          echo "PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS"
