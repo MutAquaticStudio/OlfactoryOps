@@ -1,0 +1,211 @@
+name: V2 Production Candidate Hyperdrive Runtime Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_hostname:
+        description: Exact isolated candidate workspace hostname under next.labofscents.org.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC to deploy and invoke the isolated diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-runtime-path-diagnostic
+  cancel-in-progress: false
+
+env:
+  DIAGNOSTIC_SOURCE_BRANCH: codex/candidate-router-runtime-path-diagnostic
+  DIAGNOSTIC_SOURCE_SHA: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
+  TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+  CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+  DIAGNOSTIC_WORKER_NAME: olfactoryops-v2-tenant-router-production-candidate-runtime-diagnostic
+
+jobs:
+  validate-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fixture_hostname: ${{ steps.validation.outputs.fixture_hostname }}
+    env:
+      FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validation
+        name: Validate the pinned target and reviewed diagnostic source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
+          test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
+          test "$DIAGNOSTIC_SOURCE_SHA" = "4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe"
+          suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
+          slug="${FIXTURE_HOSTNAME%"$suffix"}"
+          test "$slug" != "$FIXTURE_HOSTNAME"
+          test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
+          [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          git fetch --no-tags origin \
+            "+refs/heads/$DIAGNOSTIC_SOURCE_BRANCH:refs/remotes/origin/$DIAGNOSTIC_SOURCE_BRANCH"
+          git fetch --tags origin
+          git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
+          git cat-file -e "${DIAGNOSTIC_SOURCE_SHA}^{commit}"
+          test "$(git rev-parse 'v2-production-rc2^{}')" = "$TARGET_RELEASE_SHA"
+          diagnostic_source_branch_sha="$(git rev-parse "origin/${DIAGNOSTIC_SOURCE_BRANCH}")"
+          git merge-base --is-ancestor "$DIAGNOSTIC_SOURCE_SHA" "$diagnostic_source_branch_sha"
+          for required_file in \
+            worker/v2-tenant-router-runtime-diagnostic.ts \
+            scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs \
+            wrangler.v2-tenant-router-runtime-diagnostic.example.toml; do
+            git cat-file -e "$DIAGNOSTIC_SOURCE_SHA:$required_file"
+          done
+          echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  deploy-and-invoke-runtime-path-diagnostic:
+    needs: validate-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+      DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Derive the non-secret production database-name checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_DATABASE_URL"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from 'node:fs'
+          import { createHash } from 'node:crypto'
+
+          const connection = new URL(process.env.PRODUCTION_DATABASE_URL)
+          const databaseName = decodeURIComponent(connection.pathname.replace(/^\//, ''))
+          if (!databaseName) throw new Error('production diagnostic requires a database name')
+          const checksum = createHash('sha256').update(databaseName, 'utf8').digest('hex')
+          appendFileSync(process.env.GITHUB_ENV, `V2_RUNTIME_DIAGNOSTIC_EXPECTED_DATABASE_NAME_SHA=${checksum}\n`)
+          EOF
+      - name: Render and deploy the route-free diagnostic Worker
+        shell: bash
+        env:
+          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
+          V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          V2_RUNTIME_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+          V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$V2_RUNTIME_DIAGNOSTIC_EXPECTED_DATABASE_NAME_SHA"
+          test "$V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID" = "$PRODUCTION_HYPERDRIVE_ID"
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs
+          if grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$V2_RUNTIME_DIAGNOSTIC_CONFIG"; then
+            echo 'runtime diagnostic configuration must not attach a route or custom domain' >&2
+            exit 1
+          fi
+          npx wrangler deploy --config "$V2_RUNTIME_DIAGNOSTIC_CONFIG" --keep-vars
+      - name: Bind one ephemeral internal diagnostic token
+        shell: bash
+        env:
+          V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
+        run: |
+          set -euo pipefail
+          diagnostic_token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+          printf '%s' "$diagnostic_token" | npx wrangler secret put CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN --config "$V2_RUNTIME_DIAGNOSTIC_CONFIG"
+          npx wrangler secret list --config "$V2_RUNTIME_DIAGNOSTIC_CONFIG" | grep -Fq '"CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN"'
+          printf '%s' "$diagnostic_token" > .qa/candidate-runtime-diagnostic-token
+          chmod 600 .qa/candidate-runtime-diagnostic-token
+      - name: Invoke the isolated Worker and verify safe runtime-path evidence
+        shell: bash
+        env:
+          V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
+        run: |
+          set -euo pipefail
+          subdomain="$(curl --fail-with-body --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{const value=JSON.parse(body)?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(value??""))process.exit(2);process.stdout.write(value)})')"
+          diagnostic_token="$(cat .qa/candidate-runtime-diagnostic-token)"
+          diagnostic_url="https://${DIAGNOSTIC_WORKER_NAME}.${subdomain}.workers.dev/"
+          response="$(curl --fail-with-body --silent --show-error --max-time 30 -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" "$diagnostic_url")"
+          RESPONSE="$response" RELEASE_SHA="$RELEASE_SHA" node --input-type=module <<'EOF'
+          const body = JSON.parse(process.env.RESPONSE)
+          const requiredTrue = [
+            'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
+            'runtimeCurrentUserMatchesExpected', 'runtimeSessionUserMatchesExpected',
+            'workspaceHostnamesRls', 'workspaceHostnamesForceRls', 'organizationsRls', 'organizationsForceRls',
+            'runtimeExecuteGranted', 'resolverQueryExecuted',
+          ]
+          const requiredFalse = [
+            'runtimeDirectHostnameVisible', 'runtimeDirectOrganizationVisible', 'runtimeRequestHostnameContextPresent',
+            'runtimeOrganizationContextPresent', 'runtimeUserContextPresent',
+          ]
+          const evidenceKeys = [
+            ...requiredTrue, ...requiredFalse, 'runtimeResolverResult', 'resolverSecurityDefiner',
+            'functionOwnerOwnsWorkspaceHostnames', 'functionOwnerOwnsOrganizations', 'functionOwnerIsSuperuser',
+            'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained',
+          ]
+          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || body.targetReleaseSha !== process.env.RELEASE_SHA || evidenceKeys.some((key) => typeof body[key] !== 'boolean') || requiredTrue.some((key) => body[key] !== true) || requiredFalse.some((key) => body[key] !== false)) {
+            console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'SAFE_BOOLEAN_CONTRACT_FAILED' }))
+            process.exit(2)
+          }
+          console.log(JSON.stringify({
+            runtimeDiagnosticExecution: 'PASS',
+            actualHyperdriveRuntimeResolver: body.runtimeResolverResult ? 'PASS' : 'FAIL',
+            targetReleaseSha: body.targetReleaseSha,
+            hyperdriveConnectionReachable: body.hyperdriveConnectionReachable,
+            hyperdriveProductionDatabaseMatch: body.hyperdriveProductionDatabaseMatch,
+            runtimeDirectHostnameVisible: body.runtimeDirectHostnameVisible,
+            runtimeDirectOrganizationVisible: body.runtimeDirectOrganizationVisible,
+            runtimeResolverResult: body.runtimeResolverResult,
+            runtimeRequestHostnameContextPresent: body.runtimeRequestHostnameContextPresent,
+            runtimeOrganizationContextPresent: body.runtimeOrganizationContextPresent,
+            runtimeUserContextPresent: body.runtimeUserContextPresent,
+            resolverSecurityDefiner: body.resolverSecurityDefiner,
+            functionOwnerOwnsWorkspaceHostnames: body.functionOwnerOwnsWorkspaceHostnames,
+            functionOwnerOwnsOrganizations: body.functionOwnerOwnsOrganizations,
+            functionOwnerIsSuperuser: body.functionOwnerIsSuperuser,
+            functionOwnerBypassRls: body.functionOwnerBypassRls,
+            functionOwnerForceRlsConstrained: body.functionOwnerForceRlsConstrained,
+          }))
+          EOF
+      - name: Delete the isolated diagnostic Worker and temporary token
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .qa/candidate-runtime-diagnostic-token
+          worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
+          if [ "$worker_status" != "404" ]; then
+            npx wrangler delete "$DIAGNOSTIC_WORKER_NAME" --force
+          fi
+          worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
+          test "$worker_status" = "404"
+          echo 'DIAGNOSTIC_WORKER_CLEANUP=PASS'
