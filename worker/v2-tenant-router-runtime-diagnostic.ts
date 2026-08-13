@@ -225,6 +225,7 @@ async function inspectCandidateRuntime(env: V2TenantRouterRuntimeDiagnosticEnv):
           SELECT 1
           FROM pg_proc function_definition
           INNER JOIN pg_namespace namespace ON namespace.oid = function_definition.pronamespace
+          INNER JOIN pg_roles function_owner ON function_owner.oid = function_definition.proowner
           INNER JOIN pg_class workspace_hostnames ON workspace_hostnames.oid = 'public.v2_workspace_hostnames'::regclass
           INNER JOIN pg_class organizations ON organizations.oid = 'public.v2_organizations'::regclass
           WHERE namespace.nspname = 'public'
@@ -235,6 +236,8 @@ async function inspectCandidateRuntime(env: V2TenantRouterRuntimeDiagnosticEnv):
             AND function_definition.proowner = organizations.relowner
             AND workspace_hostnames.relforcerowsecurity
             AND organizations.relforcerowsecurity
+            AND NOT function_owner.rolsuper
+            AND NOT function_owner.rolbypassrls
         ) AS "functionOwnerForceRlsConstrained",
         has_function_privilege(current_user, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS "runtimeExecuteGranted",
         COALESCE(NULLIF(current_setting('app.request_hostname', true), ''), '') <> '' AS "requestHostnameContextPresent",
