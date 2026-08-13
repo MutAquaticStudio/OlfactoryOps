@@ -550,6 +550,18 @@ function unavailable() {
   );
 }
 
+function ready() {
+  return Response.json(
+    { candidateRuntimeDiagnostic: "READY" },
+    {
+      headers: {
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      },
+    },
+  );
+}
+
 export function createCandidateRuntimeDiagnostic(
   inspector = inspectCandidateRuntime,
 ) {
@@ -558,17 +570,22 @@ export function createCandidateRuntimeDiagnostic(
       request: Request,
       env: V2TenantRouterRuntimeDiagnosticEnv,
     ): Promise<Response> {
-      if (
-        request.method !== "GET" ||
-        !env.CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN ||
-        !equalSecret(
-          request.headers.get(diagnosticTokenHeader) ?? "",
-          env.CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN,
-        )
-      ) {
-        return notFound();
-      }
       try {
+        if (
+          request.method !== "GET" ||
+          !env.CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN ||
+          !equalSecret(
+            request.headers.get(diagnosticTokenHeader) ?? "",
+            env.CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN,
+          )
+        ) {
+          return notFound();
+        }
+
+        const path = new URL(request.url).pathname;
+        if (path === "/ready") return ready();
+        if (path !== "/diagnose") return notFound();
+
         const { targetReleaseSha: _targetReleaseSha, ...safeBooleanMatrix } =
           await inspector(env);
         return Response.json(

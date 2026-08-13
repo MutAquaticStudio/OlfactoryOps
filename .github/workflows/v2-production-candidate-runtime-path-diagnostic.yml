@@ -172,86 +172,145 @@ jobs:
           npx wrangler secret list --config "$V2_RUNTIME_DIAGNOSTIC_CONFIG" | grep -Fq '"CANDIDATE_RUNTIME_DIAGNOSTIC_TOKEN"'
           printf '%s' "$diagnostic_token" > .qa/candidate-runtime-diagnostic-token
           chmod 600 .qa/candidate-runtime-diagnostic-token
-      - name: Invoke the isolated Worker and verify safe runtime-path evidence
+      - name: Resolve the isolated Worker workers.dev URL
         shell: bash
-        env:
-          V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
         run: |
           set -euo pipefail
-          subdomain="$(curl --fail-with-body --silent --show-error \
+          subdomain="$(curl --silent --max-time 15 \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
-            | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{const value=JSON.parse(body)?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(value??""))process.exit(2);process.stdout.write(value)})')"
+            2>/dev/null \
+            | node -e 'let body="";process.stdin.on("data",chunk=>body+=chunk).on("end",()=>{try{const value=JSON.parse(body)?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(value??""))process.exit(2);process.stdout.write(value)}catch{process.exit(2)}})')"
+          printf 'DIAGNOSTIC_WORKERS_DEV_URL=https://%s.%s.workers.dev\n' \
+            "$DIAGNOSTIC_WORKER_NAME" "$subdomain" >> "$GITHUB_ENV"
+      - name: Wait for isolated Worker readiness before database diagnosis
+        shell: bash
+        run: |
+          set -euo pipefail
           diagnostic_token="$(cat .qa/candidate-runtime-diagnostic-token)"
-          diagnostic_url="https://${DIAGNOSTIC_WORKER_NAME}.${subdomain}.workers.dev/"
-          diagnostic_response_file=.qa/candidate-runtime-diagnostic-response.json
-          max_attempts=8
+          ready_url="${DIAGNOSTIC_WORKERS_DEV_URL}/ready"
+          ready_response_file=.qa/candidate-runtime-diagnostic-ready-response.json
+          readiness_window_seconds=90
+          max_attempts=10
+          max_request_timeout_seconds=15
+          max_delay_seconds=12
+          started_at="$(date +%s)"
+          deadline=$((started_at + readiness_window_seconds))
           delay_seconds=1
+          ready=false
+
           for attempt in $(seq 1 "$max_attempts"); do
-            http_status="$(curl --silent --show-error --max-time 30 --output "$diagnostic_response_file" --write-out '%{http_code}' \
-              -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" "$diagnostic_url")"
-            if [ "$http_status" = "200" ]; then
-              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=PASS attempts=$attempt"
+            now="$(date +%s)"
+            remaining_seconds=$((deadline - now))
+            if [ "$remaining_seconds" -le 0 ]; then
               break
             fi
-            if [ "$http_status" != "404" ]; then
-              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_$http_status attempt=$attempt" >&2
+            request_timeout="$max_request_timeout_seconds"
+            if [ "$remaining_seconds" -lt "$request_timeout" ]; then
+              request_timeout="$remaining_seconds"
+            fi
+            if ! http_status="$(curl --silent --max-time "$request_timeout" \
+              --output "$ready_response_file" --write-out '%{http_code}' \
+              -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" \
+              "$ready_url" 2>/dev/null)"; then
+              http_status=000
+            fi
+            echo "DIAGNOSTIC_READY_ATTEMPT=$attempt"
+            echo "DIAGNOSTIC_READY_HTTP_STATUS=$http_status"
+            if [ "$http_status" = "200" ]; then
+              if RUNTIME_DIAGNOSTIC_RESPONSE_FILE="$ready_response_file" \
+                node scripts/verify-v2-runtime-diagnostic-response.mjs ready; then
+                ready=true
+                break
+              fi
+              echo 'DIAGNOSTIC_WORKER_READINESS=FAIL'
+              echo 'ROOT_CAUSE=PERSISTENT_WORKER_STARTUP_OR_PLATFORM_FAILURE'
               exit 1
             fi
+            case "$http_status" in
+              404|500|503)
+                ;;
+              *)
+                break
+                ;;
+            esac
             if [ "$attempt" = "$max_attempts" ]; then
-              echo "DIAGNOSTIC_WORKERS_DEV_INVOCATION=FAIL_HTTP_404 attempts=$attempt" >&2
-              exit 1
+              break
             fi
-            sleep "$delay_seconds"
+            now="$(date +%s)"
+            remaining_seconds=$((deadline - now))
+            if [ "$remaining_seconds" -le 0 ]; then
+              break
+            fi
+            sleep_seconds="$delay_seconds"
+            if [ "$sleep_seconds" -gt "$remaining_seconds" ]; then
+              sleep_seconds="$remaining_seconds"
+            fi
+            sleep "$sleep_seconds"
             delay_seconds=$((delay_seconds * 2))
-            if [ "$delay_seconds" -gt 12 ]; then
-              delay_seconds=12
+            if [ "$delay_seconds" -gt "$max_delay_seconds" ]; then
+              delay_seconds="$max_delay_seconds"
             fi
           done
-          response="$(cat "$diagnostic_response_file")"
-          RESPONSE="$response" node --input-type=module <<'EOF'
-          const body = JSON.parse(process.env.RESPONSE)
-          const safeBooleanKeys = [
-            'databaseProbeCompleted', 'hyperdriveConnectionReachable', 'hyperdriveProductionDatabaseMatch',
-            'runtimeCurrentUserMatchesExpected', 'runtimeSessionUserMatchesExpected',
-            'sessionContextProbeCompleted', 'runtimeRequestHostnameContextPresent', 'runtimeOrganizationContextPresent',
-            'runtimeUserContextPresent', 'rlsMetadataProbeCompleted', 'workspaceHostnamesRls',
-            'workspaceHostnamesForceRls', 'organizationsRls', 'organizationsForceRls',
-            'resolverMetadataProbeCompleted', 'resolverExists', 'resolverSecurityDefiner',
-            'functionOwnerOwnsWorkspaceHostnames', 'functionOwnerOwnsOrganizations', 'functionOwnerIsSuperuser',
-            'functionOwnerBypassRls', 'functionOwnerForceRlsConstrained', 'resolverPrivilegeProbeCompleted',
-            'runtimeExecuteGranted', 'directHostnameProbeCompleted', 'runtimeDirectHostnameVisible',
-            'directOrganizationProbeCompleted', 'runtimeDirectOrganizationVisible', 'resolverInvocationProbeCompleted',
-            'runtimeResolverResult', 'runtimeResolverOrganizationMatch',
-          ]
-          if (body.candidateRuntimeDiagnostic !== 'COMPLETE' || safeBooleanKeys.some((key) => typeof body[key] !== 'boolean')) {
-            console.log(JSON.stringify({ candidateRuntimeDiagnostic: 'FAIL', reason: 'SAFE_BOOLEAN_CONTRACT_FAILED' }))
-            process.exit(2)
-          }
-          const runtimeDiagnosticExecution = [
-            body.databaseProbeCompleted,
-            body.hyperdriveConnectionReachable,
-            body.hyperdriveProductionDatabaseMatch,
-            body.runtimeCurrentUserMatchesExpected,
-            body.runtimeSessionUserMatchesExpected,
-          ].every(Boolean) ? 'PASS' : 'FAIL'
-          const actualHyperdriveRuntimeResolver = !body.resolverInvocationProbeCompleted
-            ? 'UNPROVEN'
-            : body.runtimeResolverResult && body.runtimeResolverOrganizationMatch ? 'PASS' : 'FAIL'
-          console.log(JSON.stringify({
-            runtimeDiagnosticExecution,
-            actualHyperdriveRuntimeResolver,
-            ...Object.fromEntries(safeBooleanKeys.map((key) => [key, body[key]])),
-          }))
-          if (runtimeDiagnosticExecution !== 'PASS') process.exit(3)
-          if (actualHyperdriveRuntimeResolver !== 'PASS') process.exit(4)
-          EOF
+
+          if [ "$ready" != true ]; then
+            echo 'DIAGNOSTIC_WORKER_READINESS=FAIL'
+            echo 'ROOT_CAUSE=PERSISTENT_WORKER_STARTUP_OR_PLATFORM_FAILURE'
+            exit 1
+          fi
+          echo 'DIAGNOSTIC_WORKER_READINESS=PASS'
+      - name: Invoke the ready isolated Worker once and verify safe runtime-path evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          diagnostic_token="$(cat .qa/candidate-runtime-diagnostic-token)"
+          diagnose_url="${DIAGNOSTIC_WORKERS_DEV_URL}/diagnose"
+          diagnostic_response_file=.qa/candidate-runtime-diagnostic-response.json
+          if ! http_status="$(curl --silent --max-time 15 \
+            --output "$diagnostic_response_file" --write-out '%{http_code}' \
+            -H "x-olfactoryops-candidate-runtime-diagnostic: $diagnostic_token" \
+            "$diagnose_url" 2>/dev/null)"; then
+            http_status=000
+          fi
+          case "$http_status" in
+            200)
+              RUNTIME_DIAGNOSTIC_RESPONSE_FILE="$diagnostic_response_file" \
+                node scripts/verify-v2-runtime-diagnostic-response.mjs matrix
+              ;;
+            503)
+              if ! RUNTIME_DIAGNOSTIC_RESPONSE_FILE="$diagnostic_response_file" \
+                node scripts/verify-v2-runtime-diagnostic-response.mjs unavailable; then
+                echo 'DIAGNOSTIC_SAFE_BOOLEAN_MATRIX=NOT_RECEIVED'
+                echo 'DIAGNOSTIC_SAFE_UNAVAILABLE_ENVELOPE=FAIL'
+                exit 1
+              fi
+              echo 'DIAGNOSTIC_SAFE_BOOLEAN_MATRIX=NOT_RECEIVED'
+              echo 'RUNTIME_DIAGNOSTIC_EXECUTION=NOT_REACHED'
+              echo 'ACTUAL_HYPERDRIVE_RUNTIME_RESOLVER=UNPROVEN'
+              exit 1
+              ;;
+            500)
+              echo 'DIAGNOSTIC_EXECUTION_ESCAPED_SAFE_HANDLER=YES'
+              echo 'DIAGNOSTIC_SAFE_BOOLEAN_MATRIX=NOT_RECEIVED'
+              echo 'RUNTIME_DIAGNOSTIC_EXECUTION=NOT_REACHED'
+              echo 'ACTUAL_HYPERDRIVE_RUNTIME_RESOLVER=UNPROVEN'
+              exit 1
+              ;;
+            *)
+              echo "DIAGNOSTIC_DIAGNOSE_HTTP_STATUS=$http_status"
+              echo 'DIAGNOSTIC_SAFE_BOOLEAN_MATRIX=NOT_RECEIVED'
+              echo 'RUNTIME_DIAGNOSTIC_EXECUTION=NOT_REACHED'
+              echo 'ACTUAL_HYPERDRIVE_RUNTIME_RESOLVER=UNPROVEN'
+              exit 1
+              ;;
+          esac
       - name: Delete the isolated diagnostic Worker and temporary token
         if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
           rm -f .qa/candidate-runtime-diagnostic-token
+          rm -f .qa/candidate-runtime-diagnostic-ready-response.json
           rm -f .qa/candidate-runtime-diagnostic-response.json
           worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
@@ -277,4 +336,5 @@ jobs:
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
           test "$worker_status" = "404"
-          echo 'DIAGNOSTIC_WORKER_CLEANUP=PASS'
+          echo 'TEMPORARY_DIAGNOSTIC_WORKER_CLEANUP=PASS'
+          echo 'ORPHAN_DIAGNOSTIC_WORKER_EXISTS=NO'
