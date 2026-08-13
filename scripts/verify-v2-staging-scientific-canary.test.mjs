@@ -28,4 +28,11 @@ describe('staging scientific canary contract', () => {
     expect(source).toContain("artifact_count) >= 3")
     expect(source).toContain("r2Result: 'PASS'")
   })
+
+  it('keeps the helper separate from the immutable release checkout while using its locked dependencies', () => {
+    const workflow = readFileSync('.github/workflows/v2-staging-scientific-canary-dispatch.yml', 'utf8')
+    expect(workflow).toContain('Stage the reviewed canary helper outside the immutable release checkout')
+    expect(workflow).toContain('ref: ${{ needs.validate-release.outputs.release_sha }}')
+    expect(workflow).toContain('node "$RUNNER_TEMP/verify-v2-staging-scientific-canary.mjs"')
+  })
 })
