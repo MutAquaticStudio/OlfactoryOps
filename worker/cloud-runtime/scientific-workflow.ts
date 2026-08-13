@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
-import { cloudArtifactManifestSchema, cloudJobEnvelopeSchema, scientificContainerRequestSchema, scientificInputArtifactSchema, scientificModelInputArtifactSchema, type CloudJobEnvelope } from './contracts.js'
+import { cloudArtifactManifestSchema, cloudJobEnvelopeSchema, scientificContainerRequestSchema, scientificContainerResponseSchema, scientificInputArtifactSchema, scientificModelInputArtifactSchema, type CloudJobEnvelope } from './contracts.js'
 import { PrivateArtifactStore } from './artifact-store.js'
 import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
@@ -7,7 +7,7 @@ import { loadPrivateScientificInput, sha256 } from './scientific-input.js'
 import { completeCloudScientificFeature } from '../../services/scientific/src/cloud-completion.js'
 import { safeScientificContainerError } from './scientific-container-error.js'
 import { scientificContainerFor } from './scientific-container-routing.js'
-import type { ScientificFeatureContainer, ScientificModelContainer } from './scientific-containers.js'
+import type { BufferedScientificContainerResponse, ScientificFeatureContainer, ScientificModelContainer } from './scientific-containers.js'
 
 export type CloudScientificEnv = {
   HYPERDRIVE: Hyperdrive
@@ -20,7 +20,8 @@ export type CloudScientificEnv = {
 }
 
 type ContainerResponse = { payload: Record<string, unknown>; runtimeVersion?: string; componentVersions?: Record<string, string>; modelVersion?: string }
-type ScientificContainerStub = Pick<DurableObjectStub, 'fetch'>
+type ScientificContainerStub = Pick<DurableObjectStub<ScientificFeatureContainer | ScientificModelContainer>, 'runScientificJob'>
+export type ScientificWorkflowResult = { status: 'SUCCEEDED'; resultArtifactRef: string }
 
 function containerFor(env: CloudScientificEnv, job: CloudJobEnvelope): Promise<ScientificContainerStub> {
   if (job.jobType === 'SCIENTIFIC_MODEL') return scientificContainerFor(env.SCIENTIFIC_MODEL_CONTAINER)
@@ -28,7 +29,7 @@ function containerFor(env: CloudScientificEnv, job: CloudJobEnvelope): Promise<S
 }
 
 export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv, CloudJobEnvelope> {
-  async run(event: Readonly<WorkflowEvent<CloudJobEnvelope>>, step: WorkflowStep): Promise<{ status: 'SUCCEEDED'; resultArtifactRef: string }> {
+  async run(event: Readonly<WorkflowEvent<CloudJobEnvelope>>, step: WorkflowStep): Promise<ScientificWorkflowResult> {
     const job = cloudJobEnvelopeSchema.parse(event.payload)
     const ledger = new CloudJobLedger(createHyperdrivePrisma(this.env))
     try {
@@ -51,17 +52,15 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
         operation: job.jobType === 'SCIENTIFIC_MODEL' ? 'MODEL_SMOKE' : 'FEATURE_GENERATE',
       })
       const container = await containerFor(this.env, job)
-      const response = await container.fetch('https://scientific.internal/v1/jobs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-olfactoryops-scientific-key': scientificContainerSharedSecret },
-        body: JSON.stringify(request),
-      })
-      if (!response.ok) throw new Error(await safeScientificContainerError(response))
-      const parsed = await response.json() as unknown
-      if (!isContainerResponse(parsed)) throw new Error('SCIENTIFIC_CONTAINER_INVALID_RESPONSE')
-      const serialized = JSON.stringify(parsed)
-      if (serialized.length > 1_000_000) throw new Error('SCIENTIFIC_CONTAINER_RESPONSE_TOO_LARGE')
-      return serialized
+      const response = await container.runScientificJob(request, scientificContainerSharedSecret) as BufferedScientificContainerResponse
+      if (response.status < 200 || response.status >= 300) {
+        throw new Error(await safeScientificContainerError(new Response(response.body, { status: response.status })))
+      }
+      try {
+        return JSON.stringify(scientificContainerResponseSchema.parse(JSON.parse(response.body)))
+      } catch {
+        throw new Error('SCIENTIFIC_CONTAINER_INVALID_RESPONSE')
+      }
     })
     const artifact = JSON.parse(serializedArtifact) as ContainerResponse
     const persisted = await step.do('persist-scientific-artifact-provenance', async () => {
@@ -110,14 +109,4 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
       throw error
     }
   }
-}
-
-function isContainerResponse(value: unknown): value is ContainerResponse {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const row = value as Record<string, unknown>
-  if (!row.payload || typeof row.payload !== 'object' || Array.isArray(row.payload)) return false
-  if (row.runtimeVersion !== undefined && typeof row.runtimeVersion !== 'string') return false
-  if (row.modelVersion !== undefined && typeof row.modelVersion !== 'string') return false
-  if (row.componentVersions !== undefined && (!row.componentVersions || typeof row.componentVersions !== 'object' || Array.isArray(row.componentVersions) || Object.values(row.componentVersions as Record<string, unknown>).some((item) => typeof item !== 'string'))) return false
-  return true
 }

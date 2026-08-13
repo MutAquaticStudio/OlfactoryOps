@@ -7,6 +7,10 @@ export const scientificContainerHealthEndpoint = 'localhost/health'
 // Keep the staging bound finite while giving that cold start enough time.
 export const scientificContainerStartupTimeoutMs = 300_000
 export const scientificContainerStartupPollIntervalMs = 1_000
+// A drained lane owns an explicit graceful stop, then one bounded destroy
+// fallback. These small polls are post-response only and never interrupt work.
+export const scientificContainerStopPollAttempts = 10
+export const scientificContainerStopPollIntervalMs = 1_000
 export const scientificFeatureContainerEntrypoint = ['/opt/conda/bin/python', '-m', 'scientific_runtime.server']
 
 export type ScientificContainerDiagnostic = {
