@@ -24,7 +24,7 @@ env:
   DIAGNOSTIC_SOURCE_SHA: 4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe
   TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
-  DIAGNOSTIC_WORKER_NAME: olfactoryops-v2-tenant-router-production-candidate-runtime-diagnostic
+  DIAGNOSTIC_WORKER_NAME: oo-v2-router-runtime-diag
 
 jobs:
   validate-diagnostic-input:
@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node scripts/verify-v2-runtime-diagnostic-dispatcher.mjs
           test "$CONFIRM_DIAGNOSTIC" = "DEPLOY_READ_ONLY_RUNTIME_DIAGNOSTIC"
           test "$TARGET_RELEASE_SHA" = "5985834a0e14728c81c8c028a72122ded544bd6b"
           test "$DIAGNOSTIC_SOURCE_SHA" = "4f5b9e9b92a9f1880a06dbcf622fbcaa57fc2cbe"
@@ -58,6 +59,8 @@ jobs:
           git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
           git cat-file -e "${DIAGNOSTIC_SOURCE_SHA}^{commit}"
           test "$(git rev-parse 'v2-production-rc2^{}')" = "$TARGET_RELEASE_SHA"
+          [[ "$DIAGNOSTIC_WORKER_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          test "${#DIAGNOSTIC_WORKER_NAME}" -le 63
           diagnostic_source_branch_sha="$(git rev-parse "origin/${DIAGNOSTIC_SOURCE_BRANCH}")"
           git merge-base --is-ancestor "$DIAGNOSTIC_SOURCE_SHA" "$diagnostic_source_branch_sha"
           for required_file in \
@@ -122,6 +125,21 @@ jobs:
           npm run prisma:generate:v2
           npm run generate:v2-worker-transport
           node scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs
+          DIAGNOSTIC_WORKER_NAME="$DIAGNOSTIC_WORKER_NAME" node --input-type=module <<'EOF'
+          import { readFileSync, writeFileSync } from 'node:fs'
+
+          const configPath = process.env.V2_RUNTIME_DIAGNOSTIC_CONFIG
+          const workerName = process.env.DIAGNOSTIC_WORKER_NAME
+          if (!configPath || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(workerName ?? '') || workerName.length > 63) {
+            throw new Error('runtime diagnostic Worker name must be a valid workers.dev DNS label of at most 63 characters')
+          }
+          const rendered = readFileSync(configPath, 'utf8')
+          const updated = rendered.replace(/^name\s*=\s*"[^"]+"\s*$/m, `name = "${workerName}"`)
+          if (updated === rendered || !updated.includes(`name = "${workerName}"`)) {
+            throw new Error('runtime diagnostic config must have exactly one Worker name override')
+          }
+          writeFileSync(configPath, updated, 'utf8')
+          EOF
           if grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$V2_RUNTIME_DIAGNOSTIC_CONFIG"; then
             echo 'runtime diagnostic configuration must not attach a route or custom domain' >&2
             exit 1
@@ -201,9 +219,23 @@ jobs:
           worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
-          if [ "$worker_status" != "404" ]; then
-            npx wrangler delete "$DIAGNOSTIC_WORKER_NAME" --force
-          fi
+          case "$worker_status" in
+            200)
+              delete_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                --request DELETE \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                -H 'Content-Type: application/json' \
+                --data '{}' \
+                "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
+              test "$delete_status" = "200"
+              ;;
+            404)
+              ;;
+            *)
+              echo "unexpected diagnostic Worker lookup status: $worker_status" >&2
+              exit 1
+              ;;
+          esac
           worker_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$DIAGNOSTIC_WORKER_NAME")"
