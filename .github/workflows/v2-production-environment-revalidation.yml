@@ -98,20 +98,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
-          import pg from 'pg'
-          const client = new pg.Client({ connectionString: process.env.PRODUCTION_DATABASE_URL })
-          try {
-            await client.connect()
-            await client.query('SELECT 1')
-            console.log('PRODUCTION_DATABASE_CONNECTIVITY=PASS')
-          } catch {
-            console.log('PRODUCTION_DATABASE_CONNECTIVITY=FAIL')
-            process.exitCode = 1
-          } finally {
-            await client.end().catch(() => undefined)
-          }
-          NODE
+          (
+            cd "$RC9_WORKTREE"
+            node --input-type=module <<'NODE'
+            import pg from 'pg'
+            const client = new pg.Client({
+              connectionString: process.env.PRODUCTION_DATABASE_URL,
+              connectionTimeoutMillis: 15_000,
+              query_timeout: 15_000,
+              statement_timeout: 15_000,
+            })
+            try {
+              await client.connect()
+              await client.query('SELECT 1')
+              console.log('PRODUCTION_DATABASE_DRIVER=PASS')
+              console.log('PRODUCTION_DATABASE_CONNECTIVITY=PASS')
+            } catch {
+              console.log('PRODUCTION_DATABASE_CONNECTIVITY=FAIL')
+              process.exitCode = 1
+            } finally {
+              await client.end().catch(() => undefined)
+            }
+            NODE
+          )
       - name: Scan exact RC9 source and generated client bundle for secret exposure
         shell: bash
         run: |
@@ -135,3 +144,12 @@ jobs:
           set -euo pipefail
           echo "PRODUCTION_ENVIRONMENT_PROTECTION=PASS"
           echo "PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS"
+      - name: Remove the runner-local RC9 worktree
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${RC9_WORKTREE:-}" ] && [ -d "$RC9_WORKTREE" ]; then
+            git worktree remove --force "$RC9_WORKTREE"
+            git worktree prune
+          fi
