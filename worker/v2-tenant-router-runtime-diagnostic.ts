@@ -27,8 +27,11 @@ type RuntimeDiagnosticRow = {
   organizationsRlsEnabled: boolean
   organizationsForceRls: boolean
   resolverSecurityDefiner: boolean
-  functionOwnerNonSuperuser: boolean
-  functionOwnerNoBypassRls: boolean
+  functionOwnerOwnsWorkspaceHostnames: boolean
+  functionOwnerOwnsOrganizations: boolean
+  functionOwnerIsSuperuser: boolean
+  functionOwnerBypassRls: boolean
+  functionOwnerForceRlsConstrained: boolean
   runtimeExecuteGranted: boolean
   requestHostnameContextPresent: boolean
   organizationContextPresent: boolean
@@ -43,12 +46,18 @@ export type CandidateRuntimeDiagnostic = {
   runtimeSessionUserMatchesExpected: boolean
   runtimeDirectHostnameVisible: boolean
   runtimeDirectOrganizationVisible: boolean
+  resolverQueryExecuted: true
   runtimeResolverResult: boolean
   workspaceHostnamesRls: boolean
   workspaceHostnamesForceRls: boolean
   organizationsRls: boolean
   organizationsForceRls: boolean
-  functionOwnerRlsSemantics: boolean
+  resolverSecurityDefiner: boolean
+  functionOwnerOwnsWorkspaceHostnames: boolean
+  functionOwnerOwnsOrganizations: boolean
+  functionOwnerIsSuperuser: boolean
+  functionOwnerBypassRls: boolean
+  functionOwnerForceRlsConstrained: boolean
   runtimeExecuteGranted: boolean
   runtimeRequestHostnameContextPresent: boolean
   runtimeOrganizationContextPresent: boolean
@@ -83,17 +92,47 @@ export function runtimeDiagnosticFromRow(row: RuntimeDiagnosticRow, expectedData
     runtimeSessionUserMatchesExpected: row.sessionUserMatchesExpected,
     runtimeDirectHostnameVisible: row.directHostnameVisible,
     runtimeDirectOrganizationVisible: row.directOrganizationVisible,
+    resolverQueryExecuted: true,
     runtimeResolverResult: row.resolverResult,
     workspaceHostnamesRls: row.workspaceHostnamesRlsEnabled,
     workspaceHostnamesForceRls: row.workspaceHostnamesForceRls,
     organizationsRls: row.organizationsRlsEnabled,
     organizationsForceRls: row.organizationsForceRls,
-    functionOwnerRlsSemantics: row.resolverSecurityDefiner && row.functionOwnerNonSuperuser && row.functionOwnerNoBypassRls,
+    resolverSecurityDefiner: row.resolverSecurityDefiner,
+    functionOwnerOwnsWorkspaceHostnames: row.functionOwnerOwnsWorkspaceHostnames,
+    functionOwnerOwnsOrganizations: row.functionOwnerOwnsOrganizations,
+    functionOwnerIsSuperuser: row.functionOwnerIsSuperuser,
+    functionOwnerBypassRls: row.functionOwnerBypassRls,
+    functionOwnerForceRlsConstrained: row.functionOwnerForceRlsConstrained,
     runtimeExecuteGranted: row.runtimeExecuteGranted,
     runtimeRequestHostnameContextPresent: row.requestHostnameContextPresent,
     runtimeOrganizationContextPresent: row.organizationContextPresent,
     runtimeUserContextPresent: row.userContextPresent,
   }
+}
+
+export function runtimeDiagnosticExecutionPass(diagnostic: CandidateRuntimeDiagnostic) {
+  return [
+    diagnostic.hyperdriveConnectionReachable,
+    diagnostic.hyperdriveProductionDatabaseMatch,
+    diagnostic.runtimeCurrentUserMatchesExpected,
+    diagnostic.runtimeSessionUserMatchesExpected,
+    diagnostic.workspaceHostnamesRls,
+    diagnostic.workspaceHostnamesForceRls,
+    diagnostic.organizationsRls,
+    diagnostic.organizationsForceRls,
+    diagnostic.runtimeExecuteGranted,
+    diagnostic.resolverQueryExecuted,
+  ].every(Boolean)
+    && !diagnostic.runtimeDirectHostnameVisible
+    && !diagnostic.runtimeDirectOrganizationVisible
+    && !diagnostic.runtimeRequestHostnameContextPresent
+    && !diagnostic.runtimeOrganizationContextPresent
+    && !diagnostic.runtimeUserContextPresent
+}
+
+export function resolverHealth(diagnostic: CandidateRuntimeDiagnostic) {
+  return diagnostic.runtimeResolverResult ? 'PASS' : 'FAIL'
 }
 
 async function inspectCandidateRuntime(env: V2TenantRouterRuntimeDiagnosticEnv): Promise<CandidateRuntimeDiagnostic> {
@@ -142,12 +181,24 @@ async function inspectCandidateRuntime(env: V2TenantRouterRuntimeDiagnosticEnv):
           SELECT 1
           FROM pg_proc function_definition
           INNER JOIN pg_namespace namespace ON namespace.oid = function_definition.pronamespace
-          INNER JOIN pg_roles function_owner ON function_owner.oid = function_definition.proowner
+          INNER JOIN pg_class workspace_hostnames ON workspace_hostnames.oid = 'public.v2_workspace_hostnames'::regclass
           WHERE namespace.nspname = 'public'
             AND function_definition.proname = 'v2_resolve_active_workspace_hostname'
             AND pg_get_function_identity_arguments(function_definition.oid) = 'p_hostname text'
-            AND NOT function_owner.rolsuper
-        ) AS "functionOwnerNonSuperuser",
+            AND function_definition.prosecdef
+            AND function_definition.proowner = workspace_hostnames.relowner
+        ) AS "functionOwnerOwnsWorkspaceHostnames",
+        EXISTS (
+          SELECT 1
+          FROM pg_proc function_definition
+          INNER JOIN pg_namespace namespace ON namespace.oid = function_definition.pronamespace
+          INNER JOIN pg_class organizations ON organizations.oid = 'public.v2_organizations'::regclass
+          WHERE namespace.nspname = 'public'
+            AND function_definition.proname = 'v2_resolve_active_workspace_hostname'
+            AND pg_get_function_identity_arguments(function_definition.oid) = 'p_hostname text'
+            AND function_definition.prosecdef
+            AND function_definition.proowner = organizations.relowner
+        ) AS "functionOwnerOwnsOrganizations",
         EXISTS (
           SELECT 1
           FROM pg_proc function_definition
@@ -156,8 +207,35 @@ async function inspectCandidateRuntime(env: V2TenantRouterRuntimeDiagnosticEnv):
           WHERE namespace.nspname = 'public'
             AND function_definition.proname = 'v2_resolve_active_workspace_hostname'
             AND pg_get_function_identity_arguments(function_definition.oid) = 'p_hostname text'
-            AND NOT function_owner.rolbypassrls
-        ) AS "functionOwnerNoBypassRls",
+            AND function_definition.prosecdef
+            AND function_owner.rolsuper
+        ) AS "functionOwnerIsSuperuser",
+        EXISTS (
+          SELECT 1
+          FROM pg_proc function_definition
+          INNER JOIN pg_namespace namespace ON namespace.oid = function_definition.pronamespace
+          INNER JOIN pg_roles function_owner ON function_owner.oid = function_definition.proowner
+          WHERE namespace.nspname = 'public'
+            AND function_definition.proname = 'v2_resolve_active_workspace_hostname'
+            AND pg_get_function_identity_arguments(function_definition.oid) = 'p_hostname text'
+            AND function_definition.prosecdef
+            AND function_owner.rolbypassrls
+        ) AS "functionOwnerBypassRls",
+        EXISTS (
+          SELECT 1
+          FROM pg_proc function_definition
+          INNER JOIN pg_namespace namespace ON namespace.oid = function_definition.pronamespace
+          INNER JOIN pg_class workspace_hostnames ON workspace_hostnames.oid = 'public.v2_workspace_hostnames'::regclass
+          INNER JOIN pg_class organizations ON organizations.oid = 'public.v2_organizations'::regclass
+          WHERE namespace.nspname = 'public'
+            AND function_definition.proname = 'v2_resolve_active_workspace_hostname'
+            AND pg_get_function_identity_arguments(function_definition.oid) = 'p_hostname text'
+            AND function_definition.prosecdef
+            AND function_definition.proowner = workspace_hostnames.relowner
+            AND function_definition.proowner = organizations.relowner
+            AND workspace_hostnames.relforcerowsecurity
+            AND organizations.relforcerowsecurity
+        ) AS "functionOwnerForceRlsConstrained",
         has_function_privilege(current_user, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS "runtimeExecuteGranted",
         COALESCE(NULLIF(current_setting('app.request_hostname', true), ''), '') <> '' AS "requestHostnameContextPresent",
         COALESCE(NULLIF(current_setting('app.organization_id', true), ''), '') <> '' AS "organizationContextPresent",

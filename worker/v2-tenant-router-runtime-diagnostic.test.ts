@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createCandidateRuntimeDiagnostic, normalizedDiagnosticFixtureHostname, runtimeDiagnosticFromRow } from './v2-tenant-router-runtime-diagnostic.js'
+import {
+  createCandidateRuntimeDiagnostic,
+  normalizedDiagnosticFixtureHostname,
+  resolverHealth,
+  runtimeDiagnosticExecutionPass,
+  runtimeDiagnosticFromRow,
+} from './v2-tenant-router-runtime-diagnostic.js'
 
 const targetReleaseSha = '5985834a0e14728c81c8c028a72122ded544bd6b'
 const expectedDatabaseSha = 'a'.repeat(64)
@@ -15,8 +21,11 @@ const row = {
   organizationsRlsEnabled: true,
   organizationsForceRls: true,
   resolverSecurityDefiner: true,
-  functionOwnerNonSuperuser: true,
-  functionOwnerNoBypassRls: true,
+  functionOwnerOwnsWorkspaceHostnames: true,
+  functionOwnerOwnsOrganizations: true,
+  functionOwnerIsSuperuser: false,
+  functionOwnerBypassRls: false,
+  functionOwnerForceRlsConstrained: true,
   runtimeExecuteGranted: true,
   requestHostnameContextPresent: false,
   organizationContextPresent: false,
@@ -31,16 +40,33 @@ describe('candidate tenant-router runtime diagnostic', () => {
     expect(normalizedDiagnosticFixtureHostname('router.labofscents.org')).toBeNull()
   })
 
-  it('does not turn an unconfigured database identity into a pass', () => {
-    expect(runtimeDiagnosticFromRow(row, expectedDatabaseSha, 'b'.repeat(64), targetReleaseSha)).toMatchObject({
+  it('separates a healthy resolver from the generic diagnostic execution contract', () => {
+    const diagnostic = runtimeDiagnosticFromRow(row, expectedDatabaseSha, expectedDatabaseSha, targetReleaseSha)
+    expect(diagnostic).toMatchObject({
       hyperdriveConnectionReachable: true,
-      hyperdriveProductionDatabaseMatch: false,
+      hyperdriveProductionDatabaseMatch: true,
       runtimeDirectHostnameVisible: false,
       runtimeDirectOrganizationVisible: false,
       runtimeResolverResult: true,
-      functionOwnerRlsSemantics: true,
+      functionOwnerForceRlsConstrained: true,
       runtimeRequestHostnameContextPresent: false,
     })
+    expect(runtimeDiagnosticExecutionPass(diagnostic)).toBe(true)
+    expect(resolverHealth(diagnostic)).toBe('PASS')
+  })
+
+  it('retains full evidence when the resolver is the failed diagnostic subject', () => {
+    const diagnostic = runtimeDiagnosticFromRow({ ...row, resolverResult: false }, expectedDatabaseSha, expectedDatabaseSha, targetReleaseSha)
+    expect(runtimeDiagnosticExecutionPass(diagnostic)).toBe(true)
+    expect(resolverHealth(diagnostic)).toBe('FAIL')
+    expect(diagnostic.runtimeResolverResult).toBe(false)
+    expect(diagnostic.functionOwnerForceRlsConstrained).toBe(true)
+  })
+
+  it('does not turn an unconfigured database identity into a pass', () => {
+    const diagnostic = runtimeDiagnosticFromRow(row, expectedDatabaseSha, 'b'.repeat(64), targetReleaseSha)
+    expect(diagnostic.hyperdriveProductionDatabaseMatch).toBe(false)
+    expect(runtimeDiagnosticExecutionPass(diagnostic)).toBe(false)
   })
 
   it('requires the ephemeral internal diagnostic token and never exposes it', async () => {
@@ -63,5 +89,8 @@ describe('candidate tenant-router runtime diagnostic', () => {
     expect(body).toMatchObject({ candidateRuntimeDiagnostic: 'COMPLETE', targetReleaseSha, hyperdriveProductionDatabaseMatch: true })
     expect(JSON.stringify(body)).not.toContain('test-only-secret')
     expect(JSON.stringify(body)).not.toContain('postgres')
+    expect(JSON.stringify(body)).not.toContain('hyperdrive_user')
+    expect(JSON.stringify(body)).not.toContain('org_rc2_release')
+    expect(JSON.stringify(body)).not.toContain('fixture@example.test')
   })
 })
