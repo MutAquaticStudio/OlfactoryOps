@@ -1,5 +1,4 @@
-import { PrismaPg } from '@prisma/adapter-pg'
-import { PrismaClient } from '@prisma/client'
+import { Client } from 'pg'
 
 export type V2TenantRouterEnv = {
   HYPERDRIVE: Hyperdrive
@@ -10,6 +9,42 @@ export type V2TenantRouterEnv = {
 }
 
 type HostRow = { organizationId: string }
+
+export type TenantRouterPgClient = {
+  connect(): Promise<void>
+  query<Row extends HostRow>(text: string, values: unknown[]): Promise<{ rows: Row[] }>
+  end(): Promise<void>
+}
+
+export type TenantRouterPgClientFactory = (connectionString: string) => TenantRouterPgClient
+
+export type V2TenantRouterDependencies = {
+  clientFactory?: TenantRouterPgClientFactory
+  proxyFetch?: (request: Request) => Promise<Response>
+}
+
+export type V2TenantRouter = {
+  fetch(request: Request, env: V2TenantRouterEnv): Promise<Response>
+}
+
+const activeWorkspaceHostnameQuery = `
+  SELECT organization_id AS "organizationId"
+  FROM public.v2_resolve_active_workspace_hostname($1)
+  LIMIT 1
+`
+
+const untrustedTenantHeaders = [
+  'x-olfactoryops-workspace-host',
+  'x-olfactoryops-organization-id',
+  'x-olfactoryops-tenant-id',
+  'x-organization-id',
+  'x-organization_id',
+  'x-tenant-id',
+  'x-tenant_id',
+  'x-forwarded-host',
+]
+
+const nativePgClientFactory: TenantRouterPgClientFactory = (connectionString) => new Client({ connectionString })
 
 export function normalizedHost(value: string) {
   return (value.trim().toLowerCase().split(':', 1)[0] ?? '').replace(/\.$/, '')
@@ -34,26 +69,30 @@ function invalidConfig() {
   })
 }
 
-async function activeWorkspaceForHostname(env: V2TenantRouterEnv, hostname: string) {
-  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.HYPERDRIVE.connectionString }) })
+export async function activeWorkspaceForHostname(
+  env: V2TenantRouterEnv,
+  hostname: string,
+  clientFactory: TenantRouterPgClientFactory = nativePgClientFactory,
+) {
+  const client = clientFactory(env.HYPERDRIVE.connectionString)
+  let connected = false
   try {
-    const rows = await prisma.$queryRaw<HostRow[]>`
-      SELECT organization_id AS "organizationId"
-      FROM public.v2_resolve_active_workspace_hostname(${hostname})
-      LIMIT 1
-    `
-    return rows[0] ?? null
+    await client.connect()
+    connected = true
+    const result = await client.query<HostRow>(activeWorkspaceHostnameQuery, [hostname])
+    return result.rows[0] ?? null
   } finally {
-    await prisma.$disconnect()
+    if (connected) await client.end()
   }
 }
 
-function pagesRequest(request: Request, pagesOrigin: URL, hostname: string) {
+export function pagesRequest(request: Request, pagesOrigin: URL, hostname: string) {
   const destination = new URL(request.url)
   destination.protocol = pagesOrigin.protocol
   destination.host = pagesOrigin.host
   const headers = new Headers(request.headers)
   headers.delete('host')
+  for (const header of untrustedTenantHeaders) headers.delete(header)
   headers.set('x-olfactoryops-workspace-host', hostname)
   return new Request(destination, {
     method: request.method,
@@ -64,34 +103,45 @@ function pagesRequest(request: Request, pagesOrigin: URL, hostname: string) {
 }
 
 /**
- * Staging-only tenant router. It reads V2 PostgreSQL through Hyperdrive and
- * never consults legacy D1 hostname tables.
+ * The router uses only the Hyperdrive connection string to call the narrowly
+ * privileged hostname resolver. It never accepts a caller organization id.
  */
-export default {
-  async fetch(request: Request, env: V2TenantRouterEnv): Promise<Response> {
-    const hostname = normalizedHost(new URL(request.url).hostname)
-    const baseDomain = normalizedHost(env.V2_WORKSPACE_BASE_DOMAIN)
-    if (!hostname || !baseDomain || !isStagingSystemHostname(hostname, baseDomain)) return notFound()
-    let pagesOrigin: URL
-    try {
-      pagesOrigin = new URL(env.PAGES_ORIGIN)
-      if (pagesOrigin.protocol !== 'https:') return invalidConfig()
-    } catch {
-      return invalidConfig()
-    }
-    let workspace: HostRow | null
-    try {
-      workspace = await activeWorkspaceForHostname(env, hostname)
-    } catch {
-      return invalidConfig()
-    }
-    if (!workspace) return notFound()
-    const upstream = await fetch(pagesRequest(request, pagesOrigin, hostname))
-    const headers = new Headers(upstream.headers)
-    headers.set('x-olfactoryops-workspace-router', 'active')
-    headers.set('x-olfactoryops-release-environment', env.RELEASE_ENVIRONMENT ?? 'staging')
-    if (env.RELEASE_GIT_SHA) headers.set('x-olfactoryops-release-sha', env.RELEASE_GIT_SHA)
-    headers.set('cache-control', headers.get('cache-control') ?? 'public, max-age=0, must-revalidate')
-    return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers })
-  },
-} satisfies ExportedHandler<V2TenantRouterEnv>
+export function createV2TenantRouter(dependencies: V2TenantRouterDependencies = {}): V2TenantRouter {
+  const clientFactory = dependencies.clientFactory ?? nativePgClientFactory
+  const proxyFetch = dependencies.proxyFetch ?? globalThis.fetch
+  return {
+    async fetch(request: Request, env: V2TenantRouterEnv): Promise<Response> {
+      const hostname = normalizedHost(new URL(request.url).hostname)
+      const baseDomain = normalizedHost(env.V2_WORKSPACE_BASE_DOMAIN)
+      if (!hostname || !baseDomain || !isStagingSystemHostname(hostname, baseDomain)) return notFound()
+      let pagesOrigin: URL
+      try {
+        pagesOrigin = new URL(env.PAGES_ORIGIN)
+        if (pagesOrigin.protocol !== 'https:') return invalidConfig()
+      } catch {
+        return invalidConfig()
+      }
+      let workspace: HostRow | null
+      try {
+        workspace = await activeWorkspaceForHostname(env, hostname, clientFactory)
+      } catch {
+        return invalidConfig()
+      }
+      if (!workspace) return notFound()
+      let upstream: Response
+      try {
+        upstream = await proxyFetch(pagesRequest(request, pagesOrigin, hostname))
+      } catch {
+        return invalidConfig()
+      }
+      const headers = new Headers(upstream.headers)
+      headers.set('x-olfactoryops-workspace-router', 'active')
+      headers.set('x-olfactoryops-release-environment', env.RELEASE_ENVIRONMENT ?? 'staging')
+      if (env.RELEASE_GIT_SHA) headers.set('x-olfactoryops-release-sha', env.RELEASE_GIT_SHA)
+      headers.set('cache-control', headers.get('cache-control') ?? 'public, max-age=0, must-revalidate')
+      return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers })
+    },
+  }
+}
+
+export default createV2TenantRouter() satisfies ExportedHandler<V2TenantRouterEnv>
