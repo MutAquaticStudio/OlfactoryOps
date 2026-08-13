@@ -19,14 +19,21 @@ describe("production environment revalidation workflow contract", () => {
       "REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC",
     );
     expect(workflow).toContain("persist-credentials: false");
+    expect(workflow).toContain(
+      'git worktree add --detach "$RUNNER_TEMP/olfactoryops-rc9" "$RELEASE_SHA"',
+    );
   });
 
   it("has only read-only production checks and does not mutate deployment state", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("await client.query('SELECT 1')");
-    expect(workflow).toContain("user/tokens/verify");
+    expect(workflow).toContain(
+      "node scripts/verify-cloudflare-production-token.mjs",
+    );
     expect(workflow).toContain("PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS");
-    expect(workflow).toContain("npm run security:client-bundle");
+    expect(workflow).toContain(
+      'npm --prefix "$RC9_WORKTREE" run security:client-bundle',
+    );
     expect(workflow).not.toMatch(
       /wrangler\s+deploy|wrangler\s+secret\s+put|gh\s+(variable|secret)\s+set|INSERT\s+|UPDATE\s+|DELETE\s+|ALTER\s+/i,
     );
