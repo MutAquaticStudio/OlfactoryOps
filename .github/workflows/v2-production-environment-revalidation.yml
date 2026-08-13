@@ -98,28 +98,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          ops_directory="$RC9_WORKTREE/.ops-revalidation"
+          rm -rf "$ops_directory"
+          mkdir -p "$ops_directory"
+          chmod 700 "$ops_directory"
+          trap 'rm -rf "$ops_directory"' EXIT
+          install -m 600 \
+            scripts/verify-production-database-connectivity.mjs \
+            "$ops_directory/verify-production-database-connectivity.mjs"
           (
             cd "$RC9_WORKTREE"
-            node --input-type=module <<'NODE'
-            import pg from 'pg'
-            const client = new pg.Client({
-              connectionString: process.env.PRODUCTION_DATABASE_URL,
-              connectionTimeoutMillis: 15_000,
-              query_timeout: 15_000,
-              statement_timeout: 15_000,
-            })
-            try {
-              await client.connect()
-              await client.query('SELECT 1')
-              console.log('PRODUCTION_DATABASE_DRIVER=PASS')
-              console.log('PRODUCTION_DATABASE_CONNECTIVITY=PASS')
-            } catch {
-              console.log('PRODUCTION_DATABASE_CONNECTIVITY=FAIL')
-              process.exitCode = 1
-            } finally {
-              await client.end().catch(() => undefined)
-            }
-            NODE
+            node .ops-revalidation/verify-production-database-connectivity.mjs
           )
       - name: Scan exact RC9 source and generated client bundle for secret exposure
         shell: bash
@@ -153,3 +142,4 @@ jobs:
             git worktree remove --force "$RC9_WORKTREE"
             git worktree prune
           fi
+          echo "RUNNER_LOCAL_RC9_WORKTREE_CLEANUP=PASS"
