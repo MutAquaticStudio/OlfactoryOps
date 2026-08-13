@@ -69,6 +69,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate-release.outputs.release_sha }}
+      - name: Place the reviewed helper in the ephemeral release checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ops-canary
+          install -m 600 "$RUNNER_TEMP/verify-v2-staging-scientific-canary.mjs" .ops-canary/verify-v2-staging-scientific-canary.mjs
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -87,9 +93,9 @@ jobs:
           set -euo pipefail
           result_ref="$(mktemp)"
           result_file="$(mktemp)"
-          trap 'rm -f "$result_ref" "$result_file"' EXIT
+          trap 'rm -f "$result_ref" "$result_file"; rm -rf .ops-canary' EXIT
           export V2_STAGING_SCIENTIFIC_RESULT_REF_PATH="$result_ref"
-          node "$RUNNER_TEMP/verify-v2-staging-scientific-canary.mjs"
+          node .ops-canary/verify-v2-staging-scientific-canary.mjs
           artifact_ref="$(tr -d '\r\n' < "$result_ref")"
           [[ "$artifact_ref" =~ ^v2/[A-Za-z0-9_-]+/scientific/[a-f0-9]{64}$ ]]
           npx wrangler r2 object get "$STAGING_R2_BUCKET/$artifact_ref" --remote --file "$result_file"
