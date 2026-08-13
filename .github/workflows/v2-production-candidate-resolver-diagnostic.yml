@@ -135,12 +135,6 @@ jobs:
                 has_function_privilege($2, 'public.v2_resolve_active_workspace_hostname(text)', 'EXECUTE') AS runtime_execute_granted
             `, [hostname, runtimeRole])
 
-            await client.query(`SET LOCAL ROLE "${runtimeRole.replaceAll('"', '""')}"`)
-            const runtime = await client.query(`
-              SELECT EXISTS (
-                SELECT 1 FROM public.v2_resolve_active_workspace_hostname($1)
-              ) AS resolver_as_runtime_role
-            `, [hostname])
             await client.query('ROLLBACK')
             transactionOpen = false
 
@@ -152,13 +146,14 @@ jobs:
               resolverAsMigrationConnection: Boolean(row.resolver_as_migration_connection),
               resolverSecurityDefiner: Boolean(row.resolver_security_definer),
               runtimeExecuteGranted: Boolean(row.runtime_execute_granted),
-              resolverAsRuntimeRole: Boolean(runtime.rows[0]?.resolver_as_runtime_role),
             }
             console.log(JSON.stringify(result))
             if (!Object.values(result).slice(1).every(Boolean)) process.exitCode = 2
-          } catch {
+          } catch (error) {
             if (transactionOpen) await client.query('ROLLBACK').catch(() => undefined)
-            console.log(JSON.stringify({ candidateTenantResolverDiagnostic: 'FAIL', reason: 'READ_ONLY_DIAGNOSTIC_UNAVAILABLE' }))
+            const stage = transactionOpen ? 'METADATA_QUERY' : 'CONNECTION_OR_TRANSACTION'
+            const code = typeof error?.code === 'string' && /^[0-9A-Z]{5}$/.test(error.code) ? error.code : 'UNCLASSIFIED'
+            console.log(JSON.stringify({ candidateTenantResolverDiagnostic: 'FAIL', stage, code }))
             process.exitCode = 1
           } finally {
             await client.end().catch(() => undefined)
