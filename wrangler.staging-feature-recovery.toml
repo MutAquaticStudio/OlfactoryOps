@@ -1,0 +1,11 @@
+# Temporary operations-only Worker. It binds to, but never migrates or owns,
+# the existing staging ScientificFeatureContainer namespace.
+name = "oo-staging-feature-recovery"
+main = "worker/staging-feature-recovery.ts"
+compatibility_date = "2026-08-13"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "SCIENTIFIC_FEATURE_CONTAINER"
+class_name = "ScientificFeatureContainer"
+script_name = "olfactoryops-v2-cloud-runtime-staging"
