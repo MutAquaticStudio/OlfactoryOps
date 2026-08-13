@@ -37,7 +37,7 @@ test('candidate acceptance refuses incomplete approval and fixture configuration
 })
 
 test('candidate browser profile uses the same fixed targets without accepting a database credential', () => {
-  const { PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL, ...browserEnvironment } = validEnvironment
+  const { PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL: _databaseUrl, ...browserEnvironment } = validEnvironment
   const config = candidateBrowserConfig(browserEnvironment)
 
   expect(config.databaseUrl).toBeUndefined()
