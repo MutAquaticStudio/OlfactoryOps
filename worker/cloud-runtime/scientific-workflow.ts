@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
-import { cloudArtifactManifestSchema, cloudJobEnvelopeSchema, scientificContainerRequestSchema, scientificContainerResponseSchema, scientificInputArtifactSchema, scientificModelInputArtifactSchema, type CloudJobEnvelope } from './contracts.js'
+import { cloudArtifactManifestSchema, cloudJobEnvelopeSchema, parseScientificContainerResponse, scientificContainerRequestSchema, scientificInputArtifactSchema, scientificModelInputArtifactSchema, type CloudJobEnvelope } from './contracts.js'
 import { PrivateArtifactStore } from './artifact-store.js'
 import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
@@ -57,7 +57,7 @@ export class ScientificJobWorkflow extends WorkflowEntrypoint<CloudScientificEnv
         throw new Error(await safeScientificContainerError(new Response(response.body, { status: response.status })))
       }
       try {
-        return JSON.stringify(scientificContainerResponseSchema.parse(JSON.parse(response.body)))
+        return JSON.stringify(parseScientificContainerResponse(request, JSON.parse(response.body)))
       } catch {
         throw new Error('SCIENTIFIC_CONTAINER_INVALID_RESPONSE')
       }
