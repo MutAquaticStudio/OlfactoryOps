@@ -24,6 +24,7 @@ env:
 
 jobs:
   validate-production-revision:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -32,9 +33,10 @@ jobs:
       RELEASE_SHA: ${{ inputs.release_sha }}
       CONFIRM_PLATFORM_OWNER_BOOTSTRAP: ${{ inputs.confirm_platform_owner_bootstrap }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: revision
         name: Validate the approved bootstrap revision
         shell: bash
@@ -44,12 +46,11 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           git fetch --no-tags origin "$RELEASE_BRANCH"
           release_branch_sha="$(git rev-parse FETCH_HEAD)"
-          git fetch --tags origin
-          git cat-file -e "${RELEASE_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
-            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
-          fi
-          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          git fetch --force --tags origin
+          release_sha="$(git rev-parse "${RELEASE_SHA}^{commit}")"
+          test "$release_sha" = "$release_branch_sha"
+          git tag --points-at "$release_sha" | grep -Eq '^v2-production-rc[0-9]+$'
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 
   bootstrap-platform-owner:
     needs: validate-production-revision
@@ -57,22 +58,34 @@ jobs:
     timeout-minutes: 15
     environment: production
     env:
-      PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
-      PLATFORM_BOOTSTRAP_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
-      PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT: production
-      CONFIRM_PLATFORM_OWNER_BOOTSTRAP: ${{ inputs.confirm_platform_owner_bootstrap }}
-      V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED: ASSIGN_PLATFORM_OWNER
+      RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
+          ref: ${{ env.RELEASE_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Require protected one-time bootstrap inputs
+      - name: Require exact protected production revalidation
         shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+      - name: Assign the one-time Platform Owner without logging identity or credentials
+        shell: bash
+        env:
+          PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
+          PLATFORM_BOOTSTRAP_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT: production
+          CONFIRM_PLATFORM_OWNER_BOOTSTRAP: ${{ inputs.confirm_platform_owner_bootstrap }}
+          V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED: ASSIGN_PLATFORM_OWNER
         run: |
           set -euo pipefail
           test -n "$PLATFORM_OWNER_BOOTSTRAP_EMAIL"
@@ -80,5 +93,4 @@ jobs:
           test "$PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT" = "production"
           test "$CONFIRM_PLATFORM_OWNER_BOOTSTRAP" = "ASSIGN_PLATFORM_OWNER"
           test "$V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED" = "ASSIGN_PLATFORM_OWNER"
-      - name: Assign the one-time Platform Owner without logging identity or credentials
-        run: npm run bootstrap:platform-owner
+          npm run bootstrap:platform-owner
