@@ -77,13 +77,13 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
       PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      RELEASE_SHA: ${{ env.TARGET_RELEASE_SHA }}
+      RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
       DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
       V2_RUNTIME_DB_ROLE: hyperdrive_user
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.DIAGNOSTIC_SOURCE_SHA }}
+          ref: 57d2921150888e233614b6087d51cb260e845179
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -108,7 +108,7 @@ jobs:
       - name: Render and deploy the route-free diagnostic Worker
         shell: bash
         env:
-          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ env.TARGET_RELEASE_SHA }}
+          V2_RUNTIME_DIAGNOSTIC_TARGET_RELEASE_SHA: 5985834a0e14728c81c8c028a72122ded544bd6b
           V2_RUNTIME_DIAGNOSTIC_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
           V2_RUNTIME_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
           V2_RUNTIME_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-runtime-diagnostic.toml
