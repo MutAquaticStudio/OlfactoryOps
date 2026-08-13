@@ -4,6 +4,8 @@ import {
   scientificContainerEnvironment,
   scientificFeatureContainerEntrypoint,
   scientificContainerHealthEndpoint,
+  scientificContainerStopPollAttempts,
+  scientificContainerStopPollIntervalMs,
   scientificContainerStartupPollIntervalMs,
   scientificContainerStartupTimeoutMs,
 } from './scientific-container-env.js'
@@ -13,6 +15,8 @@ describe('scientificContainerEnvironment', () => {
     expect(scientificContainerHealthEndpoint).toBe('localhost/health')
     expect(scientificContainerStartupTimeoutMs).toBe(300_000)
     expect(scientificContainerStartupPollIntervalMs).toBe(1_000)
+    expect(scientificContainerStopPollAttempts).toBe(10)
+    expect(scientificContainerStopPollIntervalMs).toBe(1_000)
     expect(scientificFeatureContainerEntrypoint).toEqual(['/opt/conda/bin/python', '-m', 'scientific_runtime.server'])
   })
 

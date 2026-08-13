@@ -92,6 +92,14 @@ export const scientificContainerRequestSchema = z.object({
 }).strict()
 export type ScientificContainerRequest = z.infer<typeof scientificContainerRequestSchema>
 
+export const scientificContainerResponseSchema = z.object({
+  payload: z.record(z.string(), z.unknown()),
+  runtimeVersion: z.string().trim().min(1).max(160).optional(),
+  componentVersions: z.record(z.string(), z.string().trim().min(1).max(160)).optional(),
+  modelVersion: z.string().trim().min(1).max(160).optional(),
+}).strict()
+export type ScientificContainerResponse = z.infer<typeof scientificContainerResponseSchema>
+
 export const scientificInputArtifactSchema = z.object({
   canonicalSmiles: z.string().trim().min(1).max(4096).refine((value) => [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127), 'SMILES must not contain control characters.'),
   featureKinds: z.array(z.enum(['ECFP', 'BCFP', 'MOLFTP', 'OSMORDRED'])).min(1).max(4).default(['ECFP']),

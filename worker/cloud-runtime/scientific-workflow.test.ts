@@ -69,19 +69,17 @@ describe('ScientificJobWorkflow container pool tenancy', () => {
     const { ScientificJobWorkflow } = await import('./scientific-workflow.js')
     const featureContainer = {
       stub: {
-        fetch: async (_url: string, init: RequestInit) => {
-          const request = JSON.parse(String(init.body)) as Record<string, unknown>
+        runScientificJob: async (request: Record<string, unknown>) => {
           state.containerRequests.push(request)
-          return new Response(JSON.stringify({ payload: { jobId: request.jobId }, runtimeVersion: 'scientific-test/1', componentVersions: {} }))
+          return { status: 200, body: JSON.stringify({ payload: { jobId: request.jobId }, runtimeVersion: 'scientific-test/1', componentVersions: {} }) }
         },
       } as unknown as DurableObjectStub,
     }
     const modelContainer = {
       stub: {
-        fetch: async (_url: string, init: RequestInit) => {
-          const request = JSON.parse(String(init.body)) as Record<string, unknown>
+        runScientificJob: async (request: Record<string, unknown>) => {
           state.containerRequests.push(request)
-          return new Response(JSON.stringify({ payload: { evidenceStatus: 'NOT_CONFIGURED', jobId: request.jobId }, runtimeVersion: 'model-test/1', componentVersions: {} }))
+          return { status: 200, body: JSON.stringify({ payload: { evidenceStatus: 'NOT_CONFIGURED', jobId: request.jobId }, runtimeVersion: 'model-test/1', componentVersions: {} }) }
         },
       } as unknown as DurableObjectStub,
     }
