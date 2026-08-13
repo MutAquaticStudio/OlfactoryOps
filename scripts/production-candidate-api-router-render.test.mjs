@@ -41,6 +41,7 @@ function runRenderer(directory, renderer, environment) {
       ...process.env,
       RELEASE_SHA: immutableRc2Sha,
       PRODUCTION_HYPERDRIVE_ID: hyperdriveId,
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: 'candidate-pages',
       CANDIDATE_WORKSPACE_BASE_DOMAIN: candidateWorkspaceBaseDomain,
       CANDIDATE_FIXTURE_HOSTNAME: candidateFixtureHostname,
       ...environment,
@@ -86,7 +87,7 @@ test('candidate tenant router renderer keeps its config at root and resolves the
     writeFileSync(join(directory, 'wrangler.v2-tenant-router-production.example.toml'), `name = "olfactoryops-v2-tenant-router-production"\nmain = "worker/v2-tenant-router.ts"\nroutes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]\n[vars]\nPAGES_ORIGIN = "https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN"\nRELEASE_GIT_SHA = "REPLACE_WITH_VERIFIED_RELEASE_SHA"\nV2_WORKSPACE_BASE_DOMAIN = "labofscents.org"\n[[hyperdrive]]\nbinding = "HYPERDRIVE"\nid = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"\n`)
 
     const output = runRenderer(directory, rendererFor('deploy-candidate-tenant-router'), {
-      CANDIDATE_PAGES_ORIGIN: 'https://production-candidate.example.pages.dev',
+      CANDIDATE_PAGES_ORIGIN: 'https://production-candidate.candidate-pages.pages.dev',
     })
     const configPath = join(directory, 'wrangler.v2-tenant-router-production-candidate.toml')
     const config = readFileSync(configPath, 'utf8')
@@ -126,7 +127,7 @@ test('candidate namespace is valid, coherent, and binds only one fixture Custom 
   expect(workflow).toContain('VITE_V2_WORKSPACE_BASE_DOMAIN: next.labofscents.org')
   expect(workflow).toContain('candidate_fixture_hostname:')
   expect(workflow).not.toContain('workspace-*-next.labofscents.org/*')
-  expect(workflow).toContain('PRODUCTION_SMOKE_TENANT_URL must be one isolated workspace hostname under the candidate namespace')
+  expect(workflow).toContain('node scripts/verify-v2-production-candidate-acceptance.mjs --validate-only')
   expect(isCandidateFixtureHostname(candidateFixtureHostname)).toBe(true)
   expect(isCandidateFixtureHostname('api-next.labofscents.org')).toBe(false)
   expect(isCandidateFixtureHostname('release-test.labofscents.org')).toBe(false)
