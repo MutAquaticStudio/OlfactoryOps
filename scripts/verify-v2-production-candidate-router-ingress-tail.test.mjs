@@ -52,9 +52,13 @@ test("accepts the documented Tail event schema without undocumented version meta
     eventOutcome: "OK",
     eventHttpStatus: "404",
   });
+  const emitted = JSON.stringify(result);
+  expect(emitted).not.toContain("never-emitted");
+  expect(emitted).not.toContain(nonce);
+  expect(emitted).not.toContain(hostname);
 });
 
-test("does not treat a redacted or delayed event as ingress drift evidence", () => {
+test("keeps a valid Tail session ready when no matching event is captured", () => {
   const redacted = inspectRouterIngressTail({
     capture: event({
       event: {
@@ -68,9 +72,9 @@ test("does not treat a redacted or delayed event as ingress drift evidence", () 
     ...expectedOptions(),
   });
   expect(redacted).toMatchObject({
-    readiness: "UNPROVEN",
+    readiness: "PASS",
     eventCaptured: "NO",
-    versionFilterApplied: "UNPROVEN",
+    versionFilterApplied: "PASS",
   });
 
   const delayed = inspectRouterIngressTail({
@@ -78,9 +82,42 @@ test("does not treat a redacted or delayed event as ingress drift evidence", () 
     ...expectedOptions({ errors: "unexpected tail transport text" }),
   });
   expect(delayed).toMatchObject({
-    readiness: "UNPROVEN",
+    readiness: "PASS",
     eventCaptured: "NO",
+    versionFilterApplied: "PASS",
     captureWindowCompleted: "PASS",
+  });
+  const emitted = JSON.stringify(delayed);
+  expect(emitted).not.toContain("unexpected tail transport text");
+  expect(emitted).not.toContain(nonce);
+  expect(emitted).not.toContain(hostname);
+});
+
+test("fails closed when the Tail process does not establish a usable session", () => {
+  const startupFailure = inspectRouterIngressTail({
+    capture: "",
+    ...expectedOptions({
+      errors: "startup failure",
+      tailProcessObserved: false,
+      captureWindowCompleted: false,
+    }),
+  });
+
+  expect(startupFailure).toMatchObject({
+    permissionAvailable: "YES",
+    readiness: "FAIL",
+    eventCaptured: "NO",
+    versionFilterApplied: "UNPROVEN",
+    captureWindowCompleted: "UNPROVEN",
+  });
+
+  const rejectedFilter = inspectRouterIngressTail({
+    capture: "",
+    ...expectedOptions({ errors: "invalid --version-id" }),
+  });
+  expect(rejectedFilter).toMatchObject({
+    readiness: "FAIL",
+    versionFilterApplied: "UNPROVEN",
   });
 });
 

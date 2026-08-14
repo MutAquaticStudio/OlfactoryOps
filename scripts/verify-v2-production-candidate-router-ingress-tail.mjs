@@ -11,6 +11,18 @@ function safeStatus(value) {
     : "UNKNOWN";
 }
 
+function hasFatalTailError(errorText) {
+  return /(?:\bfatal\b|unknown option|unrecognized option|invalid (?:option|argument|value|version(?:[- ]?id)?)|failed to (?:start|connect)|wrangler\s+error|command failed|startup failure)/i.test(
+    errorText,
+  );
+}
+
+function hasVersionFilterRejection(errorText) {
+  return /(?:(?:--version-id|version(?:[- ]?id)?).{0,80}(?:invalid|unknown|unrecognized|unsupported|not found)|(?:invalid|unknown|unrecognized|unsupported|not found).{0,80}(?:--version-id|version(?:[- ]?id)?))/i.test(
+    errorText,
+  );
+}
+
 export function inspectRouterIngressTail({
   capture,
   errors,
@@ -27,6 +39,27 @@ export function inspectRouterIngressTail({
     typeof versionId === "string" && versionIdPattern.test(versionId);
   const permissionUnavailable =
     /(?:\b401\b|\b403\b|permission denied|not authorized)/i.test(errorText);
+  const observed = tailProcessObserved === true;
+  const windowComplete = captureWindowCompleted === true;
+  const versionFilterRejected = hasVersionFilterRejection(errorText);
+  const sessionEstablished =
+    observed &&
+    windowComplete &&
+    !permissionUnavailable &&
+    !hasFatalTailError(errorText) &&
+    !versionFilterRejected;
+  const readiness = permissionUnavailable
+    ? "UNAVAILABLE"
+    : sessionEstablished
+      ? "PASS"
+      : "FAIL";
+  const versionFilterApplied =
+    readiness === "PASS" &&
+    validExpectedVersion &&
+    versionFilterRequested === true &&
+    !versionFilterRejected
+      ? "PASS"
+      : "UNPROVEN";
   let matching;
 
   for (const line of captureText.split(/\r?\n/)) {
@@ -45,18 +78,12 @@ export function inspectRouterIngressTail({
     }
   }
 
-  const observed = tailProcessObserved === true;
-  const windowComplete = captureWindowCompleted === true;
   if (!matching)
     return {
       permissionAvailable: permissionUnavailable ? "NO" : "YES",
-      readiness: permissionUnavailable
-        ? "UNAVAILABLE"
-        : observed
-          ? "UNPROVEN"
-          : "FAIL",
+      readiness,
       eventCaptured: "NO",
-      versionFilterApplied: "UNPROVEN",
+      versionFilterApplied,
       captureWindowCompleted: windowComplete ? "PASS" : "UNPROVEN",
       requestHostMatchesExpected: "UNPROVEN",
       requestSchemeHttps: "UNPROVEN",
@@ -71,12 +98,9 @@ export function inspectRouterIngressTail({
   const outcome = matching.item?.outcome;
   return {
     permissionAvailable: permissionUnavailable ? "NO" : "YES",
-    readiness: permissionUnavailable ? "UNAVAILABLE" : "PASS",
+    readiness,
     eventCaptured: "YES",
-    versionFilterApplied:
-      validExpectedVersion && versionFilterRequested === true
-        ? "PASS"
-        : "UNPROVEN",
+    versionFilterApplied,
     captureWindowCompleted: windowComplete ? "PASS" : "UNPROVEN",
     requestHostMatchesExpected:
       matching.parsed.hostname === hostname ? "PASS" : "FAIL",

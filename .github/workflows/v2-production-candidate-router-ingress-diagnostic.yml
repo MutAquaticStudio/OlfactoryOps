@@ -270,6 +270,7 @@ jobs:
           ROUTER_INGRESS_PUBLIC_PROBE: ${{ steps.tail.outputs.public_probe }}
           ROUTER_INGRESS_TAIL_PERMISSION: ${{ steps.tail.outputs.permission }}
           ROUTER_INGRESS_TAIL_READINESS: ${{ steps.tail.outputs.readiness }}
+          ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED: ${{ steps.tail.outputs.capture_window_completed }}
           ROUTER_INGRESS_TAIL_EVENT_CAPTURED: ${{ steps.tail.outputs.event_captured }}
           ROUTER_INGRESS_TAIL_VERSION_FILTER_APPLIED: ${{ steps.tail.outputs.version_filter_applied }}
           ROUTER_INGRESS_TAIL_HOST_MATCHES_EXPECTED: ${{ steps.tail.outputs.host_matches_expected }}
