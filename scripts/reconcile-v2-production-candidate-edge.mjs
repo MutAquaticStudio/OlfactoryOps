@@ -97,6 +97,47 @@ async function readJson(response) {
   return (await readControlPlaneEnvelope(response)).result;
 }
 
+class PagesInventoryFailure extends Error {
+  constructor(failureClass, evidence) {
+    super(failureClass);
+    this.failureClass = failureClass;
+    this.evidence = evidence;
+  }
+}
+
+function pagesDeploymentsHttpClass(response) {
+  if (!response || !Number.isInteger(response.status)) return "NETWORK";
+  if (response.status >= 200 && response.status < 300) return "2XX";
+  if (response.status >= 400 && response.status < 500) return "4XX";
+  if (response.status >= 500 && response.status < 600) return "5XX";
+  return "NETWORK";
+}
+
+function pagesInventoryEvidence({
+  httpClass = "NETWORK",
+  successFlag = "unavailable",
+  resultArray = false,
+  resultInfoPresent = false,
+} = {}) {
+  return { httpClass, successFlag, resultArray, resultInfoPresent };
+}
+
+function pagesInventoryFailure(failureClass, evidence) {
+  return new PagesInventoryFailure(failureClass, evidence);
+}
+
+function emitPagesInventoryEvidence(emitLine, evidence, failureClass) {
+  emit(emitLine, "PAGES_DEPLOYMENTS_HTTP_CLASS", evidence.httpClass);
+  emit(emitLine, "PAGES_DEPLOYMENTS_SUCCESS_FLAG", evidence.successFlag);
+  emit(emitLine, "PAGES_DEPLOYMENTS_RESULT_ARRAY", evidence.resultArray);
+  emit(
+    emitLine,
+    "PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT",
+    evidence.resultInfoPresent,
+  );
+  emit(emitLine, "PAGES_DEPLOYMENTS_FAILURE_CLASS", failureClass);
+}
+
 function immutablePagesOrigin(url, project) {
   try {
     const parsed = new URL(url);
@@ -151,6 +192,34 @@ function candidateImmutableOrigin(deployment, project) {
   }
 }
 
+function optionalPaginationInteger(resultInfo, name, minimum) {
+  if (!Object.hasOwn(resultInfo, name) || resultInfo[name] === undefined)
+    return undefined;
+  const value = resultInfo[name];
+  if (!Number.isInteger(value) || value < minimum)
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  return value;
+}
+
+function validatedPaginationInfo(resultInfo, requestedPage) {
+  if (resultInfo === undefined) return {};
+  if (
+    typeof resultInfo !== "object" ||
+    resultInfo === null ||
+    Array.isArray(resultInfo)
+  )
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+
+  const page = optionalPaginationInteger(resultInfo, "page", 1);
+  const perPage = optionalPaginationInteger(resultInfo, "per_page", 1);
+  const totalPages = optionalPaginationInteger(resultInfo, "total_pages", 0);
+  optionalPaginationInteger(resultInfo, "count", 0);
+  optionalPaginationInteger(resultInfo, "total_count", 0);
+  if (page !== undefined && page !== requestedPage)
+    throw safeFailure("PAGES_PAGINATION_PAGE_MISMATCH");
+  return { page, perPage, totalPages };
+}
+
 async function pagesDeploymentPage(config, page, fetchFn) {
   const endpoint = new URL(
     `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/pages/projects/${config.pagesProject}/deployments`,
@@ -158,55 +227,91 @@ async function pagesDeploymentPage(config, page, fetchFn) {
   endpoint.searchParams.set("env", "preview");
   endpoint.searchParams.set("page", String(page));
   endpoint.searchParams.set("per_page", String(pagesDeploymentsPerPage));
-  const envelope = await readControlPlaneEnvelope(
-    await fetchFn(endpoint, noCacheOptions(authorizationHeaders(config))),
-  );
-  if (!Array.isArray(envelope.result))
-    throw safeFailure("PAGES_DEPLOYMENTS_INVALID");
-  const resultInfo = envelope.result_info;
-  if (!resultInfo || !Number.isInteger(resultInfo.page))
-    throw safeFailure("PAGES_PAGINATION_INVALID");
-  if (resultInfo.page !== page)
-    throw safeFailure("PAGES_PAGINATION_PAGE_MISMATCH");
-  if (!Number.isInteger(resultInfo.total_pages) || resultInfo.total_pages < 0)
-    throw safeFailure("PAGES_PAGINATION_INVALID");
-  if (
-    !Number.isInteger(resultInfo.per_page) ||
-    resultInfo.per_page < 1 ||
-    resultInfo.per_page > pagesDeploymentsPerPage
-  )
-    throw safeFailure("PAGES_PAGINATION_INVALID");
-  if (
-    resultInfo.total_pages === 0 &&
-    (page !== 1 || envelope.result.length !== 0)
-  )
-    throw safeFailure("PAGES_PAGINATION_INVALID");
-  if (resultInfo.total_pages > 0 && resultInfo.total_pages < page)
-    throw safeFailure("PAGES_PAGINATION_INVALID");
-  return { deployments: envelope.result, totalPages: resultInfo.total_pages };
+  let response;
+  try {
+    response = await fetchFn(
+      endpoint,
+      noCacheOptions(authorizationHeaders(config)),
+    );
+  } catch {
+    throw pagesInventoryFailure("NETWORK", pagesInventoryEvidence());
+  }
+
+  const httpClass = pagesDeploymentsHttpClass(response);
+  if (httpClass !== "2XX")
+    throw pagesInventoryFailure("HTTP", pagesInventoryEvidence({ httpClass }));
+
+  let envelope;
+  try {
+    envelope = await response.json();
+  } catch {
+    throw pagesInventoryFailure(
+      "API_ENVELOPE",
+      pagesInventoryEvidence({ httpClass }),
+    );
+  }
+
+  const successFlag =
+    typeof envelope?.success === "boolean" ? envelope.success : "unavailable";
+  const resultArray = Array.isArray(envelope?.result);
+  const resultInfoPresent =
+    typeof envelope === "object" &&
+    envelope !== null &&
+    Object.hasOwn(envelope, "result_info") &&
+    envelope.result_info !== undefined;
+  const evidence = pagesInventoryEvidence({
+    httpClass,
+    successFlag,
+    resultArray,
+    resultInfoPresent,
+  });
+  if (!envelope || typeof envelope !== "object" || envelope.success !== true)
+    throw pagesInventoryFailure("API_ENVELOPE", evidence);
+  if (!resultArray) throw pagesInventoryFailure("RESULT_SHAPE", evidence);
+
+  let pagination;
+  try {
+    pagination = validatedPaginationInfo(
+      resultInfoPresent ? envelope.result_info : undefined,
+      page,
+    );
+  } catch {
+    throw pagesInventoryFailure("PAGINATION_METADATA", evidence);
+  }
+  return { deployments: envelope.result, ...pagination, evidence };
 }
 
 async function allPagesDeployments(config, fetchFn) {
   const deployments = [];
   const deploymentIds = new Set();
-  let expectedTotalPages;
+  let knownTotalPages;
+  let lastEvidence = pagesInventoryEvidence();
   for (let page = 1; page <= maximumPagesDeploymentsPages; page += 1) {
     const result = await pagesDeploymentPage(config, page, fetchFn);
-    if (expectedTotalPages === undefined)
-      expectedTotalPages = result.totalPages;
-    if (result.totalPages !== expectedTotalPages)
-      throw safeFailure("PAGES_PAGINATION_CHANGED");
+    lastEvidence = result.evidence;
+    if (result.totalPages !== undefined) {
+      if (
+        knownTotalPages !== undefined &&
+        result.totalPages !== knownTotalPages
+      )
+        throw pagesInventoryFailure("PAGINATION_METADATA", lastEvidence);
+      knownTotalPages = result.totalPages;
+    }
     for (const deployment of result.deployments) {
       if (typeof deployment?.id !== "string" || deployment.id.length === 0)
-        throw safeFailure("PAGES_DEPLOYMENT_ID_INVALID");
+        throw pagesInventoryFailure("RESULT_SHAPE", lastEvidence);
       if (deploymentIds.has(deployment.id))
-        throw safeFailure("PAGES_PAGINATION_DUPLICATE_RECORD");
+        throw pagesInventoryFailure("DUPLICATE_DEPLOYMENT", lastEvidence);
       deploymentIds.add(deployment.id);
       deployments.push(deployment);
     }
-    if (page >= expectedTotalPages) return deployments;
+    if (result.deployments.length === 0) return { deployments, lastEvidence };
+    if (result.totalPages !== undefined && page >= result.totalPages)
+      return { deployments, lastEvidence };
+    if (result.deployments.length < pagesDeploymentsPerPage)
+      return { deployments, lastEvidence };
   }
-  throw safeFailure("PAGES_PAGINATION_LIMIT_EXCEEDED");
+  throw pagesInventoryFailure("PAGINATION_LIMIT", lastEvidence);
 }
 
 function isHtml(response) {
@@ -275,13 +380,24 @@ export async function inventoryImmutablePages({
   emitLine = console.log,
   persistOrigin = persistPagesOrigin,
 }) {
-  let deployments;
+  let inventory;
   try {
-    deployments = await allPagesDeployments(config, fetchFn);
-  } catch {
+    inventory = await allPagesDeployments(config, fetchFn);
+  } catch (error) {
+    const failure =
+      error instanceof PagesInventoryFailure
+        ? error
+        : pagesInventoryFailure("NETWORK", pagesInventoryEvidence());
+    emitPagesInventoryEvidence(
+      emitLine,
+      failure.evidence,
+      failure.failureClass,
+    );
     emit(emitLine, "PAGES_DEPLOYMENTS_API", "FAIL");
     throw safeFailure("PAGES_DEPLOYMENTS_API_FAILURE");
   }
+  const { deployments } = inventory;
+  emitPagesInventoryEvidence(emitLine, inventory.lastEvidence, "NONE");
   emit(emitLine, "PAGES_DEPLOYMENTS_API", "PASS");
 
   const matching = deployments

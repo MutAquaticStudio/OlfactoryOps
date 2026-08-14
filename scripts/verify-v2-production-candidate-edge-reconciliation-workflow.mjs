@@ -141,6 +141,21 @@ for (const value of [
   'endpoint.searchParams.set("per_page", String(pagesDeploymentsPerPage));',
   "allPagesDeployments",
   "PAGES_DEPLOYMENTS_API",
+  "PAGES_DEPLOYMENTS_HTTP_CLASS",
+  "PAGES_DEPLOYMENTS_SUCCESS_FLAG",
+  "PAGES_DEPLOYMENTS_RESULT_ARRAY",
+  "PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT",
+  "PAGES_DEPLOYMENTS_FAILURE_CLASS",
+  '"HTTP"',
+  '"API_ENVELOPE"',
+  '"RESULT_SHAPE"',
+  '"PAGINATION_METADATA"',
+  '"PAGINATION_LIMIT"',
+  '"DUPLICATE_DEPLOYMENT"',
+  '"NETWORK"',
+  '"NONE"',
+  "if (resultInfo === undefined) return {};",
+  "Object.hasOwn(resultInfo, name)",
   "PAGES_RC9_MATCH_COUNT",
   "PAGES_RC9_CANDIDATE_INDEX",
   "PAGES_RC9_CANDIDATE_CREATED_AT",
@@ -152,6 +167,16 @@ for (const value of [
 ])
   if (!reconciliation.includes(value))
     throw new Error(`candidate Pages selection is missing ${value}`);
+
+for (const value of [
+  "!resultInfo || !Number.isInteger(resultInfo.page)",
+  "!Number.isInteger(resultInfo.total_pages)",
+  "!Number.isInteger(resultInfo.per_page)",
+])
+  if (reconciliation.includes(value))
+    throw new Error(
+      "candidate Pages selection must not require optional pagination fields",
+    );
 
 if (reconciliation.includes("PAGES_DEPLOYMENT_NOT_UNIQUE"))
   throw new Error(
