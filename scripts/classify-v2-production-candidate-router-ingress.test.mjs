@@ -7,6 +7,7 @@ const baseEvidence = {
   publicProbe: "YES",
   permission: "YES",
   readiness: "PASS",
+  filterSamplingWindowElapsed: "PASS",
   captureWindowCompleted: "PASS",
   eventCaptured: "YES",
   versionFilterApplied: "PASS",
@@ -31,6 +32,13 @@ test("classifies a complete zero-event tail boundary as Custom Domain control-pl
 });
 
 test("fails closed when the required tail evidence boundary is incomplete", () => {
+  expect(
+    classifyRouterIngress({
+      ...baseEvidence,
+      filterSamplingWindowElapsed: "UNPROVEN",
+      eventCaptured: "NO",
+    }),
+  ).toBe("CANDIDATE_ROUTER_TAIL_FILTER_SAMPLING_UNPROVEN");
   expect(
     classifyRouterIngress({
       ...baseEvidence,

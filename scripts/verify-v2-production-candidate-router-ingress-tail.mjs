@@ -31,6 +31,7 @@ export function inspectRouterIngressTail({
   versionId,
   versionFilterRequested,
   tailProcessObserved,
+  filterSamplingWindowElapsed,
   captureWindowCompleted,
 }) {
   const captureText = typeof capture === "string" ? capture : "";
@@ -40,6 +41,8 @@ export function inspectRouterIngressTail({
   const permissionUnavailable =
     /(?:\b401\b|\b403\b|permission denied|not authorized)/i.test(errorText);
   const observed = tailProcessObserved === true;
+  const samplingWindowComplete =
+    observed && filterSamplingWindowElapsed === true;
   const windowComplete = captureWindowCompleted === true;
   const versionFilterRejected = hasVersionFilterRejection(errorText);
   const sessionEstablished =
@@ -57,6 +60,7 @@ export function inspectRouterIngressTail({
     readiness === "PASS" &&
     validExpectedVersion &&
     versionFilterRequested === true &&
+    samplingWindowComplete &&
     !versionFilterRejected
       ? "PASS"
       : "UNPROVEN";
@@ -84,6 +88,7 @@ export function inspectRouterIngressTail({
       readiness,
       eventCaptured: "NO",
       versionFilterApplied,
+      filterSamplingWindowElapsed: samplingWindowComplete ? "PASS" : "UNPROVEN",
       captureWindowCompleted: windowComplete ? "PASS" : "UNPROVEN",
       requestHostMatchesExpected: "UNPROVEN",
       requestSchemeHttps: "UNPROVEN",
@@ -101,6 +106,7 @@ export function inspectRouterIngressTail({
     readiness,
     eventCaptured: "YES",
     versionFilterApplied,
+    filterSamplingWindowElapsed: samplingWindowComplete ? "PASS" : "UNPROVEN",
     captureWindowCompleted: windowComplete ? "PASS" : "UNPROVEN",
     requestHostMatchesExpected:
       matching.parsed.hostname === hostname ? "PASS" : "FAIL",
@@ -121,6 +127,9 @@ function print(result) {
   console.log(`TAIL_READINESS=${result.readiness}`);
   console.log(`TAIL_EVENT_CAPTURED=${result.eventCaptured}`);
   console.log(`TAIL_VERSION_FILTER_APPLIED=${result.versionFilterApplied}`);
+  console.log(
+    `TAIL_FILTER_SAMPLING_WINDOW_ELAPSED=${result.filterSamplingWindowElapsed}`,
+  );
   console.log(`TAIL_CAPTURE_WINDOW_COMPLETED=${result.captureWindowCompleted}`);
   console.log(
     `TAIL_REQUEST_HOST_MATCHES_EXPECTED=${result.requestHostMatchesExpected}`,
@@ -137,6 +146,7 @@ function failedResult() {
     readiness: "FAIL",
     eventCaptured: "NO",
     versionFilterApplied: "UNPROVEN",
+    filterSamplingWindowElapsed: "UNPROVEN",
     captureWindowCompleted: "UNPROVEN",
     requestHostMatchesExpected: "UNPROVEN",
     requestSchemeHttps: "UNPROVEN",
@@ -154,6 +164,8 @@ if (import.meta.main) {
   const versionId = process.env.ROUTER_INGRESS_TAIL_VERSION_ID;
   const tailProcessObserved =
     process.env.ROUTER_INGRESS_TAIL_PROCESS_OBSERVED === "YES";
+  const filterSamplingWindowElapsed =
+    process.env.ROUTER_INGRESS_TAIL_FILTER_SAMPLING_WINDOW_ELAPSED === "YES";
   const captureWindowCompleted =
     process.env.ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED === "YES";
   if (
@@ -178,6 +190,7 @@ if (import.meta.main) {
           versionId,
           versionFilterRequested: true,
           tailProcessObserved,
+          filterSamplingWindowElapsed,
           captureWindowCompleted,
         }),
       );

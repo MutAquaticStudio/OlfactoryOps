@@ -29,6 +29,7 @@ function expectedOptions(overrides = {}) {
     versionId,
     versionFilterRequested: true,
     tailProcessObserved: true,
+    filterSamplingWindowElapsed: true,
     captureWindowCompleted: true,
     ...overrides,
   };
@@ -45,6 +46,7 @@ test("accepts the documented Tail event schema without undocumented version meta
     readiness: "PASS",
     eventCaptured: "YES",
     versionFilterApplied: "PASS",
+    filterSamplingWindowElapsed: "PASS",
     captureWindowCompleted: "PASS",
     requestHostMatchesExpected: "PASS",
     requestSchemeHttps: "PASS",
@@ -75,6 +77,7 @@ test("keeps a valid Tail session ready when no matching event is captured", () =
     readiness: "PASS",
     eventCaptured: "NO",
     versionFilterApplied: "PASS",
+    filterSamplingWindowElapsed: "PASS",
   });
 
   const delayed = inspectRouterIngressTail({
@@ -85,6 +88,7 @@ test("keeps a valid Tail session ready when no matching event is captured", () =
     readiness: "PASS",
     eventCaptured: "NO",
     versionFilterApplied: "PASS",
+    filterSamplingWindowElapsed: "PASS",
     captureWindowCompleted: "PASS",
   });
   const emitted = JSON.stringify(delayed);
@@ -108,6 +112,7 @@ test("fails closed when the Tail process does not establish a usable session", (
     readiness: "FAIL",
     eventCaptured: "NO",
     versionFilterApplied: "UNPROVEN",
+    filterSamplingWindowElapsed: "UNPROVEN",
     captureWindowCompleted: "UNPROVEN",
   });
 
@@ -117,6 +122,20 @@ test("fails closed when the Tail process does not establish a usable session", (
   });
   expect(rejectedFilter).toMatchObject({
     readiness: "FAIL",
+    versionFilterApplied: "UNPROVEN",
+  });
+});
+
+test("requires the full version-filter sampling window before treating the filter as applied", () => {
+  const result = inspectRouterIngressTail({
+    capture: "",
+    ...expectedOptions({ filterSamplingWindowElapsed: false }),
+  });
+
+  expect(result).toMatchObject({
+    readiness: "PASS",
+    eventCaptured: "NO",
+    filterSamplingWindowElapsed: "UNPROVEN",
     versionFilterApplied: "UNPROVEN",
   });
 });
