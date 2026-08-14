@@ -1,0 +1,324 @@
+name: V2 Production Candidate Custom Domain Reset
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for candidate-only Custom Domain reset.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC9 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_reset:
+        description: Type RESET_RC9_CANDIDATE_CUSTOM_DOMAIN to reset only the exact candidate Custom Domain.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_PAGES_ORIGIN: https://57b7300b.olfactoryops-v2-production-candidate.pages.dev
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-candidate-custom-domain-reset-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC9 candidate-only Custom Domain reset inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_RESET: ${{ inputs.confirm_reset }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_RESET" = "RESET_RC9_CANDIDATE_CUSTOM_DOMAIN"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  reset-candidate-custom-domain:
+    needs: validate-candidate-custom-domain-reset-input
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    env:
+      CANDIDATE_DOMAIN_RESET_RELEASE_SHA: ${{ needs.validate-candidate-custom-domain-reset-input.outputs.release_sha }}
+      CANDIDATE_DOMAIN_RESET_FIXTURE_HOSTNAME: ${{ needs.validate-candidate-custom-domain-reset-input.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require immutable candidate-only Custom Domain reset constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_DOMAIN_RESET_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$CANDIDATE_DOMAIN_RESET_FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          node scripts/verify-v2-production-candidate-custom-domain-reset-workflow.mjs
+      - name: Install pinned main operations tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Create protected runner-local Custom Domain reset evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          reset_dir="$RUNNER_TEMP/oo-v2-candidate-domain-reset-$GITHUB_RUN_ID"
+          test "$reset_dir" = "$RUNNER_TEMP/oo-v2-candidate-domain-reset-$GITHUB_RUN_ID"
+          mkdir -p "$reset_dir"
+          chmod 700 "$reset_dir"
+          printf 'CANDIDATE_DOMAIN_RESET_DIR=%s\n' "$reset_dir" >> "$GITHUB_ENV"
+      - name: Preflight exact candidate Custom Domain ownership
+        id: preflight
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs preflight
+      - id: active-deployment
+        name: Read only and require the active RC9 candidate Router configuration before reset
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          deployments_file="$CANDIDATE_DOMAIN_RESET_DIR/active-deployments.json"
+          version_file="$CANDIDATE_DOMAIN_RESET_DIR/active-version.json"
+          : > "$deployments_file"
+          chmod 600 "$deployments_file"
+          deployment_status="$(curl --silent --output "$deployments_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/deployments" || true)"
+          [[ "$deployment_status" =~ ^[1-5][0-9][0-9]$ ]] || deployment_status=000
+          printf 'CURRENT_ROUTER_DEPLOYMENT_HTTP_STATUS=%s\n' "$deployment_status"
+          deployment_output="$(ROUTER_INGRESS_DEPLOYMENT_FILE="$deployments_file" node scripts/inspect-v2-production-candidate-router-ingress.mjs deployment 2>/dev/null || true)"
+          printf '%s\n' "$deployment_output"
+          active_version="$(printf '%s\n' "$deployment_output" | awk -F= '$1 == "CURRENT_ROUTER_VERSION_ID" { print $2; exit }')"
+          if ! printf '%s\n' "$deployment_output" | grep -qx 'CURRENT_ROUTER_ACTIVE_TRAFFIC=PASS'; then
+            exit 1
+          fi
+          if ! [[ "$active_version" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            exit 1
+          fi
+          : > "$version_file"
+          chmod 600 "$version_file"
+          version_status="$(curl --silent --output "$version_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/versions/$active_version" || true)"
+          [[ "$version_status" =~ ^[1-5][0-9][0-9]$ ]] || version_status=000
+          printf 'CURRENT_ROUTER_VERSION_HTTP_STATUS=%s\n' "$version_status"
+          version_output="$(ROUTER_INGRESS_VERSION_FILE="$version_file" ROUTER_INGRESS_VERSION_ID="$active_version" node scripts/inspect-v2-production-candidate-router-ingress.mjs version 2>/dev/null || true)"
+          printf '%s\n' "$version_output"
+          printf '%s\n' "$version_output" | grep -qx 'CURRENT_ROUTER_CONFIGURATION=PASS'
+          printf 'active_version=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+      - name: Detach only the verified exact candidate Custom Domain
+        id: detach
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CANDIDATE_DOMAIN_RESET_DOMAIN_ID: ${{ steps.preflight.outputs.domain_id }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs detach
+      - name: Confirm exact candidate Custom Domain detach within the bounded window
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs wait-detached
+      - name: Reattach only the exact candidate hostname to the exact Router
+        id: reattach
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CANDIDATE_DOMAIN_RESET_ZONE_ID: ${{ steps.preflight.outputs.zone_id }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs reattach
+      - name: Confirm exact candidate Custom Domain attachment within the bounded window
+        id: wait-attached
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs wait-attached
+      - name: Wait only within the bounded candidate edge readiness window
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=NO
+          for attempt in 1 2 3 4 5 6; do
+            status="$(curl --silent --request GET --output /dev/null --write-out '%{http_code}' \
+              --connect-timeout 15 --max-time 20 --max-redirs 0 \
+              --header 'Cache-Control: no-cache' --header 'Pragma: no-cache' \
+              "https://$TARGET_FIXTURE_HOSTNAME/" || true)"
+            [[ "$status" =~ ^[1-5][0-9][0-9]$ ]] || status=000
+            printf 'CANDIDATE_CUSTOM_DOMAIN_EDGE_READY_ATTEMPT=%s\n' "$attempt"
+            printf 'CANDIDATE_CUSTOM_DOMAIN_EDGE_READY_HTTP_STATUS=%s\n' "$status"
+            if [[ "$status" = 200 ]]; then
+              ready=YES
+              break
+            fi
+            sleep 5
+          done
+          test "$ready" = YES
+          echo "CANDIDATE_CUSTOM_DOMAIN_EDGE_READINESS=PASS"
+      - id: tail
+        name: Tail the verified active Router version and require one candidate event
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTIVE_ROUTER_VERSION: ${{ steps.active-deployment.outputs.active_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tail_capture="$CANDIDATE_DOMAIN_RESET_DIR/tail.jsonl"
+          tail_errors="$CANDIDATE_DOMAIN_RESET_DIR/tail.stderr"
+          nonce_file="$CANDIDATE_DOMAIN_RESET_DIR/nonce"
+          tail_pid=""
+          cleanup_tail() {
+            if [[ -n "$tail_pid" ]]; then
+              kill -- "-$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+            fi
+            rm -f -- "$tail_capture" "$tail_errors" "$nonce_file"
+          }
+          trap cleanup_tail EXIT
+          : > "$tail_capture"
+          : > "$tail_errors"
+          chmod 600 "$tail_capture" "$tail_errors"
+          nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+          printf '%s' "$nonce" > "$nonce_file"
+          chmod 600 "$nonce_file"
+          mkdir -p "$CANDIDATE_DOMAIN_RESET_DIR/wrangler-home" "$CANDIDATE_DOMAIN_RESET_DIR/wrangler-xdg"
+          chmod 700 "$CANDIDATE_DOMAIN_RESET_DIR/wrangler-home" "$CANDIDATE_DOMAIN_RESET_DIR/wrangler-xdg"
+          HOME="$CANDIDATE_DOMAIN_RESET_DIR/wrangler-home" \
+          XDG_CONFIG_HOME="$CANDIDATE_DOMAIN_RESET_DIR/wrangler-xdg" \
+          WRANGLER_WRITE_LOGS=false \
+          WRANGLER_LOG=log \
+          WRANGLER_SEND_METRICS=false \
+          WRANGLER_SEND_ERROR_REPORTS=false \
+          NO_COLOR=1 \
+          setsid timeout --signal=TERM 45s ./node_modules/.bin/wrangler tail "$TARGET_ROUTER_SERVICE" \
+            --format json --version-id "$ACTIVE_ROUTER_VERSION" > "$tail_capture" 2> "$tail_errors" &
+          tail_pid=$!
+          sleep 5
+          tail_process_observed=NO
+          if kill -0 "$tail_pid" 2>/dev/null; then tail_process_observed=YES; fi
+          probe_status="$(curl --silent --request GET --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 15 --max-time 20 --max-redirs 0 \
+            --header 'Cache-Control: no-cache' --header 'Pragma: no-cache' \
+            "https://$TARGET_FIXTURE_HOSTNAME/?oo_router_ingress_diag=$nonce" || true)"
+          [[ "$probe_status" =~ ^[1-5][0-9][0-9]$ ]] || probe_status=000
+          printf 'TAIL_PUBLIC_PROBE_CONFIRMED=%s\n' "$([[ "$probe_status" != 000 ]] && printf YES || printf NO)"
+          printf 'TAIL_PUBLIC_PROBE_HTTP_STATUS=%s\n' "$probe_status"
+          sleep 15
+          capture_window_completed=NO
+          if [[ "$tail_process_observed" = YES ]] && kill -0 "$tail_pid" 2>/dev/null; then capture_window_completed=YES; fi
+          kill -- "-$tail_pid" 2>/dev/null || true
+          wait "$tail_pid" 2>/dev/null || true
+          tail_pid=""
+          tail_output="$(ROUTER_INGRESS_TAIL_CAPTURE_FILE="$tail_capture" ROUTER_INGRESS_TAIL_ERROR_FILE="$tail_errors" ROUTER_INGRESS_TAIL_NONCE="$nonce" ROUTER_INGRESS_TAIL_HOSTNAME="$TARGET_FIXTURE_HOSTNAME" ROUTER_INGRESS_TAIL_VERSION_ID="$ACTIVE_ROUTER_VERSION" ROUTER_INGRESS_TAIL_PROCESS_OBSERVED="$tail_process_observed" ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED="$capture_window_completed" node scripts/verify-v2-production-candidate-router-ingress-tail.mjs 2>/dev/null || true)"
+          printf '%s\n' "$tail_output"
+          require_tail_value() {
+            local key="$1"
+            local expected="$2"
+            printf '%s\n' "$tail_output" | grep -qx "$key=$expected"
+          }
+          require_tail_value TAIL_PERMISSION_AVAILABLE YES
+          require_tail_value TAIL_READINESS PASS
+          require_tail_value TAIL_VERSION_FILTER_APPLIED PASS
+          require_tail_value TAIL_CAPTURE_WINDOW_COMPLETED PASS
+          require_tail_value TAIL_EVENT_CAPTURED YES
+          require_tail_value TAIL_REQUEST_HOST_MATCHES_EXPECTED PASS
+          require_tail_value TAIL_REQUEST_SCHEME_HTTPS PASS
+          require_tail_value TAIL_REQUEST_METHOD_GET PASS
+          require_tail_value TAIL_EVENT_OUTCOME OK
+          require_tail_value TAIL_EVENT_HTTP_STATUS 200
+      - id: active-deployment-recheck
+        name: Re-read the active Router deployment after the reset tail probe
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTIVE_ROUTER_VERSION: ${{ steps.active-deployment.outputs.active_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          deployments_file="$CANDIDATE_DOMAIN_RESET_DIR/post-tail-deployments.json"
+          : > "$deployments_file"
+          chmod 600 "$deployments_file"
+          deployment_status="$(curl --silent --output "$deployments_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/deployments" || true)"
+          [[ "$deployment_status" =~ ^[1-5][0-9][0-9]$ ]] || deployment_status=000
+          printf 'POST_RESET_ROUTER_DEPLOYMENT_HTTP_STATUS=%s\n' "$deployment_status"
+          deployment_output="$(ROUTER_INGRESS_DEPLOYMENT_FILE="$deployments_file" node scripts/inspect-v2-production-candidate-router-ingress.mjs deployment 2>/dev/null || true)"
+          printf '%s\n' "$deployment_output"
+          observed_version="$(printf '%s\n' "$deployment_output" | awk -F= '$1 == "CURRENT_ROUTER_VERSION_ID" { print $2; exit }')"
+          test "$observed_version" = "$ACTIVE_ROUTER_VERSION"
+          printf '%s\n' "$deployment_output" | grep -qx 'CURRENT_ROUTER_ACTIVE_TRAFFIC=PASS'
+          echo "ACTIVE_ROUTER_VERSION_STABLE=PASS"
+      - name: Verify all exact tenant routes, trusted header handling, and unknown-host failure
+        shell: bash
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs tenant-verify
+      - name: Restore the exact candidate Custom Domain only if attachment recovery failed
+        if: always() && steps.preflight.outcome == 'success' && steps.wait-attached.outcome != 'success'
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CANDIDATE_DOMAIN_RESET_ZONE_ID: ${{ steps.preflight.outputs.zone_id }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs restore
+      - name: Capture only candidate Custom Domain state after reset or recovery
+        if: always()
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reset-v2-production-candidate-custom-domain.mjs postflight
+      - name: Remove only runner-local candidate Custom Domain reset evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CANDIDATE_DOMAIN_RESET_DIR:-}" in
+            "$RUNNER_TEMP"/oo-v2-candidate-domain-reset-*) ;;
+            *) exit 1 ;;
+          esac
+          rm -rf -- "$CANDIDATE_DOMAIN_RESET_DIR"
+          test ! -e "$CANDIDATE_DOMAIN_RESET_DIR"
+          echo "CANDIDATE_CUSTOM_DOMAIN_RESET_RUNNER_LOCAL_CLEANUP=PASS"
