@@ -1,0 +1,99 @@
+name: V2 Production Candidate Custom Domain Precedence Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for diagnosis.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC9 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DIAGNOSE_RC9_CUSTOM_DOMAIN_PRECEDENCE to run this read-only diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_ZONE_NAME: labofscents.org
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-custom-domain-precedence-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC9 Custom Domain precedence diagnostic inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-custom-domain-precedence-diagnostic-workflow.mjs
+          test "$CONFIRM_DIAGNOSTIC" = "DIAGNOSE_RC9_CUSTOM_DOMAIN_PRECEDENCE"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  diagnose-candidate-custom-domain-precedence:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    needs: validate-custom-domain-precedence-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: production
+    env:
+      CUSTOM_DOMAIN_PRECEDENCE_RELEASE_SHA: ${{ needs.validate-custom-domain-precedence-diagnostic-input.outputs.release_sha }}
+      CUSTOM_DOMAIN_PRECEDENCE_FIXTURE_HOSTNAME: ${{ needs.validate-custom-domain-precedence-diagnostic-input.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require immutable candidate-only diagnostic constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CUSTOM_DOMAIN_PRECEDENCE_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$CUSTOM_DOMAIN_PRECEDENCE_FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          node scripts/verify-v2-production-candidate-custom-domain-precedence-diagnostic-workflow.mjs
+      - name: Install pinned main operations tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Read only candidate Custom Domain, zone Route, and DNS precedence state
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/diagnose-v2-production-candidate-custom-domain-precedence.mjs
