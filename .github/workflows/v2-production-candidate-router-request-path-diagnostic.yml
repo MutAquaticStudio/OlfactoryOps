@@ -1,0 +1,412 @@
+name: V2 Production Candidate Router Request-Path Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC release SHA approved for this diagnostic.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated candidate workspace hostname under next.labofscents.org.
+        required: true
+        type: string
+      expected_router_version:
+        description: Exact active candidate Router version to observe through the bounded tail.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type VERIFY_RC9_ROUTER_REQUEST_PATH to run this route-free diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-router-request-path-diagnostic
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  EXPECTED_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  EXPECTED_ROUTER_VERSION: 7640f2d6-0a0e-4fb8-81ed-22f6eb9a56bc
+  EXPECTED_PRODUCTION_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+  CANDIDATE_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  DIAGNOSTIC_CALLER_WORKER_NAME: oo-v2-router-service-diag
+  DIAGNOSTIC_SHADOW_WORKER_NAME: oo-v2-router-rc9-shadow
+  CANDIDATE_PAGES_ORIGIN: https://production-candidate.olfactoryops-v2-production-candidate.pages.dev
+  CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+
+jobs:
+  validate-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validation.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validation.outputs.fixture_hostname }}
+      expected_router_version: ${{ steps.validation.outputs.expected_router_version }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+      ROUTER_VERSION: ${{ inputs.expected_router_version }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validation
+        name: Validate exact RC9 request-path diagnostic inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-router-request-path-diagnostic-dispatcher.mjs
+          test "$CONFIRM_DIAGNOSTIC" = "VERIFY_RC9_ROUTER_REQUEST_PATH"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$EXPECTED_FIXTURE_HOSTNAME"
+          test "$ROUTER_VERSION" = "$EXPECTED_ROUTER_VERSION"
+          [[ "$TARGET_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_ROUTER_VERSION" =~ ^[0-9a-f-]{36}$ ]]
+          suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
+          slug="${FIXTURE_HOSTNAME%"$suffix"}"
+          test "$slug" != "$FIXTURE_HOSTNAME"
+          test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
+          [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          git fetch --no-tags origin \
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+          git fetch --tags origin
+          git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
+          test "$(git rev-parse 'v2-production-rc9^{}')" = "$TARGET_RELEASE_SHA"
+          test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$TARGET_RELEASE_SHA"
+          for worker_name in "$CANDIDATE_ROUTER_SERVICE" "$DIAGNOSTIC_CALLER_WORKER_NAME" "$DIAGNOSTIC_SHADOW_WORKER_NAME"; do
+            [[ "$worker_name" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+            test "${#worker_name}" -le 63
+          done
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+          echo "expected_router_version=$ROUTER_VERSION" >> "$GITHUB_OUTPUT"
+
+  diagnose-router-request-path:
+    needs: validate-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+      DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+      ACTIVE_ROUTER_VERSION: ${{ needs.validate-diagnostic-input.outputs.expected_router_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Verify bounded candidate-only diagnostic configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test "$PRODUCTION_HYPERDRIVE_ID" = "$EXPECTED_PRODUCTION_HYPERDRIVE_ID"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$DIAGNOSTIC_FIXTURE_HOSTNAME" = "$EXPECTED_FIXTURE_HOSTNAME"
+          test "$ACTIVE_ROUTER_VERSION" = "$EXPECTED_ROUTER_VERSION"
+          mkdir -p .qa
+          chmod 700 .qa
+
+      - id: phase_a
+        name: Phase A - capture one bounded live exact-version tail probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          tail_capture=.qa/router-request-path-tail.jsonl
+          tail_error=.qa/router-request-path-tail.err
+          public_response=.qa/router-request-path-public-response
+          tail_classification=.qa/router-request-path-tail-classification
+          nonce="$(node -e "process.stdout.write(require('node:crypto').randomBytes(16).toString('hex'))")"
+          printf '%s' "$nonce" > .qa/router-request-path-nonce
+          chmod 600 .qa/router-request-path-nonce
+          : > "$tail_capture"
+          : > "$tail_error"
+          chmod 600 "$tail_capture" "$tail_error"
+
+          setsid timeout --signal=TERM 45s npx wrangler tail "$CANDIDATE_ROUTER_SERVICE" \
+            --format json --version-id "$ACTIVE_ROUTER_VERSION" >"$tail_capture" 2>"$tail_error" &
+          tail_pid=$!
+          sleep 5
+          probe_url="https://${DIAGNOSTIC_FIXTURE_HOSTNAME}/?oo_router_path_diag=${nonce}"
+          if ! curl --silent --max-time 20 --output "$public_response" \
+            -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --write-out '%{http_code}' "$probe_url" >/dev/null 2>&1; then
+            :
+          fi
+          sleep 10
+          kill -- -"$tail_pid" >/dev/null 2>&1 || true
+          wait "$tail_pid" >/dev/null 2>&1 || true
+
+          ROUTER_TAIL_CAPTURE_FILE="$tail_capture" \
+          ROUTER_TAIL_ERROR_FILE="$tail_error" \
+          ROUTER_TAIL_EXPECTED_NONCE="$nonce" \
+          ROUTER_TAIL_EXPECTED_HOSTNAME="$DIAGNOSTIC_FIXTURE_HOSTNAME" \
+          ROUTER_TAIL_VERSION_FILTER="$ACTIVE_ROUTER_VERSION" \
+            node scripts/verify-v2-router-request-path-tail.mjs | tee "$tail_classification"
+          cat "$tail_classification" >> "$GITHUB_ENV"
+          tail_permission="$(grep '^TAIL_PERMISSION_AVAILABLE=' "$tail_classification" | cut -d= -f2)"
+          tail_event="$(grep '^TAIL_EVENT_CAPTURED=' "$tail_classification" | cut -d= -f2)"
+          tail_host="$(grep '^TAIL_REQUEST_HOST_MATCHES_EXPECTED=' "$tail_classification" | cut -d= -f2 || true)"
+          if [ "$tail_permission" = NO ]; then
+            echo 'continue_to_service_probe=true' >> "$GITHUB_OUTPUT"
+          elif [ "$tail_event" = YES ]; then
+            if [ "$tail_host" = PASS ]; then
+              echo 'TAIL_EXPECTED_ROUTER_INGRESS=PASS' >> "$GITHUB_ENV"
+              echo 'continue_to_service_probe=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'ROOT_CAUSE_CLASS=CUSTOM_DOMAIN_REQUEST_URL_HOST_MISMATCH' >> "$GITHUB_ENV"
+              echo 'continue_to_service_probe=false' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo 'ROOT_CAUSE_CLASS=CUSTOM_DOMAIN_NOT_REACHING_EXPECTED_ROUTER_VERSION' >> "$GITHUB_ENV"
+            echo 'continue_to_service_probe=false' >> "$GITHUB_OUTPUT"
+          fi
+          rm -f "$tail_capture" "$tail_error" "$public_response" "$tail_classification" .qa/router-request-path-nonce
+
+      - name: Reverify active candidate Router version before service binding probe
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment_file=.qa/router-request-path-active-deployment.json
+          chmod 600 .qa
+          curl --silent --show-error --max-time 20 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$CANDIDATE_ROUTER_SERVICE/deployments" \
+            --output "$deployment_file"
+          ROUTER_ACTIVE_DEPLOYMENT_FILE="$deployment_file" \
+          ROUTER_EXPECTED_VERSION="$ACTIVE_ROUTER_VERSION" \
+            node scripts/verify-v2-router-request-path-active-deployment.mjs
+          rm -f "$deployment_file"
+
+      - name: Deploy temporary route-free service diagnostic caller
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' }}
+        shell: bash
+        env:
+          V2_REQUEST_PATH_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          V2_REQUEST_PATH_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+          V2_REQUEST_PATH_DIAGNOSTIC_PROBE_TARGET: TARGET_ROUTER
+          V2_REQUEST_PATH_DIAGNOSTIC_PROBE_QUERY_KEY: oo_service_diag
+          V2_REQUEST_PATH_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-request-path-diagnostic.toml
+        run: |
+          set -euo pipefail
+          nonce="$(node -e "process.stdout.write(require('node:crypto').randomBytes(16).toString('hex'))")"
+          echo "V2_REQUEST_PATH_DIAGNOSTIC_CORRELATION_NONCE=$nonce" >> "$GITHUB_ENV"
+          V2_REQUEST_PATH_DIAGNOSTIC_CORRELATION_NONCE="$nonce" \
+            node scripts/render-v2-tenant-router-request-path-diagnostic-config.mjs
+          if grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG"; then
+            echo 'temporary service diagnostic must not attach routes or Custom Domains' >&2
+            exit 1
+          fi
+          npx wrangler deploy --config "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG" --keep-vars
+          diagnostic_token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+          printf '%s' "$diagnostic_token" | npx wrangler secret put ROUTER_REQUEST_PATH_DIAGNOSTIC_TOKEN --config "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG"
+          npx wrangler secret list --config "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG" | grep -Fq '"ROUTER_REQUEST_PATH_DIAGNOSTIC_TOKEN"'
+          printf '%s' "$diagnostic_token" > .qa/router-request-path-diagnostic-token
+          chmod 600 .qa/router-request-path-diagnostic-token
+
+      - name: Resolve temporary caller workers.dev URL and prove readiness
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          subdomain_file=.qa/router-request-path-subdomain.json
+          curl --silent --show-error --max-time 20 \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            --output "$subdomain_file"
+          subdomain="$(node -e "const fs=require('node:fs');try{const x=JSON.parse(fs.readFileSync(process.argv[1],'utf8')).result?.subdomain;if(!/^[a-z0-9-]+$/.test(x??''))process.exit(2);process.stdout.write(x)}catch{process.exit(2)}" "$subdomain_file")"
+          rm -f "$subdomain_file"
+          echo "DIAGNOSTIC_CALLER_WORKERS_DEV_URL=https://${DIAGNOSTIC_CALLER_WORKER_NAME}.${subdomain}.workers.dev" >> "$GITHUB_ENV"
+          token="$(cat .qa/router-request-path-diagnostic-token)"
+          ready_response=.qa/router-request-path-ready.json
+          ready=false
+          for attempt in $(seq 1 6); do
+            if http_status="$(curl --silent --max-time 15 --output "$ready_response" --write-out '%{http_code}' \
+              -H "x-olfactoryops-router-request-path-diagnostic: $token" \
+              "https://${DIAGNOSTIC_CALLER_WORKER_NAME}.${subdomain}.workers.dev/ready" 2>/dev/null)" && [ "$http_status" = 200 ]; then
+              if ROUTER_REQUEST_PATH_DIAGNOSTIC_RESPONSE_FILE="$ready_response" \
+                node scripts/verify-v2-router-request-path-diagnostic-response.mjs ready; then
+                ready=true
+                break
+              fi
+            fi
+            sleep 5
+          done
+          rm -f "$ready_response"
+          test "$ready" = true
+          echo 'SERVICE_DIAGNOSTIC_CALLER_READINESS=PASS'
+
+      - id: phase_b
+        name: Phase B - invoke the actual Router only through its service binding
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat .qa/router-request-path-diagnostic-token)"
+          response_file=.qa/router-request-path-target-response.json
+          if ! http_status="$(curl --silent --max-time 20 --output "$response_file" --write-out '%{http_code}' \
+            -H "x-olfactoryops-router-request-path-diagnostic: $token" \
+            "${DIAGNOSTIC_CALLER_WORKERS_DEV_URL}/probe" 2>/dev/null)"; then
+            http_status=000
+          fi
+          case "$http_status" in
+            200)
+              ROUTER_REQUEST_PATH_DIAGNOSTIC_RESPONSE_FILE="$response_file" \
+                node scripts/verify-v2-router-request-path-diagnostic-response.mjs target | tee .qa/router-request-path-target-classification
+              cat .qa/router-request-path-target-classification >> "$GITHUB_ENV"
+              ;;
+            503)
+              ROUTER_REQUEST_PATH_DIAGNOSTIC_RESPONSE_FILE="$response_file" \
+                node scripts/verify-v2-router-request-path-diagnostic-response.mjs unavailable
+              echo 'ACTUAL_ROUTER_SERVICE_BINDING_PROBE=FAIL_OTHER' | tee .qa/router-request-path-target-classification
+              cat .qa/router-request-path-target-classification >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo 'ACTUAL_ROUTER_SERVICE_BINDING_PROBE=FAIL_OTHER' | tee .qa/router-request-path-target-classification
+              cat .qa/router-request-path-target-classification >> "$GITHUB_ENV"
+              ;;
+          esac
+          actual_probe="$(grep '^ACTUAL_ROUTER_SERVICE_BINDING_PROBE=' .qa/router-request-path-target-classification | cut -d= -f2)"
+          test -n "$actual_probe"
+          echo "actual_probe=$actual_probe" >> "$GITHUB_OUTPUT"
+          rm -f "$response_file"
+
+      - name: Phase C - create a runner-local exact RC9 shadow worktree
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' && steps.phase_b.outputs.actual_probe != 'PASS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$RELEASE_SHA"
+          rc9_worktree="$RUNNER_TEMP/oo-v2-router-rc9-shadow-$GITHUB_RUN_ID"
+          git worktree add --detach "$rc9_worktree" "$RELEASE_SHA"
+          echo "RC9_SHADOW_WORKTREE=$rc9_worktree" >> "$GITHUB_ENV"
+          (
+            cd "$rc9_worktree"
+            npm ci --ignore-scripts
+            test "$(node -p "require('./node_modules/pg/package.json').version")" = 8.13.0
+            test "$(./node_modules/.bin/wrangler --version | awk '{print $1}')" = 4.118.0
+          )
+          echo 'EXACT_RC9_SHADOW_DEPENDENCIES=PASS'
+
+      - name: Deploy the route-free exact RC9 shadow and bind it to the caller
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' && steps.phase_b.outputs.actual_probe != 'PASS' }}
+        shell: bash
+        env:
+          V2_REQUEST_PATH_SHADOW_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          V2_REQUEST_PATH_SHADOW_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          V2_REQUEST_PATH_DIAGNOSTIC_TARGET_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          V2_REQUEST_PATH_DIAGNOSTIC_FIXTURE_HOSTNAME: ${{ needs.validate-diagnostic-input.outputs.fixture_hostname }}
+          V2_REQUEST_PATH_DIAGNOSTIC_PROBE_TARGET: SHADOW_ROUTER
+          V2_REQUEST_PATH_DIAGNOSTIC_PROBE_QUERY_KEY: oo_shadow_diag
+          V2_REQUEST_PATH_DIAGNOSTIC_INCLUDE_SHADOW: "true"
+          V2_REQUEST_PATH_DIAGNOSTIC_CONFIG: .qa/wrangler.v2-tenant-router-request-path-diagnostic.toml
+        run: |
+          set -euo pipefail
+          V2_REQUEST_PATH_SHADOW_WORKTREE="$RC9_SHADOW_WORKTREE" \
+          V2_REQUEST_PATH_SHADOW_CONFIG="$RC9_SHADOW_WORKTREE/.ops-router-request-path/wrangler.shadow.toml" \
+            node scripts/render-v2-tenant-router-request-path-shadow-config.mjs
+          shadow_config="$RC9_SHADOW_WORKTREE/.ops-router-request-path/wrangler.shadow.toml"
+          if grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$shadow_config"; then
+            echo 'exact RC9 shadow must not attach routes or Custom Domains' >&2
+            exit 1
+          fi
+          test "$(grep -E '^workers_dev\s*=' "$shadow_config" | tr -d '[:space:]')" = 'workers_dev=false'
+          "$RC9_SHADOW_WORKTREE/node_modules/.bin/wrangler" deploy --config "$shadow_config" --keep-vars
+          V2_REQUEST_PATH_DIAGNOSTIC_CORRELATION_NONCE="$V2_REQUEST_PATH_DIAGNOSTIC_CORRELATION_NONCE" \
+            node scripts/render-v2-tenant-router-request-path-diagnostic-config.mjs
+          npx wrangler deploy --config "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG" --keep-vars
+          npx wrangler secret list --config "$V2_REQUEST_PATH_DIAGNOSTIC_CONFIG" | grep -Fq '"ROUTER_REQUEST_PATH_DIAGNOSTIC_TOKEN"'
+
+      - name: Phase C - invoke the exact RC9 shadow through the service caller
+        if: ${{ steps.phase_a.outputs.continue_to_service_probe == 'true' && steps.phase_b.outputs.actual_probe != 'PASS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(cat .qa/router-request-path-diagnostic-token)"
+          response_file=.qa/router-request-path-shadow-response.json
+          if ! http_status="$(curl --silent --max-time 20 --output "$response_file" --write-out '%{http_code}' \
+            -H "x-olfactoryops-router-request-path-diagnostic: $token" \
+            "${DIAGNOSTIC_CALLER_WORKERS_DEV_URL}/probe" 2>/dev/null)"; then
+            http_status=000
+          fi
+          case "$http_status" in
+            200)
+              ROUTER_REQUEST_PATH_DIAGNOSTIC_RESPONSE_FILE="$response_file" \
+                node scripts/verify-v2-router-request-path-diagnostic-response.mjs shadow | tee .qa/router-request-path-shadow-classification
+              cat .qa/router-request-path-shadow-classification >> "$GITHUB_ENV"
+              ;;
+            503)
+              ROUTER_REQUEST_PATH_DIAGNOSTIC_RESPONSE_FILE="$response_file" \
+                node scripts/verify-v2-router-request-path-diagnostic-response.mjs unavailable
+              echo 'EXACT_RC9_SHADOW_PROBE=FAIL_OTHER' | tee .qa/router-request-path-shadow-classification
+              cat .qa/router-request-path-shadow-classification >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo 'EXACT_RC9_SHADOW_PROBE=FAIL_OTHER' | tee .qa/router-request-path-shadow-classification
+              cat .qa/router-request-path-shadow-classification >> "$GITHUB_ENV"
+              ;;
+          esac
+          rm -f "$response_file"
+
+      - name: Delete only temporary diagnostic resources and runner-local evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          delete_temporary_worker() {
+            local worker_name="$1"
+            case "$worker_name" in
+              oo-v2-router-service-diag|oo-v2-router-rc9-shadow) ;;
+              *) echo 'unsafe temporary Worker cleanup target' >&2; exit 1 ;;
+            esac
+            local status
+            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker_name")"
+            case "$status" in
+              200)
+                status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+                  --request DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                  -H 'Content-Type: application/json' --data '{}' \
+                  "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker_name")"
+                test "$status" = 200
+                ;;
+              404) ;;
+              *) exit 1 ;;
+            esac
+            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$worker_name")"
+            test "$status" = 404
+          }
+          delete_temporary_worker "$DIAGNOSTIC_CALLER_WORKER_NAME"
+          echo 'TEMP_SERVICE_DIAGNOSTIC_CLEANUP=PASS'
+          delete_temporary_worker "$DIAGNOSTIC_SHADOW_WORKER_NAME"
+          echo 'TEMP_SHADOW_ROUTER_CLEANUP=PASS'
+          if [ -n "${RC9_SHADOW_WORKTREE:-}" ]; then
+            case "$RC9_SHADOW_WORKTREE" in
+              "$RUNNER_TEMP"/oo-v2-router-rc9-shadow-*) ;;
+              *) echo 'unsafe RC9 worktree cleanup target' >&2; exit 1 ;;
+            esac
+            git worktree remove --force "$RC9_SHADOW_WORKTREE"
+          fi
+          echo 'TEMP_RC9_WORKTREE_CLEANUP=PASS'
+          rm -f .qa/router-request-path-* .qa/wrangler.v2-tenant-router-request-path-diagnostic.toml

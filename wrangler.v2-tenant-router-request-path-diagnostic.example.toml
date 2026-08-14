@@ -1,0 +1,18 @@
+# Temporary, token-protected caller. It has a workers.dev URL only and never
+# attaches a route or Custom Domain.
+name = "oo-v2-router-service-diag"
+main = "worker/v2-tenant-router-request-path-diagnostic.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+DIAGNOSTIC_FIXTURE_HOSTNAME = "REPLACE_WITH_DIAGNOSTIC_FIXTURE_HOSTNAME"
+TARGET_RELEASE_SHA = "REPLACE_WITH_TARGET_RELEASE_SHA"
+DIAGNOSTIC_CORRELATION_NONCE = "REPLACE_WITH_DIAGNOSTIC_CORRELATION_NONCE"
+DIAGNOSTIC_PROBE_TARGET = "REPLACE_WITH_DIAGNOSTIC_PROBE_TARGET"
+DIAGNOSTIC_PROBE_QUERY_KEY = "REPLACE_WITH_DIAGNOSTIC_PROBE_QUERY_KEY"
+
+[[services]]
+binding = "TARGET_ROUTER"
+service = "olfactoryops-v2-tenant-router-production-candidate"
