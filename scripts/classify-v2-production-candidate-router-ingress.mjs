@@ -3,6 +3,7 @@ export function classifyRouterIngress({
   publicProbe,
   permission,
   readiness,
+  captureWindowCompleted,
   eventCaptured,
   versionFilterApplied,
   hostMatchesExpected,
@@ -18,11 +19,14 @@ export function classifyRouterIngress({
   if (permission !== "YES")
     return "CANDIDATE_ROUTER_TAIL_PERMISSION_UNAVAILABLE";
   if (readiness !== "PASS") return "CANDIDATE_ROUTER_TAIL_STARTUP_UNPROVEN";
+  if (captureWindowCompleted !== "PASS")
+    return "CANDIDATE_ROUTER_TAIL_CAPTURE_UNPROVEN";
   if (versionStable !== "PASS")
     return "CANDIDATE_ROUTER_VERSION_CHANGED_DURING_TAIL";
-  if (eventCaptured !== "YES") return "CANDIDATE_ROUTER_TAIL_CAPTURE_UNPROVEN";
   if (versionFilterApplied !== "PASS")
     return "CANDIDATE_ROUTER_TAIL_FILTER_UNPROVEN";
+  if (eventCaptured !== "YES")
+    return "CANDIDATE_CUSTOM_DOMAIN_CONTROL_PLANE_ROUTING_DRIFT";
   if (hostMatchesExpected !== "PASS")
     return "CANDIDATE_CUSTOM_DOMAIN_REQUEST_HOST_TRANSFORMATION";
   if (requestSchemeHttps !== "PASS" || requestMethodGet !== "PASS")
@@ -42,6 +46,8 @@ if (import.meta.main) {
     publicProbe: process.env.ROUTER_INGRESS_PUBLIC_PROBE,
     permission: process.env.ROUTER_INGRESS_TAIL_PERMISSION,
     readiness: process.env.ROUTER_INGRESS_TAIL_READINESS,
+    captureWindowCompleted:
+      process.env.ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED,
     eventCaptured: process.env.ROUTER_INGRESS_TAIL_EVENT_CAPTURED,
     versionFilterApplied:
       process.env.ROUTER_INGRESS_TAIL_VERSION_FILTER_APPLIED,

@@ -65,6 +65,7 @@ requireFragments(workflow, "router ingress workflow", [
   "inspect-v2-production-candidate-router-ingress.mjs version",
   "verify-v2-production-candidate-router-ingress-tail.mjs",
   "classify-v2-production-candidate-router-ingress.mjs",
+  "ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED: ${{ steps.tail.outputs.capture_window_completed }}",
 ]);
 
 const triggerBlock = workflow.slice(
@@ -180,6 +181,7 @@ requireAbsent(
 
 requireFragments(classifier, "router ingress classifier", [
   "CANDIDATE_ROUTER_RUNTIME_TENANT_RESOLUTION_PATH",
+  "CANDIDATE_CUSTOM_DOMAIN_CONTROL_PLANE_ROUTING_DRIFT",
   "CANDIDATE_ROUTER_TAIL_CAPTURE_UNPROVEN",
   "CANDIDATE_ROUTER_TAIL_FILTER_UNPROVEN",
 ]);
