@@ -61,21 +61,42 @@ function deployment({
   };
 }
 
-function pagesResponse(result, page, totalPages) {
-  return new Response(
-    JSON.stringify({
-      success: true,
-      result,
-      result_info: {
-        page,
-        per_page: 100,
-        total_pages: totalPages,
-        count: result.length,
-        total_count: totalPages * 100,
+function nonMatchingDeployments(count, prefix) {
+  return Array.from({ length: count }, (_, index) =>
+    deployment({
+      id: `nonmatching-${prefix}-${index}`,
+      overrides: {
+        deployment_trigger: {
+          metadata: { branch: "unrelated", commit_hash: edgeReleaseSha },
+        },
       },
     }),
-    { status: 200, headers: { "content-type": "application/json" } },
   );
+}
+
+function pagesResultInfo(page, totalPages) {
+  return {
+    page,
+    per_page: 100,
+    total_pages: totalPages,
+    count: 0,
+    total_count: totalPages * 100,
+  };
+}
+
+function pagesResponse({
+  status = 200,
+  success = true,
+  result = [],
+  resultInfo,
+  contentType = "application/json",
+} = {}) {
+  const body = { success, result };
+  if (resultInfo !== undefined) body.result_info = resultInfo;
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": contentType },
+  });
 }
 
 function htmlResponse(headers = {}) {
@@ -87,6 +108,7 @@ function htmlResponse(headers = {}) {
 
 function inventoryFetch({
   pages,
+  pageResponses = [],
   healthyLabels = [],
   aliasStatus = 200,
   requests = [],
@@ -103,7 +125,18 @@ function inventoryFetch({
       const page = Number(url.searchParams.get("page"));
       expect(url.searchParams.get("env")).toBe("preview");
       expect(url.searchParams.get("per_page")).toBe("100");
-      return pagesResponse(pages[page - 1] ?? [], page, pages.length);
+      const response = pageResponses[page - 1];
+      if (typeof response === "function") return response();
+      if (response instanceof Response) return response;
+      if (response !== undefined) return pagesResponse(response);
+      const result = pages[page - 1] ?? [];
+      return pagesResponse({
+        result,
+        resultInfo: {
+          ...pagesResultInfo(page, pages.length),
+          count: result.length,
+        },
+      });
     }
     expect(options.redirect).toBe("manual");
     expect(options.credentials).toBe("omit");
@@ -121,6 +154,7 @@ function inventoryFetch({
 
 async function inventory({
   pages,
+  pageResponses,
   healthyLabels,
   aliasStatus,
   emitLine = () => undefined,
@@ -130,10 +164,22 @@ async function inventory({
   return inventoryImmutablePages({
     config: edgeReconciliationConfig(environment()),
     environment: environment(),
-    fetchFn: inventoryFetch({ pages, healthyLabels, aliasStatus, requests }),
+    fetchFn: inventoryFetch({
+      pages,
+      pageResponses,
+      healthyLabels,
+      aliasStatus,
+      requests,
+    }),
     emitLine,
     persistOrigin,
   });
+}
+
+function apiPageNumbers(requests) {
+  return requests
+    .filter((request) => request.url.hostname === "api.cloudflare.com")
+    .map((request) => request.url.searchParams.get("page"));
 }
 
 afterEach(() => {
@@ -274,11 +320,66 @@ describe("RC9 candidate Pages inventory selection", () => {
     expect(result.healthy).toHaveLength(1);
   });
 
-  it("handles pagination before matching RC9 deployments", async () => {
+  it("accepts a successful Pages response with result_info absent", async () => {
+    const lines = [];
+    const requests = [];
+    const result = await inventory({
+      pages: [[]],
+      pageResponses: [{ result: [deployment()] }],
+      healthyLabels: ["1cb6e1c5"],
+      emitLine: (line) => lines.push(line),
+      persistOrigin: () => undefined,
+      requests,
+    });
+    expect(result.origin).toBe(
+      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
+    );
+    expect(apiPageNumbers(requests)).toEqual(["1"]);
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=true");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=true");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NONE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_API=PASS");
+  });
+
+  it.each([
+    ["page absent", { per_page: 100, total_pages: 1 }],
+    ["per_page absent", { page: 1, total_pages: 1 }],
+    ["total_pages absent", { page: 1, per_page: 100 }],
+  ])(
+    "accepts valid present pagination metadata with %s",
+    async (_name, resultInfo) => {
+      const requests = [];
+      const result = await inventory({
+        pages: [[]],
+        pageResponses: [{ result: [deployment()], resultInfo }],
+        healthyLabels: ["1cb6e1c5"],
+        persistOrigin: () => undefined,
+        requests,
+      });
+      expect(result.origin).toBe(
+        `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
+      );
+      expect(apiPageNumbers(requests)).toEqual(["1"]);
+    },
+  );
+
+  it("uses a present total_pages value to retrieve the declared final page", async () => {
     const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
     const requests = [];
     const result = await inventory({
-      pages: [[], [pageTwoDeployment]],
+      pages: [[], []],
+      pageResponses: [
+        {
+          result: nonMatchingDeployments(100, "total-pages-one"),
+          resultInfo: { page: 1, per_page: 100, total_pages: 2 },
+        },
+        {
+          result: [pageTwoDeployment],
+          resultInfo: { page: 2, per_page: 100, total_pages: 2 },
+        },
+      ],
       healthyLabels: ["2cb6e1c5"],
       persistOrigin: () => undefined,
       requests,
@@ -286,11 +387,85 @@ describe("RC9 candidate Pages inventory selection", () => {
     expect(result.origin).toBe(
       `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
     );
-    expect(
-      requests
-        .filter((request) => request.url.hostname === "api.cloudflare.com")
-        .map((request) => request.url.searchParams.get("page")),
-    ).toEqual(["1", "2"]);
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+  });
+
+  it("infers the final page from a short response without total_pages", async () => {
+    const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
+    const requests = [];
+    const result = await inventory({
+      pages: [[], []],
+      pageResponses: [
+        { result: nonMatchingDeployments(100, "short-page-one") },
+        { result: [pageTwoDeployment] },
+      ],
+      healthyLabels: ["2cb6e1c5"],
+      persistOrigin: () => undefined,
+      requests,
+    });
+    expect(result.origin).toBe(
+      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
+    );
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+  });
+
+  it("stops at an empty optional-metadata page without progressing to the Router", async () => {
+    const lines = [];
+    const persisted = [];
+    const requests = [];
+    await expect(
+      inventory({
+        pages: [[], []],
+        pageResponses: [
+          { result: nonMatchingDeployments(100, "empty-page-one") },
+          { result: [] },
+        ],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: (origin) => persisted.push(origin),
+        requests,
+      }),
+    ).rejects.toThrow("PAGES_RC9_MATCHES_MISSING");
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+    expect(lines).toContain("PAGES_DEPLOYMENTS_API=PASS");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NONE");
+    expect(persisted).toEqual([]);
+  });
+
+  it("does not require total_pages to remain present on later pages", async () => {
+    const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
+    const requests = [];
+    const result = await inventory({
+      pages: [[], []],
+      pageResponses: [
+        {
+          result: nonMatchingDeployments(100, "optional-total-one"),
+          resultInfo: { page: 1, per_page: 100, total_pages: 2 },
+        },
+        { result: [pageTwoDeployment], resultInfo: { page: 2, per_page: 100 } },
+      ],
+      healthyLabels: ["2cb6e1c5"],
+      persistOrigin: () => undefined,
+      requests,
+    });
+    expect(result.origin).toBe(
+      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
+    );
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+  });
+
+  it("rejects a pages inventory that would require more than 100 requests", async () => {
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: Array.from({ length: 100 }, (_, pageIndex) => ({
+          result: nonMatchingDeployments(100, `page-limit-${pageIndex}`),
+        })),
+        emitLine: (line) => lines.push(line),
+        persistOrigin: () => undefined,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_LIMIT");
   });
 
   it("rejects invalid immutable URLs and zero healthy candidates without persisting an origin", async () => {
@@ -334,37 +509,175 @@ describe("RC9 candidate Pages inventory selection", () => {
     );
   });
 
-  it("fails closed when Pages pagination metadata is incomplete", async () => {
-    const config = edgeReconciliationConfig(environment());
-    const missingInfo = new Response(
-      JSON.stringify({ success: true, result: [deployment()] }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+  it("fails safely when present total_pages values disagree", async () => {
+    const lines = [];
+    const requests = [];
     await expect(
-      inventoryImmutablePages({
-        config,
-        environment: environment(),
-        fetchFn: async () => missingInfo,
+      inventory({
+        pages: [[], []],
+        pageResponses: [
+          {
+            result: nonMatchingDeployments(100, "changed-total-one"),
+            resultInfo: { page: 1, per_page: 100, total_pages: 3 },
+          },
+          {
+            result: nonMatchingDeployments(100, "changed-total-two"),
+            resultInfo: { page: 2, per_page: 100, total_pages: 4 },
+          },
+        ],
+        emitLine: (line) => lines.push(line),
         persistOrigin: () => undefined,
+        requests,
       }),
     ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+    expect(lines).toContain(
+      "PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_METADATA",
+    );
   });
 
-  it("fails closed when Pages pagination metadata changes while enumerating", async () => {
-    const config = edgeReconciliationConfig(environment());
-    let requestCount = 0;
+  it("rejects duplicate deployment IDs before selecting or probing Pages", async () => {
+    const duplicate = nonMatchingDeployments(100, "duplicate")[0];
+    const lines = [];
+    const persisted = [];
+    const requests = [];
     await expect(
-      inventoryImmutablePages({
-        config,
-        environment: environment(),
-        fetchFn: async () => {
-          requestCount += 1;
-          return pagesResponse([], requestCount, requestCount === 1 ? 2 : 3);
-        },
+      inventory({
+        pages: [[], []],
+        pageResponses: [
+          { result: nonMatchingDeployments(100, "duplicate") },
+          { result: [duplicate] },
+        ],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: (origin) => persisted.push(origin),
+        requests,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain(
+      "PAGES_DEPLOYMENTS_FAILURE_CLASS=DUPLICATE_DEPLOYMENT",
+    );
+    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
+    expect(requests).toHaveLength(2);
+    expect(persisted).toEqual([]);
+  });
+
+  it.each([
+    ["page", { page: 0 }],
+    ["per_page", { per_page: "100" }],
+    ["total_pages", { total_pages: -1 }],
+    ["total_count", { total_count: -1 }],
+    ["result_info", null],
+  ])(
+    "rejects malformed present %s metadata safely",
+    async (_name, resultInfo) => {
+      const lines = [];
+      await expect(
+        inventory({
+          pages: [[]],
+          pageResponses: [{ result: [deployment()], resultInfo }],
+          emitLine: (line) => lines.push(line),
+          persistOrigin: () => undefined,
+        }),
+      ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+      expect(lines).toContain(
+        "PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_METADATA",
+      );
+    },
+  );
+
+  it("classifies a successful response with success=false without emitting its body", async () => {
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: [{ success: false, result: [] }],
+        emitLine: (line) => lines.push(line),
         persistOrigin: () => undefined,
       }),
     ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(requestCount).toBe(2);
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=true");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=API_ENVELOPE");
+  });
+
+  it("classifies a successful response with a non-array result", async () => {
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: [{ result: {} }],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: () => undefined,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=true");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=RESULT_SHAPE");
+  });
+
+  it("classifies malformed JSON without emitting the response body", async () => {
+    const rawBody = "not-json-private-pages-response";
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: [
+          new Response(rawBody, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: () => undefined,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=unavailable");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=API_ENVELOPE");
+    expect(lines.join("\n")).not.toContain(rawBody);
+  });
+
+  it("classifies HTTP failures without emitting the response body", async () => {
+    const rawError = "cloudflare-error-private-request-id";
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: [
+          new Response(JSON.stringify({ error: rawError }), { status: 403 }),
+        ],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: () => undefined,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=4XX");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=unavailable");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=HTTP");
+    expect(lines.join("\n")).not.toContain(rawError);
+  });
+
+  it("classifies network failures without emitting the raw exception", async () => {
+    const rawError = "postgresql://private-network-error";
+    const lines = [];
+    await expect(
+      inventory({
+        pages: [[]],
+        pageResponses: [() => Promise.reject(new Error(rawError))],
+        emitLine: (line) => lines.push(line),
+        persistOrigin: () => undefined,
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=NETWORK");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=unavailable");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NETWORK");
+    expect(lines.join("\n")).not.toContain(rawError);
   });
 });
 

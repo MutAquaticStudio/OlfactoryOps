@@ -11,6 +11,10 @@ const renderer = readFileSync(
   resolve("scripts/render-v2-production-candidate-edge-router-config.mjs"),
   "utf8",
 );
+const reconciliation = readFileSync(
+  resolve("scripts/reconcile-v2-production-candidate-edge.mjs"),
+  "utf8",
+);
 
 describe("RC9 candidate edge reconciliation workflow contract", () => {
   it("passes the static candidate-only boundary verifier", () => {
@@ -42,5 +46,16 @@ describe("RC9 candidate edge reconciliation workflow contract", () => {
     expect(inventory).toBeGreaterThanOrEqual(0);
     expect(preflight).toBeGreaterThan(inventory);
     expect(deploy).toBeGreaterThan(preflight);
+  });
+
+  it("keeps optional Pages pagination metadata and safe failure telemetry in the inventory boundary", () => {
+    expect(reconciliation).toContain(
+      "if (resultInfo === undefined) return {};",
+    );
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS");
+    expect(reconciliation).toContain('"PAGINATION_LIMIT"');
+    expect(reconciliation).not.toContain(
+      "!resultInfo || !Number.isInteger(resultInfo.page)",
+    );
   });
 });
