@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import {
   attachCandidateDomain,
+  candidateDomainDetachEvidence,
   candidateDomainPreflightEvidence,
   candidateDomainResetConfig,
   candidateDomainResetExpectation,
@@ -30,8 +31,15 @@ function config(overrides = {}) {
   return candidateDomainResetConfig(environment(overrides));
 }
 
-function envelope(result, { success = true, status = 200 } = {}) {
-  return new Response(JSON.stringify({ success, result }), { status });
+function envelope(result, { success = true, status = 200, errors } = {}) {
+  return new Response(
+    JSON.stringify({
+      success,
+      result,
+      ...(errors === undefined ? {} : { errors }),
+    }),
+    { status },
+  );
 }
 
 function candidateDomain(overrides = {}) {
@@ -165,7 +173,12 @@ test("rechecks ownership and detaches only the exact candidate domain id", async
       expectedZoneId: zoneId,
       fetchFn,
     }),
-  ).resolves.toEqual({ detached: true });
+  ).resolves.toMatchObject({
+    detached: true,
+    detachAttempted: true,
+    httpStatus: 200,
+    cloudflareErrorCode: "NONE",
+  });
   expect(calls.map(({ options }) => options.method)).toEqual(["GET", "DELETE"]);
   expect(calls[0].url.searchParams.get("hostname")).toBe(
     candidateDomainResetExpectation.fixtureHostname,
@@ -263,6 +276,103 @@ test("can restore the exact candidate domain after an ambiguous detach response"
   ).resolves.toEqual({ restoration: "RESTORED" });
   expect(calls).toContain("DELETE");
   expect(calls).toContain("PUT");
+});
+
+test("keeps DELETE failure evidence numeric and never exposes the Cloudflare error message", async () => {
+  const rawMessage = "must-not-be-emitted";
+  let failure;
+  await expect(
+    detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        return envelope(null, {
+          success: false,
+          status: 403,
+          errors: [{ code: 10_000, message: rawMessage }],
+        });
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "CUSTOM_DOMAIN_DETACH_FAILED",
+    detachAttempted: true,
+    httpStatus: 403,
+    cloudflareErrorCode: "10000",
+  });
+
+  try {
+    await detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        return envelope(null, {
+          success: false,
+          status: 403,
+          errors: [{ code: 10_000, message: rawMessage }],
+        });
+      },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  expect(JSON.stringify(failure)).not.toContain(rawMessage);
+  expect(JSON.stringify(failure)).not.toContain(domainId);
+  expect(JSON.stringify(failure)).not.toContain(zoneId);
+});
+
+test("normalizes malformed and network DELETE failure evidence without retrying", async () => {
+  for (const { fetchFn, expectedStatus } of [
+    {
+      expectedStatus: 409,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        return envelope(null, {
+          success: false,
+          status: 409,
+          errors: "not-an-array",
+        });
+      },
+    },
+    {
+      expectedStatus: 0,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        throw new Error("network details are not emitted");
+      },
+    },
+  ]) {
+    await expect(
+      detachCandidateDomain({
+        config: config(),
+        expectedDomainId: domainId,
+        expectedZoneId: zoneId,
+        fetchFn,
+      }),
+    ).rejects.toMatchObject({
+      code: "CUSTOM_DOMAIN_DETACH_FAILED",
+      detachAttempted: true,
+      httpStatus: expectedStatus,
+      cloudflareErrorCode: "NONE",
+    });
+  }
+});
+
+test("marks detach evidence not attempted before any DELETE request", () => {
+  expect(candidateDomainDetachEvidence({})).toEqual({
+    httpStatus: "NOT_ATTEMPTED",
+    cloudflareErrorCode: "NOT_ATTEMPTED",
+  });
+  expect(
+    candidateDomainDetachEvidence({
+      detachAttempted: true,
+      httpStatus: 599,
+      cloudflareErrorCode: "untrusted error text",
+    }),
+  ).toEqual({ httpStatus: "599", cloudflareErrorCode: "NONE" });
 });
 
 test("reattaches only the exact candidate hostname and Router service", async () => {
