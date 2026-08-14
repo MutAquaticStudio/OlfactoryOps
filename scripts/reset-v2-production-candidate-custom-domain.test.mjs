@@ -31,10 +31,13 @@ function config(overrides = {}) {
   return candidateDomainResetConfig(environment(overrides));
 }
 
-function envelope(result, { success = true, status = 200, errors } = {}) {
+function envelope(
+  result,
+  { success = true, includeSuccess = true, status = 200, errors } = {},
+) {
   return new Response(
     JSON.stringify({
-      success,
+      ...(includeSuccess ? { success } : {}),
       result,
       ...(errors === undefined ? {} : { errors }),
     }),
@@ -176,6 +179,7 @@ test("rechecks ownership and detaches only the exact candidate domain id", async
   ).resolves.toMatchObject({
     detached: true,
     detachAttempted: true,
+    detachResponseClass: "SUCCESS_ENVELOPE",
     httpStatus: 200,
     cloudflareErrorCode: "NONE",
   });
@@ -298,6 +302,7 @@ test("keeps DELETE failure evidence numeric and never exposes the Cloudflare err
   ).rejects.toMatchObject({
     code: "CUSTOM_DOMAIN_DETACH_FAILED",
     detachAttempted: true,
+    detachResponseClass: "EXPLICIT_FAILURE",
     httpStatus: 403,
     cloudflareErrorCode: "10000",
   });
@@ -325,8 +330,9 @@ test("keeps DELETE failure evidence numeric and never exposes the Cloudflare err
 });
 
 test("normalizes malformed and network DELETE failure evidence without retrying", async () => {
-  for (const { fetchFn, expectedStatus } of [
+  for (const { fetchFn, expectedResponseClass, expectedStatus } of [
     {
+      expectedResponseClass: "EXPLICIT_FAILURE",
       expectedStatus: 409,
       fetchFn: async (_request, options) => {
         if (options.method === "GET") return envelope([candidateDomain()]);
@@ -338,6 +344,7 @@ test("normalizes malformed and network DELETE failure evidence without retrying"
       },
     },
     {
+      expectedResponseClass: "UNACKNOWLEDGED_FAILURE",
       expectedStatus: 0,
       fetchFn: async (_request, options) => {
         if (options.method === "GET") return envelope([candidateDomain()]);
@@ -355,6 +362,7 @@ test("normalizes malformed and network DELETE failure evidence without retrying"
     ).rejects.toMatchObject({
       code: "CUSTOM_DOMAIN_DETACH_FAILED",
       detachAttempted: true,
+      detachResponseClass: expectedResponseClass,
       httpStatus: expectedStatus,
       cloudflareErrorCode: "NONE",
     });
@@ -365,6 +373,8 @@ test("marks detach evidence not attempted before any DELETE request", () => {
   expect(candidateDomainDetachEvidence({})).toEqual({
     httpStatus: "NOT_ATTEMPTED",
     cloudflareErrorCode: "NOT_ATTEMPTED",
+    responseClass: "NOT_ATTEMPTED",
+    confirmationRequired: "NO",
   });
   expect(
     candidateDomainDetachEvidence({
@@ -372,7 +382,132 @@ test("marks detach evidence not attempted before any DELETE request", () => {
       httpStatus: 599,
       cloudflareErrorCode: "untrusted error text",
     }),
-  ).toEqual({ httpStatus: "599", cloudflareErrorCode: "NONE" });
+  ).toEqual({
+    httpStatus: "599",
+    cloudflareErrorCode: "NONE",
+    responseClass: "UNACKNOWLEDGED_FAILURE",
+    confirmationRequired: "NO",
+  });
+});
+
+test("proceeds only to confirmation after a 2xx response without an explicit failure envelope", async () => {
+  const calls = [];
+  let listReads = 0;
+  const fetchFn = async (_request, options) => {
+    calls.push(options.method);
+    if (options.method === "GET") {
+      listReads += 1;
+      return envelope(listReads === 1 ? [candidateDomain()] : []);
+    }
+    return envelope(null, { includeSuccess: false, status: 200 });
+  };
+  const result = await detachCandidateDomain({
+    config: config(),
+    expectedDomainId: domainId,
+    expectedZoneId: zoneId,
+    fetchFn,
+  });
+
+  expect(result).toMatchObject({
+    detached: false,
+    detachAttempted: true,
+    detachResponseClass: "HTTP_ACKNOWLEDGED_UNCONFIRMED",
+    httpStatus: 200,
+    cloudflareErrorCode: "NONE",
+  });
+  expect(candidateDomainDetachEvidence(result)).toMatchObject({
+    responseClass: "HTTP_ACKNOWLEDGED_UNCONFIRMED",
+    confirmationRequired: "YES",
+  });
+  await expect(
+    waitForCandidateDomain({
+      config: config(),
+      desiredAttachment: "ABSENT",
+      fetchFn,
+      intervalMilliseconds: 0,
+      maxAttempts: 1,
+      sleep: async () => undefined,
+    }),
+  ).resolves.toMatchObject({ attempts: 1, state: { attachment: "ABSENT" } });
+  expect(calls).toEqual(["GET", "DELETE", "GET"]);
+});
+
+test("permits an unparseable 2xx DELETE response only to the bounded confirmation step", async () => {
+  const result = await detachCandidateDomain({
+    config: config(),
+    expectedDomainId: domainId,
+    expectedZoneId: zoneId,
+    fetchFn: async (_request, options) => {
+      if (options.method === "GET") return envelope([candidateDomain()]);
+      return new Response("unparseable control-plane body", { status: 200 });
+    },
+  });
+
+  expect(candidateDomainDetachEvidence(result)).toMatchObject({
+    httpStatus: "200",
+    cloudflareErrorCode: "NONE",
+    responseClass: "HTTP_ACKNOWLEDGED_UNCONFIRMED",
+    confirmationRequired: "YES",
+  });
+});
+
+test("fails closed for a parsed 2xx response with an invalid success field", async () => {
+  for (const success of ["false", null]) {
+    await expect(
+      detachCandidateDomain({
+        config: config(),
+        expectedDomainId: domainId,
+        expectedZoneId: zoneId,
+        fetchFn: async (_request, options) => {
+          if (options.method === "GET") return envelope([candidateDomain()]);
+          return envelope(null, { success, status: 200 });
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "CUSTOM_DOMAIN_DETACH_FAILED",
+      detachResponseClass: "UNACKNOWLEDGED_FAILURE",
+      httpStatus: 200,
+      cloudflareErrorCode: "NONE",
+    });
+  }
+});
+
+test("does not acknowledge a non-2xx DELETE response with a missing success field", async () => {
+  await expect(
+    detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        return envelope(null, { includeSuccess: false, status: 500 });
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "CUSTOM_DOMAIN_DETACH_FAILED",
+    detachResponseClass: "UNACKNOWLEDGED_FAILURE",
+    httpStatus: 500,
+    cloudflareErrorCode: "NONE",
+  });
+});
+
+test("fails closed on an explicit false Cloudflare success envelope", async () => {
+  await expect(
+    detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        if (options.method === "GET") return envelope([candidateDomain()]);
+        return envelope(null, { success: false, status: 200, errors: [] });
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "CUSTOM_DOMAIN_DETACH_FAILED",
+    detachResponseClass: "EXPLICIT_FAILURE",
+    httpStatus: 200,
+    cloudflareErrorCode: "NONE",
+  });
 });
 
 test("reattaches only the exact candidate hostname and Router service", async () => {
