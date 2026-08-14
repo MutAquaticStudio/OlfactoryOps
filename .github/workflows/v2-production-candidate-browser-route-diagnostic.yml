@@ -1,0 +1,88 @@
+name: V2 Production Candidate Browser Route Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for diagnosis.
+        required: true
+        type: string
+      tenant_url:
+        description: Exact isolated RC9 candidate tenant HTTPS URL.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DIAGNOSE_RC9_CANDIDATE_BROWSER_ROUTES to run this read-only route matrix.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-browser-route-diagnostic
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  EXPECTED_TENANT_URL: https://rc9-release-31736285494-469ca8942a.next.labofscents.org
+  EXPECTED_PAGES_ORIGIN: https://production-candidate.olfactoryops-v2-production-candidate.pages.dev
+
+jobs:
+  validate-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validation.outputs.release_sha }}
+      tenant_url: ${{ steps.validation.outputs.tenant_url }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      TENANT_URL: ${{ inputs.tenant_url }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validation
+        name: Validate exact read-only RC9 browser route inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-browser-route-diagnostic-workflow.mjs
+          test "$CONFIRM_DIAGNOSTIC" = "DIAGNOSE_RC9_CANDIDATE_BROWSER_ROUTES"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$TENANT_URL" = "$EXPECTED_TENANT_URL"
+          git fetch --no-tags origin \
+            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
+          git fetch --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          test "$(git rev-parse 'v2-production-rc9^{}')" = "$RELEASE_SHA"
+          test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$RELEASE_SHA"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "tenant_url=$TENANT_URL" >> "$GITHUB_OUTPUT"
+
+  diagnose-candidate-browser-routes:
+    needs: validate-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+      CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_TENANT_URL: ${{ needs.validate-diagnostic-input.outputs.tenant_url }}
+      CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_PAGES_ORIGIN: https://production-candidate.olfactoryops-v2-production-candidate.pages.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Probe the exact candidate tenant and Pages route matrix without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_TENANT_URL" = "$EXPECTED_TENANT_URL"
+          test "$CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_PAGES_ORIGIN" = "$EXPECTED_PAGES_ORIGIN"
+          node scripts/verify-v2-production-candidate-browser-route-diagnostic.mjs
