@@ -109,12 +109,61 @@ function safeCloudflareErrorCode(envelope) {
   return errorCode === undefined ? "NONE" : String(errorCode);
 }
 
+function envelopeSuccessState(envelope, jsonState) {
+  if (jsonState !== "PARSED") return "BODY_UNPARSEABLE";
+  if (
+    envelope === null ||
+    typeof envelope !== "object" ||
+    Array.isArray(envelope)
+  )
+    return "SUCCESS_INVALID";
+  if (!Object.hasOwn(envelope, "success")) return "SUCCESS_MISSING";
+  if (envelope?.success === true) return "SUCCESS_TRUE";
+  if (envelope?.success === false) return "SUCCESS_FALSE";
+  return "SUCCESS_INVALID";
+}
+
+function classifyDetachResponse(response) {
+  if (
+    response?.success === true &&
+    response?.envelopeSuccessState === "SUCCESS_TRUE"
+  )
+    return "SUCCESS_ENVELOPE";
+  if (response?.envelopeSuccessState === "SUCCESS_FALSE")
+    return "EXPLICIT_FAILURE";
+  if (
+    response?.httpStatus >= 200 &&
+    response.httpStatus <= 299 &&
+    response?.cfErrorCode === "NONE" &&
+    ["SUCCESS_MISSING", "BODY_UNPARSEABLE"].includes(
+      response?.envelopeSuccessState,
+    )
+  )
+    return "HTTP_ACKNOWLEDGED_UNCONFIRMED";
+  return "UNACKNOWLEDGED_FAILURE";
+}
+
+function safeDetachResponseClass(value) {
+  if (value?.detachAttempted !== true) return "NOT_ATTEMPTED";
+  return [
+    "SUCCESS_ENVELOPE",
+    "HTTP_ACKNOWLEDGED_UNCONFIRMED",
+    "EXPLICIT_FAILURE",
+    "UNACKNOWLEDGED_FAILURE",
+  ].includes(value.detachResponseClass)
+    ? value.detachResponseClass
+    : "UNACKNOWLEDGED_FAILURE";
+}
+
 export function candidateDomainDetachEvidence(value) {
   if (value?.detachAttempted !== true)
     return {
       httpStatus: "NOT_ATTEMPTED",
       cloudflareErrorCode: "NOT_ATTEMPTED",
+      responseClass: "NOT_ATTEMPTED",
+      confirmationRequired: "NO",
     };
+  const responseClass = safeDetachResponseClass(value);
   return {
     httpStatus: String(safeHttpStatus({ status: value.httpStatus })),
     cloudflareErrorCode:
@@ -122,6 +171,9 @@ export function candidateDomainDetachEvidence(value) {
       /^(?:NONE|[1-9][0-9]{3,5})$/.test(value.cloudflareErrorCode)
         ? value.cloudflareErrorCode
         : "NONE",
+    responseClass,
+    confirmationRequired:
+      responseClass === "HTTP_ACKNOWLEDGED_UNCONFIRMED" ? "YES" : "NO",
   };
 }
 
@@ -131,6 +183,7 @@ function safeControlPlaneFailure(classification, response) {
   error.httpStatus = safeHttpStatus({ status: response?.httpStatus });
   error.cloudflareErrorCode =
     typeof response?.cfErrorCode === "string" ? response.cfErrorCode : "NONE";
+  error.detachResponseClass = classifyDetachResponse(response);
   return error;
 }
 
@@ -154,8 +207,10 @@ async function controlPlaneRequest({
       signal: AbortSignal.timeout(20_000),
     });
     let envelope;
+    let jsonState = "BODY_UNPARSEABLE";
     try {
       envelope = await response.json();
+      jsonState = "PARSED";
     } catch {
       envelope = undefined;
     }
@@ -163,6 +218,7 @@ async function controlPlaneRequest({
       httpStatus: safeHttpStatus(response),
       success: response?.ok === true && envelope?.success === true,
       cfErrorCode: safeCloudflareErrorCode(envelope),
+      envelopeSuccessState: envelopeSuccessState(envelope, jsonState),
       envelope,
     };
   } catch {
@@ -170,6 +226,7 @@ async function controlPlaneRequest({
       httpStatus: 0,
       success: false,
       cfErrorCode: "NONE",
+      envelopeSuccessState: "TRANSPORT_FAILURE",
       envelope: undefined,
     };
   }
@@ -427,11 +484,16 @@ export async function detachCandidateDomain({
     method: "DELETE",
     suffix: `/${encodeURIComponent(domainId)}`,
   });
-  if (!response.success)
+  const detachResponseClass = classifyDetachResponse(response);
+  if (
+    detachResponseClass !== "SUCCESS_ENVELOPE" &&
+    detachResponseClass !== "HTTP_ACKNOWLEDGED_UNCONFIRMED"
+  )
     throw safeControlPlaneFailure("CUSTOM_DOMAIN_DETACH_FAILED", response);
   return {
-    detached: true,
+    detached: detachResponseClass === "SUCCESS_ENVELOPE",
     detachAttempted: true,
+    detachResponseClass,
     httpStatus: response.httpStatus,
     cloudflareErrorCode: response.cfErrorCode,
   };
@@ -534,6 +596,14 @@ function reportFailure(mode, error) {
       "CANDIDATE_CUSTOM_DOMAIN_DETACH_CF_ERROR_CODE",
       evidence.cloudflareErrorCode,
     );
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_RESPONSE_CLASS",
+      evidence.responseClass,
+    );
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_CONFIRMATION_REQUIRED",
+      evidence.confirmationRequired,
+    );
   }
   print("CANDIDATE_CUSTOM_DOMAIN_RESET_FAILURE_CLASS", safeFailureCode(error));
   print(names[mode] ?? "CANDIDATE_CUSTOM_DOMAIN_RESET", "FAIL");
@@ -565,7 +635,20 @@ async function main() {
       "CANDIDATE_CUSTOM_DOMAIN_DETACH_CF_ERROR_CODE",
       evidence.cloudflareErrorCode,
     );
-    print("CANDIDATE_CUSTOM_DOMAIN_DETACH", "PASS");
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_RESPONSE_CLASS",
+      evidence.responseClass,
+    );
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_CONFIRMATION_REQUIRED",
+      evidence.confirmationRequired,
+    );
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH",
+      evidence.responseClass === "SUCCESS_ENVELOPE"
+        ? "PASS"
+        : "ACKNOWLEDGED_UNCONFIRMED",
+    );
     return;
   }
   if (mode === "wait-detached") {
