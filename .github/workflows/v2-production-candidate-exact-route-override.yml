@@ -1,0 +1,223 @@
+name: V2 Production Candidate Exact Route Override
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for the exact candidate route override.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC9 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_route_override:
+        description: Type CREATE_RC9_EXACT_CANDIDATE_ROUTE to create only the exact candidate Zone Route.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_PAGES_ORIGIN: https://57b7300b.olfactoryops-v2-production-candidate.pages.dev
+  TARGET_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+  TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+  TARGET_ROUTE_PATTERN: https://rc9-release-31736285494-469ca8942a.next.labofscents.org/*
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-exact-route-override-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC9 candidate-only route override inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_ROUTE_OVERRIDE: ${{ inputs.confirm_route_override }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-exact-route-override-workflow.mjs
+          test "$CONFIRM_ROUTE_OVERRIDE" = "CREATE_RC9_EXACT_CANDIDATE_ROUTE"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  override-exact-candidate-route:
+    needs: validate-exact-route-override-input
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      EXACT_ROUTE_OVERRIDE_RELEASE_SHA: ${{ needs.validate-exact-route-override-input.outputs.release_sha }}
+      EXACT_ROUTE_OVERRIDE_FIXTURE_HOSTNAME: ${{ needs.validate-exact-route-override-input.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require immutable candidate-only exact route override constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$EXACT_ROUTE_OVERRIDE_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$EXACT_ROUTE_OVERRIDE_FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          node scripts/verify-v2-production-candidate-exact-route-override-workflow.mjs
+      - name: Install pinned main operations tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Create protected runner-local exact route override state
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          route_dir="$RUNNER_TEMP/oo-v2-exact-route-override-$GITHUB_RUN_ID"
+          test "$route_dir" = "$RUNNER_TEMP/oo-v2-exact-route-override-$GITHUB_RUN_ID"
+          mkdir -p "$route_dir"
+          chmod 700 "$route_dir"
+          printf 'EXACT_ROUTE_OVERRIDE_DIR=%s\n' "$route_dir" >> "$GITHUB_ENV"
+      - id: preflight
+        name: Prove exact candidate Router configuration and existing wildcard route before mutation
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/override-v2-production-candidate-exact-route.mjs preflight 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'CURRENT_ROUTER_CONFIGURATION=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXISTING_WILDCARD_ROUTE_PRESENT=YES'
+          printf '%s\n' "$output" | grep -qx 'EXISTING_WILDCARD_ROUTE_UNCHANGED=YES'
+          active_version="$(printf '%s\n' "$output" | awk -F= '$1 == "CURRENT_ROUTER_VERSION_ID" { print $2; exit }')"
+          [[ "$active_version" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          printf 'active_version=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+      - id: create
+        name: Create only the exact candidate Route with bounded GET recovery
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/override-v2-production-candidate-exact-route.mjs create
+      - id: verify-route
+        name: Verify exact candidate route precedence and preserve the wildcard route
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/override-v2-production-candidate-exact-route.mjs verify
+      - id: tail
+        name: Tail the exact active Router version and require one HTTP 200 candidate event
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTIVE_ROUTER_VERSION: ${{ steps.preflight.outputs.active_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tail_capture="$EXACT_ROUTE_OVERRIDE_DIR/tail.jsonl"
+          tail_errors="$EXACT_ROUTE_OVERRIDE_DIR/tail.stderr"
+          nonce_file="$EXACT_ROUTE_OVERRIDE_DIR/nonce"
+          tail_pid=""
+          cleanup_tail() {
+            if [[ -n "$tail_pid" ]]; then
+              kill -- "-$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+            fi
+            rm -f -- "$tail_capture" "$tail_errors" "$nonce_file"
+          }
+          trap cleanup_tail EXIT
+          : > "$tail_capture"
+          : > "$tail_errors"
+          chmod 600 "$tail_capture" "$tail_errors"
+          nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+          printf '%s' "$nonce" > "$nonce_file"
+          chmod 600 "$nonce_file"
+          mkdir -p "$EXACT_ROUTE_OVERRIDE_DIR/wrangler-home" "$EXACT_ROUTE_OVERRIDE_DIR/wrangler-xdg"
+          chmod 700 "$EXACT_ROUTE_OVERRIDE_DIR/wrangler-home" "$EXACT_ROUTE_OVERRIDE_DIR/wrangler-xdg"
+          HOME="$EXACT_ROUTE_OVERRIDE_DIR/wrangler-home" XDG_CONFIG_HOME="$EXACT_ROUTE_OVERRIDE_DIR/wrangler-xdg" WRANGLER_WRITE_LOGS=false WRANGLER_LOG=log WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1 \
+            setsid timeout --signal=TERM 120s ./node_modules/.bin/wrangler tail "$TARGET_ROUTER_SERVICE" --format json --version-id "$ACTIVE_ROUTER_VERSION" > "$tail_capture" 2> "$tail_errors" &
+          tail_pid=$!
+          sleep 5
+          tail_process_observed=NO
+          if kill -0 "$tail_pid" 2>/dev/null; then tail_process_observed=YES; fi
+          filter_sampling_window_elapsed=NO
+          if [[ "$tail_process_observed" = YES ]]; then
+            sleep 60
+            if kill -0 "$tail_pid" 2>/dev/null; then filter_sampling_window_elapsed=YES; fi
+          fi
+          probe_status="$(curl --silent --request GET --output /dev/null --write-out '%{http_code}' --connect-timeout 15 --max-time 20 --max-redirs 0 --header 'Cache-Control: no-cache' --header 'Pragma: no-cache' "https://$TARGET_FIXTURE_HOSTNAME/?oo_exact_route_override=$nonce" || true)"
+          [[ "$probe_status" =~ ^[1-5][0-9][0-9]$ ]] || probe_status=000
+          printf 'TAIL_PUBLIC_PROBE_HTTP_STATUS=%s\n' "$probe_status"
+          sleep 15
+          capture_window_completed=NO
+          if [[ "$tail_process_observed" = YES ]] && kill -0 "$tail_pid" 2>/dev/null; then capture_window_completed=YES; fi
+          kill -- "-$tail_pid" 2>/dev/null || true
+          wait "$tail_pid" 2>/dev/null || true
+          tail_pid=""
+          tail_output="$(ROUTER_INGRESS_TAIL_CAPTURE_FILE="$tail_capture" ROUTER_INGRESS_TAIL_ERROR_FILE="$tail_errors" ROUTER_INGRESS_TAIL_NONCE="$nonce" ROUTER_INGRESS_TAIL_HOSTNAME="$TARGET_FIXTURE_HOSTNAME" ROUTER_INGRESS_TAIL_VERSION_ID="$ACTIVE_ROUTER_VERSION" ROUTER_INGRESS_TAIL_PROCESS_OBSERVED="$tail_process_observed" ROUTER_INGRESS_TAIL_FILTER_SAMPLING_WINDOW_ELAPSED="$filter_sampling_window_elapsed" ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED="$capture_window_completed" node scripts/verify-v2-production-candidate-router-ingress-tail.mjs 2>/dev/null || true)"
+          printf '%s\n' "$tail_output"
+          require_tail() { printf '%s\n' "$tail_output" | grep -qx "$1=$2"; }
+          require_tail TAIL_PERMISSION_AVAILABLE YES
+          require_tail TAIL_READINESS PASS
+          require_tail TAIL_VERSION_FILTER_APPLIED PASS
+          require_tail TAIL_FILTER_SAMPLING_WINDOW_ELAPSED PASS
+          require_tail TAIL_CAPTURE_WINDOW_COMPLETED PASS
+          require_tail TAIL_EVENT_CAPTURED YES
+          require_tail TAIL_REQUEST_HOST_MATCHES_EXPECTED PASS
+          require_tail TAIL_REQUEST_METHOD_GET PASS
+          require_tail TAIL_REQUEST_SCHEME_HTTPS PASS
+          require_tail TAIL_EVENT_OUTCOME OK
+          require_tail TAIL_EVENT_HTTP_STATUS 200
+      - id: tenant-verify
+        name: Verify five tenant routes, caller header isolation, and unknown-host failure
+        shell: bash
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs tenant-verify
+      - name: Roll back only the exact route created by this operation after an acceptance failure
+        if: always() && steps.preflight.outcome == 'success' && steps.create.outcome != 'skipped' && (steps.create.outcome != 'success' || steps.verify-route.outcome != 'success' || steps.tail.outcome != 'success' || steps.tenant-verify.outcome != 'success')
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/override-v2-production-candidate-exact-route.mjs rollback
+      - name: Remove only runner-local exact route override state and evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${EXACT_ROUTE_OVERRIDE_DIR:-}" in
+            "$RUNNER_TEMP"/oo-v2-exact-route-override-*) ;;
+            *) exit 1 ;;
+          esac
+          rm -rf -- "$EXACT_ROUTE_OVERRIDE_DIR"
+          test ! -e "$EXACT_ROUTE_OVERRIDE_DIR"
+          echo "EXACT_CANDIDATE_ROUTE_OVERRIDE_RUNNER_LOCAL_CLEANUP=PASS"
