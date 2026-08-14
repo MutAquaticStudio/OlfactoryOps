@@ -54,7 +54,9 @@ requireFragments(workflow, "router ingress workflow", [
   "npm ci --ignore-scripts",
   "./node_modules/.bin/wrangler tail",
   '--format json --version-id "$ACTIVE_ROUTER_VERSION"',
-  "setsid timeout --signal=TERM 45s",
+  "setsid timeout --signal=TERM 120s",
+  "filter_sampling_window_elapsed=NO",
+  "sleep 60",
   "--request GET --output /dev/null --write-out '%{http_code}'",
   "--max-time 20 --max-redirs 0",
   "Cache-Control: no-cache",
@@ -66,6 +68,8 @@ requireFragments(workflow, "router ingress workflow", [
   "verify-v2-production-candidate-router-ingress-tail.mjs",
   "classify-v2-production-candidate-router-ingress.mjs",
   "ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED: ${{ steps.tail.outputs.capture_window_completed }}",
+  "ROUTER_INGRESS_TAIL_FILTER_SAMPLING_WINDOW_ELAPSED: ${{ steps.tail.outputs.filter_sampling_window_elapsed }}",
+  "copy_tail_output TAIL_FILTER_SAMPLING_WINDOW_ELAPSED filter_sampling_window_elapsed",
 ]);
 
 const triggerBlock = workflow.slice(
@@ -149,6 +153,13 @@ if (workflow.split(fixtureProbe).length - 1 !== 1)
     "router ingress workflow must issue exactly one public fixture probe",
   );
 
+const samplingWindowIndex = workflow.indexOf("sleep 60");
+const fixtureProbeIndex = workflow.indexOf(fixtureProbe);
+if (!(samplingWindowIndex >= 0 && samplingWindowIndex < fixtureProbeIndex))
+  throw new Error(
+    "router ingress workflow must complete the version-filter sampling window before probing",
+  );
+
 requireFragments(inspector, "router deployment inspector", [
   'strategy === "percentage"',
   "versions.length === 1",
@@ -168,6 +179,7 @@ requireAbsent(
 
 requireFragments(tail, "router ingress tail verifier", [
   "TAIL_VERSION_FILTER_APPLIED",
+  "TAIL_FILTER_SAMPLING_WINDOW_ELAPSED",
   "TAIL_CAPTURE_WINDOW_COMPLETED",
   "oo_router_ingress_diag",
   "requestSchemeHttps",
@@ -184,6 +196,7 @@ requireFragments(classifier, "router ingress classifier", [
   "CANDIDATE_CUSTOM_DOMAIN_CONTROL_PLANE_ROUTING_DRIFT",
   "CANDIDATE_ROUTER_TAIL_CAPTURE_UNPROVEN",
   "CANDIDATE_ROUTER_TAIL_FILTER_UNPROVEN",
+  "CANDIDATE_ROUTER_TAIL_FILTER_SAMPLING_UNPROVEN",
 ]);
 
 console.log("ROUTER_INGRESS_DIAGNOSTIC_WORKFLOW=PASS");

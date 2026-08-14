@@ -184,7 +184,7 @@ jobs:
           WRANGLER_SEND_METRICS=false \
           WRANGLER_SEND_ERROR_REPORTS=false \
           NO_COLOR=1 \
-          setsid timeout --signal=TERM 45s ./node_modules/.bin/wrangler tail "$TARGET_ROUTER_SERVICE" \
+          setsid timeout --signal=TERM 120s ./node_modules/.bin/wrangler tail "$TARGET_ROUTER_SERVICE" \
             --format json --version-id "$ACTIVE_ROUTER_VERSION" > "$tail_capture" 2> "$tail_errors" &
           tail_pid=$!
           sleep 5
@@ -193,6 +193,13 @@ jobs:
             printf 'startup failure\n' >> "$tail_errors"
           else
             tail_process_observed=YES
+          fi
+          filter_sampling_window_elapsed=NO
+          if [[ "$tail_process_observed" = YES ]]; then
+            sleep 60
+            if kill -0 "$tail_pid" 2>/dev/null; then
+              filter_sampling_window_elapsed=YES
+            fi
           fi
           probe_status="$(curl --silent --request GET --output /dev/null --write-out '%{http_code}' \
             --connect-timeout 15 --max-time 20 --max-redirs 0 \
@@ -211,7 +218,7 @@ jobs:
           kill -- "-$tail_pid" 2>/dev/null || true
           wait "$tail_pid" 2>/dev/null || true
           tail_pid=""
-          tail_output="$(ROUTER_INGRESS_TAIL_CAPTURE_FILE="$tail_capture" ROUTER_INGRESS_TAIL_ERROR_FILE="$tail_errors" ROUTER_INGRESS_TAIL_NONCE="$nonce" ROUTER_INGRESS_TAIL_HOSTNAME="$TARGET_FIXTURE_HOSTNAME" ROUTER_INGRESS_TAIL_VERSION_ID="$ACTIVE_ROUTER_VERSION" ROUTER_INGRESS_TAIL_PROCESS_OBSERVED="$tail_process_observed" ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED="$capture_window_completed" node scripts/verify-v2-production-candidate-router-ingress-tail.mjs 2>/dev/null || true)"
+          tail_output="$(ROUTER_INGRESS_TAIL_CAPTURE_FILE="$tail_capture" ROUTER_INGRESS_TAIL_ERROR_FILE="$tail_errors" ROUTER_INGRESS_TAIL_NONCE="$nonce" ROUTER_INGRESS_TAIL_HOSTNAME="$TARGET_FIXTURE_HOSTNAME" ROUTER_INGRESS_TAIL_VERSION_ID="$ACTIVE_ROUTER_VERSION" ROUTER_INGRESS_TAIL_PROCESS_OBSERVED="$tail_process_observed" ROUTER_INGRESS_TAIL_FILTER_SAMPLING_WINDOW_ELAPSED="$filter_sampling_window_elapsed" ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED="$capture_window_completed" node scripts/verify-v2-production-candidate-router-ingress-tail.mjs 2>/dev/null || true)"
           printf '%s\n' "$tail_output"
           copy_tail_output() {
             local source_key="$1"
@@ -228,6 +235,7 @@ jobs:
           copy_tail_output TAIL_READINESS readiness
           copy_tail_output TAIL_EVENT_CAPTURED event_captured
           copy_tail_output TAIL_VERSION_FILTER_APPLIED version_filter_applied
+          copy_tail_output TAIL_FILTER_SAMPLING_WINDOW_ELAPSED filter_sampling_window_elapsed
           copy_tail_output TAIL_CAPTURE_WINDOW_COMPLETED capture_window_completed
           copy_tail_output TAIL_REQUEST_HOST_MATCHES_EXPECTED host_matches_expected
           copy_tail_output TAIL_REQUEST_SCHEME_HTTPS request_scheme_https
@@ -270,6 +278,7 @@ jobs:
           ROUTER_INGRESS_PUBLIC_PROBE: ${{ steps.tail.outputs.public_probe }}
           ROUTER_INGRESS_TAIL_PERMISSION: ${{ steps.tail.outputs.permission }}
           ROUTER_INGRESS_TAIL_READINESS: ${{ steps.tail.outputs.readiness }}
+          ROUTER_INGRESS_TAIL_FILTER_SAMPLING_WINDOW_ELAPSED: ${{ steps.tail.outputs.filter_sampling_window_elapsed }}
           ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED: ${{ steps.tail.outputs.capture_window_completed }}
           ROUTER_INGRESS_TAIL_EVENT_CAPTURED: ${{ steps.tail.outputs.event_captured }}
           ROUTER_INGRESS_TAIL_VERSION_FILTER_APPLIED: ${{ steps.tail.outputs.version_filter_applied }}
