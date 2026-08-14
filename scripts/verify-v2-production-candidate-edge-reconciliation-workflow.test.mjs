@@ -57,15 +57,28 @@ describe("RC9 candidate edge reconciliation workflow contract", () => {
     expect(reconciliation).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS");
     expect(reconciliation).toContain("PAGES_DEPLOYMENTS_HTTP_STATUS");
     expect(reconciliation).toContain("PAGES_DEPLOYMENTS_CF_ERROR_CODE");
-    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_PAGE20_HTTP_STATUS");
-    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_PAGE100_HTTP_STATUS");
+    expect(reconciliation).toContain("PAGES_PROJECT_PRODUCTION_BRANCH");
+    expect(reconciliation).toContain("EXPECTED_CANDIDATE_PAGES_ENVIRONMENT");
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_PREVIEW_HTTP_STATUS");
+    expect(reconciliation).toContain(
+      "PAGES_DEPLOYMENTS_PRODUCTION_HTTP_STATUS",
+    );
+    expect(reconciliation).toContain("PAGES_DEPLOYMENT_COUNT_ALL");
+    expect(reconciliation).toContain("pagesDeploymentsPerPage = 20");
+    expect(reconciliation).toContain("edgeKnownImmutablePagesOrigin");
     expect(reconciliation).toContain("runWranglerPagesInventory");
     expect(reconciliation).toContain('WRANGLER_WRITE_LOGS: "false"');
-    expect(reconciliation).toContain("detailsForWranglerCandidates");
-    expect(reconciliation).toContain("PAGES_INVENTORY_COMPLETENESS");
+    expect(reconciliation).toContain("PAGES_KNOWN_DEPLOYMENT_RELEASE_JSON");
+    expect(reconciliation).toContain("PAGES_KNOWN_DEPLOYMENT_FIVE_ROUTES");
     expect(reconciliation).toContain("PAGES_RC9_ARTIFACT_RELEASE_IDENTITY");
     expect(reconciliation).not.toContain("npx wrangler");
     expect(reconciliation).toContain('"PAGINATION_LIMIT"');
+    expect(reconciliation).not.toContain(
+      "PAGES_DEPLOYMENTS_PAGE100_HTTP_STATUS",
+    );
+    expect(reconciliation).not.toContain(
+      "PAGES_DEPLOYMENTS_PER_PAGE_100_REJECTED",
+    );
     expect(reconciliation).not.toContain(
       "!resultInfo || !Number.isInteger(resultInfo.page)",
     );

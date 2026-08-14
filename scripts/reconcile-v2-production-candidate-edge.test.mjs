@@ -13,11 +13,12 @@ import {
   edgeBrowserPaths,
   edgeFixtureHostname,
   edgeHyperdriveId,
+  edgeKnownImmutablePagesOrigin,
   edgePagesProject,
   edgeReconciliationConfig,
   edgeReleaseSha,
   edgeRouterService,
-  edgeWorkspaceBaseDomain,
+  expectedCandidatePagesEnvironment,
   inspectPagesRequestLadder,
   inventoryImmutablePages,
   preflightCandidateDomain,
@@ -45,60 +46,39 @@ function environment(overrides = {}) {
 
 function deployment({
   id = "11111111-1111-1111-1111-111111111111",
-  createdOn = "2026-08-14T03:00:00.000Z",
-  label = "1cb6e1c5",
-  url = `https://${label}.${edgePagesProject}.pages.dev`,
-  overrides = {},
+  projectName = edgePagesProject,
+  environmentName = "production",
+  branch = "production-candidate",
+  commitHash = edgeReleaseSha,
+  url = edgeKnownImmutablePagesOrigin,
+  stage = "success",
+  skipped = false,
 } = {}) {
   return {
     id,
-    created_on: createdOn,
-    environment: "preview",
-    is_skipped: false,
-    latest_stage: { status: "success" },
+    project_name: projectName,
+    created_on: "2026-08-14T03:00:00.000Z",
+    environment: environmentName,
+    is_skipped: skipped,
+    latest_stage: { status: stage },
     url,
-    deployment_trigger: {
-      metadata: { branch: "production-candidate", commit_hash: edgeReleaseSha },
-    },
-    ...overrides,
+    deployment_trigger: { metadata: { branch, commit_hash: commitHash } },
   };
 }
 
-function nonMatchingDeployments(count, prefix) {
-  return Array.from({ length: count }, (_, index) =>
-    deployment({
-      id: `nonmatching-${prefix}-${index}`,
-      overrides: {
-        deployment_trigger: {
-          metadata: { branch: "unrelated", commit_hash: edgeReleaseSha },
-        },
-      },
-    }),
-  );
-}
-
-function pagesResultInfo(page, totalPages) {
-  return {
-    page,
-    per_page: 100,
-    total_pages: totalPages,
-    count: 0,
-    total_count: totalPages * 100,
-  };
-}
-
-function pagesResponse({
+function cloudflareResponse({
   status = 200,
   success = true,
-  result = [],
+  result = {},
   resultInfo,
-  contentType = "application/json",
+  errors,
 } = {}) {
   const body = { success, result };
   if (resultInfo !== undefined) body.result_info = resultInfo;
+  if (errors !== undefined) body.errors = errors;
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": contentType },
+    headers: { "content-type": "application/json" },
   });
 }
 
@@ -112,21 +92,22 @@ function htmlResponse(headers = {}) {
 function releaseManifestResponse({
   fullGitSha = edgeReleaseSha,
   artifact = "pages",
+  status = 200,
 } = {}) {
   return new Response(JSON.stringify({ fullGitSha, artifact }), {
-    status: 200,
+    status,
     headers: { "content-type": "application/json" },
   });
 }
 
-function inventoryFetch({
-  pages,
-  pageResponses = [],
-  healthyLabels = [],
-  aliasStatus = 200,
+function pagesInventoryFetch({
+  pages = [[deployment()]],
+  releaseManifest = true,
+  html = true,
+  aliasStatus = 404,
   requests = [],
 }) {
-  const healthy = new Set(healthyLabels);
+  const allDeployments = pages.flat();
   return async (request, options) => {
     const url = new URL(request);
     requests.push({ url, options });
@@ -135,70 +116,134 @@ function inventoryFetch({
       expect(options.redirect).toBe("manual");
       expect(options.credentials).toBe("omit");
       expect(options.headers.authorization).toBe("Bearer not-a-real-token");
+      const detailId = url.pathname.match(/\/deployments\/([^/]+)$/)?.[1];
+      if (detailId) {
+        const item = allDeployments.find(
+          (candidate) => candidate.id === detailId,
+        );
+        return cloudflareResponse({
+          success: Boolean(item),
+          result: item ?? null,
+        });
+      }
+      expect(url.pathname).toContain("/deployments");
+      expect(url.searchParams.has("env")).toBe(false);
+      expect(url.searchParams.get("page")).toMatch(/^[1-9]\d*$/);
+      expect(url.searchParams.get("per_page")).toBe("20");
       const page = Number(url.searchParams.get("page"));
-      expect(url.searchParams.get("env")).toBe("preview");
-      expect(url.searchParams.get("per_page")).toBe("100");
-      const response = pageResponses[page - 1];
-      if (typeof response === "function") return response();
-      if (response instanceof Response) return response;
-      if (response !== undefined) return pagesResponse(response);
       const result = pages[page - 1] ?? [];
-      return pagesResponse({
+      return cloudflareResponse({
         result,
         resultInfo: {
-          ...pagesResultInfo(page, pages.length),
+          page,
+          per_page: 20,
+          total_pages: pages.length,
           count: result.length,
+          total_count: allDeployments.length,
         },
       });
     }
     expect(options.redirect).toBe("manual");
     expect(options.credentials).toBe("omit");
-    expect(options.headers["cache-control"]).toBe("no-cache");
-    expect(options.headers.pragma).toBe("no-cache");
-    if (url.pathname === "/release.json") {
-      const label = url.hostname.split(".")[0];
-      return healthy.has(label)
+    if (url.pathname === "/release.json")
+      return releaseManifest
         ? releaseManifestResponse()
         : new Response(null, { status: 404 });
-    }
     if (url.hostname.startsWith("production-candidate."))
-      return aliasStatus === 200
-        ? htmlResponse()
-        : new Response(null, { status: aliasStatus });
-    return healthy.has(url.hostname.split(".")[0])
-      ? htmlResponse()
-      : new Response(null, { status: 404 });
+      return new Response(null, { status: aliasStatus });
+    return html ? htmlResponse() : new Response(null, { status: 404 });
   };
 }
 
 async function inventory({
   pages,
-  pageResponses,
-  healthyLabels,
+  releaseManifest,
+  html,
+  expectedEnvironment = "production",
+  knownImmutableOrigin = edgeKnownImmutablePagesOrigin,
   aliasStatus,
   emitLine = () => undefined,
-  persistOrigin,
+  persistOrigin = () => undefined,
   requests,
 } = {}) {
   return inventoryImmutablePages({
     config: edgeReconciliationConfig(environment()),
     environment: environment(),
-    fetchFn: inventoryFetch({
+    fetchFn: pagesInventoryFetch({
       pages,
-      pageResponses,
-      healthyLabels,
+      releaseManifest,
+      html,
       aliasStatus,
       requests,
     }),
     emitLine,
     persistOrigin,
+    expectedEnvironment,
+    knownImmutableOrigin,
   });
 }
 
-function apiPageNumbers(requests) {
-  return requests
-    .filter((request) => request.url.hostname === "api.cloudflare.com")
-    .map((request) => request.url.searchParams.get("page"));
+function reconciliationFetch({
+  productionBranch = "production-candidate",
+  bare = [deployment()],
+  preview = [],
+  production = [deployment()],
+  previewStatus = 200,
+  productionStatus = 200,
+  requests = [],
+}) {
+  const known = bare.find(
+    (candidate) => candidate.url === edgeKnownImmutablePagesOrigin,
+  );
+  return async (request, options) => {
+    const url = new URL(request);
+    requests.push({ url, options });
+    if (url.hostname === "api.cloudflare.com") {
+      const detailId = url.pathname.match(/\/deployments\/([^/]+)$/)?.[1];
+      if (detailId)
+        return cloudflareResponse({
+          success: Boolean(known && detailId === known.id),
+          result: known ?? null,
+        });
+      if (url.pathname.endsWith("/deployments")) {
+        const requestedEnvironment = url.searchParams.get("env");
+        const result =
+          requestedEnvironment === "preview"
+            ? preview
+            : requestedEnvironment === "production"
+              ? production
+              : bare;
+        const status =
+          requestedEnvironment === "preview"
+            ? previewStatus
+            : requestedEnvironment === "production"
+              ? productionStatus
+              : 200;
+        return cloudflareResponse({
+          status,
+          success: status === 200,
+          result: status === 200 ? result : null,
+          resultInfo: {
+            page: Number(url.searchParams.get("page") ?? "1"),
+            per_page: 20,
+            total_pages: 1,
+            count: result.length,
+            total_count: result.length,
+          },
+        });
+      }
+      return cloudflareResponse({
+        result: {
+          name: edgePagesProject,
+          production_branch: productionBranch,
+        },
+      });
+    }
+    if (url.pathname === "/release.json") return releaseManifestResponse();
+    if (url.hostname.startsWith("production-candidate."))
+      return new Response(null, { status: 404 });
+    return htmlResponse();
+  };
 }
 
 afterEach(() => {
@@ -206,14 +251,12 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-describe("RC9 candidate Pages inventory selection", () => {
-  it("pins only the exact RC9 candidate inputs", () => {
-    expect(edgeReconciliationConfig(environment()).releaseSha).toBe(
-      edgeReleaseSha,
-    );
-    expect(edgeReconciliationConfig(environment()).hyperdriveId).toBe(
-      edgeHyperdriveId,
-    );
+describe("RC9 candidate Pages environment classification", () => {
+  it("pins the exact immutable candidate inputs", () => {
+    const config = edgeReconciliationConfig(environment());
+    expect(config.releaseSha).toBe(edgeReleaseSha);
+    expect(config.pagesProject).toBe(edgePagesProject);
+    expect(config.hyperdriveId).toBe(edgeHyperdriveId);
     expect(edgeBrowserPaths).toEqual([
       "/",
       "/login",
@@ -223,1043 +266,448 @@ describe("RC9 candidate Pages inventory selection", () => {
     ]);
     expect(() =>
       edgeReconciliationConfig(
-        environment({ CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: "c".repeat(40) }),
-      ),
-    ).toThrow("INVALID_IMMUTABLE_INPUT");
-    expect(() =>
-      edgeReconciliationConfig(
-        environment({ CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID: "b".repeat(32) }),
-      ),
-    ).toThrow("INVALID_HYPERDRIVE_ID");
-    expect(() =>
-      edgeReconciliationConfig(
-        environment({
-          CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME: "wrong.invalid",
-        }),
+        environment({ CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: "f".repeat(40) }),
       ),
     ).toThrow("INVALID_IMMUTABLE_INPUT");
   });
 
-  it("selects the one healthy exact-RC9 immutable Pages deployment", async () => {
+  it("derives production only when the isolated candidate branch is the project production branch", () => {
+    expect(expectedCandidatePagesEnvironment("production-candidate")).toBe(
+      "production",
+    );
+    expect(expectedCandidatePagesEnvironment("main")).toBe("preview");
+    expect(() => expectedCandidatePagesEnvironment("")).toThrow(
+      "PAGES_PROJECT_PRODUCTION_BRANCH_INVALID",
+    );
+  });
+
+  it("accepts the known RC9 immutable deployment in the project production environment", async () => {
     const lines = [];
     const persisted = [];
     const result = await inventory({
-      pages: [[deployment()]],
-      healthyLabels: ["1cb6e1c5"],
+      pages: [[deployment({ environmentName: "production" })]],
       emitLine: (line) => lines.push(line),
       persistOrigin: (origin) => persisted.push(origin),
     });
-    expect(result.origin).toBe(
-      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(persisted).toEqual([result.origin]);
-    expect(lines).toContain("PAGES_DEPLOYMENTS_API=PASS");
-    expect(lines).toContain("PAGES_RC9_MATCH_COUNT=1");
-    expect(lines).toContain("PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT=PASS");
-    expect(lines).toContain("PAGES_RC9_MULTIPLE_HEALTHY_DEPLOYMENTS=NO");
-    expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=NO");
-    expect(lines.join("\n")).not.toContain(result.origin);
+    expect(result.origin).toBe(edgeKnownImmutablePagesOrigin);
+    expect(persisted).toEqual([edgeKnownImmutablePagesOrigin]);
+    for (const line of [
+      "PAGES_KNOWN_IMMUTABLE_DEPLOYMENT_FOUND=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_PROJECT=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_BRANCH=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_SHA=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_ENVIRONMENT=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_STAGE=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_RELEASE_JSON=PASS",
+      "PAGES_KNOWN_DEPLOYMENT_FIVE_ROUTES=PASS",
+      "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT=PASS",
+      "PAGES_REDEPLOY_REQUIRED=NO",
+    ])
+      expect(lines).toContain(line);
     expect(lines.join("\n")).not.toContain("not-a-real-token");
-    expect(lines.join("\n")).not.toContain("a".repeat(32));
     expect(lines.join("\n")).not.toContain(deployment().id);
   });
 
-  it("reports zero matching deployments and prevents Router progress", async () => {
-    const lines = [];
-    const persisted = [];
-    const requests = [];
+  it("accepts a preview deployment only when the project production branch differs", async () => {
     await expect(
       inventory({
-        pages: [[]],
+        pages: [[deployment({ environmentName: "preview" })]],
+        expectedEnvironment: "preview",
+      }),
+    ).resolves.toMatchObject({ origin: edgeKnownImmutablePagesOrigin });
+  });
+
+  it("keeps a non-authoritative branch alias result out of immutable selection", async () => {
+    const lines = [];
+    const persisted = [];
+    await expect(
+      inventory({
+        aliasStatus: 503,
         emitLine: (line) => lines.push(line),
         persistOrigin: (origin) => persisted.push(origin),
-        requests,
       }),
-    ).rejects.toThrow("PAGES_RC9_MATCHES_MISSING");
-    expect(lines).toContain("PAGES_RC9_MATCH_COUNT=0");
-    expect(lines).toContain(
-      "PAGES_RC9_IMMUTABLE_DEPLOYMENT=MISSING_OR_UNHEALTHY",
-    );
-    expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=YES");
-    expect(persisted).toEqual([]);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("selects the newest healthy deployment deterministically and records multiple healthy candidates", async () => {
-    const newer = deployment({
-      id: "22222222-2222-2222-2222-222222222222",
-      createdOn: "2026-08-14T04:00:00.000Z",
-      label: "2cb6e1c5",
-    });
-    const older = deployment({
-      id: "11111111-1111-1111-1111-111111111111",
-      createdOn: "2026-08-14T03:00:00.000Z",
-      label: "1cb6e1c5",
-    });
-    const lines = [];
-    const requests = [];
-    const result = await inventory({
-      pages: [[older, newer]],
-      healthyLabels: ["1cb6e1c5", "2cb6e1c5"],
-      emitLine: (line) => lines.push(line),
-      persistOrigin: () => undefined,
-      requests,
-    });
-    expect(result.origin).toBe(
-      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(lines).toContain("PAGES_RC9_MATCH_COUNT=2");
-    expect(lines).toContain("PAGES_RC9_CANDIDATE_INDEX=1");
-    expect(lines).toContain("PAGES_RC9_CANDIDATE_INDEX=2");
-    expect(lines).toContain("PAGES_RC9_MULTIPLE_HEALTHY_DEPLOYMENTS=YES");
-    expect(
-      requests.filter(
-        (request) =>
-          request.url.hostname === `1cb6e1c5.${edgePagesProject}.pages.dev` ||
-          request.url.hostname === `2cb6e1c5.${edgePagesProject}.pages.dev`,
-      ),
-    ).toHaveLength((edgeBrowserPaths.length + 1) * 2);
-  });
-
-  it("selects an older healthy deployment when the newest exact-RC9 deployment is unhealthy", async () => {
-    const newer = deployment({
-      id: "22222222-2222-2222-2222-222222222222",
-      createdOn: "2026-08-14T04:00:00.000Z",
-      label: "2cb6e1c5",
-    });
-    const older = deployment({ label: "1cb6e1c5" });
-    const result = await inventory({
-      pages: [[newer, older]],
-      healthyLabels: ["1cb6e1c5"],
-      persistOrigin: () => undefined,
-    });
-    expect(result.origin).toBe(
-      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(result.healthy).toHaveLength(1);
-  });
-
-  it("accepts a successful Pages response with result_info absent", async () => {
-    const lines = [];
-    const requests = [];
-    const result = await inventory({
-      pages: [[]],
-      pageResponses: [{ result: [deployment()] }],
-      healthyLabels: ["1cb6e1c5"],
-      emitLine: (line) => lines.push(line),
-      persistOrigin: () => undefined,
-      requests,
-    });
-    expect(result.origin).toBe(
-      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(apiPageNumbers(requests)).toEqual(["1"]);
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=true");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=true");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NONE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_API=PASS");
+    ).resolves.toMatchObject({ origin: edgeKnownImmutablePagesOrigin });
+    expect(persisted).toEqual([edgeKnownImmutablePagesOrigin]);
+    expect(lines).toContain("PAGES_RC9_BRANCH_ALIAS_ROUTING=UNPROVEN");
   });
 
   it.each([
-    ["page absent", { per_page: 100, total_pages: 1 }],
-    ["per_page absent", { page: 1, total_pages: 1 }],
-    ["total_pages absent", { page: 1, per_page: 100 }],
-  ])(
-    "accepts valid present pagination metadata with %s",
-    async (_name, resultInfo) => {
-      const requests = [];
-      const result = await inventory({
-        pages: [[]],
-        pageResponses: [{ result: [deployment()], resultInfo }],
-        healthyLabels: ["1cb6e1c5"],
-        persistOrigin: () => undefined,
-        requests,
-      });
-      expect(result.origin).toBe(
-        `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-      );
-      expect(apiPageNumbers(requests)).toEqual(["1"]);
-    },
-  );
-
-  it("uses a present total_pages value to retrieve the declared final page", async () => {
-    const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
-    const requests = [];
-    const result = await inventory({
-      pages: [[], []],
-      pageResponses: [
-        {
-          result: nonMatchingDeployments(100, "total-pages-one"),
-          resultInfo: { page: 1, per_page: 100, total_pages: 2 },
-        },
-        {
-          result: [pageTwoDeployment],
-          resultInfo: { page: 2, per_page: 100, total_pages: 2 },
-        },
-      ],
-      healthyLabels: ["2cb6e1c5"],
-      persistOrigin: () => undefined,
-      requests,
-    });
-    expect(result.origin).toBe(
-      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-  });
-
-  it("infers the final page from a short response without total_pages", async () => {
-    const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
-    const requests = [];
-    const result = await inventory({
-      pages: [[], []],
-      pageResponses: [
-        { result: nonMatchingDeployments(100, "short-page-one") },
-        { result: [pageTwoDeployment] },
-      ],
-      healthyLabels: ["2cb6e1c5"],
-      persistOrigin: () => undefined,
-      requests,
-    });
-    expect(result.origin).toBe(
-      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-  });
-
-  it("stops at an empty optional-metadata page without progressing to the Router", async () => {
-    const lines = [];
+    ["unexpected environment", { environmentName: "preview" }],
+    ["wrong branch", { branch: "other-branch" }],
+    ["wrong SHA", { commitHash: "f".repeat(40) }],
+    ["wrong deployment project", { projectName: "another-project" }],
+  ])("rejects a %s before an origin can persist", async (_name, overrides) => {
     const persisted = [];
-    const requests = [];
     await expect(
       inventory({
-        pages: [[], []],
-        pageResponses: [
-          { result: nonMatchingDeployments(100, "empty-page-one") },
-          { result: [] },
-        ],
-        emitLine: (line) => lines.push(line),
+        pages: [[deployment(overrides)]],
         persistOrigin: (origin) => persisted.push(origin),
-        requests,
       }),
     ).rejects.toThrow("PAGES_RC9_MATCHES_MISSING");
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-    expect(lines).toContain("PAGES_DEPLOYMENTS_API=PASS");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NONE");
     expect(persisted).toEqual([]);
   });
 
-  it("does not require total_pages to remain present on later pages", async () => {
-    const pageTwoDeployment = deployment({ label: "2cb6e1c5" });
-    const requests = [];
-    const result = await inventory({
-      pages: [[], []],
-      pageResponses: [
-        {
-          result: nonMatchingDeployments(100, "optional-total-one"),
-          resultInfo: { page: 1, per_page: 100, total_pages: 2 },
-        },
-        { result: [pageTwoDeployment], resultInfo: { page: 2, per_page: 100 } },
-      ],
-      healthyLabels: ["2cb6e1c5"],
-      persistOrigin: () => undefined,
-      requests,
-    });
-    expect(result.origin).toBe(
-      `https://2cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-  });
-
-  it("rejects a pages inventory that would require more than 100 requests", async () => {
+  it("fails closed when the known immutable deployment cannot be found", async () => {
     const lines = [];
     await expect(
       inventory({
-        pages: [[]],
-        pageResponses: Array.from({ length: 100 }, (_, pageIndex) => ({
-          result: nonMatchingDeployments(100, `page-limit-${pageIndex}`),
-        })),
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_LIMIT");
-  });
-
-  it("rejects invalid immutable URLs and zero healthy candidates without persisting an origin", async () => {
-    const validButUnhealthy = deployment({ label: "1cb6e1c5" });
-    const invalidUrl = deployment({
-      id: "22222222-2222-2222-2222-222222222222",
-      createdOn: "2026-08-14T04:00:00.000Z",
-      url: "https://production-candidate.invalid.pages.dev",
-    });
-    const lines = [];
-    const persisted = [];
-    await expect(
-      inventory({
-        pages: [[validButUnhealthy, invalidUrl]],
-        healthyLabels: [],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: (origin) => persisted.push(origin),
-      }),
-    ).rejects.toThrow("PAGES_RC9_MATCHES_UNHEALTHY");
-    expect(lines).toContain("PAGES_RC9_CANDIDATE_URL_SHAPE_VALID=false");
-    expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=YES");
-    expect(persisted).toEqual([]);
-  });
-
-  it("accepts a 404 branch alias only after selecting a healthy immutable deployment", async () => {
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[deployment()]],
-        healthyLabels: ["1cb6e1c5"],
-        aliasStatus: 404,
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).resolves.toMatchObject({
-      origin: `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    });
-    expect(lines).toContain("PAGES_RC9_BRANCH_ALIAS_ROUTING=DRIFTED");
-    expect(lines).toContain(
-      "ROOT_CAUSE_PAGES=PAGES_BRANCH_ALIAS_CONTROL_PLANE_DRIFT",
-    );
-  });
-
-  it("fails safely when present total_pages values disagree", async () => {
-    const lines = [];
-    const requests = [];
-    await expect(
-      inventory({
-        pages: [[], []],
-        pageResponses: [
-          {
-            result: nonMatchingDeployments(100, "changed-total-one"),
-            resultInfo: { page: 1, per_page: 100, total_pages: 3 },
-          },
-          {
-            result: nonMatchingDeployments(100, "changed-total-two"),
-            resultInfo: { page: 2, per_page: 100, total_pages: 4 },
-          },
-        ],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-        requests,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-    expect(lines).toContain(
-      "PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_METADATA",
-    );
-  });
-
-  it("rejects duplicate deployment IDs before selecting or probing Pages", async () => {
-    const duplicate = nonMatchingDeployments(100, "duplicate")[0];
-    const lines = [];
-    const persisted = [];
-    const requests = [];
-    await expect(
-      inventory({
-        pages: [[], []],
-        pageResponses: [
-          { result: nonMatchingDeployments(100, "duplicate") },
-          { result: [duplicate] },
-        ],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: (origin) => persisted.push(origin),
-        requests,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain(
-      "PAGES_DEPLOYMENTS_FAILURE_CLASS=DUPLICATE_DEPLOYMENT",
-    );
-    expect(apiPageNumbers(requests)).toEqual(["1", "2"]);
-    expect(requests).toHaveLength(2);
-    expect(persisted).toEqual([]);
-  });
-
-  it.each([
-    ["page", { page: 0 }],
-    ["per_page", { per_page: "100" }],
-    ["total_pages", { total_pages: -1 }],
-    ["total_count", { total_count: -1 }],
-    ["result_info", null],
-  ])(
-    "rejects malformed present %s metadata safely",
-    async (_name, resultInfo) => {
-      const lines = [];
-      await expect(
-        inventory({
-          pages: [[]],
-          pageResponses: [{ result: [deployment()], resultInfo }],
-          emitLine: (line) => lines.push(line),
-          persistOrigin: () => undefined,
-        }),
-      ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-      expect(lines).toContain(
-        "PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_METADATA",
-      );
-    },
-  );
-
-  it("classifies a successful response with success=false without emitting its body", async () => {
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[]],
-        pageResponses: [{ success: false, result: [] }],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=true");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=API_ENVELOPE");
-  });
-
-  it("classifies a successful response with a non-array result", async () => {
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[]],
-        pageResponses: [{ result: {} }],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=true");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=RESULT_SHAPE");
-  });
-
-  it("classifies malformed JSON without emitting the response body", async () => {
-    const rawBody = "not-json-private-pages-response";
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[]],
-        pageResponses: [
-          new Response(rawBody, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-        ],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=2XX");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=unavailable");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=API_ENVELOPE");
-    expect(lines.join("\n")).not.toContain(rawBody);
-  });
-
-  it("classifies HTTP failures without emitting the response body", async () => {
-    const rawError = "cloudflare-error-private-request-id";
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[]],
-        pageResponses: [
-          new Response(
-            JSON.stringify({
-              success: false,
-              errors: [{ code: 12345, message: rawError }],
+        pages: [
+          [
+            deployment({
+              url: "https://1cb6e1c5.olfactoryops-v2-production-candidate.pages.dev",
             }),
-            { status: 403 },
-          ),
+          ],
         ],
         emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
       }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=4XX");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_STATUS=403");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_CF_ERROR_CODE=12345");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=HTTP");
-    expect(lines.join("\n")).not.toContain(rawError);
-  });
-
-  it("classifies network failures without emitting the raw exception", async () => {
-    const rawError = "postgresql://private-network-error";
-    const lines = [];
-    await expect(
-      inventory({
-        pages: [[]],
-        pageResponses: [() => Promise.reject(new Error(rawError))],
-        emitLine: (line) => lines.push(line),
-        persistOrigin: () => undefined,
-      }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_CLASS=NETWORK");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_SUCCESS_FLAG=unavailable");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_ARRAY=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT=false");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS=NETWORK");
-    expect(lines.join("\n")).not.toContain(rawError);
-  });
-});
-
-function cloudflareResponse({
-  status = 200,
-  success = true,
-  result = {},
-  errors,
-} = {}) {
-  const body = { success, result };
-  if (errors !== undefined) body.errors = errors;
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function nativeDeploymentRecord({
-  id = "11111111-1111-1111-1111-111111111111",
-  label = "1cb6e1c5",
-} = {}) {
-  return {
-    Id: id,
-    Environment: "Preview",
-    Branch: "production-candidate",
-    Source: edgeReleaseSha.slice(0, 7),
-    Deployment: `https://${label}.${edgePagesProject}.pages.dev`,
-    Status: "just now",
-    Build: "build",
-  };
-}
-
-describe("RC9 Pages control-plane inventory ladder", () => {
-  it("classifies numeric project request statuses without emitting Cloudflare bodies", async () => {
-    const rawMessage = "private cloudflare request detail";
-    for (const status of [400, 401, 403, 404, 500]) {
-      const lines = [];
-      await inspectPagesRequestLadder({
-        config: edgeReconciliationConfig(environment()),
-        emitLine: (line) => lines.push(line),
-        fetchFn: async () =>
-          cloudflareResponse({
-            status,
-            success: false,
-            result: null,
-            errors: [{ code: 10101, message: rawMessage }],
-          }),
-      });
-      expect(lines).toContain(`PAGES_PROJECT_HTTP_STATUS=${status}`);
-      expect(lines).toContain("PAGES_PROJECT_ACCESS=FAIL");
-      expect(lines.join("\n")).not.toContain(rawMessage);
-      expect(lines.join("\n")).not.toContain("10101");
-    }
-  });
-
-  it("performs the Pages list ladder in the requested order and classifies a page-100 rejection", async () => {
-    const requests = [];
-    const responses = [
-      cloudflareResponse({ result: { name: edgePagesProject } }),
-      cloudflareResponse({ result: [] }),
-      cloudflareResponse({ result: [] }),
-      cloudflareResponse({ result: [] }),
-      cloudflareResponse({
-        status: 400,
-        success: false,
-        result: null,
-        errors: [{ code: 10202, message: "private page size error" }],
-      }),
-    ];
-    const lines = [];
-    const result = await inspectPagesRequestLadder({
-      config: edgeReconciliationConfig(environment()),
-      emitLine: (line) => lines.push(line),
-      fetchFn: async (request) => {
-        requests.push(new URL(request));
-        return responses.shift();
-      },
-    });
-    expect(result.perPage).toBe(20);
-    expect(result.rootCause).toBe("PAGES_DEPLOYMENTS_PER_PAGE_100_REJECTED");
-    expect(requests).toHaveLength(5);
-    expect(requests[0].pathname).toContain(
-      `/pages/projects/${edgePagesProject}`,
-    );
-    expect(requests[1].search).toBe("");
-    expect(requests[2].searchParams.get("env")).toBe("preview");
-    expect(requests[2].searchParams.has("page")).toBe(false);
-    expect(requests[3].searchParams.get("per_page")).toBe("20");
-    expect(requests[4].searchParams.get("per_page")).toBe("100");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_PAGE100_HTTP_STATUS=400");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_PER_PAGE=20");
-    expect(lines.join("\n")).not.toContain("private page size error");
-  });
-
-  it("stops the REST ladder at a deployment-list authorization failure", async () => {
-    const requests = [];
-    const result = await inspectPagesRequestLadder({
-      config: edgeReconciliationConfig(environment()),
-      fetchFn: async (request) => {
-        requests.push(new URL(request));
-        return requests.length === 1
-          ? cloudflareResponse({ result: { name: edgePagesProject } })
-          : cloudflareResponse({ status: 403, success: false, result: null });
-      },
-      emitLine: () => undefined,
-    });
-    expect(result.stop).toBe(true);
-    expect(result.rootCause).toBe(
-      "CLOUDFLARE_PAGES_DEPLOYMENT_LIST_PERMISSION_FAILURE",
-    );
-    expect(requests).toHaveLength(2);
-  });
-
-  it("uses native Wrangler inventory as a safe cross-check without exposing presentation records", async () => {
-    const lines = [];
-    const commands = [];
-    const privateDeploymentUrl = `https://1cb6e1c5.${edgePagesProject}.pages.dev`;
-    const result = await runWranglerPagesInventory({
-      config: edgeReconciliationConfig(environment()),
-      emitLine: (line) => lines.push(line),
-      runCommand: async ({ args }) => {
-        commands.push(args);
-        return args[1] === "project"
-          ? { ok: true, value: [{ "Project Name": edgePagesProject }] }
-          : {
-              ok: true,
-              value: [nativeDeploymentRecord()],
-            };
-      },
-    });
-    expect(result.available).toBe(true);
-    expect(result.candidates).toHaveLength(1);
-    expect(commands).toEqual([
-      ["pages", "project", "list", "--json"],
-      [
-        "pages",
-        "deployment",
-        "list",
-        "--project-name",
-        edgePagesProject,
-        "--environment",
-        "preview",
-        "--json",
-      ],
-    ]);
-    expect(lines).toContain("WRANGLER_PAGES_PROJECT_VISIBLE=PASS");
-    expect(lines).toContain("WRANGLER_PAGES_DEPLOYMENT_LIST=PASS");
-    expect(lines).toContain("WRANGLER_PAGES_DEPLOYMENT_COUNT=1");
-    expect(lines.join("\n")).not.toContain(privateDeploymentUrl);
-  });
-
-  it("classifies a native Wrangler failure without emitting its raw error", async () => {
-    const lines = [];
-    const result = await runWranglerPagesInventory({
-      config: edgeReconciliationConfig(environment()),
-      emitLine: (line) => lines.push(line),
-      runCommand: async () => ({ ok: false, failureClass: "AUTHORIZATION" }),
-    });
-    expect(result).toEqual({ available: false, failureClass: "AUTHORIZATION" });
-    expect(lines).toContain("WRANGLER_PAGES_FAILURE_CLASS=AUTHORIZATION");
-    expect(lines.join("\n")).not.toContain("not-a-real-token");
-  });
-
-  it("uses native candidates only after exact detail and artifact verification when REST listing fails", async () => {
-    const lines = [];
-    const persisted = [];
-    const requests = [];
-    const config = edgeReconciliationConfig(environment());
-    const result = await reconcilePagesInventory({
-      config,
-      environment: environment(),
-      emitLine: (line) => lines.push(line),
-      persistOrigin: (origin) => persisted.push(origin),
-      runWrangler: async () => ({
-        available: true,
-        candidates: [nativeDeploymentRecord()],
-      }),
-      fetchFn: async (request, options) => {
-        const url = new URL(request);
-        requests.push({ url, options });
-        if (url.hostname === "api.cloudflare.com") {
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          if (url.pathname.endsWith("/deployments"))
-            return cloudflareResponse({
-              status: 400,
-              success: false,
-              result: null,
-              errors: [{ code: 1020, message: "private REST failure" }],
-            });
-          if (url.pathname.endsWith("/11111111-1111-1111-1111-111111111111"))
-            return cloudflareResponse({ result: deployment() });
-        }
-        if (url.pathname === "/release.json") return releaseManifestResponse();
-        if (url.hostname.startsWith("production-candidate."))
-          return new Response(null, { status: 404 });
-        return htmlResponse();
-      },
-    });
-    expect(result.origin).toBe(
-      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(persisted).toEqual([result.origin]);
-    expect(lines).toContain("PAGES_DEPLOYMENTS_HTTP_STATUS=400");
-    expect(lines).toContain("PAGES_DEPLOYMENTS_CF_ERROR_CODE=1020");
-    expect(lines).toContain("ROOT_CAUSE=CUSTOM_REST_INVENTORY_REQUEST_DEFECT");
-    expect(lines).toContain("PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT=PASS");
-    expect(lines.join("\n")).not.toContain("private REST failure");
-    expect(
-      requests.filter(
-        (request) => request.url.hostname === "api.cloudflare.com",
-      ),
-    ).toHaveLength(3);
-  });
-
-  it("does not request a Pages redeploy when native inventory has no RC9 prefilter candidate", async () => {
-    const lines = [];
-    const persisted = [];
-    await expect(
-      reconcilePagesInventory({
-        config: edgeReconciliationConfig(environment()),
-        environment: environment(),
-        emitLine: (line) => lines.push(line),
-        persistOrigin: (origin) => persisted.push(origin),
-        runWrangler: async () => ({ available: true, candidates: [] }),
-        fetchFn: async (request) => {
-          const url = new URL(request);
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          return cloudflareResponse({
-            status: 400,
-            success: false,
-            result: null,
-          });
-        },
-      }),
-    ).rejects.toThrow("WRANGLER_PAGES_INVENTORY_INCOMPLETE");
-    expect(persisted).toEqual([]);
-    expect(lines).toContain("PAGES_INVENTORY_COMPLETENESS=UNPROVEN");
+    ).rejects.toThrow("PAGES_KNOWN_IMMUTABLE_DEPLOYMENT_MISSING");
+    expect(lines).toContain("PAGES_KNOWN_IMMUTABLE_DEPLOYMENT_FOUND=FAIL");
     expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=NO");
   });
 
-  it("does not request a Pages redeploy when a partial native list has only non-RC9 details", async () => {
-    const lines = [];
-    const persisted = [];
-    await expect(
-      reconcilePagesInventory({
-        config: edgeReconciliationConfig(environment()),
-        environment: environment(),
-        emitLine: (line) => lines.push(line),
-        persistOrigin: (origin) => persisted.push(origin),
-        runWrangler: async () => ({
-          available: true,
-          candidates: [nativeDeploymentRecord()],
-        }),
-        fetchFn: async (request) => {
-          const url = new URL(request);
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          if (url.pathname.endsWith("/deployments"))
-            return cloudflareResponse({
-              status: 400,
-              success: false,
-              result: null,
-            });
-          if (url.pathname.endsWith("/11111111-1111-1111-1111-111111111111"))
-            return cloudflareResponse({
-              result: deployment({
-                overrides: {
-                  deployment_trigger: {
-                    metadata: {
-                      branch: "unrelated",
-                      commit_hash: edgeReleaseSha,
-                    },
-                  },
-                },
-              }),
-            });
-          return htmlResponse();
-        },
-      }),
-    ).rejects.toThrow("WRANGLER_PAGES_INVENTORY_INCOMPLETE");
-    expect(persisted).toEqual([]);
-    expect(lines).toContain("PAGES_INVENTORY_COMPLETENESS=UNPROVEN");
-    expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=NO");
-    expect(lines).not.toContain("PAGES_REDEPLOY_REQUIRED=YES");
-  });
-
-  it("does not request a Pages redeploy when a partial native list has no healthy RC9 artifact", async () => {
-    const lines = [];
-    const persisted = [];
-    await expect(
-      reconcilePagesInventory({
-        config: edgeReconciliationConfig(environment()),
-        environment: environment(),
-        emitLine: (line) => lines.push(line),
-        persistOrigin: (origin) => persisted.push(origin),
-        runWrangler: async () => ({
-          available: true,
-          candidates: [nativeDeploymentRecord()],
-        }),
-        fetchFn: async (request) => {
-          const url = new URL(request);
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          if (url.pathname.endsWith("/deployments"))
-            return cloudflareResponse({
-              status: 400,
-              success: false,
-              result: null,
-            });
-          if (url.pathname.endsWith("/11111111-1111-1111-1111-111111111111"))
-            return cloudflareResponse({ result: deployment() });
-          if (url.pathname === "/release.json")
-            return releaseManifestResponse({ fullGitSha: "f".repeat(40) });
-          return htmlResponse();
-        },
-      }),
-    ).rejects.toThrow("WRANGLER_PAGES_INVENTORY_INCOMPLETE");
-    expect(persisted).toEqual([]);
-    expect(lines).toContain("PAGES_INVENTORY_COMPLETENESS=UNPROVEN");
-    expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=NO");
-    expect(lines).not.toContain("PAGES_REDEPLOY_REQUIRED=YES");
-  });
-
-  it("fails closed when a native candidate detail does not bind back to its deployment ID", async () => {
-    const persisted = [];
-    await expect(
-      reconcilePagesInventory({
-        config: edgeReconciliationConfig(environment()),
-        environment: environment(),
-        emitLine: () => undefined,
-        persistOrigin: (origin) => persisted.push(origin),
-        runWrangler: async () => ({
-          available: true,
-          candidates: [nativeDeploymentRecord()],
-        }),
-        fetchFn: async (request) => {
-          const url = new URL(request);
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          if (url.pathname.endsWith("/deployments"))
-            return cloudflareResponse({
-              status: 400,
-              success: false,
-              result: null,
-            });
-          return cloudflareResponse({
-            result: deployment({
-              id: "22222222-2222-2222-2222-222222222222",
-            }),
-          });
-        },
-      }),
-    ).rejects.toThrow("WRANGLER_PAGES_DEPLOYMENT_DETAIL_FAILURE");
-    expect(persisted).toEqual([]);
-  });
-
-  it("fails closed when a project response uses an array instead of the expected object", async () => {
-    const requests = [];
-    const result = await inspectPagesRequestLadder({
-      config: edgeReconciliationConfig(environment()),
-      emitLine: () => undefined,
-      fetchFn: async (request) => {
-        requests.push(new URL(request));
-        return cloudflareResponse({ result: [] });
-      },
-    });
-    expect(result.restUsable).toBe(false);
-    expect(result.stop).toBe(false);
-    expect(requests).toHaveLength(1);
-  });
-
-  it("rejects pagination metadata that does not honor the requested fallback page size", async () => {
-    const lines = [];
+  it("rejects a mismatched detail record", async () => {
+    const item = deployment();
     await expect(
       inventoryImmutablePages({
         config: edgeReconciliationConfig(environment()),
         environment: environment(),
-        emitLine: (line) => lines.push(line),
+        expectedEnvironment: "production",
+        knownImmutableOrigin: edgeKnownImmutablePagesOrigin,
         persistOrigin: () => undefined,
-        perPage: 20,
-        fetchFn: async () =>
-          pagesResponse({
-            result: [deployment()],
-            resultInfo: { page: 1, per_page: 100, total_pages: 1 },
-          }),
+        fetchFn: async (request, _options) => {
+          const url = new URL(request);
+          if (url.hostname === "api.cloudflare.com") {
+            if (url.pathname.endsWith("/deployments"))
+              return cloudflareResponse({
+                result: [item],
+                resultInfo: { page: 1, per_page: 20, total_pages: 1 },
+              });
+            return cloudflareResponse({
+              result: deployment({
+                id: "22222222-2222-2222-2222-222222222222",
+              }),
+            });
+          }
+          return htmlResponse();
+        },
       }),
-    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
-    expect(lines).toContain(
-      "PAGES_DEPLOYMENTS_FAILURE_CLASS=PAGINATION_METADATA",
-    );
+    ).rejects.toThrow("PAGES_KNOWN_IMMUTABLE_DEPLOYMENT_DETAIL_INVALID");
   });
 
-  it("uses bounded page-20 REST pagination before any Router step when page 100 is rejected", async () => {
+  it.each([
+    ["release manifest", { releaseManifest: false, html: true }],
+    ["five-route surface", { releaseManifest: true, html: false }],
+  ])(
+    "rejects a missing %s without a Pages redeploy request",
+    async (_name, options) => {
+      const lines = [];
+      await expect(
+        inventory({ ...options, emitLine: (line) => lines.push(line) }),
+      ).rejects.toThrow("PAGES_KNOWN_IMMUTABLE_DEPLOYMENT_UNHEALTHY");
+      expect(lines).toContain("PAGES_REDEPLOY_REQUIRED=NO");
+    },
+  );
+
+  it("uses bare page-20 inventory as the complete selection source when preview is empty", async () => {
     const lines = [];
     const persisted = [];
     const requests = [];
-    const config = edgeReconciliationConfig(environment());
     await reconcilePagesInventory({
-      config,
+      config: edgeReconciliationConfig(environment()),
+      environment: environment(),
+      emitLine: (line) => lines.push(line),
+      persistOrigin: (origin) => persisted.push(origin),
+      runWrangler: async ({ expectedEnvironment }) => {
+        expect(expectedEnvironment).toBe("production");
+        return { available: false, failureClass: "AUTHORIZATION" };
+      },
+      fetchFn: reconciliationFetch({ preview: [], requests }),
+    });
+    expect(persisted).toEqual([edgeKnownImmutablePagesOrigin]);
+    expect(lines).toContain(
+      "PAGES_PROJECT_PRODUCTION_BRANCH=production-candidate",
+    );
+    expect(lines).toContain("CANDIDATE_PAGES_PROJECT_PRODUCTION_BRANCH=PASS");
+    expect(lines).toContain("EXPECTED_CANDIDATE_PAGES_ENVIRONMENT=production");
+    expect(lines).toContain("PAGES_DEPLOYMENT_COUNT_PREVIEW=0");
+    expect(lines).toContain("PAGES_DEPLOYMENT_COUNT_PRODUCTION=1");
+    const listRequests = requests.filter(
+      (request) =>
+        request.url.hostname === "api.cloudflare.com" &&
+        request.url.pathname.endsWith("/deployments"),
+    );
+    expect(
+      listRequests.some((request) => !request.url.searchParams.has("env")),
+    ).toBe(true);
+    expect(
+      listRequests.every(
+        (request) => request.url.searchParams.get("per_page") === "20",
+      ),
+    ).toBe(true);
+    expect(
+      listRequests.some(
+        (request) => request.url.searchParams.get("per_page") === "100",
+      ),
+    ).toBe(false);
+  });
+
+  it("derives preview selection from a non-candidate project production branch", async () => {
+    const lines = [];
+    const persisted = [];
+    await reconcilePagesInventory({
+      config: edgeReconciliationConfig(environment()),
+      environment: environment(),
+      emitLine: (line) => lines.push(line),
+      persistOrigin: (origin) => persisted.push(origin),
+      runWrangler: async ({ expectedEnvironment }) => {
+        expect(expectedEnvironment).toBe("preview");
+        return { available: true, candidates: [] };
+      },
+      fetchFn: reconciliationFetch({
+        productionBranch: "main",
+        bare: [deployment({ environmentName: "preview" })],
+        preview: [deployment({ environmentName: "preview" })],
+        production: [],
+      }),
+    });
+    expect(persisted).toEqual([edgeKnownImmutablePagesOrigin]);
+    expect(lines).toContain("PAGES_PROJECT_PRODUCTION_BRANCH=main");
+    expect(lines).toContain(
+      "CANDIDATE_PAGES_PROJECT_PRODUCTION_BRANCH=NOT_PRODUCTION_BRANCH",
+    );
+    expect(lines).toContain("EXPECTED_CANDIDATE_PAGES_ENVIRONMENT=preview");
+    expect(lines).toContain("PAGES_KNOWN_DEPLOYMENT_ENVIRONMENT=PASS");
+  });
+
+  it("keeps filtered environment failures as telemetry when bare inventory selects the known origin", async () => {
+    const lines = [];
+    const persisted = [];
+    await reconcilePagesInventory({
+      config: edgeReconciliationConfig(environment()),
       environment: environment(),
       emitLine: (line) => lines.push(line),
       persistOrigin: (origin) => persisted.push(origin),
       runWrangler: async () => ({ available: false, failureClass: "OTHER" }),
-      fetchFn: async (request) => {
-        const url = new URL(request);
-        requests.push(url);
-        if (url.hostname === "api.cloudflare.com") {
-          if (url.pathname.endsWith(`/pages/projects/${edgePagesProject}`))
-            return cloudflareResponse({ result: { name: edgePagesProject } });
-          const perPage = url.searchParams.get("per_page");
-          if (!perPage) return cloudflareResponse({ result: [] });
-          if (perPage === "100")
-            return cloudflareResponse({
-              status: 400,
-              success: false,
-              result: null,
-            });
-          return cloudflareResponse({ result: [deployment()] });
-        }
-        if (url.pathname === "/release.json") return releaseManifestResponse();
-        if (url.hostname.startsWith("production-candidate."))
-          return new Response(null, { status: 404 });
-        return htmlResponse();
-      },
+      fetchFn: reconciliationFetch({
+        previewStatus: 500,
+        productionStatus: 403,
+      }),
     });
-    expect(lines).toContain(
-      "ROOT_CAUSE=PAGES_DEPLOYMENTS_PER_PAGE_100_REJECTED",
+    expect(persisted).toEqual([edgeKnownImmutablePagesOrigin]);
+    expect(lines).toContain("PAGES_DEPLOYMENTS_PREVIEW_HTTP_STATUS=500");
+    expect(lines).toContain("PAGES_DEPLOYMENTS_PRODUCTION_HTTP_STATUS=403");
+    expect(lines).toContain("PAGES_FILTERED_ENVIRONMENT_INVENTORY=PARTIAL");
+    expect(lines).toContain("PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT=PASS");
+  });
+
+  it("paginates the bare page-20 inventory before selecting the known immutable deployment", async () => {
+    const known = deployment();
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      deployment({
+        id: `other-${index}`,
+        branch: "other-branch",
+        url: `https://${String(index).padStart(8, "0")}.${edgePagesProject}.pages.dev`,
+      }),
     );
-    expect(lines).toContain("PAGES_DEPLOYMENTS_PER_PAGE=20");
-    expect(persisted).toHaveLength(1);
-    expect(
-      requests.filter(
-        (url) =>
-          url.hostname === "api.cloudflare.com" &&
-          url.searchParams.get("per_page") === "20",
-      ),
-    ).toHaveLength(2);
-  });
-});
-
-describe("RC9 candidate Router safety", () => {
-  it("preflights only the exact candidate-owned Custom Domain and never deletes it", async () => {
     const requests = [];
-    const config = edgeReconciliationConfig(environment());
-    await preflightCandidateDomain({
-      config,
-      fetchFn: async (request, options) => {
-        requests.push({ url: String(request), options });
-        return new Response(
-          JSON.stringify({
-            success: true,
-            result: [
-              {
-                hostname: edgeFixtureHostname,
-                service: edgeRouterService,
-                zone_name: "labofscents.org",
-              },
-            ],
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      },
-    });
-    expect(requests).toHaveLength(1);
-    expect(requests[0].options.method).toBe("GET");
-    expect(requests[0].options.redirect).toBe("manual");
-    expect(requests[0].url).toContain("/workers/domains?hostname=");
-  });
-
-  it("refuses a Custom Domain attached to another service before deployment", async () => {
-    const config = edgeReconciliationConfig(environment());
     await expect(
-      preflightCandidateDomain({
-        config,
-        fetchFn: async () =>
-          new Response(
-            JSON.stringify({
-              success: true,
-              result: [
-                {
-                  hostname: edgeFixtureHostname,
-                  service: "not-the-candidate-router",
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-      }),
-    ).rejects.toThrow("CUSTOM_DOMAIN_OWNED_BY_OTHER_SERVICE");
-  });
-
-  it("requires the post-deploy Custom Domain attachment to be exact", async () => {
-    const config = edgeReconciliationConfig(environment());
-    await expect(
-      verifyCandidateDomain({
-        config,
-        fetchFn: async () =>
-          new Response(
-            JSON.stringify({
-              success: true,
-              result: [
-                {
-                  hostname: edgeFixtureHostname,
-                  service: edgeRouterService,
-                  zone_name: "labofscents.org",
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-      }),
-    ).resolves.toMatchObject({ service: edgeRouterService });
-  });
-
-  it("accepts only active RC9 tenant routes, ignores spoofed headers, and fails closed for an unknown host", async () => {
-    const requests = [];
-    await verifyTenantRoutes({
-      fetchFn: async (request, options) => {
-        const url = new URL(request);
-        requests.push({ url, options });
-        if (url.hostname.startsWith("missing-"))
-          return new Response(null, { status: 404 });
-        return htmlResponse({
-          "x-olfactoryops-workspace-router": "active",
-          "x-olfactoryops-release-environment": "production",
-          "x-olfactoryops-release-sha": edgeReleaseSha,
-        });
-      },
-    });
-    expect(requests).toHaveLength(edgeBrowserPaths.length + 2);
+      inventory({ pages: [firstPage, [known]], requests }),
+    ).resolves.toMatchObject({ origin: edgeKnownImmutablePagesOrigin });
     expect(
       requests.some(
-        (request) =>
-          request.options.headers["x-olfactoryops-organization-id"] ===
-          "untrusted",
+        ({ url }) =>
+          url.hostname === "api.cloudflare.com" &&
+          url.pathname.endsWith("/deployments") &&
+          url.searchParams.get("page") === "2" &&
+          url.searchParams.get("per_page") === "20",
       ),
     ).toBe(true);
   });
 
-  it("rejects an unknown hostname that leaks candidate Pages without Router identity", async () => {
+  it("rejects a wrong Pages project before inventory or Router work", async () => {
+    const requests = [];
+    const result = await inspectPagesRequestLadder({
+      config: edgeReconciliationConfig(environment()),
+      fetchFn: async (request) => {
+        requests.push(new URL(request));
+        return cloudflareResponse({
+          result: {
+            name: "another-project",
+            production_branch: "production-candidate",
+          },
+        });
+      },
+      emitLine: () => undefined,
+    });
+    expect(result.stop).toBe(true);
+    expect(result.rootCause).toBe("CLOUDFLARE_PAGES_PROJECT_RESOURCE_MISMATCH");
+    expect(requests).toHaveLength(1);
+  });
+
+  it("fails closed for an invalid project production branch before deployment inventory", async () => {
+    const requests = [];
+    const result = await inspectPagesRequestLadder({
+      config: edgeReconciliationConfig(environment()),
+      fetchFn: async (request) => {
+        requests.push(new URL(request));
+        return cloudflareResponse({
+          result: { name: edgePagesProject, production_branch: "" },
+        });
+      },
+      emitLine: () => undefined,
+    });
+    expect(result.stop).toBe(true);
+    expect(result.rootCause).toBe("PAGES_PROJECT_CONFIGURATION_INVALID");
+    expect(requests).toHaveLength(1);
+  });
+
+  it("lists both Pages environments through pinned Wrangler without exposing records", async () => {
+    const lines = [];
+    const commands = [];
+    const result = await runWranglerPagesInventory({
+      config: edgeReconciliationConfig(environment()),
+      expectedEnvironment: "production",
+      emitLine: (line) => lines.push(line),
+      runCommand: async ({ args }) => {
+        commands.push(args);
+        if (args[1] === "project")
+          return { ok: true, value: [{ "Project Name": edgePagesProject }] };
+        return {
+          ok: true,
+          value:
+            args[args.indexOf("--environment") + 1] === "production"
+              ? [
+                  {
+                    Id: "11111111-1111-1111-1111-111111111111",
+                    Environment: "Production",
+                    Branch: "production-candidate",
+                    Source: edgeReleaseSha.slice(0, 7),
+                  },
+                ]
+              : [],
+        };
+      },
+    });
+    expect(result.available).toBe(true);
+    expect(result.candidates).toHaveLength(1);
+    expect(commands).toHaveLength(3);
+    expect(commands.flat()).toContain("preview");
+    expect(commands.flat()).toContain("production");
+    expect(lines).toContain("WRANGLER_PREVIEW_COUNT=0");
+    expect(lines).toContain("WRANGLER_PRODUCTION_COUNT=1");
+    expect(lines.join("\n")).not.toContain("not-a-real-token");
+  });
+
+  it("rejects duplicate deployment IDs during bare pagination", async () => {
+    const item = deployment();
+    const firstPage = Array.from({ length: 20 }, (_, index) =>
+      index === 0
+        ? item
+        : deployment({
+            id: `other-${index}`,
+            branch: "other-branch",
+            url: `https://${String(index).padStart(8, "0")}.${edgePagesProject}.pages.dev`,
+          }),
+    );
+    await expect(
+      inventory({
+        pages: [firstPage, [item]],
+      }),
+    ).rejects.toThrow("PAGES_DEPLOYMENTS_API_FAILURE");
+  });
+});
+
+describe("RC9 candidate Router reconciliation boundaries", () => {
+  it("keeps Pages selection ahead of every candidate Router mutation", () => {
+    const workflow = readFileSync(
+      ".github/workflows/v2-production-candidate-edge-reconciliation.yml",
+      "utf8",
+    );
+    expect(workflow.indexOf("pages-inventory")).toBeGreaterThan(
+      workflow.indexOf("npm ci --ignore-scripts"),
+    );
+    expect(workflow.indexOf("domain-preflight")).toBeGreaterThan(
+      workflow.indexOf("pages-inventory"),
+    );
+    expect(
+      workflow.indexOf("./node_modules/.bin/wrangler deploy"),
+    ).toBeGreaterThan(workflow.indexOf("domain-preflight"));
+    expect(workflow).not.toContain("wrangler pages deploy");
+    expect(workflow).not.toContain("PRODUCTION_DATABASE_URL");
+  });
+
+  it("preflights only the exact candidate-owned Custom Domain with GET", async () => {
+    const requests = [];
+    await preflightCandidateDomain({
+      config: edgeReconciliationConfig(environment()),
+      fetchFn: async (request, options) => {
+        requests.push({ request: String(request), options });
+        return cloudflareResponse({
+          result: [
+            {
+              hostname: edgeFixtureHostname,
+              service: edgeRouterService,
+              zone_name: "labofscents.org",
+            },
+          ],
+        });
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].options.method).toBe("GET");
+    expect(requests[0].request).toContain("/workers/domains?hostname=");
+  });
+
+  it("rejects a Custom Domain attached to another service", async () => {
+    await expect(
+      preflightCandidateDomain({
+        config: edgeReconciliationConfig(environment()),
+        fetchFn: async () =>
+          cloudflareResponse({
+            result: [
+              {
+                hostname: edgeFixtureHostname,
+                service: "not-the-candidate-router",
+              },
+            ],
+          }),
+      }),
+    ).rejects.toThrow("CUSTOM_DOMAIN_OWNED_BY_OTHER_SERVICE");
+  });
+
+  it("verifies active tenant routes, spoof resistance, and unknown-host failure", async () => {
     await expect(
       verifyTenantRoutes({
-        fetchFn: async () =>
-          htmlResponse({
+        fetchFn: async (request) => {
+          if (new URL(request).hostname.startsWith("missing-"))
+            return new Response(null, { status: 404 });
+          return htmlResponse({
             "x-olfactoryops-workspace-router": "active",
             "x-olfactoryops-release-environment": "production",
             "x-olfactoryops-release-sha": edgeReleaseSha,
-          }),
+          });
+        },
+      }),
+    ).resolves.toMatchObject({ unknown: { status: "404" } });
+  });
+
+  it("rejects an unknown hostname that leaks a successful candidate surface", async () => {
+    await expect(
+      verifyTenantRoutes({
+        fetchFn: async (request) => {
+          if (new URL(request).hostname.startsWith("missing-"))
+            return htmlResponse();
+          return htmlResponse({
+            "x-olfactoryops-workspace-router": "active",
+            "x-olfactoryops-release-environment": "production",
+            "x-olfactoryops-release-sha": edgeReleaseSha,
+          });
+        },
       }),
     ).rejects.toThrow("UNKNOWN_HOST_DID_NOT_FAIL_CLOSED");
   });
 
-  it("rejects spoofed tenant headers when the safe Router surface differs from the baseline", async () => {
+  it("rejects a spoofed tenant header that changes the trusted Router surface", async () => {
     await expect(
       verifyTenantRoutes({
         fetchFn: async (request, options) => {
@@ -1284,63 +732,51 @@ describe("RC9 candidate Router safety", () => {
     ).rejects.toThrow("CALLER_TENANT_HEADER_ACCEPTANCE_FAILURE");
   });
 
-  it("captures candidate-only postflight state without mutating the Router after a failed verification", async () => {
+  it("captures candidate-only postflight state read-only", async () => {
     const requests = [];
-    const lines = [];
-    const result = await captureCandidateEdgePostflight({
+    await captureCandidateEdgePostflight({
       config: edgeReconciliationConfig(environment()),
-      emitLine: (line) => lines.push(line),
       fetchFn: async (request, options) => {
-        const url = new URL(request);
-        requests.push({ url, options });
-        if (url.hostname === "api.cloudflare.com")
-          return new Response(
-            JSON.stringify({
-              success: true,
-              result: [
-                {
-                  hostname: edgeFixtureHostname,
-                  service: edgeRouterService,
-                  zone_name: "labofscents.org",
-                },
-              ],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+        requests.push(options);
+        if (new URL(request).hostname === "api.cloudflare.com")
+          return cloudflareResponse({
+            result: [
+              {
+                hostname: edgeFixtureHostname,
+                service: edgeRouterService,
+                zone_name: "labofscents.org",
+              },
+            ],
+          });
         return new Response(null, { status: 404 });
       },
     });
-    expect(result).toMatchObject({ attachment: "CANDIDATE_ROUTER" });
-    expect(lines).toContain("CANDIDATE_EDGE_POSTFLIGHT=CAPTURED");
-    expect(requests.every((request) => request.options.method === "GET")).toBe(
-      true,
-    );
+    expect(requests.every((options) => options.method === "GET")).toBe(true);
   });
 
-  it("fails closed when postflight state cannot be captured", async () => {
+  it("fails closed when candidate-only postflight inventory is unavailable", async () => {
     await expect(
       captureCandidateEdgePostflight({
         config: edgeReconciliationConfig(environment()),
         fetchFn: async () => {
-          throw new Error("control plane unavailable");
+          throw new Error("unavailable");
         },
       }),
     ).rejects.toThrow("CANDIDATE_EDGE_POSTFLIGHT_UNAVAILABLE");
   });
 
-  it("renders only the exact candidate Router with the proven immutable Pages deployment", () => {
+  it("renders only the exact candidate Router with an immutable Pages deployment", () => {
     const directory = mkdtempSync(join(tmpdir(), "candidate-edge-router-"));
     temporaryDirectories.push(directory);
     const template = join(directory, "template.toml");
     const output = join(directory, "candidate.toml");
-    const worker = join(directory, "worker", "v2-tenant-router.ts");
     const workerDirectory = join(directory, "worker");
+    mkdirSync(workerDirectory, { recursive: true });
+    writeFileSync(join(workerDirectory, "v2-tenant-router.ts"), "export {}\n");
     writeFileSync(
       template,
-      `name = "olfactoryops-v2-tenant-router-production"\nmain = "worker/v2-tenant-router.ts"\nroutes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]\n[vars]\nPAGES_ORIGIN = "https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN"\nRELEASE_GIT_SHA = "REPLACE_WITH_VERIFIED_RELEASE_SHA"\nV2_WORKSPACE_BASE_DOMAIN = "labofscents.org"\n[[hyperdrive]]\nbinding = "HYPERDRIVE"\nid = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"\n`,
+      'name = "olfactoryops-v2-tenant-router-production"\nmain = "worker/v2-tenant-router.ts"\nroutes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]\n[vars]\nPAGES_ORIGIN = "https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN"\nRELEASE_GIT_SHA = "REPLACE_WITH_VERIFIED_RELEASE_SHA"\nV2_WORKSPACE_BASE_DOMAIN = "labofscents.org"\n[[hyperdrive]]\nbinding = "HYPERDRIVE"\nid = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"\n',
     );
-    mkdirSync(workerDirectory, { recursive: true });
-    writeFileSync(worker, "export {}\n");
     const result = renderCandidateEdgeRouterConfig({
       environment: {
         CANDIDATE_EDGE_RECONCILE_TEMPLATE: template,
@@ -1348,28 +784,11 @@ describe("RC9 candidate Router safety", () => {
         CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: edgeReleaseSha,
         CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME: edgeFixtureHostname,
         CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID: edgeHyperdriveId,
-        CANDIDATE_PAGES_ORIGIN: `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
+        CANDIDATE_PAGES_ORIGIN: edgeKnownImmutablePagesOrigin,
       },
     });
-    const config = readFileSync(output, "utf8");
-    expect(result.pagesOrigin).toBe(
-      `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
-    );
-    expect(config).toContain(`pattern = "${edgeFixtureHostname}"`);
-    expect(config).toContain("custom_domain = true");
-    expect(config).toContain(
-      `V2_WORKSPACE_BASE_DOMAIN = "${edgeWorkspaceBaseDomain}"`,
-    );
-    expect(config).toContain(`id = "${edgeHyperdriveId}"`);
-    expect(config).not.toContain("*.labofscents.org/*");
-  });
-
-  it("rejects the broken branch alias as a Router Pages origin", () => {
-    const directory = mkdtempSync(join(tmpdir(), "candidate-edge-router-"));
-    temporaryDirectories.push(directory);
-    const template = join(directory, "template.toml");
-    const output = join(directory, "candidate.toml");
-    writeFileSync(template, "");
+    expect(result.pagesOrigin).toBe(edgeKnownImmutablePagesOrigin);
+    expect(readFileSync(output, "utf8")).toContain("custom_domain = true");
     expect(() =>
       renderCandidateEdgeRouterConfig({
         environment: {
@@ -1378,13 +797,14 @@ describe("RC9 candidate Router safety", () => {
           CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: edgeReleaseSha,
           CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME: edgeFixtureHostname,
           CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID: edgeHyperdriveId,
-          CANDIDATE_PAGES_ORIGIN: `https://production-candidate.${edgePagesProject}.pages.dev`,
+          CANDIDATE_PAGES_ORIGIN:
+            "https://production-candidate.olfactoryops-v2-production-candidate.pages.dev",
         },
       }),
     ).toThrow("immutable isolated deployment");
   });
 
-  it("rejects any non-approved Hyperdrive binding during Router rendering", () => {
+  it("rejects a non-approved Hyperdrive binding during Router rendering", () => {
     const directory = mkdtempSync(join(tmpdir(), "candidate-edge-router-"));
     temporaryDirectories.push(directory);
     const template = join(directory, "template.toml");
@@ -1398,9 +818,27 @@ describe("RC9 candidate Router safety", () => {
           CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: edgeReleaseSha,
           CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME: edgeFixtureHostname,
           CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID: "b".repeat(32),
-          CANDIDATE_PAGES_ORIGIN: `https://1cb6e1c5.${edgePagesProject}.pages.dev`,
+          CANDIDATE_PAGES_ORIGIN: edgeKnownImmutablePagesOrigin,
         },
       }),
     ).toThrow("approved production binding");
+  });
+
+  it("requires the post-deploy Custom Domain attachment to stay exact", async () => {
+    await expect(
+      verifyCandidateDomain({
+        config: edgeReconciliationConfig(environment()),
+        fetchFn: async () =>
+          cloudflareResponse({
+            result: [
+              {
+                hostname: edgeFixtureHostname,
+                service: edgeRouterService,
+                zone_name: "labofscents.org",
+              },
+            ],
+          }),
+      }),
+    ).resolves.toMatchObject({ service: edgeRouterService });
   });
 });
