@@ -1,4 +1,11 @@
-import { appendFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 export const candidateDomainResetExpectation = Object.freeze({
   releaseSha: "de0734df2d2b5b2dd3a2a67ee542131235e75eb7",
@@ -7,13 +14,22 @@ export const candidateDomainResetExpectation = Object.freeze({
   zoneName: "labofscents.org",
 });
 
-const domainIdPattern =
-  /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const maxWaitAttempts = 8;
 const waitMilliseconds = 5_000;
+const maxControlPlaneIdLength = 512;
+const domainIdentifierFile = "candidate-domain-id";
+const zoneIdentifierFile = "candidate-zone-id";
 
 function safeFailure(classification) {
-  return new Error(classification);
+  const error = new Error(classification);
+  error.code = classification;
+  return error;
+}
+
+function safeFailureCode(error) {
+  return typeof error?.code === "string" && /^[A-Z0-9_]+$/.test(error.code)
+    ? error.code
+    : "UNCLASSIFIED";
 }
 
 function required(environment, name) {
@@ -28,8 +44,22 @@ function exact(value, expected) {
   return value;
 }
 
-function validDomainId(value) {
-  return typeof value === "string" && domainIdPattern.test(value);
+function validControlPlaneId(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxControlPlaneIdLength &&
+    !Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return (
+        codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)
+      );
+    })
+  );
+}
+
+function identifierState(value) {
+  return validControlPlaneId(value) ? "PRESENT" : "MISSING_OR_UNSUPPORTED";
 }
 
 export function candidateDomainResetConfig(environment = process.env) {
@@ -109,49 +139,94 @@ export function inspectCandidateDomainList(
       listRead: false,
       attachment: "UNAVAILABLE",
       domainId: undefined,
+      zoneId: undefined,
+      exactHostRows: "UNPROVEN",
+      serviceMatch: "UNPROVEN",
+      zoneMatch: "UNPROVEN",
+      domainIdState: "UNPROVEN",
+      zoneIdState: "UNPROVEN",
     };
 
   const exactDomains = domains.filter(
     (domain) => domain?.hostname === expectation.fixtureHostname,
   );
   if (exactDomains.length === 0)
-    return { listRead: true, attachment: "ABSENT", domainId: undefined };
+    return {
+      listRead: true,
+      attachment: "ABSENT",
+      domainId: undefined,
+      zoneId: undefined,
+      exactHostRows: "ZERO",
+      serviceMatch: "UNKNOWN",
+      zoneMatch: "UNKNOWN",
+      domainIdState: "UNKNOWN",
+      zoneIdState: "UNKNOWN",
+    };
   if (exactDomains.length !== 1)
-    return { listRead: true, attachment: "AMBIGUOUS", domainId: undefined };
+    return {
+      listRead: true,
+      attachment: "AMBIGUOUS",
+      domainId: undefined,
+      zoneId: undefined,
+      exactHostRows: "MULTIPLE",
+      serviceMatch: "UNKNOWN",
+      zoneMatch: "UNKNOWN",
+      domainIdState: "UNKNOWN",
+      zoneIdState: "UNKNOWN",
+    };
 
   const [domain] = exactDomains;
-  if (
-    domain?.service !== expectation.routerService ||
-    domain?.zone_name !== expectation.zoneName
-  )
+  const serviceMatch =
+    domain?.service === expectation.routerService ? "PASS" : "FAIL";
+  const zoneMatch =
+    domain?.zone_name === expectation.zoneName ? "PASS" : "FAIL";
+  const domainIdState = identifierState(domain?.id);
+  const zoneIdState = identifierState(domain?.zone_id);
+  if (serviceMatch !== "PASS" || zoneMatch !== "PASS")
     return {
       listRead: true,
       attachment: "OTHER_SERVICE",
       domainId: undefined,
+      zoneId: undefined,
+      exactHostRows: "ONE",
+      serviceMatch,
+      zoneMatch,
+      domainIdState,
+      zoneIdState,
     };
-  if (!validDomainId(domain?.id) || !validDomainId(domain?.zone_id))
+  if (domainIdState !== "PRESENT" || zoneIdState !== "PRESENT")
     return {
       listRead: true,
       attachment: "INVALID",
       domainId: undefined,
       zoneId: undefined,
+      exactHostRows: "ONE",
+      serviceMatch,
+      zoneMatch,
+      domainIdState,
+      zoneIdState,
     };
   return {
     listRead: true,
     attachment: "CANDIDATE_ROUTER",
-    domainId: domain.id.toLowerCase(),
-    zoneId: domain.zone_id.toLowerCase(),
+    domainId: domain.id,
+    zoneId: domain.zone_id,
+    exactHostRows: "ONE",
+    serviceMatch,
+    zoneMatch,
+    domainIdState,
+    zoneIdState,
   };
 }
 
 function attachResponseMatches(envelope, expectation, zoneId) {
   const domain = envelope?.success === true ? envelope?.result : undefined;
   return (
-    validDomainId(domain?.id) &&
+    validControlPlaneId(domain?.id) &&
     domain?.hostname === expectation.fixtureHostname &&
     domain?.service === expectation.routerService &&
     domain?.zone_name === expectation.zoneName &&
-    domain?.zone_id?.toLowerCase() === zoneId.toLowerCase()
+    domain?.zone_id === zoneId
   );
 }
 
@@ -178,6 +253,107 @@ function requireCandidateAttachment(state) {
   return state.domainId;
 }
 
+function resetEvidenceDirectory(environment = process.env) {
+  const resetDirectory = required(environment, "CANDIDATE_DOMAIN_RESET_DIR");
+  const runnerTemp = required(environment, "RUNNER_TEMP");
+  const runId = required(environment, "GITHUB_RUN_ID");
+  const resolvedDirectory = resolve(resetDirectory);
+  const resolvedRunnerTemp = resolve(runnerTemp);
+  const relativeDirectory = relative(resolvedRunnerTemp, resolvedDirectory);
+  const expectedName = `oo-v2-candidate-domain-reset-${runId}`;
+  if (
+    basename(resolvedDirectory) !== expectedName ||
+    relativeDirectory.length === 0 ||
+    isAbsolute(relativeDirectory) ||
+    relativeDirectory === ".." ||
+    relativeDirectory.startsWith(`..${sep}`) ||
+    !existsSync(resolvedDirectory)
+  )
+    throw safeFailure("INVALID_RESET_EVIDENCE_DIRECTORY");
+  const metadata = lstatSync(resolvedDirectory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink())
+    throw safeFailure("INVALID_RESET_EVIDENCE_DIRECTORY");
+  return resolvedDirectory;
+}
+
+function privateIdentifierPath(name, environment = process.env) {
+  return resolve(resetEvidenceDirectory(environment), name);
+}
+
+function writePrivateIdentifier(name, value, environment = process.env) {
+  if (!validControlPlaneId(value))
+    throw safeFailure("INVALID_CONTROL_PLANE_IDENTIFIER");
+  const filePath = privateIdentifierPath(name, environment);
+  writeFileSync(filePath, value, { encoding: "utf8", mode: 0o600 });
+  chmodSync(filePath, 0o600);
+}
+
+function readPrivateIdentifier(name, environment = process.env) {
+  const filePath = privateIdentifierPath(name, environment);
+  let value;
+  try {
+    value = readFileSync(filePath, "utf8");
+  } catch {
+    throw safeFailure("MISSING_PREFLIGHT_IDENTIFIER");
+  }
+  if (!validControlPlaneId(value))
+    throw safeFailure("INVALID_PREFLIGHT_IDENTIFIER");
+  return value;
+}
+
+function writePreflightIdentifiers(state, environment = process.env) {
+  writePrivateIdentifier(domainIdentifierFile, state.domainId, environment);
+  writePrivateIdentifier(zoneIdentifierFile, state.zoneId, environment);
+}
+
+function readPreflightIdentifiers(environment = process.env) {
+  return {
+    domainId: readPrivateIdentifier(domainIdentifierFile, environment),
+    zoneId: readPrivateIdentifier(zoneIdentifierFile, environment),
+  };
+}
+
+function preflightClass(state) {
+  const classes = {
+    CANDIDATE_ROUTER: "EXACT_CANDIDATE_ROUTER",
+    INVALID: "IDENTIFIER_MISSING_OR_UNSUPPORTED",
+    ABSENT: "EXACT_HOST_ABSENT",
+    AMBIGUOUS: "EXACT_HOST_MULTIPLE",
+    OTHER_SERVICE: "OWNERSHIP_MISMATCH",
+    UNAVAILABLE: "CONTROL_PLANE_UNAVAILABLE",
+  };
+  return classes[state.attachment] ?? "UNCLASSIFIED";
+}
+
+export function candidateDomainPreflightEvidence(state) {
+  return {
+    apiRead: state.listRead ? "PASS" : "FAIL",
+    exactHostRows: state.exactHostRows,
+    serviceMatch: state.serviceMatch,
+    zoneMatch: state.zoneMatch,
+    domainId: state.domainIdState,
+    zoneId: state.zoneIdState,
+    classification: preflightClass(state),
+  };
+}
+
+function emitPreflightEvidence(state) {
+  const evidence = candidateDomainPreflightEvidence(state);
+  print("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_API_READ", evidence.apiRead);
+  print(
+    "CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_EXACT_HOST_ROWS",
+    evidence.exactHostRows,
+  );
+  print(
+    "CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_SERVICE_MATCH",
+    evidence.serviceMatch,
+  );
+  print("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_ZONE_MATCH", evidence.zoneMatch);
+  print("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_DOMAIN_ID", evidence.domainId);
+  print("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_ZONE_ID", evidence.zoneId);
+  print("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_CLASS", evidence.classification);
+}
+
 function requireCandidateAbsence(state) {
   if (!state.listRead)
     throw safeFailure("CUSTOM_DOMAIN_CONTROL_PLANE_UNAVAILABLE");
@@ -188,13 +364,16 @@ function requireCandidateAbsence(state) {
 export async function detachCandidateDomain({
   config,
   expectedDomainId,
+  expectedZoneId,
   fetchFn = fetch,
 }) {
-  if (!validDomainId(expectedDomainId))
+  if (!validControlPlaneId(expectedDomainId))
     throw safeFailure("INVALID_CUSTOM_DOMAIN_ID");
+  if (!validControlPlaneId(expectedZoneId))
+    throw safeFailure("INVALID_CUSTOM_DOMAIN_ZONE_ID");
   const current = await readCandidateDomain({ config, fetchFn });
   const domainId = requireCandidateAttachment(current.state);
-  if (domainId !== expectedDomainId.toLowerCase())
+  if (domainId !== expectedDomainId || current.state.zoneId !== expectedZoneId)
     throw safeFailure("CUSTOM_DOMAIN_OWNERSHIP_CHANGED");
   const response = await controlPlaneRequest({
     config,
@@ -211,7 +390,7 @@ export async function attachCandidateDomain({
   zoneId,
   fetchFn = fetch,
 }) {
-  if (!validDomainId(zoneId))
+  if (!validControlPlaneId(zoneId))
     throw safeFailure("INVALID_CUSTOM_DOMAIN_ZONE_ID");
   const current = await readCandidateDomain({ config, fetchFn });
   requireCandidateAbsence(current.state);
@@ -282,17 +461,11 @@ export async function restoreCandidateDomain({
   return { restoration: "RESTORED" };
 }
 
-function writeOutput(name, value) {
-  const output = process.env.GITHUB_OUTPUT;
-  if (typeof output === "string" && output.length > 0)
-    appendFileSync(output, `${name}=${value}\n`, { encoding: "utf8" });
-}
-
 function print(name, value) {
   console.log(`${name}=${value}`);
 }
 
-function reportFailure(mode) {
+function reportFailure(mode, error) {
   const names = {
     preflight: "CANDIDATE_CUSTOM_DOMAIN_RESET_PREFLIGHT",
     detach: "CANDIDATE_CUSTOM_DOMAIN_DETACH",
@@ -302,6 +475,7 @@ function reportFailure(mode) {
     restore: "CANDIDATE_CUSTOM_DOMAIN_RESTORATION",
     postflight: "CANDIDATE_CUSTOM_DOMAIN_POSTFLIGHT",
   };
+  print("CANDIDATE_CUSTOM_DOMAIN_RESET_FAILURE_CLASS", safeFailureCode(error));
   print(names[mode] ?? "CANDIDATE_CUSTOM_DOMAIN_RESET", "FAIL");
 }
 
@@ -310,23 +484,21 @@ async function main() {
   const config = candidateDomainResetConfig();
   if (mode === "preflight") {
     const { state } = await readCandidateDomain({ config });
+    emitPreflightEvidence(state);
     const domainId = requireCandidateAttachment(state);
-    writeOutput("domain_id", domainId);
-    writeOutput("zone_id", state.zoneId);
+    writePreflightIdentifiers({ domainId, zoneId: state.zoneId });
     print("CANDIDATE_CUSTOM_DOMAIN_OWNERSHIP", "PASS");
     print("CANDIDATE_CUSTOM_DOMAIN_EXACT_ONLY", "PASS");
     print("CANDIDATE_CUSTOM_DOMAIN_RESET_PREFLIGHT", "PASS");
     return;
   }
   if (mode === "detach") {
+    const { domainId, zoneId } = readPreflightIdentifiers();
     await detachCandidateDomain({
       config,
-      expectedDomainId: required(
-        process.env,
-        "CANDIDATE_DOMAIN_RESET_DOMAIN_ID",
-      ),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
     });
-    writeOutput("detached", "YES");
     print("CANDIDATE_CUSTOM_DOMAIN_DETACH", "PASS");
     return;
   }
@@ -336,11 +508,11 @@ async function main() {
     return;
   }
   if (mode === "reattach") {
+    const { zoneId } = readPreflightIdentifiers();
     await attachCandidateDomain({
       config,
-      zoneId: required(process.env, "CANDIDATE_DOMAIN_RESET_ZONE_ID"),
+      zoneId,
     });
-    writeOutput("attached", "YES");
     print("CANDIDATE_CUSTOM_DOMAIN_REATTACH", "PASS");
     return;
   }
@@ -353,9 +525,10 @@ async function main() {
     return;
   }
   if (mode === "restore") {
+    const { zoneId } = readPreflightIdentifiers();
     const result = await restoreCandidateDomain({
       config,
-      zoneId: required(process.env, "CANDIDATE_DOMAIN_RESET_ZONE_ID"),
+      zoneId,
     });
     print("CANDIDATE_CUSTOM_DOMAIN_RESTORATION", result.restoration);
     return;
@@ -374,7 +547,7 @@ async function main() {
 }
 
 if (import.meta.main)
-  main().catch(() => {
-    reportFailure(process.argv[2]);
+  main().catch((error) => {
+    reportFailure(process.argv[2], error);
     process.exitCode = 1;
   });

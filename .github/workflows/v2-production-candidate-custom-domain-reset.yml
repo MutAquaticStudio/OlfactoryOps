@@ -151,7 +151,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CANDIDATE_DOMAIN_RESET_DOMAIN_ID: ${{ steps.preflight.outputs.domain_id }}
         run: node scripts/reset-v2-production-candidate-custom-domain.mjs detach
       - name: Confirm exact candidate Custom Domain detach within the bounded window
         shell: bash
@@ -165,7 +164,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CANDIDATE_DOMAIN_RESET_ZONE_ID: ${{ steps.preflight.outputs.zone_id }}
         run: node scripts/reset-v2-production-candidate-custom-domain.mjs reattach
       - name: Confirm exact candidate Custom Domain attachment within the bounded window
         id: wait-attached
@@ -301,7 +299,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CANDIDATE_DOMAIN_RESET_ZONE_ID: ${{ steps.preflight.outputs.zone_id }}
         run: node scripts/reset-v2-production-candidate-custom-domain.mjs restore
       - name: Capture only candidate Custom Domain state after reset or recovery
         if: always()
