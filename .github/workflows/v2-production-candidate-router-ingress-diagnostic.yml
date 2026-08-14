@@ -1,0 +1,295 @@
+name: V2 Production Candidate Router Ingress Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for diagnosis.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC9 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DIAGNOSE_RC9_ROUTER_INGRESS to run this read-only diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_PAGES_ORIGIN: https://57b7300b.olfactoryops-v2-production-candidate.pages.dev
+  TARGET_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+  TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-router-ingress-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC9 ingress diagnostic inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-router-ingress-diagnostic-workflow.mjs
+          test "$CONFIRM_DIAGNOSTIC" = "DIAGNOSE_RC9_ROUTER_INGRESS"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  diagnose-candidate-router-ingress:
+    needs: validate-router-ingress-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    env:
+      ROUTER_INGRESS_RELEASE_SHA: ${{ needs.validate-router-ingress-diagnostic-input.outputs.release_sha }}
+      ROUTER_INGRESS_FIXTURE_HOSTNAME: ${{ needs.validate-router-ingress-diagnostic-input.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require immutable candidate-only diagnostic constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$ROUTER_INGRESS_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$ROUTER_INGRESS_FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          node scripts/verify-v2-production-candidate-router-ingress-diagnostic-workflow.mjs
+      - name: Install pinned main operations tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Create protected runner-local ingress evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          router_ingress_dir="$RUNNER_TEMP/oo-v2-router-ingress-$GITHUB_RUN_ID"
+          test "$router_ingress_dir" = "$RUNNER_TEMP/oo-v2-router-ingress-$GITHUB_RUN_ID"
+          mkdir -p "$router_ingress_dir"
+          chmod 700 "$router_ingress_dir"
+          printf 'ROUTER_INGRESS_DIR=%s\n' "$router_ingress_dir" >> "$GITHUB_ENV"
+      - id: active-deployment
+        name: Read only the active candidate Router deployment and version bindings
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          deployments_file="$ROUTER_INGRESS_DIR/active-deployments.json"
+          version_file="$ROUTER_INGRESS_DIR/active-version.json"
+          : > "$deployments_file"
+          chmod 600 "$deployments_file"
+          deployment_status="$(curl --silent --output "$deployments_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/deployments" || true)"
+          [[ "$deployment_status" =~ ^[1-5][0-9][0-9]$ ]] || deployment_status=000
+          printf 'CURRENT_ROUTER_DEPLOYMENT_HTTP_STATUS=%s\n' "$deployment_status"
+          deployment_output="$(ROUTER_INGRESS_DEPLOYMENT_FILE="$deployments_file" node scripts/inspect-v2-production-candidate-router-ingress.mjs deployment 2>/dev/null || true)"
+          printf '%s\n' "$deployment_output"
+          active_version="$(printf '%s\n' "$deployment_output" | awk -F= '$1 == "CURRENT_ROUTER_VERSION_ID" { print $2; exit }')"
+          if ! printf '%s\n' "$deployment_output" | grep -qx 'CURRENT_ROUTER_ACTIVE_TRAFFIC=PASS'; then
+            printf 'discovery=FAIL\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! [[ "$active_version" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            printf 'discovery=FAIL\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          : > "$version_file"
+          chmod 600 "$version_file"
+          version_status="$(curl --silent --output "$version_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/versions/$active_version" || true)"
+          [[ "$version_status" =~ ^[1-5][0-9][0-9]$ ]] || version_status=000
+          printf 'CURRENT_ROUTER_VERSION_HTTP_STATUS=%s\n' "$version_status"
+          version_output="$(ROUTER_INGRESS_VERSION_FILE="$version_file" ROUTER_INGRESS_VERSION_ID="$active_version" node scripts/inspect-v2-production-candidate-router-ingress.mjs version 2>/dev/null || true)"
+          printf '%s\n' "$version_output"
+          if ! printf '%s\n' "$version_output" | grep -qx 'CURRENT_ROUTER_CONFIGURATION=PASS'; then
+            printf 'discovery=FAIL\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'active_version=%s\n' "$active_version" >> "$GITHUB_OUTPUT"
+          printf 'discovery=PASS\n' >> "$GITHUB_OUTPUT"
+      - id: tail
+        if: steps.active-deployment.outputs.discovery == 'PASS'
+        name: Tail the discovered Router version and issue one exact public probe
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTIVE_ROUTER_VERSION: ${{ steps.active-deployment.outputs.active_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          tail_capture="$ROUTER_INGRESS_DIR/tail.jsonl"
+          tail_errors="$ROUTER_INGRESS_DIR/tail.stderr"
+          nonce_file="$ROUTER_INGRESS_DIR/nonce"
+          tail_pid=""
+          cleanup_tail() {
+            if [[ -n "$tail_pid" ]]; then
+              kill -- "-$tail_pid" 2>/dev/null || true
+              wait "$tail_pid" 2>/dev/null || true
+            fi
+            rm -f -- "$tail_capture" "$tail_errors" "$nonce_file"
+          }
+          trap cleanup_tail EXIT
+          : > "$tail_capture"
+          : > "$tail_errors"
+          chmod 600 "$tail_capture" "$tail_errors"
+          nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+          printf '%s' "$nonce" > "$nonce_file"
+          chmod 600 "$nonce_file"
+          mkdir -p "$ROUTER_INGRESS_DIR/wrangler-home" "$ROUTER_INGRESS_DIR/wrangler-xdg"
+          chmod 700 "$ROUTER_INGRESS_DIR/wrangler-home" "$ROUTER_INGRESS_DIR/wrangler-xdg"
+          HOME="$ROUTER_INGRESS_DIR/wrangler-home" \
+          XDG_CONFIG_HOME="$ROUTER_INGRESS_DIR/wrangler-xdg" \
+          WRANGLER_WRITE_LOGS=false \
+          WRANGLER_LOG=log \
+          WRANGLER_SEND_METRICS=false \
+          WRANGLER_SEND_ERROR_REPORTS=false \
+          NO_COLOR=1 \
+          setsid timeout --signal=TERM 45s ./node_modules/.bin/wrangler tail "$TARGET_ROUTER_SERVICE" \
+            --format json --version-id "$ACTIVE_ROUTER_VERSION" > "$tail_capture" 2> "$tail_errors" &
+          tail_pid=$!
+          sleep 5
+          tail_process_observed=NO
+          if ! kill -0 "$tail_pid" 2>/dev/null; then
+            printf 'startup failure\n' >> "$tail_errors"
+          else
+            tail_process_observed=YES
+          fi
+          probe_status="$(curl --silent --request GET --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 15 --max-time 20 --max-redirs 0 \
+            --header 'Cache-Control: no-cache' --header 'Pragma: no-cache' \
+            "https://$TARGET_FIXTURE_HOSTNAME/?oo_router_ingress_diag=$nonce" || true)"
+          [[ "$probe_status" =~ ^[1-5][0-9][0-9]$ ]] || probe_status=000
+          public_probe=NO
+          if [[ "$probe_status" != 000 ]]; then public_probe=YES; fi
+          printf 'TAIL_PUBLIC_PROBE_CONFIRMED=%s\n' "$public_probe"
+          printf 'TAIL_PUBLIC_PROBE_HTTP_STATUS=%s\n' "$probe_status"
+          sleep 15
+          capture_window_completed=NO
+          if [[ "$tail_process_observed" = YES ]] && kill -0 "$tail_pid" 2>/dev/null; then
+            capture_window_completed=YES
+          fi
+          kill -- "-$tail_pid" 2>/dev/null || true
+          wait "$tail_pid" 2>/dev/null || true
+          tail_pid=""
+          tail_output="$(ROUTER_INGRESS_TAIL_CAPTURE_FILE="$tail_capture" ROUTER_INGRESS_TAIL_ERROR_FILE="$tail_errors" ROUTER_INGRESS_TAIL_NONCE="$nonce" ROUTER_INGRESS_TAIL_HOSTNAME="$TARGET_FIXTURE_HOSTNAME" ROUTER_INGRESS_TAIL_VERSION_ID="$ACTIVE_ROUTER_VERSION" ROUTER_INGRESS_TAIL_PROCESS_OBSERVED="$tail_process_observed" ROUTER_INGRESS_TAIL_CAPTURE_WINDOW_COMPLETED="$capture_window_completed" node scripts/verify-v2-production-candidate-router-ingress-tail.mjs 2>/dev/null || true)"
+          printf '%s\n' "$tail_output"
+          copy_tail_output() {
+            local source_key="$1"
+            local output_key="$2"
+            local value
+            value="$(printf '%s\n' "$tail_output" | awk -F= -v key="$source_key" '$1 == key { print $2; exit }')"
+            case "$value" in
+              YES|NO|PASS|FAIL|UNPROVEN|UNAVAILABLE|OK|OTHER|UNKNOWN|[1-5][0-9][0-9]) ;;
+              *) value=UNPROVEN ;;
+            esac
+            printf '%s=%s\n' "$output_key" "$value" >> "$GITHUB_OUTPUT"
+          }
+          copy_tail_output TAIL_PERMISSION_AVAILABLE permission
+          copy_tail_output TAIL_READINESS readiness
+          copy_tail_output TAIL_EVENT_CAPTURED event_captured
+          copy_tail_output TAIL_VERSION_FILTER_APPLIED version_filter_applied
+          copy_tail_output TAIL_CAPTURE_WINDOW_COMPLETED capture_window_completed
+          copy_tail_output TAIL_REQUEST_HOST_MATCHES_EXPECTED host_matches_expected
+          copy_tail_output TAIL_REQUEST_SCHEME_HTTPS request_scheme_https
+          copy_tail_output TAIL_REQUEST_METHOD_GET request_method_get
+          copy_tail_output TAIL_EVENT_OUTCOME event_outcome
+          copy_tail_output TAIL_EVENT_HTTP_STATUS event_http_status
+          printf 'public_probe=%s\n' "$public_probe" >> "$GITHUB_OUTPUT"
+      - id: active-deployment-recheck
+        if: steps.active-deployment.outputs.discovery == 'PASS'
+        name: Re-read only the active Router deployment after the tail probe
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACTIVE_ROUTER_VERSION: ${{ steps.active-deployment.outputs.active_version }}
+        run: |
+          set -euo pipefail
+          umask 077
+          deployments_file="$ROUTER_INGRESS_DIR/post-tail-deployments.json"
+          : > "$deployments_file"
+          chmod 600 "$deployments_file"
+          deployment_status="$(curl --silent --output "$deployments_file" --write-out '%{http_code}' --connect-timeout 15 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TARGET_ROUTER_SERVICE/deployments" || true)"
+          [[ "$deployment_status" =~ ^[1-5][0-9][0-9]$ ]] || deployment_status=000
+          printf 'POST_TAIL_ROUTER_DEPLOYMENT_HTTP_STATUS=%s\n' "$deployment_status"
+          deployment_output="$(ROUTER_INGRESS_DEPLOYMENT_FILE="$deployments_file" node scripts/inspect-v2-production-candidate-router-ingress.mjs deployment 2>/dev/null || true)"
+          printf '%s\n' "$deployment_output"
+          observed_version="$(printf '%s\n' "$deployment_output" | awk -F= '$1 == "CURRENT_ROUTER_VERSION_ID" { print $2; exit }')"
+          if printf '%s\n' "$deployment_output" | grep -qx 'CURRENT_ROUTER_ACTIVE_TRAFFIC=PASS' && [[ "$observed_version" = "$ACTIVE_ROUTER_VERSION" ]]; then
+            printf 'version_stable=PASS\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'version_stable=UNPROVEN\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Classify the read-only Router ingress evidence
+        if: always()
+        shell: bash
+        env:
+          ROUTER_INGRESS_DISCOVERY: ${{ steps.active-deployment.outputs.discovery }}
+          ROUTER_INGRESS_PUBLIC_PROBE: ${{ steps.tail.outputs.public_probe }}
+          ROUTER_INGRESS_TAIL_PERMISSION: ${{ steps.tail.outputs.permission }}
+          ROUTER_INGRESS_TAIL_READINESS: ${{ steps.tail.outputs.readiness }}
+          ROUTER_INGRESS_TAIL_EVENT_CAPTURED: ${{ steps.tail.outputs.event_captured }}
+          ROUTER_INGRESS_TAIL_VERSION_FILTER_APPLIED: ${{ steps.tail.outputs.version_filter_applied }}
+          ROUTER_INGRESS_TAIL_HOST_MATCHES_EXPECTED: ${{ steps.tail.outputs.host_matches_expected }}
+          ROUTER_INGRESS_TAIL_REQUEST_SCHEME_HTTPS: ${{ steps.tail.outputs.request_scheme_https }}
+          ROUTER_INGRESS_TAIL_REQUEST_METHOD_GET: ${{ steps.tail.outputs.request_method_get }}
+          ROUTER_INGRESS_TAIL_EVENT_OUTCOME: ${{ steps.tail.outputs.event_outcome }}
+          ROUTER_INGRESS_TAIL_EVENT_HTTP_STATUS: ${{ steps.tail.outputs.event_http_status }}
+          ROUTER_INGRESS_VERSION_STABLE: ${{ steps.active-deployment-recheck.outputs.version_stable }}
+        run: |
+          set -euo pipefail
+          node scripts/classify-v2-production-candidate-router-ingress.mjs
+      - name: Remove only runner-local ingress diagnostic evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ROUTER_INGRESS_DIR" in
+            "$RUNNER_TEMP"/oo-v2-router-ingress-*) ;;
+            *) exit 1 ;;
+          esac
+          rm -rf -- "$ROUTER_INGRESS_DIR"
+          test ! -e "$ROUTER_INGRESS_DIR"
+          echo "ROUTER_INGRESS_RUNNER_LOCAL_CLEANUP=PASS"
