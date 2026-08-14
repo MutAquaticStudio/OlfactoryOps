@@ -91,7 +91,47 @@ function controlPlaneEndpoint(config, suffix = "") {
 }
 
 function safeHttpStatus(response) {
-  return response && Number.isInteger(response.status) ? response.status : 0;
+  const status = response?.status;
+  return Number.isInteger(status) &&
+    (status === 0 || (status >= 100 && status <= 599))
+    ? status
+    : 0;
+}
+
+function safeCloudflareErrorCode(envelope) {
+  const errors = Array.isArray(envelope?.errors) ? envelope.errors : [];
+  const errorCode = errors.find(
+    (error) =>
+      Number.isSafeInteger(error?.code) &&
+      error.code >= 1_000 &&
+      error.code <= 999_999,
+  )?.code;
+  return errorCode === undefined ? "NONE" : String(errorCode);
+}
+
+export function candidateDomainDetachEvidence(value) {
+  if (value?.detachAttempted !== true)
+    return {
+      httpStatus: "NOT_ATTEMPTED",
+      cloudflareErrorCode: "NOT_ATTEMPTED",
+    };
+  return {
+    httpStatus: String(safeHttpStatus({ status: value.httpStatus })),
+    cloudflareErrorCode:
+      typeof value.cloudflareErrorCode === "string" &&
+      /^(?:NONE|[1-9][0-9]{3,5})$/.test(value.cloudflareErrorCode)
+        ? value.cloudflareErrorCode
+        : "NONE",
+  };
+}
+
+function safeControlPlaneFailure(classification, response) {
+  const error = safeFailure(classification);
+  error.detachAttempted = true;
+  error.httpStatus = safeHttpStatus({ status: response?.httpStatus });
+  error.cloudflareErrorCode =
+    typeof response?.cfErrorCode === "string" ? response.cfErrorCode : "NONE";
+  return error;
 }
 
 async function controlPlaneRequest({
@@ -122,10 +162,16 @@ async function controlPlaneRequest({
     return {
       httpStatus: safeHttpStatus(response),
       success: response?.ok === true && envelope?.success === true,
+      cfErrorCode: safeCloudflareErrorCode(envelope),
       envelope,
     };
   } catch {
-    return { httpStatus: 0, success: false, envelope: undefined };
+    return {
+      httpStatus: 0,
+      success: false,
+      cfErrorCode: "NONE",
+      envelope: undefined,
+    };
   }
 }
 
@@ -381,8 +427,14 @@ export async function detachCandidateDomain({
     method: "DELETE",
     suffix: `/${encodeURIComponent(domainId)}`,
   });
-  if (!response.success) throw safeFailure("CUSTOM_DOMAIN_DETACH_FAILED");
-  return { detached: true };
+  if (!response.success)
+    throw safeControlPlaneFailure("CUSTOM_DOMAIN_DETACH_FAILED", response);
+  return {
+    detached: true,
+    detachAttempted: true,
+    httpStatus: response.httpStatus,
+    cloudflareErrorCode: response.cfErrorCode,
+  };
 }
 
 export async function attachCandidateDomain({
@@ -475,6 +527,14 @@ function reportFailure(mode, error) {
     restore: "CANDIDATE_CUSTOM_DOMAIN_RESTORATION",
     postflight: "CANDIDATE_CUSTOM_DOMAIN_POSTFLIGHT",
   };
+  if (mode === "detach") {
+    const evidence = candidateDomainDetachEvidence(error);
+    print("CANDIDATE_CUSTOM_DOMAIN_DETACH_HTTP_STATUS", evidence.httpStatus);
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_CF_ERROR_CODE",
+      evidence.cloudflareErrorCode,
+    );
+  }
   print("CANDIDATE_CUSTOM_DOMAIN_RESET_FAILURE_CLASS", safeFailureCode(error));
   print(names[mode] ?? "CANDIDATE_CUSTOM_DOMAIN_RESET", "FAIL");
 }
@@ -494,11 +554,17 @@ async function main() {
   }
   if (mode === "detach") {
     const { domainId, zoneId } = readPreflightIdentifiers();
-    await detachCandidateDomain({
+    const result = await detachCandidateDomain({
       config,
       expectedDomainId: domainId,
       expectedZoneId: zoneId,
     });
+    const evidence = candidateDomainDetachEvidence(result);
+    print("CANDIDATE_CUSTOM_DOMAIN_DETACH_HTTP_STATUS", evidence.httpStatus);
+    print(
+      "CANDIDATE_CUSTOM_DOMAIN_DETACH_CF_ERROR_CODE",
+      evidence.cloudflareErrorCode,
+    );
     print("CANDIDATE_CUSTOM_DOMAIN_DETACH", "PASS");
     return;
   }
