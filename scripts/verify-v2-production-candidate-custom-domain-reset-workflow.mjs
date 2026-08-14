@@ -118,6 +118,14 @@ requireFragments(workflow, "candidate Custom Domain reset recovery", [
   "Capture only candidate Custom Domain state after reset or recovery",
   "Remove only runner-local candidate Custom Domain reset evidence",
 ]);
+if (
+  /CANDIDATE_DOMAIN_RESET_(?:DOMAIN_ID|ZONE_ID):\s*\$\{\{\s*steps\.preflight\.outputs\./.test(
+    workflow,
+  )
+)
+  throw new Error(
+    "opaque Custom Domain identifiers must not pass through GitHub step outputs",
+  );
 
 requireAbsent(
   workflow,
@@ -147,7 +155,11 @@ requireFragments(resetScript, "candidate Custom Domain reset helper", [
   "restoreCandidateDomain",
   "maxWaitAttempts = 8",
   "waitMilliseconds = 5_000",
-  'writeOutput("zone_id", state.zoneId)',
+  "writePreflightIdentifiers",
+  "readPreflightIdentifiers",
+  "CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT_CLASS",
+  "CANDIDATE_CUSTOM_DOMAIN_RESET_FAILURE_CLASS",
+  "validControlPlaneId",
   "hostname: candidateDomainResetExpectation.fixtureHostname",
   "service: candidateDomainResetExpectation.routerService",
   "zone_id: zoneId",
@@ -158,6 +170,10 @@ requireAbsent(
   "candidate Custom Domain reset helper",
   /(?:wrangler|workers\/routes|\[\[routes\]\]|custom_domain\s*=|PRODUCTION_DATABASE_URL|DATABASE_URL|\b(?:psql|prisma)\b|console\.(?:error|dir)|error\.message|\*\.labofscents\.org|\*\.next\.labofscents\.org)/i,
 );
+if (/GITHUB_OUTPUT|appendFileSync/.test(resetScript))
+  throw new Error(
+    "opaque Custom Domain identifiers must remain in protected runner-local files",
+  );
 if (/console\.log\([^\n]*(?:domainId|apiToken|accountId)/.test(resetScript))
   throw new Error(
     "candidate Custom Domain reset helper must not log identifiers or credentials",

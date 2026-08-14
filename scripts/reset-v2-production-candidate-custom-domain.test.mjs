@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import {
   attachCandidateDomain,
+  candidateDomainPreflightEvidence,
   candidateDomainResetConfig,
   candidateDomainResetExpectation,
   detachCandidateDomain,
@@ -65,11 +66,16 @@ test("accepts only one exact candidate Router Custom Domain", () => {
     success: true,
   });
 
-  expect(state).toEqual({
+  expect(state).toMatchObject({
     listRead: true,
     attachment: "CANDIDATE_ROUTER",
     domainId,
     zoneId,
+    exactHostRows: "ONE",
+    serviceMatch: "PASS",
+    zoneMatch: "PASS",
+    domainIdState: "PRESENT",
+    zoneIdState: "PRESENT",
   });
   expect(
     inspectCandidateDomainList({
@@ -91,6 +97,58 @@ test("accepts only one exact candidate Router Custom Domain", () => {
   ).toMatchObject({ attachment: "ABSENT" });
 });
 
+test("accepts opaque Cloudflare control-plane identifiers without logging them", () => {
+  const opaqueDomainId = "domain:opaque-rc9_42";
+  const opaqueZoneId = "zone:opaque-rc9_42";
+  const state = inspectCandidateDomainList({
+    result: [candidateDomain({ id: opaqueDomainId, zone_id: opaqueZoneId })],
+    success: true,
+  });
+
+  expect(state).toMatchObject({
+    attachment: "CANDIDATE_ROUTER",
+    domainId: opaqueDomainId,
+    zoneId: opaqueZoneId,
+    domainIdState: "PRESENT",
+    zoneIdState: "PRESENT",
+  });
+  const evidence = candidateDomainPreflightEvidence(state);
+  expect(evidence).toMatchObject({
+    apiRead: "PASS",
+    exactHostRows: "ONE",
+    serviceMatch: "PASS",
+    zoneMatch: "PASS",
+    domainId: "PRESENT",
+    zoneId: "PRESENT",
+    classification: "EXACT_CANDIDATE_ROUTER",
+  });
+  expect(JSON.stringify(evidence)).not.toContain(opaqueDomainId);
+  expect(JSON.stringify(evidence)).not.toContain(opaqueZoneId);
+});
+
+test("fails closed when a candidate domain identifier is missing or unsafe", () => {
+  const missing = inspectCandidateDomainList({
+    result: [candidateDomain({ zone_id: undefined })],
+    success: true,
+  });
+  const unsafe = inspectCandidateDomainList({
+    result: [candidateDomain({ id: "contains\na newline" })],
+    success: true,
+  });
+
+  expect(missing).toMatchObject({
+    attachment: "INVALID",
+    exactHostRows: "ONE",
+    serviceMatch: "PASS",
+    zoneMatch: "PASS",
+    zoneIdState: "MISSING_OR_UNSUPPORTED",
+  });
+  expect(unsafe).toMatchObject({
+    attachment: "INVALID",
+    domainIdState: "MISSING_OR_UNSUPPORTED",
+  });
+});
+
 test("rechecks ownership and detaches only the exact candidate domain id", async () => {
   const calls = [];
   const fetchFn = async (request, options) => {
@@ -104,6 +162,7 @@ test("rechecks ownership and detaches only the exact candidate domain id", async
     detachCandidateDomain({
       config: config(),
       expectedDomainId: domainId,
+      expectedZoneId: zoneId,
       fetchFn,
     }),
   ).resolves.toEqual({ detached: true });
@@ -121,12 +180,47 @@ test("does not detach after a candidate-domain ownership change", async () => {
     detachCandidateDomain({
       config: config(),
       expectedDomainId: domainId,
+      expectedZoneId: zoneId,
       fetchFn: async (request, options) => {
         calls.push(options.method);
         return envelope([candidateDomain({ service: "other-service" })]);
       },
     }),
   ).rejects.toThrow("CUSTOM_DOMAIN_OWNERSHIP_MISMATCH");
+  expect(calls).toEqual(["GET"]);
+});
+
+test("never detaches when exact candidate ownership lacks a usable identifier", async () => {
+  const calls = [];
+  await expect(
+    detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        calls.push(options.method);
+        return envelope([candidateDomain({ zone_id: undefined })]);
+      },
+    }),
+  ).rejects.toThrow("CUSTOM_DOMAIN_OWNERSHIP_MISMATCH");
+  expect(calls).toEqual(["GET"]);
+});
+
+test("never detaches when the candidate domain moves to another zone after preflight", async () => {
+  const calls = [];
+  await expect(
+    detachCandidateDomain({
+      config: config(),
+      expectedDomainId: domainId,
+      expectedZoneId: zoneId,
+      fetchFn: async (_request, options) => {
+        calls.push(options.method);
+        return envelope([
+          candidateDomain({ zone_id: "zone:changed-after-preflight" }),
+        ]);
+      },
+    }),
+  ).rejects.toThrow("CUSTOM_DOMAIN_OWNERSHIP_CHANGED");
   expect(calls).toEqual(["GET"]);
 });
 
@@ -155,6 +249,7 @@ test("can restore the exact candidate domain after an ambiguous detach response"
     detachCandidateDomain({
       config: config(),
       expectedDomainId: domainId,
+      expectedZoneId: zoneId,
       fetchFn,
     }),
   ).rejects.toThrow("CUSTOM_DOMAIN_DETACH_FAILED");
@@ -214,7 +309,7 @@ test("requires the preflight-verified zone id for an exact reattach", async () =
   await expect(
     attachCandidateDomain({
       config: config(),
-      zoneId: "not-a-zone-id",
+      zoneId: "not\na zone id",
       fetchFn: async (_request, options) => {
         calls.push(options.method);
         return envelope([]);
