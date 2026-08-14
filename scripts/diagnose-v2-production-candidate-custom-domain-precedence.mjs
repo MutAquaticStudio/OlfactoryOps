@@ -229,6 +229,17 @@ export function routePatternMatchesFixture(pattern, hostname) {
   }
 }
 
+export function routePatternHostScope(pattern, hostname) {
+  if (!routePatternMatchesFixture(pattern, hostname)) return "UNPROVEN";
+  const normalizedPattern = pattern
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .toLowerCase();
+  const routeHostname = normalizedPattern.split("/", 1)[0];
+  if (routeHostname === hostname.toLowerCase()) return "EXACT_HOST";
+  return routeHostname.includes("*") ? "WILDCARD_HOST" : "UNPROVEN";
+}
+
 export function inspectZoneRouteInventory(
   response,
   expectation = candidateCustomDomainPrecedenceExpectation,
@@ -241,6 +252,7 @@ export function inspectZoneRouteInventory(
       inventory,
       exactSyntheticRouteMatches: "UNPROVEN",
       precedence: "UNPROVEN",
+      hostScope: "UNPROVEN",
     };
 
   const matchingRoutes = routes.filter((route) =>
@@ -251,20 +263,35 @@ export function inspectZoneRouteInventory(
       inventory: "PASS",
       exactSyntheticRouteMatches: "ZERO",
       precedence: "NONE",
+      hostScope: "NONE",
     };
-  if (matchingRoutes.length !== 1)
+  if (matchingRoutes.length !== 1) {
+    const scopes = matchingRoutes.map((route) =>
+      routePatternHostScope(route?.pattern, expectation.fixtureHostname),
+    );
     return {
       inventory: "PASS",
       exactSyntheticRouteMatches: "MULTIPLE",
       precedence: "AMBIGUOUS",
+      hostScope: scopes.includes("WILDCARD_HOST")
+        ? "WILDCARD_HOST"
+        : scopes.every((scope) => scope === "EXACT_HOST")
+          ? "EXACT_HOST"
+          : "UNPROVEN",
     };
+  }
 
   const [route] = matchingRoutes;
+  const hostScope = routePatternHostScope(
+    route?.pattern,
+    expectation.fixtureHostname,
+  );
   if (route?.script === null)
     return {
       inventory: "PASS",
       exactSyntheticRouteMatches: "ONE",
       precedence: "BYPASS",
+      hostScope,
     };
   if (typeof route?.script === "string" && route.script.length > 0)
     return {
@@ -274,11 +301,13 @@ export function inspectZoneRouteInventory(
         route.script === expectation.routerService
           ? "SCRIPTED_CANDIDATE"
           : "SCRIPTED_NON_CANDIDATE",
+      hostScope,
     };
   return {
     inventory: "PASS",
     exactSyntheticRouteMatches: "ONE",
     precedence: "UNPROVEN",
+    hostScope,
   };
 }
 
@@ -355,14 +384,6 @@ export function classifyCandidateCustomDomainPrecedence({
   if (detail.certificateReference !== "PRESENT")
     return "CANDIDATE_CUSTOM_DOMAIN_CERTIFICATE_UNPROVEN";
   if (zone.status !== "ACTIVE") return "CANDIDATE_ZONE_STATE_UNPROVEN";
-  if (dns.inventory === "PERMISSION_UNAVAILABLE")
-    return "CANDIDATE_MANAGED_DNS_UNPROVEN_TOKEN_SCOPE";
-  if (dns.exactRecords === "ZERO") return "CANDIDATE_MANAGED_DNS_RECORD_ABSENT";
-  if (dns.anyShadowed === "YES") return "CANDIDATE_MANAGED_DNS_RECORD_SHADOWED";
-  if (dns.exactRecords !== "ONE" || dns.allProxied !== "YES")
-    return "CANDIDATE_MANAGED_DNS_RECORD_DISCREPANCY";
-  if (dns.anyShadowed !== "NO")
-    return "CANDIDATE_MANAGED_DNS_METADATA_UNPROVEN";
   if (routes.inventory === "PERMISSION_UNAVAILABLE")
     return "CANDIDATE_ZONE_ROUTE_PRECEDENCE_UNPROVEN_TOKEN_SCOPE";
   if (routes.precedence === "SCRIPTED_NON_CANDIDATE")
@@ -372,11 +393,19 @@ export function classifyCandidateCustomDomainPrecedence({
   if (routes.precedence === "AMBIGUOUS")
     return "ZONE_ROUTE_PRECEDENCE_AMBIGUOUS";
   if (
-    routes.precedence === "NONE" ||
-    routes.precedence === "SCRIPTED_CANDIDATE"
+    routes.precedence !== "NONE" &&
+    routes.precedence !== "SCRIPTED_CANDIDATE"
   )
-    return "CANDIDATE_CUSTOM_DOMAIN_INGRESS_PLATFORM_INCONSISTENCY";
-  return "CANDIDATE_CUSTOM_DOMAIN_PRECEDENCE_UNPROVEN";
+    return "CANDIDATE_ZONE_ROUTE_PRECEDENCE_UNPROVEN";
+  if (dns.inventory === "PERMISSION_UNAVAILABLE")
+    return "CANDIDATE_MANAGED_DNS_UNPROVEN_TOKEN_SCOPE";
+  if (dns.exactRecords === "ZERO") return "CANDIDATE_MANAGED_DNS_RECORD_ABSENT";
+  if (dns.anyShadowed === "YES") return "CANDIDATE_MANAGED_DNS_RECORD_SHADOWED";
+  if (dns.exactRecords !== "ONE" || dns.allProxied !== "YES")
+    return "CANDIDATE_MANAGED_DNS_RECORD_DISCREPANCY";
+  if (dns.anyShadowed !== "NO")
+    return "CANDIDATE_MANAGED_DNS_METADATA_UNPROVEN";
+  return "CANDIDATE_CUSTOM_DOMAIN_INGRESS_PLATFORM_INCONSISTENCY";
 }
 
 export async function diagnoseCandidateCustomDomainPrecedence({
@@ -401,6 +430,7 @@ export async function diagnoseCandidateCustomDomainPrecedence({
     inventory: "NOT_EVALUATED",
     exactSyntheticRouteMatches: "UNPROVEN",
     precedence: "UNPROVEN",
+    hostScope: "UNPROVEN",
   };
   const notEvaluatedDns = {
     inventory: "NOT_EVALUATED",
@@ -511,6 +541,7 @@ export function candidateCustomDomainPrecedenceEvidence(result) {
     ZONE_ROUTE_INVENTORY: result.routes.inventory,
     EXACT_SYNTHETIC_ROUTE_MATCHES: result.routes.exactSyntheticRouteMatches,
     ZONE_ROUTE_PRECEDENCE: result.routes.precedence,
+    ZONE_ROUTE_HOST_SCOPE: result.routes.hostScope,
     EXACT_DNS_INVENTORY: result.dns.inventory,
     EXACT_DNS_RECORDS: result.dns.exactRecords,
     EXACT_DNS_ALL_PROXIED: result.dns.allProxied,

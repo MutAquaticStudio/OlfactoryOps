@@ -10,6 +10,7 @@ import {
   inspectCandidateDomainMapping,
   inspectExactDnsInventory,
   inspectZoneRouteInventory,
+  routePatternHostScope,
   routePatternMatchesFixture,
 } from "./diagnose-v2-production-candidate-custom-domain-precedence.mjs";
 
@@ -146,6 +147,15 @@ test("matches only route patterns that can intercept the exact fixture", () => {
     routePatternMatchesFixture("other.next.labofscents.org/*", fixtureHostname),
   ).toBe(false);
   expect(routePatternMatchesFixture("", fixtureHostname)).toBe(false);
+  expect(routePatternHostScope(`${fixtureHostname}/*`, fixtureHostname)).toBe(
+    "EXACT_HOST",
+  );
+  expect(
+    routePatternHostScope("*.next.labofscents.org/*", fixtureHostname),
+  ).toBe("WILDCARD_HOST");
+  expect(
+    routePatternHostScope("other.next.labofscents.org/*", fixtureHostname),
+  ).toBe("UNPROVEN");
 });
 
 test("classifies a noncandidate route or bypass without exposing its pattern or script", () => {
@@ -161,6 +171,7 @@ test("classifies a noncandidate route or bypass without exposing its pattern or 
     inventory: "PASS",
     exactSyntheticRouteMatches: "ONE",
     precedence: "SCRIPTED_NON_CANDIDATE",
+    hostScope: "EXACT_HOST",
   });
   expect(
     classifyCandidateCustomDomainPrecedence(
@@ -191,6 +202,7 @@ test("fails closed on multiple matching routes and reports DNS absence separatel
   expect(multiple).toMatchObject({
     exactSyntheticRouteMatches: "MULTIPLE",
     precedence: "AMBIGUOUS",
+    hostScope: "WILDCARD_HOST",
   });
   expect(
     classifyCandidateCustomDomainPrecedence(
@@ -307,6 +319,31 @@ test("fails closed when the exact candidate DNS record is shadowed", () => {
   expect(JSON.stringify(shadowedDns)).not.toContain(
     "opaque-shadowing-record-id",
   );
+});
+
+test("prioritizes a proven noncandidate route over an unrelated DNS permission gap", () => {
+  const interceptingRoute = inspectZoneRouteInventory(
+    response([
+      {
+        pattern: "*.next.labofscents.org/*",
+        script: nonCandidateScript,
+      },
+    ]),
+  );
+  const unavailableDns = inspectExactDnsInventory({
+    httpStatus: 403,
+    success: false,
+    envelope: undefined,
+  });
+  expect(interceptingRoute).toMatchObject({
+    precedence: "SCRIPTED_NON_CANDIDATE",
+    hostScope: "WILDCARD_HOST",
+  });
+  expect(
+    classifyCandidateCustomDomainPrecedence(
+      completeEvidence({ routes: interceptingRoute, dns: unavailableDns }),
+    ),
+  ).toBe("ZONE_ROUTE_PRECEDENCE_INTERCEPTS_CANDIDATE_CUSTOM_DOMAIN");
 });
 
 test("reports permission gaps as unproven without changing control-plane state", () => {
