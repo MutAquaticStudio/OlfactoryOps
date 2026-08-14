@@ -79,16 +79,18 @@ const preflightIndex = workflow.indexOf("domain-preflight");
 const deployIndex = workflow.indexOf("./node_modules/.bin/wrangler deploy");
 const verifyIndex = workflow.indexOf("domain-verify");
 const postflightIndex = workflow.indexOf("postflight-inventory");
+const inventoryIndex = workflow.indexOf("pages-inventory");
 if (
   !(
-    preflightIndex >= 0 &&
+    inventoryIndex >= 0 &&
+    preflightIndex > inventoryIndex &&
     deployIndex > preflightIndex &&
     verifyIndex > deployIndex &&
     postflightIndex > verifyIndex
   )
 )
   throw new Error(
-    "candidate domain preflight, deploy, and verification ordering is unsafe",
+    "candidate Pages inventory, domain preflight, deploy, and verification ordering is unsafe",
   );
 
 const protectedJobEnv = workflow.match(
@@ -103,7 +105,7 @@ if (
   );
 
 for (const stepName of [
-  "Inventory and verify the unique immutable RC9 Pages deployment",
+  "Inventory and select a healthy immutable RC9 Pages deployment",
   "Preflight only the exact candidate Custom Domain ownership",
   "Deploy only the exact RC9 candidate Router and Custom Domain",
   "Verify the exact Custom Domain now attaches only to the candidate Router",
@@ -132,6 +134,43 @@ if (
 )
   throw new Error(
     "tenant route verification must not require Cloudflare credentials",
+  );
+
+for (const value of [
+  'endpoint.searchParams.set("page", String(page));',
+  'endpoint.searchParams.set("per_page", String(pagesDeploymentsPerPage));',
+  "allPagesDeployments",
+  "PAGES_DEPLOYMENTS_API",
+  "PAGES_RC9_MATCH_COUNT",
+  "PAGES_RC9_CANDIDATE_INDEX",
+  "PAGES_RC9_CANDIDATE_CREATED_AT",
+  "PAGES_RC9_CANDIDATE_URL_SHAPE_VALID",
+  "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT",
+  "PAGES_RC9_MULTIPLE_HEALTHY_DEPLOYMENTS",
+  "PAGES_RC9_IMMUTABLE_DEPLOYMENT",
+  "PAGES_REDEPLOY_REQUIRED",
+])
+  if (!reconciliation.includes(value))
+    throw new Error(`candidate Pages selection is missing ${value}`);
+
+if (reconciliation.includes("PAGES_DEPLOYMENT_NOT_UNIQUE"))
+  throw new Error(
+    "candidate Pages selection must allow multiple healthy deployments",
+  );
+
+const selectedOriginIndex = reconciliation.indexOf(
+  "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT",
+);
+const persistedOriginIndex = reconciliation.indexOf(
+  "persistOrigin(origin, environment);",
+);
+if (
+  selectedOriginIndex < 0 ||
+  persistedOriginIndex < 0 ||
+  persistedOriginIndex < selectedOriginIndex
+)
+  throw new Error(
+    "candidate Pages origin must not be persisted before a healthy immutable deployment is selected",
   );
 
 console.log("CANDIDATE_EDGE_RECONCILIATION_WORKFLOW=PASS");

@@ -33,4 +33,14 @@ describe("RC9 candidate edge reconciliation workflow contract", () => {
     expect(workflow).not.toContain("*.labofscents.org/*");
     expect(workflow).not.toContain("*.next.labofscents.org/*");
   });
+
+  it("selects immutable Pages before any candidate Router mutation", () => {
+    const inventory = workflow.indexOf("pages-inventory");
+    const preflight = workflow.indexOf("domain-preflight");
+    const deploy = workflow.indexOf("./node_modules/.bin/wrangler deploy");
+
+    expect(inventory).toBeGreaterThanOrEqual(0);
+    expect(preflight).toBeGreaterThan(inventory);
+    expect(deploy).toBeGreaterThan(preflight);
+  });
 });

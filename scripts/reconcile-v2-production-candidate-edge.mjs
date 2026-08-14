@@ -19,6 +19,8 @@ export const edgeBrowserPaths = [
 ];
 
 const expectedTenantOrigin = `https://${edgeFixtureHostname}`;
+const pagesDeploymentsPerPage = 100;
+const maximumPagesDeploymentsPages = 100;
 
 function safeFailure(classification) {
   return new Error(classification);
@@ -83,12 +85,16 @@ function noCacheOptions(headers = {}) {
   };
 }
 
-async function readJson(response) {
+async function readControlPlaneEnvelope(response) {
   if (!response.ok) throw safeFailure("CONTROL_PLANE_HTTP_FAILURE");
   const body = await response.json().catch(() => null);
   if (!body || body.success !== true)
     throw safeFailure("CONTROL_PLANE_API_FAILURE");
-  return body.result;
+  return body;
+}
+
+async function readJson(response) {
+  return (await readControlPlaneEnvelope(response)).result;
 }
 
 function immutablePagesOrigin(url, project) {
@@ -114,6 +120,93 @@ function immutablePagesOrigin(url, project) {
 
 function expectedBranchAlias(project) {
   return `https://${edgePagesBranch}.${project}.pages.dev`;
+}
+
+function exactRc9PagesDeployment(deployment, releaseSha) {
+  return (
+    deployment?.environment === "preview" &&
+    deployment?.latest_stage?.status === "success" &&
+    deployment?.is_skipped !== true &&
+    deployment?.deployment_trigger?.metadata?.branch === edgePagesBranch &&
+    deployment?.deployment_trigger?.metadata?.commit_hash === releaseSha
+  );
+}
+
+function createdOn(deployment) {
+  const value = deployment?.created_on;
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)
+  )
+    return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? { value, timestamp } : undefined;
+}
+
+function candidateImmutableOrigin(deployment, project) {
+  try {
+    return immutablePagesOrigin(deployment?.url, project);
+  } catch {
+    return undefined;
+  }
+}
+
+async function pagesDeploymentPage(config, page, fetchFn) {
+  const endpoint = new URL(
+    `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/pages/projects/${config.pagesProject}/deployments`,
+  );
+  endpoint.searchParams.set("env", "preview");
+  endpoint.searchParams.set("page", String(page));
+  endpoint.searchParams.set("per_page", String(pagesDeploymentsPerPage));
+  const envelope = await readControlPlaneEnvelope(
+    await fetchFn(endpoint, noCacheOptions(authorizationHeaders(config))),
+  );
+  if (!Array.isArray(envelope.result))
+    throw safeFailure("PAGES_DEPLOYMENTS_INVALID");
+  const resultInfo = envelope.result_info;
+  if (!resultInfo || !Number.isInteger(resultInfo.page))
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  if (resultInfo.page !== page)
+    throw safeFailure("PAGES_PAGINATION_PAGE_MISMATCH");
+  if (!Number.isInteger(resultInfo.total_pages) || resultInfo.total_pages < 0)
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  if (
+    !Number.isInteger(resultInfo.per_page) ||
+    resultInfo.per_page < 1 ||
+    resultInfo.per_page > pagesDeploymentsPerPage
+  )
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  if (
+    resultInfo.total_pages === 0 &&
+    (page !== 1 || envelope.result.length !== 0)
+  )
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  if (resultInfo.total_pages > 0 && resultInfo.total_pages < page)
+    throw safeFailure("PAGES_PAGINATION_INVALID");
+  return { deployments: envelope.result, totalPages: resultInfo.total_pages };
+}
+
+async function allPagesDeployments(config, fetchFn) {
+  const deployments = [];
+  const deploymentIds = new Set();
+  let expectedTotalPages;
+  for (let page = 1; page <= maximumPagesDeploymentsPages; page += 1) {
+    const result = await pagesDeploymentPage(config, page, fetchFn);
+    if (expectedTotalPages === undefined)
+      expectedTotalPages = result.totalPages;
+    if (result.totalPages !== expectedTotalPages)
+      throw safeFailure("PAGES_PAGINATION_CHANGED");
+    for (const deployment of result.deployments) {
+      if (typeof deployment?.id !== "string" || deployment.id.length === 0)
+        throw safeFailure("PAGES_DEPLOYMENT_ID_INVALID");
+      if (deploymentIds.has(deployment.id))
+        throw safeFailure("PAGES_PAGINATION_DUPLICATE_RECORD");
+      deploymentIds.add(deployment.id);
+      deployments.push(deployment);
+    }
+    if (page >= expectedTotalPages) return deployments;
+  }
+  throw safeFailure("PAGES_PAGINATION_LIMIT_EXCEEDED");
 }
 
 function isHtml(response) {
@@ -182,52 +275,91 @@ export async function inventoryImmutablePages({
   emitLine = console.log,
   persistOrigin = persistPagesOrigin,
 }) {
-  const endpoint = new URL(
-    `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/pages/projects/${config.pagesProject}/deployments`,
-  );
-  endpoint.searchParams.set("env", "preview");
-  endpoint.searchParams.set("per_page", "100");
-  const deployments = await readJson(
-    await fetchFn(endpoint, noCacheOptions(authorizationHeaders(config))),
-  );
-  if (!Array.isArray(deployments))
-    throw safeFailure("PAGES_DEPLOYMENTS_INVALID");
-  const matching = deployments.filter(
-    (deployment) =>
-      deployment?.environment === "preview" &&
-      deployment?.latest_stage?.status === "success" &&
-      deployment?.is_skipped !== true &&
-      deployment?.deployment_trigger?.metadata?.branch === edgePagesBranch &&
-      deployment?.deployment_trigger?.metadata?.commit_hash ===
-        config.releaseSha,
-  );
-  if (matching.length !== 1) throw safeFailure("PAGES_DEPLOYMENT_NOT_UNIQUE");
-  const deployment = matching[0];
-  const origin = immutablePagesOrigin(deployment.url, config.pagesProject);
-  const branchAliasPresent = Array.isArray(deployment.aliases)
-    ? deployment.aliases.includes(expectedBranchAlias(config.pagesProject))
-    : false;
+  let deployments;
+  try {
+    deployments = await allPagesDeployments(config, fetchFn);
+  } catch {
+    emit(emitLine, "PAGES_DEPLOYMENTS_API", "FAIL");
+    throw safeFailure("PAGES_DEPLOYMENTS_API_FAILURE");
+  }
+  emit(emitLine, "PAGES_DEPLOYMENTS_API", "PASS");
+
+  const matching = deployments
+    .filter((deployment) =>
+      exactRc9PagesDeployment(deployment, config.releaseSha),
+    )
+    .map((deployment) => {
+      const created = createdOn(deployment);
+      return {
+        deployment,
+        createdAt: created?.value,
+        createdAtTimestamp: created?.timestamp,
+        id: deployment.id,
+        origin: candidateImmutableOrigin(deployment, config.pagesProject),
+      };
+    })
+    .sort(
+      (left, right) =>
+        (right.createdAtTimestamp ?? -Infinity) -
+          (left.createdAtTimestamp ?? -Infinity) ||
+        left.id.localeCompare(right.id),
+    );
+
+  emit(emitLine, "PAGES_RC9_MATCH_COUNT", matching.length);
+  if (matching.length === 0) {
+    emit(emitLine, "PAGES_RC9_DEPLOYMENT_EXISTS", "MISSING");
+    emit(emitLine, "PAGES_RC9_IMMUTABLE_DEPLOYMENT", "MISSING_OR_UNHEALTHY");
+    emit(emitLine, "PAGES_REDEPLOY_REQUIRED", "YES");
+    throw safeFailure("PAGES_RC9_MATCHES_MISSING");
+  }
 
   emit(emitLine, "PAGES_RC9_DEPLOYMENT_EXISTS", "PASS");
   emit(emitLine, "PAGES_RC9_DEPLOYMENT_ENVIRONMENT", "preview");
   emit(emitLine, "PAGES_RC9_BRANCH_MATCH", "PASS");
   emit(emitLine, "PAGES_RC9_COMMIT_MATCH", "PASS");
-  emit(emitLine, "PAGES_RC9_DEPLOYMENT_URL_PRESENT", "PASS");
-  emit(
-    emitLine,
-    "PAGES_RC9_BRANCH_ALIAS_PRESENT",
-    branchAliasPresent ? "YES" : "NO",
-  );
 
-  const results = await Promise.all(
-    edgeBrowserPaths.map((path) => probe(origin, path, fetchFn)),
-  );
+  const healthy = [];
+  for (const [index, candidate] of matching.entries()) {
+    emit(emitLine, "PAGES_RC9_CANDIDATE_INDEX", index + 1);
+    emit(
+      emitLine,
+      "PAGES_RC9_CANDIDATE_CREATED_AT",
+      candidate.createdAt ?? "INVALID",
+    );
+    emit(
+      emitLine,
+      "PAGES_RC9_CANDIDATE_URL_SHAPE_VALID",
+      Boolean(candidate.origin),
+    );
+    if (!candidate.createdAt || !candidate.origin) continue;
+    const results = await Promise.all(
+      edgeBrowserPaths.map((path) => probe(candidate.origin, path, fetchFn)),
+    );
+    if (results.every((result) => result.status === "200" && result.html))
+      healthy.push({ ...candidate, results });
+  }
+
+  if (healthy.length === 0) {
+    emit(emitLine, "PAGES_RC9_IMMUTABLE_DEPLOYMENT", "MISSING_OR_UNHEALTHY");
+    emit(emitLine, "PAGES_REDEPLOY_REQUIRED", "YES");
+    throw safeFailure("PAGES_RC9_MATCHES_UNHEALTHY");
+  }
+
+  const selected = healthy[0];
+  const origin = selected.origin;
+  const results = selected.results;
+  emit(emitLine, "PAGES_RC9_DEPLOYMENT_URL_PRESENT", "PASS");
   for (const result of results) {
     emit(emitLine, "PAGES_RC9_IMMUTABLE_PATH", result.path);
     emit(emitLine, "PAGES_RC9_IMMUTABLE_HTTP_STATUS", result.status);
   }
-  if (!results.every((result) => result.status === "200" && result.html))
-    throw safeFailure("PAGES_IMMUTABLE_ROUTE_HEALTH_FAILURE");
+  emit(emitLine, "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT", "PASS");
+  emit(
+    emitLine,
+    "PAGES_RC9_MULTIPLE_HEALTHY_DEPLOYMENTS",
+    healthy.length > 1 ? "YES" : "NO",
+  );
+  emit(emitLine, "PAGES_REDEPLOY_REQUIRED", "NO");
 
   const branchAlias = expectedBranchAlias(config.pagesProject);
   const branchAliasResults = await Promise.all(
@@ -259,7 +391,7 @@ export async function inventoryImmutablePages({
 
   persistOrigin(origin, environment);
   emit(emitLine, "PAGES_RC9_IMMUTABLE_DEPLOYMENT", "PASS");
-  return { origin, branchAliasPresent, results, branchAliasResults };
+  return { origin, results, branchAliasResults, matching, healthy };
 }
 
 async function exactCandidateDomains(config, fetchFn) {
