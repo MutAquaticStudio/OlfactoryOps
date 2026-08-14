@@ -91,6 +91,9 @@ jobs:
           test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
           test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
           test "$PRODUCTION_CANDIDATE_SMOKE_TENANT_URL" = "https://$TARGET_FIXTURE_HOSTNAME"
+      - name: Install pinned main operations tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
       - name: Inventory and select a healthy immutable RC9 Pages deployment
         shell: bash
         env:

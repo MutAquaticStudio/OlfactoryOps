@@ -39,20 +39,32 @@ describe("RC9 candidate edge reconciliation workflow contract", () => {
   });
 
   it("selects immutable Pages before any candidate Router mutation", () => {
+    const mainInstall = workflow.indexOf("npm ci --ignore-scripts");
     const inventory = workflow.indexOf("pages-inventory");
     const preflight = workflow.indexOf("domain-preflight");
     const deploy = workflow.indexOf("./node_modules/.bin/wrangler deploy");
 
-    expect(inventory).toBeGreaterThanOrEqual(0);
+    expect(mainInstall).toBeGreaterThanOrEqual(0);
+    expect(inventory).toBeGreaterThan(mainInstall);
     expect(preflight).toBeGreaterThan(inventory);
     expect(deploy).toBeGreaterThan(preflight);
   });
 
-  it("keeps optional Pages pagination metadata and safe failure telemetry in the inventory boundary", () => {
+  it("keeps safe REST ladder and native Wrangler inventory boundaries", () => {
     expect(reconciliation).toContain(
       "if (resultInfo === undefined) return {};",
     );
     expect(reconciliation).toContain("PAGES_DEPLOYMENTS_FAILURE_CLASS");
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_HTTP_STATUS");
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_CF_ERROR_CODE");
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_PAGE20_HTTP_STATUS");
+    expect(reconciliation).toContain("PAGES_DEPLOYMENTS_PAGE100_HTTP_STATUS");
+    expect(reconciliation).toContain("runWranglerPagesInventory");
+    expect(reconciliation).toContain('WRANGLER_WRITE_LOGS: "false"');
+    expect(reconciliation).toContain("detailsForWranglerCandidates");
+    expect(reconciliation).toContain("PAGES_INVENTORY_COMPLETENESS");
+    expect(reconciliation).toContain("PAGES_RC9_ARTIFACT_RELEASE_IDENTITY");
+    expect(reconciliation).not.toContain("npx wrangler");
     expect(reconciliation).toContain('"PAGINATION_LIMIT"');
     expect(reconciliation).not.toContain(
       "!resultInfo || !Number.isInteger(resultInfo.page)",

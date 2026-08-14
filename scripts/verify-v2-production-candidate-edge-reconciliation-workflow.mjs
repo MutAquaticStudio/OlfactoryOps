@@ -10,7 +10,7 @@ const reconciliation = readFileSync(
   "utf8",
 );
 
-const required = [
+const requiredWorkflow = [
   "name: V2 Production Candidate Edge Reconciliation",
   "workflow_dispatch:",
   "permissions:\n  contents: read",
@@ -25,11 +25,12 @@ const required = [
   'test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"',
   'release_branch_sha="$(git rev-parse FETCH_HEAD)"',
   'test "$release_branch_sha" = "$TARGET_RELEASE_SHA"',
+  "npm ci --ignore-scripts",
   "node scripts/reconcile-v2-production-candidate-edge.mjs pages-inventory",
   "node scripts/reconcile-v2-production-candidate-edge.mjs domain-preflight",
   "ref: ${{ needs.validate-edge-reconciliation-input.outputs.release_sha }}",
   "path: rc9",
-  "npm ci --prefix rc9",
+  "npm ci --prefix rc9 --ignore-scripts",
   "node scripts/render-v2-production-candidate-edge-router-config.mjs",
   "npm --prefix rc9 run prisma:generate:v2",
   "./node_modules/.bin/wrangler deploy --strict --config wrangler.v2-tenant-router-production-candidate.toml",
@@ -41,7 +42,7 @@ const required = [
   'test "$CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID" = "$TARGET_HYPERDRIVE_ID"',
 ];
 
-const forbidden = [
+const forbiddenWorkflow = [
   "pull_request:",
   "pull_request_target:",
   "wrangler pages deploy",
@@ -61,28 +62,49 @@ const forbidden = [
   "INSERT INTO",
   "DELETE FROM",
   "--keep-vars",
+  "continue-on-error: true",
 ];
 
-for (const value of required)
+for (const value of requiredWorkflow)
   if (!workflow.includes(value))
     throw new Error(
       `candidate edge reconciliation workflow is missing ${value}`,
     );
 
-for (const value of forbidden)
+for (const value of forbiddenWorkflow)
   if (workflow.includes(value))
     throw new Error(
       `candidate edge reconciliation workflow contains forbidden ${value}`,
     );
+
+function stepSource(name) {
+  const start = workflow.indexOf(`- name: ${name}`);
+  const end = workflow.indexOf("\n      - name:", start + 1);
+  if (start < 0) throw new Error(`candidate edge workflow is missing ${name}`);
+  return workflow.slice(start, end < 0 ? undefined : end);
+}
+
+const inventoryStep = stepSource(
+  "Inventory and select a healthy immutable RC9 Pages deployment",
+);
+if (
+  inventoryStep.includes("if: always()") ||
+  inventoryStep.includes("continue-on-error")
+)
+  throw new Error(
+    "candidate Pages inventory must fail closed before Router work",
+  );
 
 const preflightIndex = workflow.indexOf("domain-preflight");
 const deployIndex = workflow.indexOf("./node_modules/.bin/wrangler deploy");
 const verifyIndex = workflow.indexOf("domain-verify");
 const postflightIndex = workflow.indexOf("postflight-inventory");
 const inventoryIndex = workflow.indexOf("pages-inventory");
+const mainInstallIndex = workflow.indexOf("npm ci --ignore-scripts");
 if (
   !(
-    inventoryIndex >= 0 &&
+    mainInstallIndex >= 0 &&
+    inventoryIndex > mainInstallIndex &&
     preflightIndex > inventoryIndex &&
     deployIndex > preflightIndex &&
     verifyIndex > deployIndex &&
@@ -111,13 +133,7 @@ for (const stepName of [
   "Verify the exact Custom Domain now attaches only to the candidate Router",
   "Capture candidate-only edge state after reconciliation or failure",
 ]) {
-  const step = workflow.slice(
-    workflow.indexOf(`- name: ${stepName}`),
-    workflow.indexOf(
-      "\n      - name:",
-      workflow.indexOf(`- name: ${stepName}`) + 1,
-    ),
-  );
+  const step = stepSource(stepName);
   if (
     !step.includes("CLOUDFLARE_ACCOUNT_ID") ||
     !step.includes("CLOUDFLARE_API_TOKEN")
@@ -127,61 +143,54 @@ for (const stepName of [
     );
 }
 
-if (
-  !reconciliation.includes(
-    'if (mode === "tenant-verify") return verifyTenantRoutes({});',
-  )
-)
-  throw new Error(
-    "tenant route verification must not require Cloudflare credentials",
-  );
-
 for (const value of [
-  'endpoint.searchParams.set("page", String(page));',
-  'endpoint.searchParams.set("per_page", String(pagesDeploymentsPerPage));',
-  "allPagesDeployments",
-  "PAGES_DEPLOYMENTS_API",
-  "PAGES_DEPLOYMENTS_HTTP_CLASS",
-  "PAGES_DEPLOYMENTS_SUCCESS_FLAG",
-  "PAGES_DEPLOYMENTS_RESULT_ARRAY",
-  "PAGES_DEPLOYMENTS_RESULT_INFO_PRESENT",
-  "PAGES_DEPLOYMENTS_FAILURE_CLASS",
-  '"HTTP"',
-  '"API_ENVELOPE"',
-  '"RESULT_SHAPE"',
-  '"PAGINATION_METADATA"',
-  '"PAGINATION_LIMIT"',
-  '"DUPLICATE_DEPLOYMENT"',
-  '"NETWORK"',
-  '"NONE"',
-  "if (resultInfo === undefined) return {};",
-  "Object.hasOwn(resultInfo, name)",
+  'if (mode === "tenant-verify") return verifyTenantRoutes({});',
+  'if (mode === "pages-inventory") return reconcilePagesInventory({ config });',
+  "inspectPagesRequestLadder",
+  "runWranglerPagesInventory",
+  "localWranglerBinary",
+  '"node_modules", "wrangler", "bin", "wrangler.js"',
+  'WRANGLER_WRITE_LOGS: "false"',
+  'WRANGLER_SEND_METRICS: "false"',
+  'WRANGLER_SEND_ERROR_REPORTS: "false"',
+  "PAGES_PROJECT_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_BARE_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_ENV_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_PAGE20_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_PAGE100_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_HTTP_STATUS",
+  "PAGES_DEPLOYMENTS_CF_ERROR_CODE",
+  "PAGES_DEPLOYMENTS_PER_PAGE_100_REJECTED",
+  "CUSTOM_REST_INVENTORY_REQUEST_DEFECT",
+  "WRANGLER_PAGES_PROJECT_VISIBLE",
+  "WRANGLER_PAGES_DEPLOYMENT_LIST",
+  "WRANGLER_PAGES_DEPLOYMENT_COUNT",
+  "WRANGLER_PAGES_FAILURE_CLASS",
+  "detailsForWranglerCandidates",
+  "PAGES_RC9_ARTIFACT_RELEASE_IDENTITY",
+  "fullGitSha === edgeReleaseSha",
+  'artifact === "pages"',
   "PAGES_RC9_MATCH_COUNT",
-  "PAGES_RC9_CANDIDATE_INDEX",
-  "PAGES_RC9_CANDIDATE_CREATED_AT",
-  "PAGES_RC9_CANDIDATE_URL_SHAPE_VALID",
   "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT",
   "PAGES_RC9_MULTIPLE_HEALTHY_DEPLOYMENTS",
-  "PAGES_RC9_IMMUTABLE_DEPLOYMENT",
   "PAGES_REDEPLOY_REQUIRED",
+  "PAGES_INVENTORY_COMPLETENESS",
+  "WRANGLER_PAGES_INVENTORY_INCOMPLETE",
+  "inventoryComplete: false",
 ])
   if (!reconciliation.includes(value))
     throw new Error(`candidate Pages selection is missing ${value}`);
 
 for (const value of [
-  "!resultInfo || !Number.isInteger(resultInfo.page)",
-  "!Number.isInteger(resultInfo.total_pages)",
-  "!Number.isInteger(resultInfo.per_page)",
+  "npx wrangler",
+  "console.log(result.stdout)",
+  "console.log(error.message)",
+  "console.error(error.message)",
+  "PAGES_DEPLOYMENT_NOT_UNIQUE",
+  "NODE_PATH",
 ])
   if (reconciliation.includes(value))
-    throw new Error(
-      "candidate Pages selection must not require optional pagination fields",
-    );
-
-if (reconciliation.includes("PAGES_DEPLOYMENT_NOT_UNIQUE"))
-  throw new Error(
-    "candidate Pages selection must allow multiple healthy deployments",
-  );
+    throw new Error(`candidate Pages inventory has an unsafe ${value} path`);
 
 const selectedOriginIndex = reconciliation.indexOf(
   "PAGES_RC9_SELECTED_IMMUTABLE_DEPLOYMENT",
