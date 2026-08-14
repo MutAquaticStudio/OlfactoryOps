@@ -1,0 +1,17 @@
+# Candidate-only Worker diagnostic. This uses workers.dev only and never binds
+# a public-production route or custom domain.
+name = "olfactoryops-v2-tenant-router-production-candidate-runtime-diagnostic"
+main = "../worker/v2-tenant-router-runtime-diagnostic.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+DIAGNOSTIC_FIXTURE_HOSTNAME = "rc2-release-315960213001.next.labofscents.org"
+TARGET_RELEASE_SHA = "5985834a0e14728c81c8c028a72122ded544bd6b"
+V2_EXPECTED_DATABASE_NAME_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+V2_RUNTIME_DB_ROLE = "hyperdrive_user"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "b415b7572d9f45058ebb4ec4166b8739"
