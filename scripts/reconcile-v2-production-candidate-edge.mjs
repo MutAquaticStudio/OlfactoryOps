@@ -1256,8 +1256,12 @@ export async function verifyTenantRoutes({
       result.releaseShaMatch,
   );
   if (!accepted) throw safeFailure("CANDIDATE_TENANT_ROUTE_ACCEPTANCE_FAILURE");
+  emit(emitLine, "CANDIDATE_ROUTER_HEADERS", "PASS");
+  emit(emitLine, "CANDIDATE_ROUTER_RELEASE_SHA", "PASS");
+  emit(emitLine, "CANDIDATE_ROUTER_PAGES_PROXY", "PASS");
 
   const spoofed = await probe(expectedTenantOrigin, "/", fetchFn, {
+    "x-olfactoryops-workspace-host": "untrusted.invalid",
     "x-olfactoryops-organization-id": "untrusted",
     "x-olfactoryops-tenant-id": "untrusted",
     "x-organization-id": "untrusted",
