@@ -1,0 +1,147 @@
+name: V2 Production Candidate Edge Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact candidate-only fixture hostname.
+        required: true
+        type: string
+      confirm_reconciliation:
+        description: Type RECONCILE_RC9_CANDIDATE_EDGE to reconcile only the isolated candidate edge.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_PAGES_PROJECT: olfactoryops-v2-production-candidate
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+  TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-edge-reconciliation-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: validate
+        name: Validate exact isolated RC9 reconciliation inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_RECONCILIATION: ${{ inputs.confirm_reconciliation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_RECONCILIATION" = "RECONCILE_RC9_CANDIDATE_EDGE"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  reconcile-candidate-pages-and-router:
+    needs: validate-edge-reconciliation-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      CANDIDATE_EDGE_RECONCILE_RELEASE_SHA: ${{ needs.validate-edge-reconciliation-input.outputs.release_sha }}
+      CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME: ${{ needs.validate-edge-reconciliation-input.outputs.fixture_hostname }}
+      CANDIDATE_EDGE_RECONCILE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
+      CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_CANDIDATE_SMOKE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require exact candidate-only production control-plane inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_EDGE_RECONCILE_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$CANDIDATE_EDGE_RECONCILE_FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          test "$CANDIDATE_EDGE_RECONCILE_PAGES_PROJECT" = "$TARGET_PAGES_PROJECT"
+          test "$CANDIDATE_EDGE_RECONCILE_HYPERDRIVE_ID" = "$TARGET_HYPERDRIVE_ID"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$PRODUCTION_CANDIDATE_SMOKE_TENANT_URL" = "https://$TARGET_FIXTURE_HOSTNAME"
+      - name: Inventory and verify the unique immutable RC9 Pages deployment
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs pages-inventory
+      - name: Preflight only the exact candidate Custom Domain ownership
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs domain-preflight
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-edge-reconciliation-input.outputs.release_sha }}
+          path: rc9
+      - name: Install exact RC9 deployment dependencies
+        shell: bash
+        run: npm ci --prefix rc9 --ignore-scripts
+      - name: Render the exact RC9 candidate Router with the verified immutable Pages origin
+        shell: bash
+        env:
+          CANDIDATE_EDGE_RECONCILE_TEMPLATE: ${{ github.workspace }}/rc9/wrangler.v2-tenant-router-production.example.toml
+          CANDIDATE_EDGE_RECONCILE_OUTPUT: ${{ github.workspace }}/rc9/wrangler.v2-tenant-router-production-candidate.toml
+        run: |
+          set -euo pipefail
+          test -n "$CANDIDATE_PAGES_ORIGIN"
+          node scripts/render-v2-production-candidate-edge-router-config.mjs
+      - name: Generate the exact RC9 V2 Prisma client
+        shell: bash
+        run: npm --prefix rc9 run prisma:generate:v2
+      - name: Deploy only the exact RC9 candidate Router and Custom Domain
+        shell: bash
+        working-directory: rc9
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: ./node_modules/.bin/wrangler deploy --strict --config wrangler.v2-tenant-router-production-candidate.toml
+      - name: Verify the exact Custom Domain now attaches only to the candidate Router
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs domain-verify
+      - name: Verify exact tenant routing, spoof-header resistance, and unknown-host failure
+        shell: bash
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs tenant-verify
+      - name: Capture candidate-only edge state after reconciliation or failure
+        if: always()
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/reconcile-v2-production-candidate-edge.mjs postflight-inventory
