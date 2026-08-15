@@ -1,0 +1,102 @@
+name: V2 Production Candidate Generated Login Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 SHA.
+        required: true
+        type: string
+      confirm:
+        description: Type DIAGNOSE_RC9_GENERATED_LOGIN to create one archived diagnostic fixture.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-generated-login-diagnostic
+  cancel-in-progress: false
+
+env:
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+
+jobs:
+  validate-diagnostic-input:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate the exact RC9 generated-login diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_DIAGNOSTIC" = 'DIAGNOSE_RC9_GENERATED_LOGIN'
+          test "$RELEASE_SHA" = "$RC9_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC9_SHA"
+          git fetch --tags origin
+          test "$(git rev-parse v2-production-rc9^{})" = "$RC9_SHA"
+          printf 'release_sha=%s\n' "$RC9_SHA" >> "$GITHUB_OUTPUT"
+
+  diagnose-generated-login:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    needs: validate-diagnostic-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ops
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          path: rc9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ops/package-lock.json
+      - name: Install operations diagnostic dependencies without lifecycle scripts
+        working-directory: ops
+        run: npm ci --ignore-scripts
+      - name: Verify the immutable RC9 login and password contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C rc9 rev-parse HEAD)" = '${{ needs.validate-diagnostic-input.outputs.release_sha }}'
+          grep -Fq 'async login(input: LoginInput)' rc9/services/platform/src/service.ts
+          grep -Fq 'verifyPassword(email, input.password, user.passwordHash, this.passwordPepper)' rc9/services/platform/src/service.ts
+          grep -Fq 'pbkdf2:v2:sha256' rc9/services/platform/src/crypto.ts
+          printf '%s\n' '{"EXACT_RC9_LOGIN_SOURCE_CONTRACT":"PASS"}'
+      - name: Run one guarded generated-login diagnostic and archive its fixture
+        working-directory: ops
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+          CONFIRM_DIAGNOSTIC: ${{ inputs.confirm }}
+          V2_PRODUCTION_CANDIDATE_API_ORIGIN: https://api-next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}
+          PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+        run: |
+          set -euo pipefail
+          for name in RELEASE_SHA CONFIRM_DIAGNOSTIC V2_PRODUCTION_CANDIDATE_API_ORIGIN V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN V2_PRODUCTION_CANDIDATE_TENANT_URL PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN; do
+            test -n "${!name}"
+          done
+          node scripts/diagnose-v2-production-candidate-generated-login.mjs
