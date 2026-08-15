@@ -6,6 +6,7 @@ const apiOrigin = "https://api-next.labofscents.org";
 const paths = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
 
 function fail(code) {
+  console.log(`CANDIDATE_BROWSER_ACCEPTANCE_STAGE=${stage}`);
   console.log(`CANDIDATE_BROWSER_ACCEPTANCE_FAILURE=${code}`);
   process.exitCode = 1;
 }
@@ -14,22 +15,28 @@ function required(condition, code) {
   if (!condition) throw new Error(code);
 }
 
+let stage = "INVALID_INPUT";
 try {
   required(releaseSha === "de0734df2d2b5b2dd3a2a67ee542131235e75eb7", "INVALID_INPUT");
   required(tenantUrl === "https://rc9-release-31736285494-469ca8942a.next.labofscents.org", "INVALID_INPUT");
   const tenant = new URL(tenantUrl);
+  stage = "BROWSER_LAUNCH_UNAVAILABLE";
   const browser = await chromium.launch({ headless: true });
   try {
     for (const path of paths) {
+      stage = "BROWSER_CONTEXT_CREATE_FAILURE";
       const context = await browser.newContext();
+      stage = "BROWSER_PAGE_CREATE_FAILURE";
       const page = await context.newPage();
       let runtimeError = false;
       page.on("pageerror", () => (runtimeError = true));
       page.on("console", (message) => {
         if (message.type() === "error") runtimeError = true;
       });
+      stage = "ROUTE_NAVIGATION_FAILURE";
       const response = await page.goto(new URL(path, tenant).toString(), { waitUntil: "domcontentloaded", timeout: 30_000 });
       required(response?.status() === 200 && new URL(page.url()).host === tenant.host, "ROUTE_NAVIGATION_FAILURE");
+      stage = "ROUTE_RENDER_FAILURE";
       if (path === "/") required(await page.getByText("OlfactoryOps").first().isVisible(), "ROUTE_RENDER_FAILURE");
       else {
         const card = page.getByTestId("v2-auth-card");
@@ -37,12 +44,17 @@ try {
         const heading = await card.locator("h1").textContent();
         required(path.includes("signup") ? /create|sign up/i.test(heading ?? "") : /sign in/i.test(heading ?? ""), "ROUTE_RENDER_FAILURE");
       }
+      stage = "ROUTE_RUNTIME_ERROR";
       required(!runtimeError, "ROUTE_RUNTIME_ERROR");
       await context.close();
     }
+    stage = "BUNDLE_CONTEXT_CREATE_FAILURE";
     const bundleContext = await browser.newContext();
+    stage = "BROWSER_PAGE_CREATE_FAILURE";
     const bundlePage = await bundleContext.newPage();
+    stage = "BUNDLE_NAVIGATION_FAILURE";
     await bundlePage.goto(tenantUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
+    stage = "BUNDLE_SOURCE_FETCH_FAILURE";
     const configured = await bundlePage.evaluate(async (origin) => {
       const sources = Array.from(document.scripts).map((script) => script.src).filter(Boolean);
       const bundles = await Promise.all(sources.map(async (source) => (await fetch(source)).text()));
@@ -50,9 +62,12 @@ try {
     }, apiOrigin);
     required(configured, "BUNDLE_API_ORIGIN_FAILURE");
     await bundleContext.close();
+    stage = "API_CONTEXT_CREATE_FAILURE";
     const apiContext = await browser.newContext();
+    stage = "API_PAGE_CREATE_FAILURE";
     const apiPage = await apiContext.newPage();
     const apiUrl = `${apiOrigin}/api/v1/v2/platform/me`;
+    stage = "API_SESSION_PROBE_FAILURE";
     const apiAccepted = await apiPage.evaluate(async (url) => {
       const response = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
       return response.status === 401 && response.url === url;
@@ -62,5 +77,5 @@ try {
     console.log("CANDIDATE_BROWSER_ACCEPTANCE=PASS");
   } finally { await browser.close(); }
 } catch (error) {
-  fail(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "BROWSER_LAUNCH_UNAVAILABLE");
+  fail(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : stage);
 }
