@@ -67,6 +67,15 @@ try {
     stage = "API_PAGE_CREATE_FAILURE";
     const apiPage = await apiContext.newPage();
     const apiUrl = `${apiOrigin}/api/v1/v2/platform/me`;
+    stage = "API_CONTEXT_NAVIGATION_FAILURE";
+    const apiNavigation = await apiPage.goto(tenantUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    required(
+      apiNavigation?.status() === 200 && new URL(apiPage.url()).host === tenant.host,
+      "API_CONTEXT_NAVIGATION_FAILURE",
+    );
     stage = "API_SESSION_PROBE_FAILURE";
     const apiAccepted = await apiPage.evaluate(async (url) => {
       const response = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
