@@ -1,0 +1,95 @@
+name: V2 Production Candidate Browser Runtime Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 release SHA approved for read-only browser runtime diagnosis.
+        required: true
+        type: string
+      tenant_url:
+        description: Exact isolated RC9 candidate tenant URL.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DIAGNOSE_RC9_CANDIDATE_BROWSER_RUNTIME to run the read-only browser runtime diagnostic.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-browser-runtime-diagnostic
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  TARGET_TENANT_URL: https://rc9-release-31736285494-469ca8942a.next.labofscents.org
+  RELEASE_BRANCH: codex/v2-production-go-live
+  RELEASE_TAG: v2-production-rc9
+
+jobs:
+  validate-diagnostic-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      tenant_url: ${{ steps.validate.outputs.tenant_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact read-only RC9 candidate browser runtime inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          TENANT_URL: ${{ inputs.tenant_url }}
+          CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-browser-runtime-diagnostic-workflow.mjs
+          test "$CONFIRM_DIAGNOSTIC" = "DIAGNOSE_RC9_CANDIDATE_BROWSER_RUNTIME"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$TENANT_URL" = "$TARGET_TENANT_URL"
+          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
+          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --tags origin "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'tenant_url=%s\n' "$TENANT_URL" >> "$GITHUB_OUTPUT"
+
+  diagnose-candidate-browser-runtime:
+    needs: validate-diagnostic-input
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      CANDIDATE_BROWSER_RUNTIME_RELEASE_SHA: ${{ needs.validate-diagnostic-input.outputs.release_sha }}
+      CANDIDATE_BROWSER_RUNTIME_TENANT_URL: ${{ needs.validate-diagnostic-input.outputs.tenant_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require immutable read-only browser runtime diagnostic constants
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CANDIDATE_BROWSER_RUNTIME_RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$CANDIDATE_BROWSER_RUNTIME_TENANT_URL" = "$TARGET_TENANT_URL"
+          node scripts/verify-v2-production-candidate-browser-runtime-diagnostic-workflow.mjs
+      - name: Install pinned diagnostic tooling without provider credentials
+        shell: bash
+        run: npm ci --ignore-scripts
+      - name: Install Chromium only on the hosted diagnostic runner
+        shell: bash
+        run: npx playwright install --with-deps chromium
+      - name: Probe only the exact candidate browser runtime without credentials
+        shell: bash
+        run: node scripts/diagnose-v2-production-candidate-browser-runtime.mjs
