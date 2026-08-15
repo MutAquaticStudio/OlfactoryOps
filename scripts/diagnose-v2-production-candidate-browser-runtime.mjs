@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 export const candidateBrowserRuntimeExpectation = Object.freeze({
   releaseSha: "de0734df2d2b5b2dd3a2a67ee542131235e75eb7",
   tenantUrl: "https://rc9-release-31736285494-469ca8942a.next.labofscents.org",
+  apiOrigin: "https://api-next.labofscents.org",
 });
 
 export const candidateBrowserRuntimePaths = Object.freeze([
@@ -127,6 +128,22 @@ export function classifyCandidateBrowserRuntime({
   return "CANDIDATE_BROWSER_RUNTIME_HEALTHY";
 }
 
+export function classifyCandidateBrowserSmokeParity(parity) {
+  if (parity.routeContract !== "PASS")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_ROUTE_FAILURE";
+  if (parity.bundleApiOriginConfigured !== "YES")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_API_ORIGIN_FAILURE";
+  if (parity.apiSessionBoundary !== "PASS")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_API_SESSION_FAILURE";
+  if (parity.routeRuntimeErrors !== "NO")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_ROUTE_RUNTIME_ERRORS";
+  if (parity.bundleRuntimeErrors !== "NO")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_BUNDLE_RUNTIME_ERRORS";
+  if (parity.apiRuntimeErrors !== "NO")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_API_RUNTIME_ERRORS";
+  return "CANDIDATE_BROWSER_SMOKE_PARITY_HEALTHY";
+}
+
 function print(name, value) {
   const routePath =
     (name === "PATH" || name === "BROWSER_PATH") &&
@@ -134,14 +151,86 @@ function print(name, value) {
       ? value
       : undefined;
   const safe =
-    (routePath ?? typeof value === "boolean")
+    routePath ??
+    (typeof value === "boolean"
       ? value
         ? "YES"
         : "NO"
       : typeof value === "string" && /^[A-Z0-9_/]+$/.test(value)
         ? value
-        : "UNPROVEN";
+        : "UNPROVEN");
   console.log(`${name}=${safe}`);
+}
+
+function browserErrorsSince(errors, position) {
+  return errors.length === position ? "NO" : "YES";
+}
+
+export async function inspectCandidateBrowserSmokeParity({ config, chromium }) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const errors = [];
+    page.on("pageerror", () => errors.push("PAGE_ERROR"));
+    page.on("console", (message) => {
+      if (message.type() === "error") errors.push("CONSOLE_ERROR");
+    });
+    let routeContract = "PASS";
+    for (const path of candidateBrowserRuntimePaths) {
+      const response = await page
+        .goto(requestUrl(config, path, randomBytes(12).toString("hex")).toString(), {
+          waitUntil: "domcontentloaded",
+          timeout: 30_000,
+        })
+        .catch(() => undefined);
+      if (response?.status() !== 200) routeContract = "FAIL";
+      const visible =
+        path === "/"
+          ? await page.getByText("OlfactoryOps").first().isVisible().catch(() => false)
+          : await page.getByTestId("v2-auth-card").isVisible().catch(() => false);
+      if (!visible) routeContract = "FAIL";
+    }
+    const routeRuntimeErrors = browserErrorsSince(errors, 0);
+    const bundleErrorsStart = errors.length;
+    const bundleApiOriginConfigured = await page
+      .evaluate(async (expectedApiOrigin) => {
+        const sources = Array.from(document.scripts)
+          .map((script) => script.src)
+          .filter(Boolean);
+        const bundles = await Promise.all(
+          sources.map(async (source) => (await fetch(source)).text()),
+        );
+        return bundles.some((bundle) => bundle.includes(`${expectedApiOrigin}/api/v1`));
+      }, config.apiOrigin)
+      .then((configured) => (configured ? "YES" : "NO"))
+      .catch(() => "NO");
+    const bundleRuntimeErrors = browserErrorsSince(errors, bundleErrorsStart);
+    const apiErrorsStart = errors.length;
+    const expectedApiUrl = new URL("/api/v1/v2/platform/me", config.apiOrigin).toString();
+    const apiSessionBoundary = await page
+      .evaluate(async (url) => {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: { Accept: "application/json" },
+        });
+        return response.status === 401 && response.url === url;
+      }, expectedApiUrl)
+      .then((expected) => (expected ? "PASS" : "FAIL"))
+      .catch(() => "FAIL");
+    const apiRuntimeErrors = browserErrorsSince(errors, apiErrorsStart);
+    await context.close();
+    return {
+      routeContract,
+      bundleApiOriginConfigured,
+      apiSessionBoundary,
+      routeRuntimeErrors,
+      bundleRuntimeErrors,
+      apiRuntimeErrors,
+    };
+  } finally {
+    await browser.close();
+  }
 }
 
 function printHttpRoutes(routes) {
@@ -257,6 +346,14 @@ async function main() {
     "ROOT_CAUSE",
     classifyCandidateBrowserRuntime({ httpAccepted, browserRoutes }),
   );
+  const parity = await inspectCandidateBrowserSmokeParity({ config, chromium });
+  print("SMOKE_PARITY_ROUTE_CONTRACT", parity.routeContract);
+  print("SMOKE_PARITY_BUNDLE_API_ORIGIN_CONFIGURED", parity.bundleApiOriginConfigured);
+  print("SMOKE_PARITY_API_SESSION_BOUNDARY", parity.apiSessionBoundary);
+  print("SMOKE_PARITY_ROUTE_RUNTIME_ERRORS", parity.routeRuntimeErrors);
+  print("SMOKE_PARITY_BUNDLE_RUNTIME_ERRORS", parity.bundleRuntimeErrors);
+  print("SMOKE_PARITY_API_RUNTIME_ERRORS", parity.apiRuntimeErrors);
+  print("SMOKE_PARITY_ROOT_CAUSE", classifyCandidateBrowserSmokeParity(parity));
   print("CANDIDATE_BROWSER_RUNTIME_DIAGNOSTIC", "COMPLETE");
 }
 

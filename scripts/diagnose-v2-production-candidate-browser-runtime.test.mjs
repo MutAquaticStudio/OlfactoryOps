@@ -6,6 +6,7 @@ import {
   candidateBrowserRuntimeExpectation,
   candidateBrowserRuntimePaths,
   classifyCandidateBrowserRuntime,
+  classifyCandidateBrowserSmokeParity,
   probeCandidateBrowserRuntimeRoutes,
 } from "./diagnose-v2-production-candidate-browser-runtime.mjs";
 
@@ -47,6 +48,32 @@ test("requires all five unauthenticated routes to have exact Router identity", a
     expect(request.options.headers).not.toHaveProperty("cookie");
     expect(request.options.headers).not.toHaveProperty("authorization");
   }
+});
+
+test("classifies the immutable smoke verifier sequence without exposing runtime text", () => {
+  const healthy = {
+    routeContract: "PASS",
+    bundleApiOriginConfigured: "YES",
+    apiSessionBoundary: "PASS",
+    routeRuntimeErrors: "NO",
+    bundleRuntimeErrors: "NO",
+    apiRuntimeErrors: "NO",
+  };
+  expect(classifyCandidateBrowserSmokeParity(healthy)).toBe(
+    "CANDIDATE_BROWSER_SMOKE_PARITY_HEALTHY",
+  );
+  expect(
+    classifyCandidateBrowserSmokeParity({
+      ...healthy,
+      apiRuntimeErrors: "YES",
+    }),
+  ).toBe("CANDIDATE_BROWSER_SMOKE_PARITY_API_RUNTIME_ERRORS");
+  expect(
+    classifyCandidateBrowserSmokeParity({
+      ...healthy,
+      bundleApiOriginConfigured: "NO",
+    }),
+  ).toBe("CANDIDATE_BROWSER_SMOKE_PARITY_API_ORIGIN_FAILURE");
 });
 
 test("fails closed for missing identity headers or incorrect immutable inputs", async () => {
