@@ -129,6 +129,8 @@ export function classifyCandidateBrowserRuntime({
 }
 
 export function classifyCandidateBrowserSmokeParity(parity) {
+  if (parity.execution !== "PASS")
+    return "CANDIDATE_BROWSER_SMOKE_PARITY_UNAVAILABLE";
   if (parity.routeContract !== "PASS")
     return "CANDIDATE_BROWSER_SMOKE_PARITY_ROUTE_FAILURE";
   if (parity.bundleApiOriginConfigured !== "YES")
@@ -167,8 +169,9 @@ function browserErrorsSince(errors, position) {
 }
 
 export async function inspectCandidateBrowserSmokeParity({ config, chromium }) {
-  const browser = await chromium.launch({ headless: true });
+  let browser;
   try {
+    browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
     const page = await context.newPage();
     const errors = [];
@@ -221,6 +224,7 @@ export async function inspectCandidateBrowserSmokeParity({ config, chromium }) {
     const apiRuntimeErrors = browserErrorsSince(errors, apiErrorsStart);
     await context.close();
     return {
+      execution: "PASS",
       routeContract,
       bundleApiOriginConfigured,
       apiSessionBoundary,
@@ -228,8 +232,18 @@ export async function inspectCandidateBrowserSmokeParity({ config, chromium }) {
       bundleRuntimeErrors,
       apiRuntimeErrors,
     };
+  } catch {
+    return {
+      execution: "UNAVAILABLE",
+      routeContract: "UNPROVEN",
+      bundleApiOriginConfigured: "UNPROVEN",
+      apiSessionBoundary: "UNPROVEN",
+      routeRuntimeErrors: "UNPROVEN",
+      bundleRuntimeErrors: "UNPROVEN",
+      apiRuntimeErrors: "UNPROVEN",
+    };
   } finally {
-    await browser.close();
+    await browser?.close().catch(() => undefined);
   }
 }
 
@@ -347,6 +361,7 @@ async function main() {
     classifyCandidateBrowserRuntime({ httpAccepted, browserRoutes }),
   );
   const parity = await inspectCandidateBrowserSmokeParity({ config, chromium });
+  print("SMOKE_PARITY_EXECUTION", parity.execution);
   print("SMOKE_PARITY_ROUTE_CONTRACT", parity.routeContract);
   print("SMOKE_PARITY_BUNDLE_API_ORIGIN_CONFIGURED", parity.bundleApiOriginConfigured);
   print("SMOKE_PARITY_API_SESSION_BOUNDARY", parity.apiSessionBoundary);

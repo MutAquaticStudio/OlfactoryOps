@@ -52,6 +52,7 @@ test("requires all five unauthenticated routes to have exact Router identity", a
 
 test("classifies the immutable smoke verifier sequence without exposing runtime text", () => {
   const healthy = {
+    execution: "PASS",
     routeContract: "PASS",
     bundleApiOriginConfigured: "YES",
     apiSessionBoundary: "PASS",
@@ -74,6 +75,9 @@ test("classifies the immutable smoke verifier sequence without exposing runtime 
       bundleApiOriginConfigured: "NO",
     }),
   ).toBe("CANDIDATE_BROWSER_SMOKE_PARITY_API_ORIGIN_FAILURE");
+  expect(
+    classifyCandidateBrowserSmokeParity({ ...healthy, execution: "UNAVAILABLE" }),
+  ).toBe("CANDIDATE_BROWSER_SMOKE_PARITY_UNAVAILABLE");
 });
 
 test("fails closed for missing identity headers or incorrect immutable inputs", async () => {
