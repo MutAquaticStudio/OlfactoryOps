@@ -20,6 +20,14 @@ test("browser route diagnostic does not weaken the candidate smoke workflow", ()
     "utf8",
   );
   expect(smoke).toContain("smoke-candidate:");
-  expect(smoke).toContain("test:qa:v2-production-candidate-browser");
+  expect(smoke).toContain("path: ops");
+  expect(smoke).toContain("path: rc9");
+  expect(smoke).toContain(
+    "node scripts/verify-v2-production-candidate-browser-acceptance.mjs",
+  );
+  expect(smoke).not.toContain("test:qa:v2-production-candidate-browser");
+  expect(smoke).toContain(
+    "ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}",
+  );
   expect(smoke).toContain("test:qa:v2-production-candidate-acceptance");
 });

@@ -353,12 +353,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          path: ops
+      - uses: actions/checkout@v4
+        with:
           ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          path: rc9
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - name: Install main-owned browser acceptance tooling
+        working-directory: ops
+        run: npm ci --ignore-scripts
       - name: Verify the isolated candidate browser entrypoints
         shell: bash
         env:
@@ -381,8 +387,12 @@ jobs:
             V2_PRODUCTION_CANDIDATE_EXPECTED_SHA; do
             test -n "${!name}"
           done
+          cd ops
           npx playwright install --with-deps chromium
-          npm run test:qa:v2-production-candidate-browser
+          node scripts/verify-v2-production-candidate-browser-acceptance.mjs
+      - name: Install exact RC9 acceptance tooling
+        working-directory: rc9
+        run: npm ci
       - name: Run bounded generated-fixture candidate acceptance
         shell: bash
         env:
@@ -407,5 +417,6 @@ jobs:
             V2_PRODUCTION_CANDIDATE_EXPECTED_SHA; do
             test -n "${!name}"
           done
+          cd rc9
           node scripts/verify-v2-production-candidate-acceptance.mjs --validate-only
           npm run test:qa:v2-production-candidate-acceptance
