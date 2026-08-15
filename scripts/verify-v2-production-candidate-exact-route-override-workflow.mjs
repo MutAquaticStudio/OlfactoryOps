@@ -8,6 +8,14 @@ const helper = readFileSync(
   "scripts/override-v2-production-candidate-exact-route.mjs",
   "utf8",
 );
+const identityVerifier = readFileSync(
+  "scripts/verify-v2-production-candidate-router-identity.mjs",
+  "utf8",
+);
+const tailClassifier = readFileSync(
+  "scripts/classify-v2-production-candidate-route-override-tail.mjs",
+  "utf8",
+);
 
 function requireFragments(source, label, fragments) {
   for (const fragment of fragments)
@@ -36,10 +44,13 @@ requireFragments(workflow, "exact candidate route override workflow", [
   "node scripts/override-v2-production-candidate-exact-route.mjs create",
   "node scripts/override-v2-production-candidate-exact-route.mjs verify",
   "node scripts/override-v2-production-candidate-exact-route.mjs rollback",
+  "node scripts/verify-v2-production-candidate-router-identity.mjs",
+  "node scripts/reconcile-v2-production-candidate-edge.mjs tenant-verify",
   "./node_modules/.bin/wrangler tail",
   '--format json --version-id "$ACTIVE_ROUTER_VERSION"',
   "sleep 60",
-  "node scripts/reconcile-v2-production-candidate-edge.mjs tenant-verify",
+  "node scripts/classify-v2-production-candidate-route-override-tail.mjs",
+  "ACTIVE_ROUTER_VERSION_STABLE=PASS",
   "EXACT_CANDIDATE_ROUTE_OVERRIDE_RUNNER_LOCAL_CLEANUP=PASS",
 ]);
 
@@ -71,8 +82,10 @@ const order = [
   "Prove exact candidate Router configuration and existing wildcard route before mutation",
   "Create only the exact candidate Route with bounded GET recovery",
   "Verify exact candidate route precedence and preserve the wildcard route",
-  "Tail the exact active Router version and require one HTTP 200 candidate event",
+  "Prove candidate Router execution from immutable RC9 response identity",
   "Verify five tenant routes, caller header isolation, and unknown-host failure",
+  "Collect non-blocking exact-version Router Tail observability after identity acceptance",
+  "Require the active candidate Router version to remain stable after Tail observability",
   "Roll back only the exact route created by this operation after an acceptance failure",
 ];
 let previous = -1;
@@ -106,6 +119,25 @@ requireFragments(helper, "exact candidate route override helper", [
   "EXACT_ROUTE_CREATE_UNACKNOWLEDGED",
   "ROLLBACK_EXACT_ROUTE_OWNERSHIP_UNPROVEN",
   "CANDIDATE_ROUTE_PRECEDENCE_OVERRIDE",
+]);
+requireFragments(identityVerifier, "candidate Router identity verifier", [
+  "candidateRouterIdentityExpectation",
+  "x-olfactoryops-workspace-router",
+  "x-olfactoryops-release-environment",
+  "x-olfactoryops-release-sha",
+  'credentials: "omit"',
+  'redirect: "manual"',
+  "CANDIDATE_ROUTER_EXECUTION_PROVEN",
+]);
+requireAbsent(
+  identityVerifier,
+  "candidate Router identity verifier",
+  /(?:response\.(?:text|json)|cookie|authorization|console\.(?:error|dir)|error\.message)/i,
+);
+requireFragments(tailClassifier, "candidate Route Tail classifier", [
+  "NON_BLOCKING_MISS",
+  "CONTRADICTORY_EVENT",
+  "TAIL_EVENT_CAPTURED",
 ]);
 if (
   /console\.log\([^\n]*(?:apiToken|accountId|zoneId|createdRouteId)/.test(

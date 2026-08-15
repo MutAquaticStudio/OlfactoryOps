@@ -676,9 +676,14 @@ describe("RC9 candidate Router reconciliation boundaries", () => {
   });
 
   it("verifies active tenant routes, spoof resistance, and unknown-host failure", async () => {
+    const emitted = [];
+    const spoofHeaders = [];
     await expect(
       verifyTenantRoutes({
-        fetchFn: async (request) => {
+        emitLine: (line) => emitted.push(line),
+        fetchFn: async (request, options) => {
+          if (options.headers["x-olfactoryops-workspace-host"])
+            spoofHeaders.push(options.headers);
           if (new URL(request).hostname.startsWith("missing-"))
             return new Response(null, { status: 404 });
           return htmlResponse({
@@ -689,6 +694,15 @@ describe("RC9 candidate Router reconciliation boundaries", () => {
         },
       }),
     ).resolves.toMatchObject({ unknown: { status: "404" } });
+    expect(spoofHeaders).toHaveLength(1);
+    expect(emitted).toEqual(
+      expect.arrayContaining([
+        "CANDIDATE_ROUTER_HEADERS=PASS",
+        "CANDIDATE_ROUTER_RELEASE_SHA=PASS",
+        "CANDIDATE_ROUTER_PAGES_PROXY=PASS",
+        "CANDIDATE_CALLER_TENANT_HEADERS_IGNORED=PASS",
+      ]),
+    );
   });
 
   it("rejects an unknown hostname that leaks a successful candidate surface", async () => {
