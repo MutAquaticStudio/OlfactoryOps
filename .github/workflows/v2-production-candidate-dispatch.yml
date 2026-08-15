@@ -362,6 +362,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            ops/package-lock.json
+            rc9/package-lock.json
       - name: Install main-owned browser acceptance tooling
         working-directory: ops
         run: npm ci --ignore-scripts
