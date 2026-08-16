@@ -2,10 +2,7 @@
 // This file is copied into the exact RC9 checkout by the protected workflow.
 // It intentionally imports RC9's repository and service implementations rather
 // than reimplementing their billing queries in the operations repository.
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
-import { PrismaPlatformRepository } from "../services/platform/src/prisma-repository.js";
-import { PlatformService } from "../services/platform/src/service.js";
+import type { PrismaClient } from "@prisma/client";
 import type { PlatformContext } from "../services/platform/src/types.js";
 
 const tokenHeader = "x-olfactoryops-exact-billing-diagnostic";
@@ -157,6 +154,8 @@ async function runExactDiagnostic(
     invitationEncryptionKey: string;
   },
 ) {
+  const { PrismaPlatformRepository } = await import("../services/platform/src/prisma-repository.js");
+  const { PlatformService } = await import("../services/platform/src/service.js");
   const repository = new PrismaPlatformRepository(prisma);
   const unscopedResult: { probe: Probe; value?: unknown } = { probe: { status: "FAIL", safeClass: "UNCLASSIFIED" } };
   try {
@@ -313,6 +312,10 @@ export default {
     if (!organizationId || !userId || !hostname) return response(404, { exactBillingPathDiagnostic: "NOT_FOUND" });
     let prisma: PrismaClient | undefined;
     try {
+      const [{ PrismaPg }, { PrismaClient }] = await Promise.all([
+        import("@prisma/adapter-pg"),
+        import("@prisma/client"),
+      ]);
       prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: env.HYPERDRIVE.connectionString }) });
       const result = await runExactDiagnostic(prisma, organizationId, userId, hostname, {
         sessionPepper: env.V2_SESSION_PEPPER,
