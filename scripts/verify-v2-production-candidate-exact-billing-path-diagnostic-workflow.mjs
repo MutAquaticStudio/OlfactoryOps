@@ -19,6 +19,7 @@ for (const required of [
   "repository.transaction",
   "BILLING_RLS_RUNTIME_EFFECT",
   "EXACT_BILLING_PATH_DIAGNOSTIC_CLEANUP=PASS",
+  "TEMP_EXACT_BILLING_WORKER_NAME: oo-v2-billing-runtime-exact-${{ github.run_id }}",
   "if: ${{ always() }}",
 ]) {
   if (!(workflow + worker + runner).includes(required)) throw new Error(`missing exact billing path contract: ${required}`);
@@ -39,4 +40,5 @@ for (const forbidden of [
 }
 if (!workflow.includes("environment: production")) throw new Error("diagnostic must use protected production environment");
 if (!workflow.includes("--request DELETE") || !workflow.includes("TEMP_EXACT_BILLING_WORKER_NAME")) throw new Error("temporary Worker cleanup is missing");
+if (workflow.includes("deploy.stderr" ) && !workflow.includes("EXACT_BILLING_WORKER_DEPLOY_FAILURE_CLASS")) throw new Error("temporary Worker deploy failures must emit only a safe class");
 console.log(JSON.stringify({ EXACT_BILLING_PATH_DIAGNOSTIC_WORKFLOW: "PASS", EXACT_BILLING_PATH_DIAGNOSTIC_NO_RC9_OR_PUBLIC_MUTATION: "PASS" }));
