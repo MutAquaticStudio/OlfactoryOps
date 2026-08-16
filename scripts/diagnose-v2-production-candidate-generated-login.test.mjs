@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   RC9_SHA,
+  classifySecondStageLogin,
   classifyLoginDiagnostic,
   inspectActiveApiVersion,
   inspectBindings,
+  inspectLoginRuntimeTail,
   runGeneratedLoginDiagnostic,
 } from "./diagnose-v2-production-candidate-generated-login.mjs";
 
@@ -106,6 +108,37 @@ function adapters({ failAt, generatedStatus = 503, publicStatus = 503 } = {}) {
         if (failAt === "after-verification") throw new Error(secret);
       },
       resolveHostname: async () => fixture.organizationId,
+      startRuntimeLogCapture: async () => ({
+        finish: async () => ({ eventCaptured: "YES", safeCode: "PG_42501" }),
+      }),
+      control: async ({ path }) => {
+        if (failAt === "session-control" && path.includes("email-verification"))
+          throw new Error(secret);
+        if (failAt === "branding-control" && path.includes("branding"))
+          throw new Error(secret);
+        if (failAt === "billing-control" && path.includes("billing"))
+          throw new Error(secret);
+        return { status: 200, errorCode: "NO_STABLE_ERROR_CODE" };
+      },
+      inspectLoginCatalog: async () => ({
+        usersSelect: true,
+        membershipsSelect: true,
+        hostnamesSelect: true,
+        sessionsInsert: true,
+        auditInsert: true,
+        subscriptionsSelect: true,
+        plansSelect: true,
+        entitlementsSelect: true,
+        usageLimitsSelect: true,
+        rlsMetadata: true,
+      }),
+      inspectBillingFixture: async () => ({
+        subscriptionExists: true,
+        subscriptionPlanExpected: true,
+        planExists: true,
+        entitlementCountNonzero: true,
+        usageLimitQueryable: true,
+      }),
       login: async ({ hostname }) => {
         if (
           failAt === "generated-login" ||
@@ -227,6 +260,9 @@ describe("generated login diagnostic", () => {
     "generated-login",
     "public-login",
     "version-recheck",
+    "session-control",
+    "branding-control",
+    "billing-control",
   ]) {
     it(`always archives the one fixture after ${failAt} failure`, async () => {
       const test = adapters({ failAt });
@@ -298,5 +334,75 @@ describe("generated login diagnostic", () => {
         phase: "LOGIN_VERIFY_PASSWORD",
       }),
     ).toBe("PASSWORD_HASH_OR_PEPPER_COHERENCE");
+  });
+  it("uses only the existing safe structured runtime event", () => {
+    const result = inspectLoginRuntimeTail(
+      `${JSON.stringify({ logs: [{ message: [JSON.stringify({ event: "v2_platform_runtime_failure", code: "PG_42501", password, cookie: secret })] }] })}\nnot-json`,
+    );
+    expect(result).toEqual({ eventCaptured: "YES", safeCode: "PG_42501" });
+    expect(JSON.stringify(result)).not.toContain(password);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
+  it("classifies a billing-only control failure before transaction writes", () => {
+    expect(
+      classifySecondStageLogin({
+        sessionContext: { status: 200 },
+        branding: { status: 200 },
+        billing: { status: 503 },
+        generatedLogin: { status: 503 },
+        publicLogin: { status: 503 },
+        runtimeCode: "UNCLASSIFIED",
+        catalog: {},
+        versionStable: "YES",
+      }),
+    ).toEqual({
+      phase: "LOGIN_GET_BILLING",
+      category: "BILLING_READ",
+      rootCause: "LOGIN_BILLING_READ_PATH",
+    });
+  });
+  it("keeps session and tenant controls distinct from billing", () => {
+    const base = {
+      generatedLogin: { status: 503 },
+      publicLogin: { status: 503 },
+      runtimeCode: "UNCLASSIFIED",
+      catalog: {},
+      versionStable: "YES",
+    };
+    expect(
+      classifySecondStageLogin({
+        ...base,
+        sessionContext: { status: 503 },
+        branding: { status: 200 },
+        billing: { status: 200 },
+      }).phase,
+    ).toBe("LOGIN_SESSION_CONTEXT_PATH");
+    expect(
+      classifySecondStageLogin({
+        ...base,
+        sessionContext: { status: 200 },
+        branding: { status: 503 },
+        billing: { status: 200 },
+      }).phase,
+    ).toBe("LOGIN_TENANT_SCOPED_REPOSITORY_PATH");
+  });
+  it("requires matching catalog evidence before a privilege-drift conclusion", () => {
+    const input = {
+      sessionContext: { status: 200 },
+      branding: { status: 200 },
+      billing: { status: 200 },
+      generatedLogin: { status: 503 },
+      publicLogin: { status: 503 },
+      runtimeCode: "PG_42501",
+      versionStable: "YES",
+    };
+    expect(
+      classifySecondStageLogin({ ...input, catalog: { sessionsInsert: false } })
+        .rootCause,
+    ).toBe("LOGIN_RUNTIME_DATABASE_PRIVILEGE_DRIFT");
+    expect(
+      classifySecondStageLogin({ ...input, catalog: { sessionsInsert: true } })
+        .rootCause,
+    ).toBe("LOGIN_SPECIFIC_RUNTIME_OR_TRANSACTION_PATH");
   });
 });

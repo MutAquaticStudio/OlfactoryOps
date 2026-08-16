@@ -1,4 +1,15 @@
 import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import { spawn } from "node:child_process";
+import {
+  closeSync,
+  chmodSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const RC9_SHA = "de0734df2d2b5b2dd3a2a67ee542131235e75eb7";
@@ -17,6 +28,8 @@ export const REQUIRED_VARS = {
   RELEASE_GIT_SHA: RC9_SHA,
 };
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{1,79}$/;
+const SAFE_RUNTIME_CODE =
+  /^(?:[A-Z][A-Z0-9_]{1,79}|PG_[0-9A-Z]{5}|PRISMA_P[0-9]{4})$/;
 
 function fail(code) {
   throw new Error(`GENERATED_LOGIN_DIAGNOSTIC_FAIL:${code}`);
@@ -36,6 +49,61 @@ function safeCode(value) {
 }
 function emit(emitRecord, record) {
   emitRecord(record);
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function safeRuntimeCode(value) {
+  return typeof value === "string" && SAFE_RUNTIME_CODE.test(value)
+    ? value
+    : "UNCLASSIFIED";
+}
+
+export function inspectLoginRuntimeTail(capture) {
+  const codes = new Set();
+  const inspect = (value) => {
+    if (!value || typeof value !== "object") {
+      if (typeof value === "string") {
+        try {
+          inspect(JSON.parse(value));
+        } catch {
+          // Raw log content is intentionally never returned or emitted.
+        }
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(inspect);
+      return;
+    }
+    if (value.event === "v2_platform_runtime_failure") {
+      codes.add(safeRuntimeCode(value.code));
+    }
+    for (const nested of Object.values(value)) inspect(nested);
+  };
+  for (const line of String(capture ?? "").split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      inspect(JSON.parse(line));
+    } catch {
+      // Raw Tail records are parsed only in memory.
+    }
+  }
+  return {
+    eventCaptured: codes.size > 0 ? "YES" : "NO",
+    safeCode: codes.size === 1 ? [...codes][0] : "UNCLASSIFIED",
+  };
+}
+
+function terminateProcess(child) {
+  if (!child || child.exitCode !== null || child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    child.kill("SIGTERM");
+  }
 }
 
 export function validateDiagnosticEnvironment(environment = process.env) {
@@ -196,6 +264,73 @@ export function classifyLoginPhase(state) {
   return { phase: "UNCLASSIFIED", category: "UNCLASSIFIED" };
 }
 
+export function classifySecondStageLogin({
+  sessionContext,
+  branding,
+  billing,
+  generatedLogin,
+  publicLogin,
+  runtimeCode,
+  catalog,
+  versionStable,
+}) {
+  if (versionStable !== "YES")
+    return {
+      phase: "UNPROVEN",
+      category: "UNCLASSIFIED",
+      rootCause: "CANDIDATE_API_VERSION_CHANGED_DURING_DIAGNOSTIC",
+    };
+  if (sessionContext?.status !== 200)
+    return {
+      phase: "LOGIN_SESSION_CONTEXT_PATH",
+      category: "PLATFORM_ERROR",
+      rootCause: "LOGIN_SPECIFIC_RUNTIME_OR_TRANSACTION_PATH",
+    };
+  if (branding?.status !== 200)
+    return {
+      phase: "LOGIN_TENANT_SCOPED_REPOSITORY_PATH",
+      category: "PLATFORM_ERROR",
+      rootCause: "LOGIN_SPECIFIC_RUNTIME_OR_TRANSACTION_PATH",
+    };
+  if (billing?.status !== 200)
+    return {
+      phase: "LOGIN_GET_BILLING",
+      category: "BILLING_READ",
+      rootCause: "LOGIN_BILLING_READ_PATH",
+    };
+  if (generatedLogin?.status !== 200 && publicLogin?.status !== 200) {
+    const privilegeFailure = Object.values(catalog ?? {}).some(
+      (value) => value === false,
+    );
+    if (
+      (runtimeCode === "POSTGRES_PERMISSION_DENIED" ||
+        runtimeCode === "PG_42501") &&
+      privilegeFailure
+    )
+      return {
+        phase: "UNPROVEN",
+        category: "DATABASE_PERMISSION",
+        rootCause: "LOGIN_RUNTIME_DATABASE_PRIVILEGE_DRIFT",
+      };
+    if (runtimeCode === "POSTGRES_RLS_DENIED")
+      return {
+        phase: "UNPROVEN",
+        category: "DATABASE_RLS",
+        rootCause: "LOGIN_RUNTIME_RLS_POLICY_PATH",
+      };
+    return {
+      phase: "UNCLASSIFIED",
+      category: "UNCLASSIFIED",
+      rootCause: "LOGIN_SPECIFIC_RUNTIME_OR_TRANSACTION_PATH",
+    };
+  }
+  return {
+    phase: "NOT_APPLICABLE",
+    category: "NOT_APPLICABLE",
+    rootCause: "UNPROVEN",
+  };
+}
+
 function credentials() {
   const suffix = randomBytes(12).toString("hex");
   return {
@@ -220,6 +355,7 @@ export async function runGeneratedLoginDiagnostic({
   let beforeVersion;
   let versionStability = "UNPROVEN";
   let cleanupRequired = false;
+  let runtimeCapture;
   const state = {};
 
   try {
@@ -256,6 +392,9 @@ export async function runGeneratedLoginDiagnostic({
     if (!adapters.databaseCredentialPresent())
       fail("DATABASE_CREDENTIAL_MISSING");
     emit(emitRecord, { FIXTURE_CREATION_GUARDS: "PASS" });
+    runtimeCapture = await adapters.startRuntimeLogCapture?.(
+      beforeVersion.versionId,
+    );
 
     // The sole fixture creation entrypoint remains behind all same-run guards above.
     if (fixtureCreated) fail("SECOND_FIXTURE_REJECTED");
@@ -315,6 +454,67 @@ export async function runGeneratedLoginDiagnostic({
       GENERATED_HOSTNAME_RESOLUTION: bool(resolutionPass),
     });
 
+    const sessionContext = await adapters.control({
+      path: "/v2/platform/auth/email-verification/status",
+      hostname: fixture.hostname,
+      cookie: fixture.signupCookie,
+    });
+    emit(emitRecord, {
+      SIGNUP_SESSION_CONTEXT_STATUS: safeStatus(sessionContext.status),
+      SIGNUP_SESSION_CONTEXT_ERROR_CODE: safeCode(sessionContext.errorCode),
+      SIGNUP_SESSION_CONTEXT: sessionContext.status === 200 ? "PASS" : "FAIL",
+    });
+
+    const branding = await adapters.control({
+      path: "/v2/platform/workspace/branding",
+      hostname: fixture.hostname,
+      cookie: fixture.signupCookie,
+    });
+    emit(emitRecord, {
+      BRANDING_CONTROL_STATUS: safeStatus(branding.status),
+      BRANDING_CONTROL_ERROR_CODE: safeCode(branding.errorCode),
+      GENERIC_TENANT_SCOPED_READ: branding.status === 200 ? "PASS" : "FAIL",
+    });
+
+    const billing = await adapters.control({
+      path: "/v2/platform/workspace/billing",
+      hostname: fixture.hostname,
+      cookie: fixture.signupCookie,
+    });
+    emit(emitRecord, {
+      BILLING_CONTROL_STATUS: safeStatus(billing.status),
+      BILLING_CONTROL_ERROR_CODE: safeCode(billing.errorCode),
+    });
+
+    const catalog = await adapters.inspectLoginCatalog();
+    emit(emitRecord, {
+      LOGIN_TABLE_USERS_SELECT: bool(catalog.usersSelect),
+      LOGIN_TABLE_MEMBERSHIPS_SELECT: bool(catalog.membershipsSelect),
+      LOGIN_TABLE_HOSTNAMES_SELECT: bool(catalog.hostnamesSelect),
+      LOGIN_TABLE_SESSIONS_INSERT: bool(catalog.sessionsInsert),
+      LOGIN_TABLE_AUDIT_INSERT: bool(catalog.auditInsert),
+      BILLING_SUBSCRIPTIONS_SELECT: bool(catalog.subscriptionsSelect),
+      BILLING_PLANS_SELECT: bool(catalog.plansSelect),
+      BILLING_ENTITLEMENTS_SELECT: bool(catalog.entitlementsSelect),
+      BILLING_USAGE_LIMITS_SELECT: bool(catalog.usageLimitsSelect),
+      LOGIN_CATALOG_RLS_METADATA: bool(catalog.rlsMetadata),
+    });
+    const billingState = await adapters.inspectBillingFixture(fixture);
+    emit(emitRecord, {
+      GENERATED_SUBSCRIPTION_EXISTS: billingState.subscriptionExists
+        ? "YES"
+        : "NO",
+      GENERATED_SUBSCRIPTION_PLAN_ID_EXPECTED:
+        billingState.subscriptionPlanExpected ? "YES" : "NO",
+      GENERATED_PLAN_EXISTS: billingState.planExists ? "YES" : "NO",
+      GENERATED_ENTITLEMENT_COUNT_NONZERO: billingState.entitlementCountNonzero
+        ? "YES"
+        : "NO",
+      GENERATED_USAGE_LIMIT_QUERYABLE: billingState.usageLimitQueryable
+        ? "YES"
+        : "NO",
+    });
+
     const generatedLogin = await adapters.login({
       hostname: fixture.hostname,
       identity: fixture.identity,
@@ -354,49 +554,46 @@ export async function runGeneratedLoginDiagnostic({
       : "UNPROVEN";
     emit(emitRecord, { CANDIDATE_API_VERSION_STABLE: versionStability });
 
-    const phase = classifyLoginPhase({
-      userExists: state.db.userExists,
-      passwordVerify,
-      membershipExists: state.db.membershipExists,
-      membershipActive: state.db.membershipActive,
-      hostnameExists: state.db.hostnameExists,
-      hostnameActive: state.db.hostnameActive,
-      hostnameOrganizationMatch: state.db.hostnameOrganizationMatch,
-      defaultHostname: state.db.defaultHostname,
-    });
-    if (generatedLogin.status !== 200 && publicLogin.status !== 200)
-      emit(emitRecord, {
-        LOGIN_FAILURE_PHASE: phase.phase,
-        LOGIN_FAILURE_CATEGORY: phase.category,
-      });
-    else
-      emit(emitRecord, {
-        LOGIN_FAILURE_PHASE: "NOT_APPLICABLE",
-        LOGIN_FAILURE_CATEGORY: "NOT_APPLICABLE",
-      });
-    const preflightPass =
-      healthPass &&
-      binding.pass &&
-      hostnamePass &&
-      resolutionPass &&
-      state.db.userExists &&
-      state.db.userActive &&
-      state.db.membershipActive &&
-      state.db.organizationActive;
+    const runtimeLog = await runtimeCapture?.finish?.();
+    runtimeCapture = undefined;
     emit(emitRecord, {
-      LOGIN_ROOT_CAUSE: classifyLoginDiagnostic({
-        preflightPass,
-        passwordVerify,
-        generatedLogin,
-        publicLogin,
-        versionStable,
-      }),
+      LOGIN_RUNTIME_LOG_EVENT_CAPTURED: runtimeLog?.eventCaptured ?? "NO",
+      LOGIN_RUNTIME_SAFE_CODE: runtimeLog?.safeCode ?? "UNCLASSIFIED",
+    });
+    const classification = classifySecondStageLogin({
+      sessionContext,
+      branding,
+      billing,
+      generatedLogin,
+      publicLogin,
+      runtimeCode: runtimeLog?.safeCode ?? "UNCLASSIFIED",
+      catalog,
+      versionStable: versionStability,
+    });
+    emit(emitRecord, {
+      LOGIN_FAILURE_PHASE: classification.phase,
+      LOGIN_FAILURE_CATEGORY: classification.category,
+      LOGIN_ROOT_CAUSE: classification.rootCause,
     });
     rootCauseEmitted = true;
   } catch (error) {
     executionError = error;
     emit(emitRecord, { LOGIN_DIAGNOSTIC_EXECUTION: "FAIL" });
   } finally {
+    if (runtimeCapture) {
+      try {
+        const runtimeLog = await runtimeCapture.finish();
+        emit(emitRecord, {
+          LOGIN_RUNTIME_LOG_EVENT_CAPTURED: runtimeLog?.eventCaptured ?? "NO",
+          LOGIN_RUNTIME_SAFE_CODE: runtimeLog?.safeCode ?? "UNCLASSIFIED",
+        });
+      } catch {
+        emit(emitRecord, {
+          LOGIN_RUNTIME_LOG_EVENT_CAPTURED: "NO",
+          LOGIN_RUNTIME_SAFE_CODE: "UNCLASSIFIED",
+        });
+      }
+    }
     if (beforeVersion && versionStability === "UNPROVEN") {
       try {
         const afterVersion = await adapters.activeVersion();
@@ -413,15 +610,24 @@ export async function runGeneratedLoginDiagnostic({
     if (cleanupRequired) {
       try {
         await adapters.cleanupFixture(fixture);
-        emit(emitRecord, { LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "PASS" });
+        emit(emitRecord, {
+          LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "PASS",
+          SECOND_STAGE_LOGIN_DIAGNOSTIC_CLEANUP: "PASS",
+        });
       } catch {
         cleanupError = new Error(
           "GENERATED_LOGIN_DIAGNOSTIC_FAIL:CLEANUP_UNPROVEN",
         );
-        emit(emitRecord, { LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "FAIL" });
+        emit(emitRecord, {
+          LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "FAIL",
+          SECOND_STAGE_LOGIN_DIAGNOSTIC_CLEANUP: "FAIL",
+        });
       }
     } else
-      emit(emitRecord, { LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "NOT_REQUIRED" });
+      emit(emitRecord, {
+        LOGIN_DIAGNOSTIC_FIXTURE_CLEANUP: "NOT_REQUIRED",
+        SECOND_STAGE_LOGIN_DIAGNOSTIC_CLEANUP: "NOT_REQUIRED",
+      });
     if (!rootCauseEmitted && executionError) {
       const runtimeBindingDrift =
         executionError instanceof Error &&
@@ -450,6 +656,18 @@ async function jsonResponse(response) {
 
 function safeHttpError(body) {
   return safeCode(body?.error?.code);
+}
+
+function sessionCookie(response) {
+  const values =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie()
+      : [response.headers.get("set-cookie")];
+  return values
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .map((value) => value.split(";", 1)[0])
+    .filter((value) => value.includes("="))
+    .join("; ");
 }
 
 async function createRuntimeAdapters(environment) {
@@ -537,7 +755,31 @@ async function createRuntimeAdapters(environment) {
               hostname: body.hostname.hostname,
             }
           : undefined;
-      return { status: response.status, fixture };
+      return {
+        status: response.status,
+        fixture: fixture
+          ? {
+              ...fixture,
+              signupCookie: sessionCookie(response),
+            }
+          : undefined,
+      };
+    },
+    control: async ({ path, hostname, cookie }) => {
+      const response = await fetch(`${API_ORIGIN}/api/v1${path}`, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          Accept: "application/json",
+          Origin: `https://${hostname}`,
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      });
+      return {
+        status: response.status,
+        errorCode: safeHttpError(await jsonResponse(response)),
+      };
     },
     inspectFixture: async (fixture) => {
       const result = await client.query(
@@ -579,6 +821,70 @@ async function createRuntimeAdapters(environment) {
           )
         ).rows[0]?.verified,
       ),
+    inspectLoginCatalog: async () => {
+      const runtimeRole = environment.V2_RUNTIME_DB_ROLE ?? "hyperdrive_user";
+      if (!/^[a-z_][a-z0-9_]{0,62}$/.test(runtimeRole))
+        fail("INVALID_RUNTIME_DB_ROLE");
+      const tables = [
+        "v2_users",
+        "v2_memberships",
+        "v2_workspace_hostnames",
+        "v2_sessions",
+        "v2_audit_events",
+        "v2_subscriptions",
+        "v2_plans",
+        "v2_entitlements",
+        "v2_usage_limits",
+        "v2_role_policies",
+      ];
+      const result = await client.query(
+        `SELECT c.relname AS table_name,
+          has_table_privilege($1, 'public.' || c.relname, 'SELECT') AS can_select,
+          has_table_privilege($1, 'public.' || c.relname, 'INSERT') AS can_insert,
+          c.relrowsecurity AS rls_enabled,
+          c.relforcerowsecurity AS force_rls_enabled,
+          (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) AS policy_count
+         FROM pg_class c
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relname = ANY($2::text[])`,
+        [runtimeRole, tables],
+      );
+      const entries = new Map(result.rows.map((row) => [row.table_name, row]));
+      const access = (name, privilege) =>
+        entries.has(name) && entries.get(name)?.[privilege] === true;
+      const rlsMetadata = tables.every((name) => {
+        const row = entries.get(name);
+        return (
+          row?.rls_enabled === true &&
+          row?.force_rls_enabled === true &&
+          Number(row?.policy_count) > 0
+        );
+      });
+      return {
+        usersSelect: access("v2_users", "can_select"),
+        membershipsSelect: access("v2_memberships", "can_select"),
+        hostnamesSelect: access("v2_workspace_hostnames", "can_select"),
+        sessionsInsert: access("v2_sessions", "can_insert"),
+        auditInsert: access("v2_audit_events", "can_insert"),
+        subscriptionsSelect: access("v2_subscriptions", "can_select"),
+        plansSelect: access("v2_plans", "can_select"),
+        entitlementsSelect: access("v2_entitlements", "can_select"),
+        usageLimitsSelect: access("v2_usage_limits", "can_select"),
+        rlsMetadata,
+      };
+    },
+    inspectBillingFixture: async (fixture) => {
+      const result = await client.query(
+        `SELECT
+          EXISTS(SELECT 1 FROM v2_subscriptions WHERE organization_id = $1) AS "subscriptionExists",
+          EXISTS(SELECT 1 FROM v2_subscriptions s JOIN v2_plans p ON p.id = s.plan_id WHERE s.organization_id = $1 AND p.active AND p.billing_mode = 'MANAGED_BETA') AS "subscriptionPlanExpected",
+          EXISTS(SELECT 1 FROM v2_plans p JOIN v2_subscriptions s ON s.plan_id = p.id WHERE s.organization_id = $1) AS "planExists",
+          EXISTS(SELECT 1 FROM v2_entitlements WHERE organization_id = $1) AS "entitlementCountNonzero",
+          (SELECT count(*) >= 0 FROM v2_usage_limits WHERE organization_id = $1) AS "usageLimitQueryable"`,
+        [fixture.organizationId],
+      );
+      return result.rows[0] ?? {};
+    },
     resolveHostname: async (hostname) =>
       (
         await client.query(
@@ -612,6 +918,66 @@ async function createRuntimeAdapters(environment) {
         cookiePresent: Boolean(setCookie?.includes("oo_v2_session=")),
         csrfPresent:
           typeof body?.csrfToken === "string" && body.csrfToken.length >= 16,
+      };
+    },
+    startRuntimeLogCapture: async (versionId) => {
+      const bin = environment.WRANGLER_BIN;
+      if (
+        typeof bin !== "string" ||
+        !bin ||
+        !/^[0-9a-f-]{36}$/i.test(versionId)
+      )
+        return undefined;
+      const directory = mkdtempSync(
+        join(
+          environment.RUNNER_TEMP ?? tmpdir(),
+          "oo-v2-generated-login-tail-",
+        ),
+      );
+      chmodSync(directory, 0o700);
+      const capturePath = join(directory, "capture.jsonl");
+      const errorPath = join(directory, "tail.stderr");
+      const stdout = openSync(capturePath, "w", 0o600);
+      const stderr = openSync(errorPath, "w", 0o600);
+      let child;
+      try {
+        child = spawn(
+          bin,
+          ["tail", API_SERVICE, "--format", "json", "--version-id", versionId],
+          {
+            detached: true,
+            stdio: ["ignore", stdout, stderr],
+            env: {
+              ...process.env,
+              WRANGLER_WRITE_LOGS: "false",
+              WRANGLER_LOG: "log",
+              WRANGLER_SEND_METRICS: "false",
+              WRANGLER_SEND_ERROR_REPORTS: "false",
+              NO_COLOR: "1",
+            },
+          },
+        );
+      } finally {
+        closeSync(stdout);
+        closeSync(stderr);
+      }
+      await sleep(5_000);
+      const observed = child?.exitCode === null;
+      if (observed) await sleep(60_000);
+      return {
+        finish: async () => {
+          try {
+            if (child?.exitCode === null) await sleep(10_000);
+            terminateProcess(child);
+            const capture = readFileSync(capturePath, "utf8");
+            return inspectLoginRuntimeTail(capture);
+          } catch {
+            return { eventCaptured: "NO", safeCode: "UNCLASSIFIED" };
+          } finally {
+            terminateProcess(child);
+            rmSync(directory, { recursive: true, force: true });
+          }
+        },
       };
     },
     cleanupFixture: async (fixture) => {
