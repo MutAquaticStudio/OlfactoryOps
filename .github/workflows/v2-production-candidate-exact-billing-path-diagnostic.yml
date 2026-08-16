@@ -62,7 +62,9 @@ jobs:
     env:
       RELEASE_SHA: ${{ needs.validate-exact-billing-input.outputs.release_sha }}
       CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
-      TEMP_EXACT_BILLING_WORKER_NAME: oo-v2-exact-billing-${{ github.run_id }}
+      # Keep the established temporary diagnostic namespace accepted by the
+      # protected account policy; this is still run-scoped and route-free.
+      TEMP_EXACT_BILLING_WORKER_NAME: oo-v2-billing-runtime-exact-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,7 +110,7 @@ jobs:
           binding = "HYPERDRIVE"
           id = "$EXPECTED_HYPERDRIVE_ID"
           EOF
-          test "$(grep -Ec '^name = "oo-v2-exact-billing-[0-9]+"$' "$qa_dir/wrangler.toml")" = 1
+          test "$(grep -Ec '^name = "oo-v2-billing-runtime-exact-[0-9]+"$' "$qa_dir/wrangler.toml")" = 1
           ! grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$qa_dir/wrangler.toml"
           printf 'EXACT_BILLING_QA_DIR=%s\n' "$qa_dir" >> "$GITHUB_ENV"
       - name: Capture active candidate API version before temporary Worker
@@ -128,11 +130,23 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
+          WRANGLER_SEND_ERROR_REPORTS: "false"
         run: |
           set -euo pipefail
           umask 077
+          test "${#TEMP_EXACT_BILLING_WORKER_NAME}" -le 63
+          test "$EXPECTED_HYPERDRIVE_ID" = 'b415b7572d9f45058ebb4ec4166b8739'
           printf 'EXACT_BILLING_WORKER_DEPLOY_ATTEMPTED=YES\n' >> "$GITHUB_ENV"
-          (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" deploy --config wrangler.toml >deploy.stdout 2>deploy.stderr)
+          if ! (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" deploy --config wrangler.toml >deploy.stdout 2>deploy.stderr); then
+            failure_class=UNCLASSIFIED
+            if grep -Eiq 'authentication|authorization|api token|permission' "$EXACT_BILLING_QA_DIR/deploy.stderr"; then failure_class=AUTHORIZATION; fi
+            if grep -Eiq 'invalid|validation|malformed|name.*already' "$EXACT_BILLING_QA_DIR/deploy.stderr"; then failure_class=INVALID_REQUEST; fi
+            printf 'EXACT_BILLING_WORKER_DEPLOY_FAILURE_CLASS=%s\n' "$failure_class"
+            exit 1
+          fi
+          echo 'EXACT_BILLING_WORKER_DEPLOY=PASS'
       - name: Bind ephemeral token and exact RC9 secret names
         shell: bash
         env:
@@ -195,7 +209,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
-          case "$TEMP_EXACT_BILLING_WORKER_NAME" in oo-v2-exact-billing-[0-9]*) ;; *) exit 1 ;; esac
+          case "$TEMP_EXACT_BILLING_WORKER_NAME" in oo-v2-billing-runtime-exact-[0-9]*) ;; *) exit 1 ;; esac
           status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_EXACT_BILLING_WORKER_NAME" || printf '000')"
           case "$status" in
             200) delete_status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' --request DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' --data '{}' "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_EXACT_BILLING_WORKER_NAME" || printf '000')"; test "$delete_status" = 200 ;;
