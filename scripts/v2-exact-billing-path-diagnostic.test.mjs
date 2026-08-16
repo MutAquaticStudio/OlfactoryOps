@@ -5,8 +5,8 @@ const worker = readFileSync("worker/v2-exact-billing-path-diagnostic.ts", "utf8"
 
 describe("exact billing Worker contract", () => {
   it("uses the exact RC9 repository and service and never gates on plan.findUnique", () => {
-    expect(worker).toContain('from "../services/platform/src/prisma-repository.js"');
-    expect(worker).toContain('from "../services/platform/src/service.js"');
+    expect(worker).toContain('import("../services/platform/src/prisma-repository.js")');
+    expect(worker).toContain('import("../services/platform/src/service.js")');
     expect(worker).toContain("repository.getBilling(organizationId)");
     expect(worker).toContain("repository.transaction");
     expect(worker).not.toContain("plan.findUnique");
