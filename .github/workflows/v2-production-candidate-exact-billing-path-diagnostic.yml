@@ -1,0 +1,211 @@
+name: V2 Production Candidate Exact Billing Path Diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC9 SHA.
+        required: true
+        type: string
+      confirm_diagnostic:
+        description: Type DIAGNOSE_RC9_EXACT_BILLING_PATH to run one bounded fixture.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-candidate-exact-billing-path-diagnostic
+  cancel-in-progress: false
+
+env:
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  RELEASE_BRANCH: codex/v2-production-go-live
+  CANDIDATE_API_SERVICE: olfactoryops-v2-api-production-candidate
+  EXPECTED_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+
+jobs:
+  validate-exact-billing-input:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact immutable RC9 billing path inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-candidate-exact-billing-path-diagnostic-workflow.mjs
+          test "$RELEASE_SHA" = "$RC9_SHA"
+          test "$CONFIRM_DIAGNOSTIC" = 'DIAGNOSE_RC9_EXACT_BILLING_PATH'
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC9_SHA"
+          git fetch --tags origin
+          test "$(git rev-parse v2-production-rc9^{})" = "$RC9_SHA"
+          printf 'release_sha=%s\n' "$RC9_SHA" >> "$GITHUB_OUTPUT"
+
+  diagnose-exact-billing-path:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    needs: validate-exact-billing-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      RELEASE_SHA: ${{ needs.validate-exact-billing-input.outputs.release_sha }}
+      CONFIRM_DIAGNOSTIC: ${{ inputs.confirm_diagnostic }}
+      TEMP_EXACT_BILLING_WORKER_NAME: oo-v2-exact-billing-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ops
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-exact-billing-input.outputs.release_sha }}
+          path: rc9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            ops/package-lock.json
+            rc9/package-lock.json
+      - name: Install operations and exact RC9 dependencies without lifecycle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --prefix ops
+          npm ci --ignore-scripts --prefix rc9
+      - name: Prepare exact RC9 Prisma client and route-free diagnostic Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git -C rc9 rev-parse HEAD)" = "$RELEASE_SHA"
+          grep -Fq 'include: { plan: true }' rc9/services/platform/src/prisma-repository.ts
+          grep -Fq 'async billing(context: PlatformContext)' rc9/services/platform/src/service.ts
+          rc9/node_modules/.bin/prisma generate --schema rc9/infra/postgres/prisma/schema.prisma >/dev/null 2>&1
+          qa_dir="$GITHUB_WORKSPACE/rc9/.qa/oo-v2-exact-billing-$GITHUB_RUN_ID"
+          mkdir -p "$qa_dir"
+          chmod 700 "$qa_dir"
+          cp ops/worker/v2-exact-billing-path-diagnostic.ts "$qa_dir/exact-billing-worker.ts"
+          cat > "$qa_dir/wrangler.toml" <<EOF
+          name = "$TEMP_EXACT_BILLING_WORKER_NAME"
+          main = "exact-billing-worker.ts"
+          compatibility_date = "2026-08-11"
+          compatibility_flags = ["nodejs_compat"]
+          workers_dev = true
+
+          [[hyperdrive]]
+          binding = "HYPERDRIVE"
+          id = "$EXPECTED_HYPERDRIVE_ID"
+          EOF
+          test "$(grep -Ec '^name = "oo-v2-exact-billing-[0-9]+"$' "$qa_dir/wrangler.toml")" = 1
+          ! grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$qa_dir/wrangler.toml"
+          printf 'EXACT_BILLING_QA_DIR=%s\n' "$qa_dir" >> "$GITHUB_ENV"
+      - name: Capture active candidate API version before temporary Worker
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          file="$EXACT_BILLING_QA_DIR/candidate-api-deployments.json"
+          curl --silent --show-error --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$CANDIDATE_API_SERVICE/deployments" --output "$file"
+          version="$(node -e "const fs=require('node:fs');try{const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const d=b?.success===true&&Array.isArray(b?.result?.deployments)?b.result.deployments[0]:undefined;const v=d?.strategy==='percentage'&&Array.isArray(d.versions)&&d.versions.length===1&&d.versions[0]?.percentage===100?d.versions[0].version_id:'';if(!/^[0-9a-f-]{36}$/i.test(v))process.exit(2);process.stdout.write(v)}catch{process.exit(2)}" "$file")"
+          printf 'INITIAL_CANDIDATE_API_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+      - name: Deploy temporary exact RC9 billing Worker
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf 'EXACT_BILLING_WORKER_DEPLOY_ATTEMPTED=YES\n' >> "$GITHUB_ENV"
+          (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" deploy --config wrangler.toml >deploy.stdout 2>deploy.stderr)
+      - name: Bind ephemeral token and exact RC9 secret names
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+          V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+          V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          token="$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))")"
+          printf '%s' "$token" > "$EXACT_BILLING_QA_DIR/token"
+          chmod 600 "$EXACT_BILLING_QA_DIR/token"
+          printf '%s' "$token" | (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" secret put EXACT_BILLING_DIAGNOSTIC_TOKEN --config wrangler.toml >secret-token.stdout 2>secret-token.stderr)
+          printf '%s' "$V2_SESSION_PEPPER" | (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" secret put V2_SESSION_PEPPER --config wrangler.toml >secret-session.stdout 2>secret-session.stderr)
+          printf '%s' "$V2_PASSWORD_PEPPER" | (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" secret put V2_PASSWORD_PEPPER --config wrangler.toml >secret-password.stdout 2>secret-password.stderr)
+          printf '%s' "$V2_INVITATION_ENCRYPTION_KEY" | (cd "$EXACT_BILLING_QA_DIR" && "$GITHUB_WORKSPACE/rc9/node_modules/.bin/wrangler" secret put V2_INVITATION_ENCRYPTION_KEY --config wrangler.toml >secret-invitation.stdout 2>secret-invitation.stderr)
+      - name: Resolve workers.dev URL and prove readiness
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          subdomain_file="$EXACT_BILLING_QA_DIR/subdomain.json"
+          curl --silent --show-error --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" --output "$subdomain_file"
+          subdomain="$(node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(v??''))process.exit(2);process.stdout.write(v)" "$subdomain_file")"
+          url="https://${TEMP_EXACT_BILLING_WORKER_NAME}.${subdomain}.workers.dev"
+          printf '%s' "$url" > "$EXACT_BILLING_QA_DIR/url"
+          token="$(cat "$EXACT_BILLING_QA_DIR/token")"
+          for attempt in $(seq 1 8); do
+            status="$(curl --silent --max-time 15 --output "$EXACT_BILLING_QA_DIR/ready.json" --write-out '%{http_code}' -H "x-olfactoryops-exact-billing-diagnostic: $token" "$url/ready" || printf '000')"
+            if [ "$status" = 200 ] && node -e "const fs=require('node:fs');try{process.exit(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.exactBillingPathDiagnostic==='READY'?0:1)}catch{process.exit(1)}" "$EXACT_BILLING_QA_DIR/ready.json"; then
+              printf 'EXACT_BILLING_DIAGNOSTIC_URL=%s\n' "$url" >> "$GITHUB_ENV"
+              printf 'EXACT_BILLING_DIAGNOSTIC_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+      - name: Run one bounded exact RC9 billing path diagnostic
+        shell: bash
+        env:
+          PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          V2_PRODUCTION_CANDIDATE_API_ORIGIN: https://api-next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_TENANT_URL: https://rc9-release-31736285494-469ca8942a.next.labofscents.org
+        run: |
+          set -euo pipefail
+          export EXACT_BILLING_DIAGNOSTIC_URL
+          export EXACT_BILLING_DIAGNOSTIC_TOKEN
+          node ops/scripts/diagnose-v2-production-candidate-exact-billing-path.mjs
+      - name: Delete temporary exact billing Worker and local evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "$TEMP_EXACT_BILLING_WORKER_NAME" in oo-v2-exact-billing-[0-9]*) ;; *) exit 1 ;; esac
+          status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_EXACT_BILLING_WORKER_NAME" || printf '000')"
+          case "$status" in
+            200) delete_status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' --request DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' --data '{}' "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_EXACT_BILLING_WORKER_NAME" || printf '000')"; test "$delete_status" = 200 ;;
+            404) ;;
+            *) exit 1 ;;
+          esac
+          final_status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_EXACT_BILLING_WORKER_NAME" || printf '000')"
+          test "$final_status" = 404
+          fixture_cleanup="${EXACT_BILLING_PATH_DIAGNOSTIC_FIXTURE_CLEANUP:-NOT_REQUIRED}"
+          case "$fixture_cleanup" in PASS|NOT_REQUIRED) ;; *) exit 1 ;; esac
+          qa_dir="${EXACT_BILLING_QA_DIR:-}"
+          if [ -n "$qa_dir" ]; then case "$qa_dir" in "$GITHUB_WORKSPACE"/rc9/.qa/oo-v2-exact-billing-*) rm -rf "$qa_dir" ;; *) exit 1 ;; esac; fi
+          echo 'EXACT_BILLING_PATH_DIAGNOSTIC_CLEANUP=PASS'
