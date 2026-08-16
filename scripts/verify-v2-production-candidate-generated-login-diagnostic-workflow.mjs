@@ -29,6 +29,8 @@ const required = [
   "CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}",
   "CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}",
   "V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}",
+  "V2_RUNTIME_DB_ROLE: hyperdrive_user",
+  "WRANGLER_BIN: ./node_modules/.bin/wrangler",
   "npm ci --ignore-scripts",
   "V2_PRODUCTION_CANDIDATE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}",
   "node scripts/diagnose-v2-production-candidate-generated-login.mjs",
@@ -74,6 +76,18 @@ for (const fragment of [
   'if (fixtureCreated) fail("SECOND_FIXTURE_REJECTED")',
   "finally",
   "cleanupFixture",
+  "startRuntimeLogCapture",
+  '"tail", API_SERVICE, "--format", "json", "--version-id", versionId',
+  'WRANGLER_WRITE_LOGS: "false"',
+  "sleep(60_000)",
+  "LOGIN_RUNTIME_LOG_EVENT_CAPTURED",
+  "LOGIN_RUNTIME_SAFE_CODE",
+  "SIGNUP_SESSION_CONTEXT",
+  "GENERIC_TENANT_SCOPED_READ",
+  "BILLING_CONTROL_STATUS",
+  "inspectLoginCatalog",
+  "inspectBillingFixture",
+  "SECOND_STAGE_LOGIN_DIAGNOSTIC_CLEANUP",
 ])
   if (!diagnostic.includes(fragment))
     throw new Error(
@@ -84,6 +98,24 @@ if (
   diagnostic.indexOf("const signup = await adapters.signup")
 )
   throw new Error("fixture creation can occur before all same-run guards pass");
+if (
+  diagnostic.indexOf("startRuntimeLogCapture") >
+  diagnostic.indexOf("const signup = await adapters.signup")
+)
+  throw new Error(
+    "runtime log capture must begin before the generated login fixture",
+  );
+for (const forbidden of [
+  /console\.error\(/,
+  /console\.log\([^\n]*password/i,
+  /console\.log\([^\n]*cookie/i,
+  /console\.log\([^\n]*csrf/i,
+  /console\.log\([^\n]*PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL/i,
+])
+  if (forbidden.test(diagnostic))
+    throw new Error(
+      "generated login diagnostic can emit sensitive runtime evidence",
+    );
 console.log(
   JSON.stringify({
     GENERATED_LOGIN_DIAGNOSTIC_WORKFLOW: "PASS",
