@@ -6,22 +6,20 @@ const workflowPath =
   ".github/workflows/v2-production-environment-revalidation.yml";
 
 describe("production environment revalidation workflow contract", () => {
-  it("is manually dispatched, protected, and pinned to RC9", () => {
+  it("is manually dispatched, protected, and pinned to an immutable RC tag", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("name: V2 Production Environment Revalidation");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain("environment: production");
     expect(workflow).toContain("github.ref == 'refs/heads/main'");
-    expect(workflow).toContain("ACTIVE_RC_TAG: v2-production-rc9");
-    expect(workflow).toContain(
-      "ACTIVE_RC_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7",
-    );
+    expect(workflow).toContain("active_rc_tag:");
+    expect(workflow).toContain('case "$ACTIVE_RC_TAG" in v2-production-rc9|v2-production-rc10)');
     expect(workflow).toContain(
       "REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC",
     );
     expect(workflow).toContain("persist-credentials: false");
     expect(workflow).toContain(
-      'git worktree add --detach "$RUNNER_TEMP/olfactoryops-rc9" "$RELEASE_SHA"',
+      'git worktree add --detach "$RUNNER_TEMP/olfactoryops-release" "$RELEASE_SHA"',
     );
   });
 
@@ -35,7 +33,7 @@ describe("production environment revalidation workflow contract", () => {
     );
     expect(workflow).toContain("PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS");
     expect(workflow).toContain(
-      'npm --prefix "$RC9_WORKTREE" run security:client-bundle',
+      'npm --prefix "$RELEASE_WORKTREE" run security:client-bundle',
     );
     expect(workflow).not.toMatch(
       /wrangler\s+deploy|wrangler\s+secret\s+put|gh\s+(variable|secret)\s+set|INSERT\s+|UPDATE\s+|DELETE\s+|ALTER\s+/i,
@@ -44,7 +42,7 @@ describe("production environment revalidation workflow contract", () => {
     expect(workflow).not.toContain("pull_request_target:");
   });
 
-  it("copies and runs the bounded database probe from the exact RC9 dependency worktree", () => {
+  it("copies and runs the bounded database probe from the exact release dependency worktree", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     const databaseStep = workflow
       .split("- name: Verify production database connectivity read-only")[1]
@@ -52,9 +50,9 @@ describe("production environment revalidation workflow contract", () => {
     const databaseRun = databaseStep
       .split("run: |\n")[1]
       .replace(/^          /gm, "");
-    expect(workflow).toContain('npm ci --prefix "$RC9_WORKTREE"');
+    expect(workflow).toContain('npm ci --prefix "$RELEASE_WORKTREE"');
     expect(databaseStep).toContain(
-      'ops_directory="$RC9_WORKTREE/.ops-revalidation"',
+      'ops_directory="$RELEASE_WORKTREE/.ops-revalidation"',
     );
     expect(databaseStep).toContain(
       "scripts/verify-production-database-connectivity.mjs",
@@ -62,8 +60,8 @@ describe("production environment revalidation workflow contract", () => {
     expect(databaseStep).toContain(
       '"$ops_directory/verify-production-database-connectivity.mjs"',
     );
-    expect(databaseStep).toContain('cd "$RC9_WORKTREE"');
-    expect(databaseStep.indexOf('cd "$RC9_WORKTREE"')).toBeLessThan(
+    expect(databaseStep).toContain('cd "$RELEASE_WORKTREE"');
+    expect(databaseStep.indexOf('cd "$RELEASE_WORKTREE"')).toBeLessThan(
       databaseStep.indexOf(
         "node .ops-revalidation/verify-production-database-connectivity.mjs",
       ),
@@ -80,12 +78,12 @@ describe("production environment revalidation workflow contract", () => {
     ).not.toThrow();
   });
 
-  it("cleans up only the runner-local RC9 worktree", () => {
+  it("cleans up only the runner-local release worktree", () => {
     const workflow = readFileSync(workflowPath, "utf8");
     expect(workflow).toContain("if: always()");
-    expect(workflow).toContain('git worktree remove --force "$RC9_WORKTREE"');
+    expect(workflow).toContain('git worktree remove --force "$RELEASE_WORKTREE"');
     expect(workflow).toContain("git worktree prune");
-    expect(workflow).toContain("RUNNER_LOCAL_RC9_WORKTREE_CLEANUP=PASS");
+    expect(workflow).toContain("RUNNER_LOCAL_RELEASE_WORKTREE_CLEANUP=PASS");
   });
 
   it("keeps all required runtime secrets inside the protected job", () => {
