@@ -111,6 +111,19 @@ describe('V2 platform security core', () => {
     expect(changed.user.verified).toBe(false)
   })
 
+  it('keeps login auth-critical when billing is unavailable', async () => {
+    const { service, repository } = makeService()
+    await service.signup({ organizationName: 'Billing Deferred', workspaceSlug: 'billing-deferred', email: 'billing-deferred@example.test', displayName: 'Billing Deferred', password: 'Correct Horse Battery 12!' })
+    let billingCalls = 0
+    repository.getBilling = async () => { billingCalls += 1; throw new Error('billing unavailable') }
+    const sessionsBefore = repository.sessions.length
+    const login = await service.login({ email: 'billing-deferred@example.test', password: 'Correct Horse Battery 12!', hostname: 'billing-deferred.olfactoryops.com' })
+    expect(login).toEqual(expect.objectContaining({ user: expect.any(Object), membership: expect.any(Object), memberships: expect.any(Array), hostname: expect.any(Object), csrfToken: expect.any(String), session: expect.any(Object), workspaceUrl: 'https://billing-deferred.olfactoryops.com/v2/workspace' }))
+    expect(billingCalls).toBe(0)
+    expect(repository.sessions).toHaveLength(sessionsBefore + 1)
+    expect(repository.audits.some((audit) => audit.action === 'platform.login' && audit.outcome === 'allowed')).toBe(true)
+  })
+
   it('rate limits verification resend and exposes tenant-scoped members and push subscriptions', async () => {
     const { service, repository } = makeService()
     const signup = await service.signup({ organizationName: 'Notify', workspaceSlug: 'notify', email: 'notify@example.test', displayName: 'Notify', password: 'Correct Horse Battery 12!' })
@@ -153,8 +166,13 @@ describe('V2 platform security core', () => {
     expect(repository.invitations.find((item) => item.id === first.id)?.status).toBe('REVOKED')
     const secondOutbox = repository.notifications.at(-1)!
     const secondToken = openSecret(String(repository.notificationPayloads.get(secondOutbox.id)?.tokenCiphertext), 'local-v2-invitation-key')
+    let billingCalls = 0
+    repository.getBilling = async () => { billingCalls += 1; throw new Error('billing unavailable') }
     const accepted = await service.acceptInvitation({ token: secondToken, email: 'member@invites.test', password: 'Member Correct Horse 12!', displayName: 'Invited Perfumer' })
     expect(accepted.membership.role).toBe('Perfumer')
+    expect(billingCalls).toBe(0)
+    expect(accepted).toEqual(expect.objectContaining({ user: expect.any(Object), membership: expect.any(Object), memberships: expect.any(Array), hostname: expect.any(Object), csrfToken: expect.any(String), session: expect.any(Object), workspaceUrl: expect.any(String) }))
+    expect(repository.audits.some((audit) => audit.action === 'platform.invitation.accept' && audit.outcome === 'allowed')).toBe(true)
     expect(repository.invitations.find((item) => item.id === reissued.id)?.status).toBe('ACCEPTED')
     await expect(service.acceptInvitation({ token: secondToken, email: 'member@invites.test', password: 'Member Correct Horse 12!', displayName: 'Invited Perfumer' })).rejects.toMatchObject({ code: 'INVITATION_CONFLICT' })
     await expect(service.acceptInvitation({ token: firstToken, email: 'member@invites.test', password: 'Member Correct Horse 12!', displayName: 'Invited Perfumer' })).rejects.toMatchObject({ code: 'INVITATION_REVOKED' })

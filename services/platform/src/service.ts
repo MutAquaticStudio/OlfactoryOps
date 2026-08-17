@@ -146,7 +146,7 @@ export class PlatformService {
       if (code === 'EMAIL_CONFLICT' || code.includes('P2002') || code.includes('Unique constraint')) throw new PlatformError('EMAIL_CONFLICT', 'That email or workspace address is already registered.', 409)
       throw new PlatformRuntimeFailure('SIGNUP_TENANT_WRITE_FAILED')
     }
-    return { ...await this.authProjection(seed.user, seed.membership, [seed.membership], hostname, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken, billing), rawSessionToken: sessionTokens.rawToken, verificationToken }
+    return { ...await this.authProjection(seed.user, seed.membership, [seed.membership], hostname, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken), rawSessionToken: sessionTokens.rawToken, verificationToken }
   }
 
   async login(input: LoginInput): Promise<PlatformAuthResponse & { rawSessionToken: string }> {
@@ -167,8 +167,8 @@ export class PlatformService {
     hostname ??= await this.repository.transaction((tx) => tx.findDefaultHostname(membership.organizationId), { organizationId: membership.organizationId, userId: user.id })
     if (!hostname) throw new PlatformError('TENANT_NOT_FOUND', 'Workspace address was not found.', 404)
     const sessionTokens = this.newSession(user.id, membership.organizationId, hostname.hostname, input.userAgent, input.ip, input.deviceLabel, undefined)
-    const billing = await this.repository.transaction(async (tx) => { await tx.createSession(sessionTokens.record); await tx.appendAudit({ organizationId: membership.organizationId, actorUserId: user.id, action: 'platform.login', outcome: 'allowed', subjectType: 'session', subjectId: sessionTokens.record.id, correlationId: correlationId() }); return tx.getBilling(membership.organizationId) }, { organizationId: membership.organizationId, userId: user.id })
-    return { ...await this.authProjection(user, membership, memberships, hostname, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken, billing), rawSessionToken: sessionTokens.rawToken }
+    await this.repository.transaction(async (tx) => { await tx.createSession(sessionTokens.record); await tx.appendAudit({ organizationId: membership.organizationId, actorUserId: user.id, action: 'platform.login', outcome: 'allowed', subjectType: 'session', subjectId: sessionTokens.record.id, correlationId: correlationId() }) }, { organizationId: membership.organizationId, userId: user.id })
+    return { ...await this.authProjection(user, membership, memberships, hostname, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken), rawSessionToken: sessionTokens.rawToken }
   }
 
   async contextFromToken(rawToken: string, hostname: string, options: { allowUnverified?: boolean } = {}): Promise<{ context: PlatformContext; user: PlatformUser; membership: MembershipRecord; session: SessionRecord }> {
@@ -333,10 +333,9 @@ export class PlatformService {
       await tx.createSession(sessionTokens.record)
       await tx.appendAudit({ organizationId: invitation.organizationId, actorUserId: userId, action: 'platform.invitation.accept', outcome: 'allowed', subjectType: 'invitation', subjectId: invitation.id, correlationId: correlationId() })
       const memberships = await tx.listMemberships(userId)
-      const billing = await tx.getBilling(invitation.organizationId)
-      return { membership, memberships, billing }
+      return { membership, memberships }
     }, { organizationId: invitation.organizationId, userId })
-    return { ...await this.authProjection(user, result.membership, result.memberships, host, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken, result.billing), rawSessionToken: sessionTokens.rawToken }
+    return { ...await this.authProjection(user, result.membership, result.memberships, host, sessionTokens.record, sessionTokens.csrfToken, sessionTokens.rawToken), rawSessionToken: sessionTokens.rawToken }
   }
 
   async subscribePush(context: PlatformContext, input: PushSubscriptionInput) { await this.requirePermission(context, 'notifications.manage'); const endpointHash = hashSecret(input.endpoint, this.sessionPepper); await this.scoped(context, async (tx) => { await tx.savePushSubscription({ ...input, userId: context.userId, organizationId: context.organizationId, endpointHash }); await tx.appendAudit({ organizationId: context.organizationId, actorUserId: context.userId, action: 'platform.push.subscribe', outcome: 'allowed', subjectType: 'push_subscription', subjectId: endpointHash, correlationId: correlationId() }) }); return { subscribed: true } }
@@ -378,6 +377,6 @@ export class PlatformService {
 
   private newSession(userId: string, organizationId: string, _hostname: string, userAgent?: string, ip?: string, deviceLabel?: string, rotatedFromId?: string) { const rawToken = randomSecret('sess_'); const csrfToken = randomSecret('csrf_'); const createdAt = new Date(); const record: SessionRecord = { id: `ses_${randomUUID().slice(0, 12)}`, userId, organizationId, tokenVerifierHash: hashSecret(rawToken, this.sessionPepper), csrfVerifierHash: hashSecret(csrfToken, this.sessionPepper), deviceLabel: deviceLabel?.slice(0, 160), userAgent: userAgent?.slice(0, 512), createdAt: iso(createdAt), lastSeenAt: iso(createdAt), idleExpiresAt: iso(addMinutes(createdAt, 60)), absoluteExpiresAt: iso(addDays(createdAt, 30)), rotatedFromId }; return { rawToken, csrfToken, record } }
   private sessionSummary(item: SessionRecord, current = false): SessionSummary { return { id: item.id, organizationId: item.organizationId, userId: item.userId, deviceLabel: item.deviceLabel, userAgent: item.userAgent, createdAt: item.createdAt, lastSeenAt: item.lastSeenAt, idleExpiresAt: item.idleExpiresAt, absoluteExpiresAt: item.absoluteExpiresAt, current } }
-  private async authProjection(user: PlatformUser, membership: MembershipRecord, memberships: MembershipRecord[], hostname: HostnameRecord, session: SessionRecord, csrfToken: string, rawToken: string, _billing: BillingCapabilityProjection): Promise<PlatformAuthResponse & { rawSessionToken: string }> { return { user: { id: user.id, email: user.email, displayName: user.displayName, verified: Boolean(user.verifiedAt) }, membership: this.membershipProjection(membership), memberships: memberships.map((item) => this.membershipProjection(item)), hostname, csrfToken, session: this.sessionSummary(session, true), workspaceUrl: `https://${hostname.hostname}/v2/workspace`, rawSessionToken: rawToken } }
+  private async authProjection(user: PlatformUser, membership: MembershipRecord, memberships: MembershipRecord[], hostname: HostnameRecord, session: SessionRecord, csrfToken: string, rawToken: string): Promise<PlatformAuthResponse & { rawSessionToken: string }> { return { user: { id: user.id, email: user.email, displayName: user.displayName, verified: Boolean(user.verifiedAt) }, membership: this.membershipProjection(membership), memberships: memberships.map((item) => this.membershipProjection(item)), hostname, csrfToken, session: this.sessionSummary(session, true), workspaceUrl: `https://${hostname.hostname}/v2/workspace`, rawSessionToken: rawToken } }
   private membershipProjection(item: MembershipRecord): TenantMembership { return { id: item.id, organizationId: item.organizationId, organizationName: item.organizationName, organizationSlug: item.organizationSlug, role: item.role, status: item.status } }
 }
