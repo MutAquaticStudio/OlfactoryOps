@@ -4,6 +4,10 @@ const releaseSha = process.env.V2_PRODUCTION_CANDIDATE_EXPECTED_SHA;
 const tenantUrl = process.env.V2_PRODUCTION_CANDIDATE_TENANT_URL;
 const apiOrigin = "https://api-next.labofscents.org";
 const paths = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+const acceptedReleaseShas = new Set([
+  "de0734df2d2b5b2dd3a2a67ee542131235e75eb7",
+  "fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd",
+]);
 
 function fail(code) {
   console.log(`CANDIDATE_BROWSER_ACCEPTANCE_STAGE=${stage}`);
@@ -17,7 +21,7 @@ function required(condition, code) {
 
 let stage = "INVALID_INPUT";
 try {
-  required(releaseSha === "de0734df2d2b5b2dd3a2a67ee542131235e75eb7", "INVALID_INPUT");
+  required(acceptedReleaseShas.has(releaseSha), "INVALID_INPUT");
   required(tenantUrl === "https://rc9-release-31736285494-469ca8942a.next.labofscents.org", "INVALID_INPUT");
   const tenant = new URL(tenantUrl);
   stage = "BROWSER_LAUNCH_UNAVAILABLE";
