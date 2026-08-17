@@ -7,6 +7,10 @@ on:
         description: Exact active release SHA to revalidate without deployment.
         required: true
         type: string
+      active_rc_tag:
+        description: Exact immutable RC tag for the release SHA.
+        required: true
+        type: string
       confirm_revalidation:
         description: Type REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC to run read-only production-boundary checks.
         required: true
@@ -21,8 +25,6 @@ concurrency:
 
 env:
   RELEASE_BRANCH: codex/v2-production-go-live
-  ACTIVE_RC_TAG: v2-production-rc9
-  ACTIVE_RC_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
 
 jobs:
   revalidate-production-environment:
@@ -32,6 +34,8 @@ jobs:
     environment: production
     env:
       RELEASE_SHA: ${{ inputs.release_sha }}
+      ACTIVE_RC_TAG: ${{ inputs.active_rc_tag }}
+      ACTIVE_RC_SHA: ${{ inputs.release_sha }}
       CONFIRM_REVALIDATION: ${{ inputs.confirm_revalidation }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -46,27 +50,28 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate the immutable RC9 identity
+      - name: Validate the immutable release identity
         shell: bash
         run: |
           set -euo pipefail
           test "$CONFIRM_REVALIDATION" = "REVALIDATE_PRODUCTION_ENVIRONMENT_FOR_ACTIVE_RC"
+          case "$ACTIVE_RC_TAG" in v2-production-rc9|v2-production-rc10) ;; *) exit 2 ;; esac
           test "$RELEASE_SHA" = "$ACTIVE_RC_SHA"
           git fetch --no-tags origin "$RELEASE_BRANCH"
           test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
           git fetch --tags origin
           test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
           git cat-file -e "${RELEASE_SHA}^{commit}"
-          git worktree add --detach "$RUNNER_TEMP/olfactoryops-rc9" "$RELEASE_SHA"
-          echo "RC9_WORKTREE=$RUNNER_TEMP/olfactoryops-rc9" >> "$GITHUB_ENV"
+          git worktree add --detach "$RUNNER_TEMP/olfactoryops-release" "$RELEASE_SHA"
+          echo "RELEASE_WORKTREE=$RUNNER_TEMP/olfactoryops-release" >> "$GITHUB_ENV"
           echo "PRODUCTION_RELEASE_IDENTITY=PASS"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - name: Install exact RC9 dependencies
+      - name: Install exact release dependencies
         shell: bash
-        run: npm ci --prefix "$RC9_WORKTREE"
+        run: npm ci --prefix "$RELEASE_WORKTREE"
       - name: Verify production secret names and safe minimum shapes
         shell: bash
         run: |
@@ -98,7 +103,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ops_directory="$RC9_WORKTREE/.ops-revalidation"
+          ops_directory="$RELEASE_WORKTREE/.ops-revalidation"
           rm -rf "$ops_directory"
           mkdir -p "$ops_directory"
           chmod 700 "$ops_directory"
@@ -107,10 +112,10 @@ jobs:
             scripts/verify-production-database-connectivity.mjs \
             "$ops_directory/verify-production-database-connectivity.mjs"
           (
-            cd "$RC9_WORKTREE"
+            cd "$RELEASE_WORKTREE"
             node .ops-revalidation/verify-production-database-connectivity.mjs
           )
-      - name: Scan exact RC9 source and generated client bundle for secret exposure
+      - name: Scan exact release source and generated client bundle for secret exposure
         shell: bash
         run: |
           set -euo pipefail
@@ -120,12 +125,12 @@ jobs:
             echo "RC9_SECRET_CONSUMER_DELTA=FAIL"
             exit 1
           fi
-          if git -C "$RC9_WORKTREE" grep -nE 'VITE_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)|PUBLIC_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)' -- ':!docs' ':!*.test.*'; then
+          if git -C "$RELEASE_WORKTREE" grep -nE 'VITE_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)|PUBLIC_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)' -- ':!docs' ':!*.test.*'; then
             echo "PRODUCTION_CLIENT_SECRET_REFERENCE=FAIL"
             exit 1
           fi
-          npm --prefix "$RC9_WORKTREE" run build
-          npm --prefix "$RC9_WORKTREE" run security:client-bundle
+          npm --prefix "$RELEASE_WORKTREE" run build
+          npm --prefix "$RELEASE_WORKTREE" run security:client-bundle
           echo "PRODUCTION_SECRET_SCAN=PASS"
       - name: Record read-only production secret-boundary result
         shell: bash
@@ -133,13 +138,13 @@ jobs:
           set -euo pipefail
           echo "PRODUCTION_ENVIRONMENT_PROTECTION=PASS"
           echo "PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS"
-      - name: Remove the runner-local RC9 worktree
+      - name: Remove the runner-local release worktree
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${RC9_WORKTREE:-}" ] && [ -d "$RC9_WORKTREE" ]; then
-            git worktree remove --force "$RC9_WORKTREE"
+          if [ -n "${RELEASE_WORKTREE:-}" ] && [ -d "$RELEASE_WORKTREE" ]; then
+            git worktree remove --force "$RELEASE_WORKTREE"
             git worktree prune
           fi
-          echo "RUNNER_LOCAL_RC9_WORKTREE_CLEANUP=PASS"
+          echo "RUNNER_LOCAL_RELEASE_WORKTREE_CLEANUP=PASS"
