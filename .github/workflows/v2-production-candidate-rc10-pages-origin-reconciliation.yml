@@ -1,0 +1,170 @@
+name: V2 Production Candidate RC10 Pages Origin Reconciliation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 release SHA.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact candidate-only fixture hostname.
+        required: true
+        type: string
+      confirm_reconciliation:
+        description: Type RECONCILE_RC10_CANDIDATE_PAGES_ORIGIN to continue.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  TARGET_RELEASE_TAG: v2-production-rc10
+  TARGET_RELEASE_BRANCH: codex/v2-production-go-live
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_PAGES_ORIGIN: https://6fceca39.olfactoryops-v2-production-candidate.pages.dev
+  TARGET_PAGES_PROJECT: olfactoryops-v2-production-candidate
+  TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+
+jobs:
+  validate-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC10 reconciliation inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_RECONCILIATION: ${{ inputs.confirm_reconciliation }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_RECONCILIATION" = "RECONCILE_RC10_CANDIDATE_PAGES_ORIGIN"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          git fetch --no-tags origin "refs/heads/$TARGET_RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_RELEASE_SHA"
+          git fetch --tags origin "refs/tags/$TARGET_RELEASE_TAG"
+          test "$(git rev-parse "$TARGET_RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  reconcile-candidate-router:
+    needs: validate-input
+    if: ${{ needs.validate-input.result == 'success' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-input.outputs.release_sha }}
+          path: rc10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install exact RC10 deployment dependencies
+        shell: bash
+        working-directory: rc10
+        run: npm ci --ignore-scripts
+      - name: Verify immutable RC10 Pages origin
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          const origin = process.env.TARGET_PAGES_ORIGIN;
+          const expectedSha = process.env.TARGET_RELEASE_SHA;
+          const paths = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+          const manifest = await fetch(`${origin}/release.json`, { redirect: "manual" });
+          const body = await manifest.json();
+          if (manifest.status !== 200 || body.fullGitSha !== expectedSha || body.artifact !== "pages") throw new Error("PAGES_IDENTITY_FAIL");
+          for (const path of paths) {
+            const response = await fetch(`${origin}${path}`, { redirect: "manual" });
+            if (response.status !== 200 || !/^text\/html(?:;|$)/i.test(response.headers.get("content-type") ?? "")) throw new Error("PAGES_ROUTE_FAIL");
+          }
+          console.log("PAGES_RC10_IMMUTABLE_IDENTITY=PASS");
+          console.log("PAGES_RC10_FIVE_ROUTES=PASS");
+          EOF
+      - name: Preflight exact candidate Custom Domain ownership
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          const endpoint = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/domains?hostname=${encodeURIComponent(process.env.TARGET_FIXTURE_HOSTNAME)}`;
+          const response = await fetch(endpoint, { headers: { authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` } });
+          const envelope = await response.json().catch(() => null);
+          const rows = envelope?.success === true && Array.isArray(envelope.result) ? envelope.result.filter((row) => row?.hostname === process.env.TARGET_FIXTURE_HOSTNAME) : [];
+          if (!response.ok || rows.length !== 1 || rows[0].service !== process.env.TARGET_ROUTER_SERVICE || rows[0].zone_name !== "labofscents.org") throw new Error("CUSTOM_DOMAIN_PREFLIGHT_FAIL");
+          console.log("CANDIDATE_CUSTOM_DOMAIN_PREFLIGHT=PASS");
+          EOF
+      - name: Render exact RC10 candidate Router config
+        shell: bash
+        working-directory: rc10
+        env:
+          RELEASE_SHA: ${{ needs.validate-input.outputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ needs.validate-input.outputs.fixture_hostname }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { readFileSync, writeFileSync } from "node:fs";
+          let config = readFileSync("wrangler.v2-tenant-router-production.example.toml", "utf8");
+          config = config.replace('name = "olfactoryops-v2-tenant-router-production"', 'name = "olfactoryops-v2-tenant-router-production-candidate"');
+          const legacyRoute = "routes = [" + "{ pattern = " + "\"*." + "labofscents.org/*\", zone_name = \"labofscents.org\" }]";
+          config = config.replace(legacyRoute, `[[routes]]\npattern = "${process.env.FIXTURE_HOSTNAME}"\ncustom_domain = true`);
+          config = config.replaceAll("REPLACE_WITH_VERIFIED_RELEASE_SHA", process.env.RELEASE_SHA);
+          config = config.replaceAll("REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID", process.env.TARGET_HYPERDRIVE_ID);
+          config = config.replace("https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN", process.env.TARGET_PAGES_ORIGIN);
+          config = config.replace('V2_WORKSPACE_BASE_DOMAIN = "labofscents.org"', 'V2_WORKSPACE_BASE_DOMAIN = "next.labofscents.org"');
+          if (config.includes('routes = [{ pattern =') || config.includes("REPLACE_WITH_") || !config.includes(`pattern = "${process.env.FIXTURE_HOSTNAME}"`) || !config.includes(`PAGES_ORIGIN = "${process.env.TARGET_PAGES_ORIGIN}"`) || !config.includes(`RELEASE_GIT_SHA = "${process.env.RELEASE_SHA}"`)) throw new Error("RC10_ROUTER_CONFIG_FAIL");
+          writeFileSync("wrangler.v2-tenant-router-production-candidate.toml", config);
+          console.log("RC10_ROUTER_CONFIG=PASS");
+          EOF
+          npm run prisma:generate:v2
+      - name: Deploy only the RC10 candidate Router
+        working-directory: rc10
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: ./node_modules/.bin/wrangler deploy --strict --config wrangler.v2-tenant-router-production-candidate.toml
+      - name: Verify candidate Router now proxies immutable RC10 Pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          const origin = `https://${process.env.TARGET_FIXTURE_HOSTNAME}`;
+          const paths = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+          for (const path of paths) {
+            const response = await fetch(`${origin}${path}`, { redirect: "manual", headers: { "cache-control": "no-cache", pragma: "no-cache" } });
+            if (response.status !== 200 || !/^text\/html(?:;|$)/i.test(response.headers.get("content-type") ?? "") || response.headers.get("x-olfactoryops-workspace-router") !== "active" || response.headers.get("x-olfactoryops-release-environment") !== "production" || response.headers.get("x-olfactoryops-release-sha") !== process.env.TARGET_RELEASE_SHA) throw new Error("CANDIDATE_ROUTER_ROUTE_FAIL");
+          }
+          console.log("CANDIDATE_ROUTER_HEADERS=PASS");
+          console.log("CANDIDATE_ROUTER_PAGES_PROXY=PASS");
+          console.log("CANDIDATE_ROUTER_RELEASE_SHA=PASS");
+          console.log("CANDIDATE_ROUTER_FIVE_ROUTES=PASS");
+          EOF
+      - name: Remove temporary RC10 checkout
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf rc10
+          test ! -e rc10
+          echo "RC10_ROUTER_RECONCILIATION_CLEANUP=PASS"
