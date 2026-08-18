@@ -1,0 +1,72 @@
+name: V2 Production Public Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_acceptance:
+        description: Type RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-public-acceptance
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  READY_TAG: v2-production-ready
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  accept:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Validate exact RC10 and readiness attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_acceptance }}" = RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE
+          test "${{ inputs.release_sha }}" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$READY_TAG")" = "$RC10_SHA"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: release
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - name: Install exact RC10 acceptance dependencies
+        run: npm ci --prefix release
+      - name: Run the bounded public V2 acceptance harness
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+          PUBLIC_ACCEPTANCE_APPROVED: RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE
+          PUBLIC_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PUBLIC_API_URL: https://api.labofscents.org
+          PUBLIC_APP_URL: https://labofscents.org
+          PUBLIC_TENANT_URL: https://next.labofscents.org
+        run: node scripts/verify-v2-production-public-acceptance.mjs
