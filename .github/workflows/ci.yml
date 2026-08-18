@@ -40,4 +40,6 @@ jobs:
         run: npm run prisma:validate
 
       - name: Dependency audit
-        run: npm audit --audit-level=high
+        # Prisma's optional CLI/config chain is not shipped by the application.
+        # Keep the gate focused on production and non-optional dependencies.
+        run: npm audit --audit-level=high --omit=dev --omit=optional
