@@ -81,16 +81,38 @@ jobs:
           mkdir -p "$dir"
           chmod 700 "$dir"
           test -n "$PRODUCTION_DATABASE_URL"
-          server_version="$(psql "$PRODUCTION_DATABASE_URL" -AtX -c 'SHOW server_version_num')"
+          set +e
+          server_version="$(psql "$PRODUCTION_DATABASE_URL" -AtX -c 'SHOW server_version_num' 2>"$dir/psql.err")"
+          psql_status=$?
+          set -e
+          if [ "$psql_status" -ne 0 ] || ! [[ "$server_version" =~ ^[0-9]+$ ]]; then
+            echo "BACKUP_DATABASE_VERSION=UNPROVEN"
+            echo "BACKUP_DATABASE_CONNECTIVITY=FAIL"
+            exit 1
+          fi
+          server_major="$((server_version / 10000))"
           client_version="$(pg_dump --version | awk '{print $3}')"
-          server_major="${server_version:0:2}"
           client_major="${client_version%%.*}"
           [[ "$server_major" =~ ^[0-9]+$ && "$client_major" =~ ^[0-9]+$ ]]
-          test "$client_major" -ge "$server_major"
+          echo "BACKUP_SERVER_MAJOR=$server_major"
+          echo "BACKUP_CLIENT_MAJOR=$client_major"
+          if [ "$client_major" -lt "$server_major" ]; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "postgresql-client-$server_major"
+            client_version="$(pg_dump --version | awk '{print $3}')"
+            client_major="${client_version%%.*}"
+            test "$client_major" -ge "$server_major"
+            echo "BACKUP_CLIENT_COMPATIBILITY=PASS"
+          else
+            echo "BACKUP_CLIENT_COMPATIBILITY=PASS"
+          fi
           timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           key="rc10/precutover/$timestamp/production-${RELEASE_SHA:0:12}.dump"
           dump="$dir/production.dump"
-          pg_dump --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null
+          if ! pg_dump --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null 2>"$dir/pg_dump.err"; then
+            echo "BACKUP_DUMP=FAIL"
+            exit 1
+          fi
           pg_restore --list "$dump" > /dev/null
           sha256sum "$dump" | awk '{print $1}' > "$dir/checksum"
           printf '%s' "$timestamp" > "$dir/timestamp"
