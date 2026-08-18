@@ -139,44 +139,19 @@ jobs:
           set -euo pipefail
           umask 077
           dir="$RUNNER_TEMP/rc10-production-backup"
-          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
-          list="$dir/buckets.json"
-          npx wrangler r2 bucket list --json > "$list" 2>/dev/null
+          evidence="$dir/r2-private.txt"
           set +e
-          node --input-type=module - "$list" "$BACKUP_BUCKET" <<'NODE'
-          import fs from 'node:fs'
-          const [file, expected] = process.argv.slice(2)
-          const value = JSON.parse(fs.readFileSync(file, 'utf8'))
-          const rows = Array.isArray(value) ? value : Array.isArray(value.result) ? value.result : []
-          const names = rows.map((row) => row?.name).filter((name) => typeof name === 'string')
-          if (!names.includes(expected)) process.exit(10)
-          NODE
+          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs > "$evidence"
           bucket_status=$?
           set -e
           if [ "$bucket_status" -eq 10 ]; then
             npx wrangler r2 bucket create "$BACKUP_BUCKET" > /dev/null 2>/dev/null
+            BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs > "$evidence"
           elif [ "$bucket_status" -ne 0 ]; then
+            cat "$evidence"
             exit "$bucket_status"
           fi
-          dev="$dir/dev-url.json"
-          npx wrangler r2 bucket dev-url get "$BACKUP_BUCKET" --json > "$dev" 2>/dev/null
-          node --input-type=module - "$dev" <<'NODE'
-          import fs from 'node:fs'
-          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
-          const text = JSON.stringify(value).toLowerCase()
-          if (value?.enabled === true || value?.result?.enabled === true || /"status"\s*:\s*"enabled"/.test(text)) process.exit(11)
-          if (value?.url || value?.result?.url) process.exit(12)
-          NODE
-          domains="$dir/domains.json"
-          npx wrangler r2 bucket domain list "$BACKUP_BUCKET" --json > "$domains" 2>/dev/null
-          node --input-type=module - "$domains" <<'NODE'
-          import fs from 'node:fs'
-          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
-          const rows = Array.isArray(value) ? value : Array.isArray(value.result) ? value.result : []
-          if (rows.length !== 0) process.exit(13)
-          NODE
-          echo "BACKUP_BUCKET=PASS"
-          echo "BACKUP_BUCKET_PRIVATE=PASS"
+          cat "$evidence"
       - name: Upload, download, checksum, and validate the same private object
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
