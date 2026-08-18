@@ -91,7 +91,9 @@ jobs:
             exit 1
           fi
           server_major="$((server_version / 10000))"
-          client_version="$(pg_dump --version | awk '{print $3}')"
+          pg_dump_bin="$(command -v pg_dump)"
+          pg_restore_bin="$(command -v pg_restore)"
+          client_version="$("$pg_dump_bin" --version | awk '{print $3}')"
           client_major="${client_version%%.*}"
           [[ "$server_major" =~ ^[0-9]+$ && "$client_major" =~ ^[0-9]+$ ]]
           echo "BACKUP_SERVER_MAJOR=$server_major"
@@ -103,7 +105,9 @@ jobs:
             echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
             sudo apt-get update -qq
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "postgresql-client-$server_major"
-            client_version="$(pg_dump --version | awk '{print $3}')"
+            pg_dump_bin="/usr/lib/postgresql/$server_major/bin/pg_dump"
+            pg_restore_bin="/usr/lib/postgresql/$server_major/bin/pg_restore"
+            client_version="$("$pg_dump_bin" --version | awk '{print $3}')"
             client_major="${client_version%%.*}"
             test "$client_major" -ge "$server_major"
             echo "BACKUP_CLIENT_COMPATIBILITY=PASS"
@@ -113,15 +117,16 @@ jobs:
           timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           key="rc10/precutover/$timestamp/production-${RELEASE_SHA:0:12}.dump"
           dump="$dir/production.dump"
-          if ! pg_dump --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null 2>"$dir/pg_dump.err"; then
+          if ! "$pg_dump_bin" --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null 2>"$dir/pg_dump.err"; then
             echo "BACKUP_DUMP=FAIL"
             exit 1
           fi
-          pg_restore --list "$dump" > /dev/null
+          "$pg_restore_bin" --list "$dump" > /dev/null
           sha256sum "$dump" | awk '{print $1}' > "$dir/checksum"
           printf '%s' "$timestamp" > "$dir/timestamp"
           printf '%s' "$key" > "$dir/key"
           printf '%s' "$dump" > "$dir/dump-path"
+          printf '%s' "$pg_restore_bin" > "$dir/pg-restore-bin"
           echo "BACKUP_TYPE=PRIVATE_R2_PG_DUMP"
           echo "BACKUP_CREATED_AT=$timestamp"
           echo "BACKUP_LOCAL_ARCHIVE_VALIDATION=PASS"
@@ -185,11 +190,12 @@ jobs:
           dump="$(cat "$dir/dump-path")"
           key="$(cat "$dir/key")"
           original="$(cat "$dir/checksum")"
+          pg_restore_bin="$(cat "$dir/pg-restore-bin")"
           downloaded="$dir/downloaded.dump"
           npx wrangler r2 object put "$BACKUP_BUCKET/$key" --remote --file "$dump" > /dev/null 2>/dev/null
           npx wrangler r2 object get "$BACKUP_BUCKET/$key" --remote --file "$downloaded" > /dev/null 2>/dev/null
           test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$original"
-          pg_restore --list "$downloaded" > /dev/null
+          "$pg_restore_bin" --list "$downloaded" > /dev/null
           echo "BACKUP_OBJECT_EXISTS=PASS"
           echo "BACKUP_CHECKSUM=PASS"
           echo "BACKUP_ARCHIVE_VALIDATION=PASS"

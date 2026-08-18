@@ -14,7 +14,7 @@ describe('RC10 final readiness operations', () => {
     expect(backup).toContain('CREATE_RC10_PRECUTOVER_BACKUP')
     expect(backup).toContain('fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd')
     expect(backup).toContain('olfactoryops-v2-production-backups')
-    expect(backup).toContain('pg_dump --format=custom --no-owner --no-acl')
+    expect(backup).toContain('--format=custom --no-owner --no-acl')
     expect(backup).toContain('BACKUP_CHECKSUM=PASS')
     expect(backup).toContain('if: always()')
     expect(backup).not.toMatch(/pages deploy|wrangler deploy|custom.domain|routes\s*=/i)
