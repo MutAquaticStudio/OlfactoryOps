@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact approved SHA from codex/v2-production-go-live or a v2-production tag.
+        description: Exact immutable RC10 SHA.
         required: true
         type: string
       operation:
@@ -31,9 +31,13 @@ concurrency:
 
 env:
   RELEASE_BRANCH: codex/v2-production-go-live
+  ACTIVE_RC_TAG: v2-production-rc10
+  ACTIVE_RC_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  READINESS_TAG: v2-production-ready
 
 jobs:
   validate-production-revision:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -44,7 +48,7 @@ jobs:
       OPERATION: ${{ inputs.operation }}
       CONFIRM_PRODUCTION: ${{ inputs.confirm_production }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - id: revision
@@ -52,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$RELEASE_SHA" = "$ACTIVE_RC_SHA"
           case "$OPERATION" in
             api) expected_confirmation=DEPLOY_PRODUCTION_API ;;
             tenant-router) expected_confirmation=DEPLOY_PRODUCTION_TENANT_ROUTER ;;
@@ -65,10 +69,10 @@ jobs:
           git fetch --no-tags origin "$RELEASE_BRANCH"
           release_branch_sha="$(git rev-parse FETCH_HEAD)"
           git fetch --tags origin
+          test "$RELEASE_SHA" = "$release_branch_sha"
+          test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
+          test "$(git rev-list -n 1 "$READINESS_TAG")" = "$ACTIVE_RC_SHA"
           git cat-file -e "${RELEASE_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
-            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
-          fi
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
 
@@ -89,10 +93,10 @@ jobs:
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d682002e # v4
         with:
           node-version: 24
           cache: npm
@@ -113,7 +117,7 @@ jobs:
           npm run prisma:generate:v2
           npm run generate:v2-worker-transport
           node scripts/render-v2-api-production-config.mjs
-          npx wrangler deploy --config .qa/wrangler.v2-api-production.toml --keep-vars
+          npx wrangler deploy --config .qa/wrangler.v2-api-production.toml
       - name: Bind rotated production API secrets without logging values
         shell: bash
         run: |
@@ -144,18 +148,35 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       V2_TENANT_ROUTER_PRODUCTION_GIT_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
       V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
-      V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN: ${{ vars.PRODUCTION_CANDIDATE_PAGES_ORIGIN }}
+      PRODUCTION_PAGES_PROJECT: ${{ vars.PRODUCTION_PAGES_PROJECT }}
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
+          path: release
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d682002e # v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+          cache-dependency-path: release/package-lock.json
+      - run: npm ci --prefix release
+      - id: pages
+        name: Resolve and verify the immutable production Pages origin
+        env:
+          RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+          PRODUCTION_PAGES_BRANCH: production
+        run: node ops/scripts/resolve-v2-production-pages-origin.mjs
+      - name: Export the verified production Pages origin
+        shell: bash
+        run: echo "V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN=${{ steps.pages.outputs.origin }}" >> "$GITHUB_ENV"
       - name: Require protected production deployment inputs
         shell: bash
         run: |
@@ -164,15 +185,19 @@ jobs:
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID"
           test -n "$V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN"
+          test -n "$PRODUCTION_PAGES_PROJECT"
+          [[ "$V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN" =~ ^https://[a-z0-9-]+\.${PRODUCTION_PAGES_PROJECT}\.pages\.dev$ ]]
+          if [[ "$V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN" == *production-candidate* ]]; then exit 1; fi
           test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
           test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_TENANT_ROUTER_PRODUCTION_GIT_SHA"
       - name: Render and deploy the exact production tenant-router candidate
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           npm run prisma:generate:v2
           node scripts/render-v2-tenant-router-production-config.mjs
-          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production.toml --keep-vars
+          npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production.toml
 
   deploy-production-pages:
     if: ${{ needs.validate-production-revision.outputs.operation == 'pages' }}
@@ -189,10 +214,10 @@ jobs:
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d682002e # v4
         with:
           node-version: 24
           cache: npm
@@ -232,10 +257,10 @@ jobs:
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d682002e # v4
         with:
           node-version: 24
           cache: npm
@@ -255,7 +280,7 @@ jobs:
           npm run prisma:generate:v2
           npm run cloud-runtime:render-production
           node scripts/validate-cloud-runtime-config.mjs .qa/wrangler.v2-cloud-runtime.production.toml
-          npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production.toml --keep-vars
+          npx wrangler deploy --config .qa/wrangler.v2-cloud-runtime.production.toml
       - name: Bind the rotated internal scientific secret without logging its value
         shell: bash
         run: |
@@ -275,19 +300,22 @@ jobs:
     timeout-minutes: 20
     environment: production
     env:
-      PRODUCTION_SMOKE_APP_URL: ${{ vars.PRODUCTION_SMOKE_APP_URL }}
-      PRODUCTION_SMOKE_TENANT_URL: ${{ vars.PRODUCTION_SMOKE_TENANT_URL }}
-      PRODUCTION_SMOKE_API_URL: ${{ vars.PRODUCTION_SMOKE_API_URL }}
+      RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      PRODUCTION_SMOKE_APP_URL: https://labofscents.org
+      PRODUCTION_SMOKE_TENANT_URL: https://next.labofscents.org
+      PRODUCTION_SMOKE_API_URL: https://api.labofscents.org
       PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
       PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
+          path: release
+          persist-credentials: false
       - name: Run the bounded production smoke harness
-        run: npm run test:qa:production-smoke
+        run: node ops/scripts/verify-v2-production-public-smoke.mjs
