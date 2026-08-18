@@ -1,0 +1,174 @@
+name: V2 RC10 Production Backup Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_backup:
+        description: Type CREATE_RC10_PRECUTOVER_BACKUP.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc10-production-backup-snapshot
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RELEASE_BRANCH: codex/v2-production-go-live
+  BACKUP_BUCKET: olfactoryops-v2-production-backups
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        name: Validate exact RC10 backup request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_backup }}" = CREATE_RC10_PRECUTOVER_BACKUP
+          test "${{ inputs.release_sha }}" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          echo "release_sha=$RC10_SHA" >> "$GITHUB_OUTPUT"
+          echo "BACKUP_RELEASE_IDENTITY=PASS"
+
+  snapshot:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install pinned operations tooling without provider credentials
+        run: npm ci --ignore-scripts
+      - name: Create and validate a runner-local custom-format dump
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="$RUNNER_TEMP/rc10-production-backup"
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          chmod 700 "$dir"
+          test -n "$PRODUCTION_DATABASE_URL"
+          server_version="$(psql "$PRODUCTION_DATABASE_URL" -AtX -c 'SHOW server_version_num')"
+          client_version="$(pg_dump --version | awk '{print $3}')"
+          server_major="${server_version:0:2}"
+          client_major="${client_version%%.*}"
+          [[ "$server_major" =~ ^[0-9]+$ && "$client_major" =~ ^[0-9]+$ ]]
+          test "$client_major" -ge "$server_major"
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          key="rc10/precutover/$timestamp/production-${RELEASE_SHA:0:12}.dump"
+          dump="$dir/production.dump"
+          pg_dump --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null
+          pg_restore --list "$dump" > /dev/null
+          sha256sum "$dump" | awk '{print $1}' > "$dir/checksum"
+          printf '%s' "$timestamp" > "$dir/timestamp"
+          printf '%s' "$key" > "$dir/key"
+          printf '%s' "$dump" > "$dir/dump-path"
+          echo "BACKUP_TYPE=PRIVATE_R2_PG_DUMP"
+          echo "BACKUP_CREATED_AT=$timestamp"
+          echo "BACKUP_LOCAL_ARCHIVE_VALIDATION=PASS"
+      - name: Ensure the dedicated R2 bucket is private
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="$RUNNER_TEMP/rc10-production-backup"
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          list="$dir/buckets.json"
+          npx wrangler r2 bucket list --json > "$list" 2>/dev/null
+          set +e
+          node --input-type=module - "$list" "$BACKUP_BUCKET" <<'NODE'
+          import fs from 'node:fs'
+          const [file, expected] = process.argv.slice(2)
+          const value = JSON.parse(fs.readFileSync(file, 'utf8'))
+          const rows = Array.isArray(value) ? value : Array.isArray(value.result) ? value.result : []
+          const names = rows.map((row) => row?.name).filter((name) => typeof name === 'string')
+          if (!names.includes(expected)) process.exit(10)
+          NODE
+          bucket_status=$?
+          set -e
+          if [ "$bucket_status" -eq 10 ]; then
+            npx wrangler r2 bucket create "$BACKUP_BUCKET" > /dev/null 2>/dev/null
+          elif [ "$bucket_status" -ne 0 ]; then
+            exit "$bucket_status"
+          fi
+          dev="$dir/dev-url.json"
+          npx wrangler r2 bucket dev-url get "$BACKUP_BUCKET" --json > "$dev" 2>/dev/null
+          node --input-type=module - "$dev" <<'NODE'
+          import fs from 'node:fs'
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+          const text = JSON.stringify(value).toLowerCase()
+          if (value?.enabled === true || value?.result?.enabled === true || /"status"\s*:\s*"enabled"/.test(text)) process.exit(11)
+          if (value?.url || value?.result?.url) process.exit(12)
+          NODE
+          domains="$dir/domains.json"
+          npx wrangler r2 bucket domain list "$BACKUP_BUCKET" --json > "$domains" 2>/dev/null
+          node --input-type=module - "$domains" <<'NODE'
+          import fs from 'node:fs'
+          const value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'))
+          const rows = Array.isArray(value) ? value : Array.isArray(value.result) ? value.result : []
+          if (rows.length !== 0) process.exit(13)
+          NODE
+          echo "BACKUP_BUCKET=PASS"
+          echo "BACKUP_BUCKET_PRIVATE=PASS"
+      - name: Upload, download, checksum, and validate the same private object
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="$RUNNER_TEMP/rc10-production-backup"
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          dump="$(cat "$dir/dump-path")"
+          key="$(cat "$dir/key")"
+          original="$(cat "$dir/checksum")"
+          downloaded="$dir/downloaded.dump"
+          npx wrangler r2 object put "$BACKUP_BUCKET/$key" --remote --file "$dump" > /dev/null 2>/dev/null
+          npx wrangler r2 object get "$BACKUP_BUCKET/$key" --remote --file "$downloaded" > /dev/null 2>/dev/null
+          test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$original"
+          pg_restore --list "$downloaded" > /dev/null
+          echo "BACKUP_OBJECT_EXISTS=PASS"
+          echo "BACKUP_CHECKSUM=PASS"
+          echo "BACKUP_ARCHIVE_VALIDATION=PASS"
+          echo "PRODUCTION_BACKUP_READY=PASS"
+      - name: Delete all local backup evidence
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/rc10-production-backup"

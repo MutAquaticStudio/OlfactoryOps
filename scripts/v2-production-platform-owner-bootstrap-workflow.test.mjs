@@ -6,7 +6,7 @@ const workflow = readFileSync('.github/workflows/v2-production-platform-owner-bo
 test('Platform Owner dispatcher binds dispatch, release source, and revalidation to one exact SHA', () => {
   expect(workflow).toContain("if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}")
   expect(workflow).toContain('test "$release_sha" = "$release_branch_sha"')
-  expect(workflow).toContain("git tag --points-at \"$release_sha\" | grep -Eq '^v2-production-rc[0-9]+$'")
+  expect(workflow).toContain('test "$(git rev-list -n 1 \"$RC10_TAG\")" = "$RC10_SHA"')
   expect(workflow).toContain('PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}')
   expect(workflow).toContain('PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}')
   expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$RELEASE_SHA"')
@@ -16,7 +16,7 @@ test('Platform Owner dispatcher binds dispatch, release source, and revalidation
 
 test('Platform Owner dispatcher pins its actions and scopes credentials to the mutation step', () => {
   expect(workflow.match(/uses: actions\/checkout@11d5960a326750d5838078e36cf38b85af677262/g)).toHaveLength(2)
-  expect(workflow).toContain('uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020')
+  expect(workflow).toContain('uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e')
   expect(workflow.match(/persist-credentials: false/g)).toHaveLength(2)
 
   const protectedJob = workflow.slice(workflow.indexOf('  bootstrap-platform-owner:'))

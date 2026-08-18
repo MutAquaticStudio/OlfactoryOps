@@ -21,6 +21,8 @@ concurrency:
 
 env:
   RELEASE_BRANCH: codex/v2-production-go-live
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
 
 jobs:
   validate-production-revision:
@@ -43,13 +45,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$CONFIRM_PLATFORM_OWNER_BOOTSTRAP" = "ASSIGN_PLATFORM_OWNER"
-          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$RELEASE_SHA" = "$RC10_SHA"
           git fetch --no-tags origin "$RELEASE_BRANCH"
           release_branch_sha="$(git rev-parse FETCH_HEAD)"
           git fetch --force --tags origin
           release_sha="$(git rev-parse "${RELEASE_SHA}^{commit}")"
           test "$release_sha" = "$release_branch_sha"
-          git tag --points-at "$release_sha" | grep -Eq '^v2-production-rc[0-9]+$'
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
           echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 
   bootstrap-platform-owner:
@@ -66,7 +68,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_SHA }}
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: 24
           cache: npm

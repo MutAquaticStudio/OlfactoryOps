@@ -1,0 +1,74 @@
+name: V2 RC10 Production Pages Project Preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_preparation:
+        description: Type PREPARE_RC10_PRODUCTION_PAGES_PROJECT.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc10-production-pages-project-preparation
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RELEASE_BRANCH: codex/v2-production-go-live
+  PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
+
+jobs:
+  prepare:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Validate exact RC10 preparation request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_preparation }}" = PREPARE_RC10_PRODUCTION_PAGES_PROJECT
+          test "${{ inputs.release_sha }}" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install operations tooling without provider credentials
+        run: npm ci --ignore-scripts
+      - name: Resolve or create the empty production Pages project
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/pages-project-resolution.txt"
+          trap 'rm -f "$evidence"' EXIT
+          set +e
+          node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -Fq 'PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=PRODUCTION_PAGES_PROJECT_MISSING' "$evidence"
+            npx wrangler pages project create "$PRODUCTION_PAGES_PROJECT" --production-branch production > /dev/null
+          fi
+          node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
+          grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$evidence"
+          grep -Fq 'PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=' "$evidence"
