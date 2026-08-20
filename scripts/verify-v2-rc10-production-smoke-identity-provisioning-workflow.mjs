@@ -20,6 +20,7 @@ const requiredWorkflow = [
   "RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd",
   "RC10_TAG: v2-production-rc10",
   "PROVISION_RC10_DEDICATED_SMOKE_IDENTITY",
+  "persist-credentials: true",
   "environment: production",
   "ref: ${{ needs.validate.outputs.release_sha }}",
   "npm ci --ignore-scripts",
@@ -55,6 +56,10 @@ const credentialStart = workflow.indexOf(
 const reverifyStart = workflow.indexOf(
   "- name: Reverify the provisioned smoke identity with a read-only database session",
 );
+const validationFetchStart = workflow.indexOf(
+  'git fetch --no-tags origin "$RELEASE_BRANCH"',
+);
+const validationCredentialStart = workflow.indexOf("persist-credentials: true");
 
 if (!requiredWorkflow.every((entry) => workflow.includes(entry))) {
   throw new Error(
@@ -76,7 +81,10 @@ if (
 if (
   credentialStart < 0 ||
   provisionStart <= credentialStart ||
-  reverifyStart <= provisionStart
+  reverifyStart <= provisionStart ||
+  validationCredentialStart < 0 ||
+  validationCredentialStart >= validationFetchStart ||
+  (workflow.match(/persist-credentials: true/g) ?? []).length !== 1
 ) {
   throw new Error("PRODUCTION_SMOKE_IDENTITY_PROVISIONING_ORDER=FAIL");
 }
