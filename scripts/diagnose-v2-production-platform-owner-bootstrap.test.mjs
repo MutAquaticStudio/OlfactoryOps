@@ -13,14 +13,16 @@ class FakeClient {
   constructor(rows = {}) {
     this.rows = rows;
     this.queries = [];
+    this.parameters = [];
   }
 
   async connect() {}
 
   async end() {}
 
-  async query(sql) {
+  async query(sql, parameters) {
     this.queries.push(sql);
+    this.parameters.push(parameters);
     if (sql === "SELECT 1" || sql === "BEGIN READ ONLY" || sql === "ROLLBACK") {
       return { rows: [] };
     }
@@ -159,6 +161,34 @@ describe("production Platform Owner diagnostic", () => {
     expect(client.queries.join("\n")).not.toMatch(
       /\b(INSERT\s+INTO|UPDATE\s+public|DELETE\s+FROM|ALTER\s+TABLE|CREATE\s+(?:TABLE|INDEX|POLICY)|DROP\s+(?:TABLE|INDEX|POLICY))\b/i,
     );
+  });
+
+  it("checks the owner guard with a parameterized semantic predicate", async () => {
+    const client = new FakeClient();
+    const report = await diagnosePlatformOwnerBootstrap({
+      environment,
+      dependencies: {
+        client,
+        requireFromRelease() {
+          return {
+            PrismaClient: class {
+              async $disconnect() {}
+            },
+          };
+        },
+      },
+    });
+    const migrationQueryIndex = client.queries.findIndex((query) =>
+      query.includes("pg_catalog.pg_index"),
+    );
+
+    expect(report.MIGRATION_0025_INVARIANT_PRESENT).toBe("PASS");
+    expect(client.queries[migrationQueryIndex]).toContain("= $1");
+    expect(client.queries[migrationQueryIndex]).toContain("regexp_replace");
+    expect(client.queries[migrationQueryIndex]).not.toContain('= \\"(');
+    expect(client.parameters[migrationQueryIndex]).toEqual([
+      "role_key='PLATFORM_OWNER'::textANDstatus='ACTIVE'::text",
+    ]);
   });
 
   it("distinguishes bootstrap user and existing-owner states without exposing identity", async () => {

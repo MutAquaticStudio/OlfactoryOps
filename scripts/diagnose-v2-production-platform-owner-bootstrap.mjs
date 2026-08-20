@@ -25,6 +25,8 @@ const requiredColumns = {
 };
 
 const requiredTables = Object.keys(requiredColumns);
+const platformOwnerGuardPredicate =
+  "role_key='PLATFORM_OWNER'::textANDstatus='ACTIVE'::text";
 
 export function safeSqlState(error) {
   return typeof error?.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)
@@ -190,7 +192,8 @@ async function queryReadOnly(client, report, email) {
       : "FAIL";
 
     const migration = await client.query(
-      "SELECT count(*)::int AS matched FROM pg_catalog.pg_index idx JOIN pg_catalog.pg_class rel ON rel.oid = idx.indrelid JOIN pg_catalog.pg_namespace ns ON ns.oid = rel.relnamespace JOIN pg_catalog.pg_class ind ON ind.oid = idx.indexrelid WHERE ns.nspname = 'public' AND rel.relname = 'v2_platform_operators' AND ind.relname = 'v2_platform_operators_single_active_owner' AND idx.indisunique AND pg_catalog.pg_get_expr(idx.indpred, idx.indrelid) = \"(role_key = 'PLATFORM_OWNER'::text) AND (status = 'ACTIVE'::text)\"",
+      "SELECT count(*)::int AS matched FROM pg_catalog.pg_index idx JOIN pg_catalog.pg_class rel ON rel.oid = idx.indrelid JOIN pg_catalog.pg_namespace ns ON ns.oid = rel.relnamespace JOIN pg_catalog.pg_class ind ON ind.oid = idx.indexrelid WHERE ns.nspname = 'public' AND rel.relname = 'v2_platform_operators' AND ind.relname = 'v2_platform_operators_single_active_owner' AND idx.indisunique AND regexp_replace(pg_catalog.pg_get_expr(idx.indpred, idx.indrelid), '[[:space:]()]', '', 'g') = $1",
+      [platformOwnerGuardPredicate],
     );
     report.MIGRATION_0025_INVARIANT_PRESENT =
       Number(migration.rows[0]?.matched) === 1 ? "PASS" : "FAIL";
