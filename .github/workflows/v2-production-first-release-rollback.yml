@@ -1,0 +1,80 @@
+name: V2 Production First-Release Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      cleanup:
+        description: Leave Workers unrouted or delete only first-release RC10 Workers.
+        required: true
+        type: choice
+        options:
+          - LEAVE_RC10_UNROUTED
+          - DELETE_RC10_FIRST_RELEASE_WORKERS
+      confirm_rollback:
+        description: Type ROLLBACK_RC10_FIRST_RELEASE.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-release-dispatch
+  cancel-in-progress: false
+
+env:
+  ACTIVE_RC_TAG: v2-production-rc10
+  ACTIVE_RC_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  READINESS_TAG: v2-production-ready
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate exact immutable first-release rollback request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_rollback }}" = ROLLBACK_RC10_FIRST_RELEASE
+          test "${{ inputs.release_sha }}" = "$ACTIVE_RC_SHA"
+          case "${{ inputs.cleanup }}" in
+            LEAVE_RC10_UNROUTED|DELETE_RC10_FIRST_RELEASE_WORKERS) ;;
+            *) exit 1 ;;
+          esac
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$ACTIVE_RC_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
+          test "$(git rev-list -n 1 "$READINESS_TAG")" = "$ACTIVE_RC_SHA"
+
+  rollback:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Restore approved public route targets before any RC10 cleanup
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
+          FIRST_RELEASE_ROLLBACK_CLEANUP: ${{ inputs.cleanup }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/execute-v2-first-release-route-rollback.mjs
