@@ -24,35 +24,16 @@ try {
   const buckets = await listBuckets(account, token);
   const exact = buckets.filter((item) => item?.name === bucket);
   if (exact.length === 0) {
-    console.log("BACKUP_BUCKET_MISSING=YES");
-    process.exitCode = 10;
-  } else if (exact.length !== 1) {
+    await createBucket(account, token, bucket);
+  } else if (exact.length > 1) {
     fail("AMBIGUOUS");
-  } else {
-    const managed = await get(
-      account,
-      token,
-      `/accounts/${encodeURIComponent(account)}/r2/buckets/${encodeURIComponent(bucket)}/domains/managed`,
-      "R2_DEV_STATUS",
-    );
-    if (managed?.result?.enabled !== false) fail("R2DEV_NOT_PRIVATE");
-    const custom = await get(
-      account,
-      token,
-      `/accounts/${encodeURIComponent(account)}/r2/buckets/${encodeURIComponent(bucket)}/domains/custom`,
-      "CUSTOM_DOMAINS",
-    );
-    const domains = custom?.result?.domains;
-    if (!Array.isArray(domains) || domains.length !== 0)
-      fail("CUSTOM_DOMAIN_PRESENT");
-    console.log("BACKUP_BUCKET=PASS");
-    console.log("BACKUP_BUCKET_PRIVATE=PASS");
-    console.log("BACKUP_BUCKET_R2DEV=DISABLED");
-    console.log("BACKUP_BUCKET_CUSTOM_DOMAINS=ZERO");
   }
+  await verifyBucketPrivate(account, token, bucket);
 } catch (error) {
   const safe =
     error instanceof R2PrivacyError ? error : new R2PrivacyError("UNPROVEN");
+  if (safe.operation === "BUCKET_CREATE")
+    console.log("BACKUP_BUCKET_CREATE=FAIL");
   console.log(`BACKUP_BUCKET_PRIVATE=${safe.safeCode}`);
   console.log(`BACKUP_R2_API_OPERATION=${safe.operation}`);
   console.log(`BACKUP_R2_API_HTTP_STATUS=${safe.httpStatus}`);
@@ -65,7 +46,7 @@ async function listBuckets(account, token) {
   let cursor = "";
   for (let page = 0; page < 20; page += 1) {
     const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-    const response = await get(
+    const response = await request(
       account,
       token,
       `/accounts/${encodeURIComponent(account)}/r2/buckets?per_page=100${suffix}`,
@@ -82,11 +63,55 @@ async function listBuckets(account, token) {
   throw new R2PrivacyError("UNPROVEN");
 }
 
-async function get(account, token, path, operation) {
+async function createBucket(account, token, bucket) {
+  const response = await request(
+    account,
+    token,
+    `/accounts/${encodeURIComponent(account)}/r2/buckets`,
+    "BUCKET_CREATE",
+    { method: "POST", body: JSON.stringify({ name: bucket }) },
+  );
+  if (response?.result?.name !== bucket) {
+    throw new R2PrivacyError("UNPROVEN", {
+      operation: "BUCKET_CREATE",
+      httpStatus: "200",
+    });
+  }
+  console.log("BACKUP_BUCKET_CREATED=PASS");
+}
+
+async function verifyBucketPrivate(account, token, bucket) {
+  const managed = await request(
+    account,
+    token,
+    `/accounts/${encodeURIComponent(account)}/r2/buckets/${encodeURIComponent(bucket)}/domains/managed`,
+    "R2_DEV_STATUS",
+  );
+  if (managed?.result?.enabled !== false) fail("R2DEV_NOT_PRIVATE");
+  const custom = await request(
+    account,
+    token,
+    `/accounts/${encodeURIComponent(account)}/r2/buckets/${encodeURIComponent(bucket)}/domains/custom`,
+    "CUSTOM_DOMAINS",
+  );
+  const domains = custom?.result?.domains;
+  if (!Array.isArray(domains) || domains.length !== 0)
+    fail("CUSTOM_DOMAIN_PRESENT");
+  console.log("BACKUP_BUCKET=PASS");
+  console.log("BACKUP_BUCKET_PRIVATE=PASS");
+  console.log("BACKUP_BUCKET_R2DEV=DISABLED");
+  console.log("BACKUP_BUCKET_CUSTOM_DOMAINS=ZERO");
+}
+
+async function request(account, token, path, operation, options = {}) {
+  const headers = { authorization: `Bearer ${token}` };
+  if (options.body) headers["content-type"] = "application/json";
   let response;
   try {
     response = await fetch(`${base}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
+      method: options.method ?? "GET",
+      headers,
+      body: options.body,
       redirect: "error",
       signal: AbortSignal.timeout(20_000),
     });
