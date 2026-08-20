@@ -125,6 +125,18 @@ jobs:
           grep -Fq '"conclusion":"success"' "$metadata"
           grep -Fq '"event":"workflow_dispatch"' "$metadata"
           gh run view "$CANDIDATE_RUN_ID" --repo "${GITHUB_REPOSITORY}" --log > "$log"
+          if grep -Fq 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP' "$log"; then
+            grep -Fq 'REAL_PLATFORM_OWNER_PRESERVED=PASS' "$log"
+            grep -Fq 'ACTIVE_PLATFORM_OWNER_COUNT=ONE' "$log"
+            grep -Fq 'PLATFORM_OWNER_ROLE=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_STATUS_ACTIVE=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_MFA_REQUIRED=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_AUDIT_EVENT=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_READY=PASS' "$log"
+            echo 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP'
+          else
+            echo 'CANDIDATE_ACCEPTANCE_MODE=LEGACY_PRE_BOOTSTRAP'
+          fi
           grep -Fq 'CANDIDATE_BROWSER_ACCEPTANCE=PASS' "$log"
           grep -Fq 'productionCandidateAcceptance":"PASS' "$log"
           grep -Fq 'candidateFixtureCleanup":"ARCHIVED' "$log"
