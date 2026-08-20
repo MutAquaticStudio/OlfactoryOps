@@ -26,10 +26,13 @@ const requiredWorkflow = [
 
 const requiredDiagnostic = [
   "BEGIN READ ONLY",
+  "SET TRANSACTION READ ONLY",
   'client.query("ROLLBACK")',
   "NODE_PRISMA_CLIENT_READY",
+  "PRISMA_READ_ONLY_TRANSACTION",
   "BOOTSTRAP_USER_MATCH_COUNT",
   "ACTIVE_PLATFORM_OWNER_COUNT",
+  "BOOTSTRAP_RLS_WRITE_PATH",
   "PLATFORM_OWNER_BOOTSTRAP_ROOT_CAUSE",
 ];
 
@@ -38,6 +41,12 @@ const forbidden =
 
 if (!requiredWorkflow.every((value) => workflow.includes(value))) {
   throw new Error("PLATFORM_OWNER_DIAGNOSTIC_WORKFLOW_CONTRACT=FAIL");
+}
+if (
+  !workflow.includes("run: npm ci") ||
+  /npm ci\s+--ignore-scripts/i.test(workflow)
+) {
+  throw new Error("PLATFORM_OWNER_DIAGNOSTIC_INSTALL_CONTRACT=FAIL");
 }
 if (!requiredDiagnostic.every((value) => diagnostic.includes(value))) {
   throw new Error("PLATFORM_OWNER_DIAGNOSTIC_SCRIPT_CONTRACT=FAIL");

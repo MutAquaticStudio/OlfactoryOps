@@ -10,6 +10,7 @@ const requiredColumns = {
     "role_key",
     "status",
     "mfa_required",
+    "created_by",
   ],
   v2_platform_audit_events: [
     "id",
@@ -67,7 +68,7 @@ export function classifyPrismaFailure(error) {
   if (error?.name === "PrismaClientInitializationError") {
     return "PRISMA_CLIENT_INITIALIZATION_FAILED";
   }
-  return "PRISMA_CLIENT_INITIALIZATION_FAILED";
+  return "PRISMA_CLIENT_RUNTIME_TRANSACTION_FAILED";
 }
 
 export function countClass(count) {
@@ -79,6 +80,9 @@ export function countClass(count) {
 export function safeRootCause(report) {
   if (report.NODE_PRISMA_CLIENT_READY === "FAIL") {
     return report.NODE_PRISMA_SAFE_CLASS;
+  }
+  if (report.PRISMA_READ_ONLY_TRANSACTION !== "PASS") {
+    return report.PRISMA_READ_ONLY_TRANSACTION_SAFE_CLASS;
   }
   if (report.DATABASE_TCP_CONNECTIVITY !== "PASS") {
     return report.DATABASE_SAFE_CLASS;
@@ -105,6 +109,9 @@ export function safeRootCause(report) {
   if (report.BOOTSTRAP_ROLE_PRIVILEGES !== "PASS") {
     return "DATABASE_PERMISSION_DENIED";
   }
+  if (report.BOOTSTRAP_RLS_WRITE_PATH !== "PASS") {
+    return "DATABASE_RLS_BOOTSTRAP_PATH_DENIED";
+  }
   return "UNKNOWN_DATABASE_RUNTIME_FAILURE";
 }
 
@@ -112,6 +119,8 @@ function defaultReport() {
   return {
     NODE_PRISMA_CLIENT_READY: "UNPROVEN",
     NODE_PRISMA_SAFE_CLASS: "UNPROVEN",
+    PRISMA_READ_ONLY_TRANSACTION: "UNPROVEN",
+    PRISMA_READ_ONLY_TRANSACTION_SAFE_CLASS: "UNPROVEN",
     DATABASE_TCP_CONNECTIVITY: "UNPROVEN",
     DATABASE_AUTHENTICATION: "UNPROVEN",
     DATABASE_SESSION: "UNPROVEN",
@@ -125,6 +134,7 @@ function defaultReport() {
     ACTIVE_PLATFORM_OWNER_COUNT: "UNPROVEN",
     PLATFORM_AUDIT_TABLE_WRITABILITY_PREREQUISITES: "UNPROVEN",
     BOOTSTRAP_ROLE_PRIVILEGES: "UNPROVEN",
+    BOOTSTRAP_RLS_WRITE_PATH: "UNPROVEN",
     DATABASE_SAFE_CLASS: "UNPROVEN",
     DATABASE_SQLSTATE: "NONE",
     BOOTSTRAP_EXECUTION_PATH_READY: "FAIL",
@@ -137,14 +147,31 @@ function requireReleaseDependencies(releaseRoot) {
   return createRequire(resolve(releaseRoot, "package.json"));
 }
 
-async function verifyPrismaClient(requireFromRelease) {
+async function verifyPrismaClient(
+  requireFromRelease,
+  databaseUrl,
+  createClient = undefined,
+) {
+  let client;
+  let PrismaClient;
   try {
-    const { PrismaClient } = requireFromRelease("@prisma/client");
-    const client = new PrismaClient();
-    await client.$disconnect();
+    ({ PrismaClient } = requireFromRelease("@prisma/client"));
+  } catch {
+    return { ready: false, safeClass: "PRISMA_CLIENT_INITIALIZATION_FAILED" };
+  }
+  try {
+    client = createClient
+      ? createClient(PrismaClient, databaseUrl)
+      : new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    await client.$transaction(async (transaction) => {
+      await transaction.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+      await transaction.$queryRawUnsafe("SELECT 1");
+    });
     return { ready: true, safeClass: "NONE" };
   } catch (error) {
     return { ready: false, safeClass: classifyPrismaFailure(error) };
+  } finally {
+    await client?.$disconnect().catch(() => undefined);
   }
 }
 
@@ -160,6 +187,7 @@ function completeDatabaseReadiness(report) {
     "PLATFORM_OWNER_LOOKUP_EXECUTABLE",
     "PLATFORM_AUDIT_TABLE_WRITABILITY_PREREQUISITES",
     "BOOTSTRAP_ROLE_PRIVILEGES",
+    "BOOTSTRAP_RLS_WRITE_PATH",
   ].every((key) => report[key] === "PASS");
 }
 
@@ -230,6 +258,16 @@ async function queryReadOnly(client, report, email) {
       row.audit_insert === true
         ? "PASS"
         : "FAIL";
+
+    const rls = await client.query(
+      "SELECT NOT pg_catalog.row_security_active('public.v2_platform_operators'::regclass) AS operators_insert_bypasses_rls, NOT pg_catalog.row_security_active('public.v2_platform_audit_events'::regclass) AS audit_insert_bypasses_rls",
+    );
+    const rlsRow = rls.rows[0] ?? {};
+    report.BOOTSTRAP_RLS_WRITE_PATH =
+      rlsRow.operators_insert_bypasses_rls === true &&
+      rlsRow.audit_insert_bypasses_rls === true
+        ? "PASS"
+        : "FAIL";
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
   }
@@ -263,9 +301,15 @@ export async function diagnosePlatformOwnerBootstrap({
     report.PLATFORM_OWNER_BOOTSTRAP_ROOT_CAUSE = safeRootCause(report);
     return report;
   }
-  const prisma = await verifyPrismaClient(requireFromRelease);
+  const prisma = await verifyPrismaClient(
+    requireFromRelease,
+    databaseUrl,
+    dependencies.createPrismaClient,
+  );
   report.NODE_PRISMA_CLIENT_READY = prisma.ready ? "PASS" : "FAIL";
   report.NODE_PRISMA_SAFE_CLASS = prisma.safeClass;
+  report.PRISMA_READ_ONLY_TRANSACTION = prisma.ready ? "PASS" : "FAIL";
+  report.PRISMA_READ_ONLY_TRANSACTION_SAFE_CLASS = prisma.safeClass;
 
   let client;
 
