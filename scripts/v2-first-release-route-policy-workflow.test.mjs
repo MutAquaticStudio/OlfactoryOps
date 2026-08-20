@@ -71,6 +71,22 @@ describe("first-release route policy workflows", () => {
     );
   });
 
+  it("keeps the API release checkout alongside its route-free config preparation", () => {
+    const apiJob = dispatcher.slice(
+      dispatcher.indexOf("  deploy-production-api:"),
+      dispatcher.indexOf("  deploy-production-tenant-router:"),
+    );
+    expect(apiJob).toContain("path: release");
+    expect(apiJob).toContain(
+      "cache-dependency-path: release/package-lock.json",
+    );
+    expect(apiJob).toContain("npm ci --prefix release");
+    expect(apiJob).toContain("working-directory: release");
+    expect(apiJob).toContain(
+      "node ../ops/scripts/prepare-v2-first-release-unrouted-config.mjs",
+    );
+  });
+
   it("makes rollback main-only, exact-RC10, reviewer-gated, and route-restoration-first", () => {
     expect(rollback).toContain("workflow_dispatch:");
     expect(rollback).toContain("github.ref == 'refs/heads/main'");
