@@ -16,7 +16,7 @@ for (let page = 1; page <= 20; page += 1) {
   if (rows.length < 20) break
 }
 
-const matches = candidates.filter((deployment) => deployment?.latest_stage?.status === 'success' && deployment?.is_skipped !== true && deployment?.environment === 'production' && deployment?.branch === branch && deployment?.commit_hash?.toLowerCase() === sha)
+const matches = candidates.filter((deployment) => deployment?.latest_stage?.status === 'success' && deployment?.is_skipped !== true && deployment?.environment === 'production' && deployment?.deployment_trigger?.metadata?.branch === branch && deployment?.deployment_trigger?.metadata?.commit_hash?.toLowerCase() === sha)
   .sort((a, b) => String(b.created_on ?? '').localeCompare(String(a.created_on ?? '')))
 
 for (const deployment of matches) {
