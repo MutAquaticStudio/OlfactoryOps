@@ -34,10 +34,16 @@ export async function verifyProductionSmokeTenantReadiness({
          FROM public.v2_workspace_hostnames hostname
          INNER JOIN public.v2_organizations organization ON organization.id = hostname.organization_id
          INNER JOIN public.v2_users user_record ON user_record.email = $2 AND user_record.status = 'ACTIVE'
-         INNER JOIN public.v2_memberships membership ON membership.organization_id = organization.id AND membership.user_id = user_record.id AND membership.status = 'ACTIVE'
+         INNER JOIN public.v2_memberships membership ON membership.organization_id = organization.id AND membership.user_id = user_record.id AND membership.status = 'ACTIVE' AND membership.role_key = 'Viewer'
          WHERE hostname.hostname = $1
            AND hostname.status = 'ACTIVE'
            AND organization.status = 'ACTIVE'
+           AND user_record.verified_at IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM public.v2_platform_operators operator
+             WHERE operator.user_id = user_record.id
+           )
        ) AS active`,
       [hostname, email],
     )
