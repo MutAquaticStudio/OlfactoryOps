@@ -57,6 +57,17 @@ describe("production dispatcher hardening", () => {
     expect(router).not.toContain("production-candidate.${");
   });
 
+  it("selects the exact production Pages deployment from canonical metadata", () => {
+    expect(resolver).toContain(
+      "deployment_trigger?.metadata?.branch === branch",
+    );
+    expect(resolver).toMatch(
+      /deployment_trigger\?\.metadata\?\.commit_hash\?\.toLowerCase\(\)\s*===\s*sha/,
+    );
+    expect(resolver).not.toContain("deployment?.branch === branch");
+    expect(resolver).not.toContain("deployment?.commit_hash?.toLowerCase()");
+  });
+
   it("stages and verifies the private Cloud Runtime trigger handoff before queue ownership moves", () => {
     const cloudRuntime = workflow.slice(
       workflow.indexOf("  deploy-production-cloud-runtime:"),
