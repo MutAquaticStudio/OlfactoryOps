@@ -16,6 +16,7 @@ const requiredWorkflow = [
   'RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd',
   'RC10_TAG: v2-production-rc10',
   'SELECT_RC10_PRODUCTION_SMOKE_TENANT',
+  'persist-credentials: true',
   'environment: production',
   'ref: ${{ needs.validate.outputs.release_sha }}',
   'npm ci --ignore-scripts',
@@ -44,6 +45,10 @@ const inspectStart = workflow.indexOf(
 const installStart = workflow.indexOf(
   '- name: Install exact RC10 dependencies without provider credentials',
 )
+const validationFetchStart = workflow.indexOf(
+  'git fetch --no-tags origin "$RELEASE_BRANCH"',
+)
+const validationCredentialStart = workflow.indexOf('persist-credentials: true')
 
 if (!requiredWorkflow.every((entry) => workflow.includes(entry))) {
   throw new Error('PRODUCTION_SMOKE_TENANT_SELECTION_WORKFLOW_CONTRACT=FAIL')
@@ -56,6 +61,9 @@ if (forbidden.test(workflow) || forbidden.test(inventory)) {
 }
 if (
   inspectStart <= installStart ||
+  validationCredentialStart < 0 ||
+  validationCredentialStart >= validationFetchStart ||
+  (workflow.match(/persist-credentials: true/g) ?? []).length !== 1 ||
   !/on:\s*\n\s+workflow_dispatch:/m.test(workflow) ||
   /^\s+(?:push|pull_request|schedule|workflow_call|workflow_run):/m.test(workflow)
 ) {
