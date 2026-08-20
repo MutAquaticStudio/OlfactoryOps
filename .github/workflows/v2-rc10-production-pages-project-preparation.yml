@@ -52,53 +52,11 @@ jobs:
           cache: npm
       - name: Install operations tooling without provider credentials
         run: npm ci --ignore-scripts
-      - name: Resolve or create the empty production Pages project
+      - name: Preflight the dedicated Pages read credential and existing production project
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          evidence="$RUNNER_TEMP/pages-project-resolution.txt"
-          create_error="$RUNNER_TEMP/pages-project-create.err"
-          trap 'rm -f "$evidence" "$create_error"' EXIT
-          emit_resolution_failure() {
-            code="$(sed -n 's/^PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=//p' "$evidence" | tail -n 1)"
-            case "$code" in
-              PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE|PRODUCTION_PAGES_PROJECT_AMBIGUOUS|PRODUCTION_PAGES_PROJECT_CONFLICT|PRODUCTION_PAGES_PROJECT_MISSING|PRODUCTION_PAGES_PROJECT_DETAIL_UNPROVEN|PRODUCTION_PAGES_PROJECT_DEPLOYMENT_STATE_UNPROVEN)
-                echo "PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=$code"
-                ;;
-              *)
-                echo 'PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=PRODUCTION_PAGES_PROJECT_STATE_UNPROVEN'
-                ;;
-            esac
-          }
-          set +e
-          node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            if ! grep -Fq 'PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=PRODUCTION_PAGES_PROJECT_MISSING' "$evidence"; then
-              emit_resolution_failure
-              exit 1
-            fi
-            set +e
-            npx wrangler pages project create "$PRODUCTION_PAGES_PROJECT" --production-branch production > /dev/null 2>"$create_error"
-            create_status=$?
-            set -e
-            if [ "$create_status" -eq 0 ]; then
-              echo 'PRODUCTION_PAGES_PROJECT_CREATE=ACKNOWLEDGED'
-            else
-              echo 'PRODUCTION_PAGES_PROJECT_CREATE=UNACKNOWLEDGED'
-            fi
-          fi
-          set +e
-          node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            emit_resolution_failure
-            exit 1
-          fi
-          grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$evidence"
-          grep -Fq 'PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=' "$evidence"
+          node scripts/resolve-v2-production-pages-project.mjs

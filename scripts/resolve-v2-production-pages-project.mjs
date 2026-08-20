@@ -1,63 +1,323 @@
-const account = required('CLOUDFLARE_ACCOUNT_ID')
-const token = required('CLOUDFLARE_API_TOKEN')
-const expectedProject = 'olfactoryops-v2-production'
-const candidateProject = 'olfactoryops-v2-production-candidate'
-const apiBase = 'https://api.cloudflare.com/client/v4'
+import { appendFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
-const projects = []
-for (let page = 1; page <= 10; page += 1) {
-  const response = await get(`/accounts/${encodeURIComponent(account)}/pages/projects?page=${page}&per_page=100`)
-  if (!response.ok) fail('PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE')
-  const rows = Array.isArray(response.body?.result) ? response.body.result : []
-  projects.push(...rows)
-  const totalPages = Number(response.body?.result_info?.total_pages)
-  if ((Number.isInteger(totalPages) && totalPages > 0 && page >= totalPages) || rows.length < 100) break
+const API_BASE = "https://api.cloudflare.com/client/v4";
+const EXPECTED_PROJECT = "olfactoryops-v2-production";
+const MAX_PAGES = 10;
+
+export class PagesProjectError extends Error {
+  constructor(
+    classification,
+    {
+      operation = "LIST_PROJECTS",
+      httpStatus = "0",
+      cfErrorCode = "NONE",
+      listAccessEstablished = false,
+      listHttpStatus = "0",
+      listCfErrorCode = "NONE",
+    } = {},
+  ) {
+    super();
+    this.classification = classification;
+    this.operation = operation;
+    this.httpStatus = httpStatus;
+    this.cfErrorCode = cfErrorCode;
+    this.listAccessEstablished = listAccessEstablished;
+    this.listHttpStatus = listHttpStatus;
+    this.listCfErrorCode = listCfErrorCode;
+  }
 }
 
-const exact = projects.filter((project) => project?.name === expectedProject)
-if (exact.length > 1) fail('PRODUCTION_PAGES_PROJECT_AMBIGUOUS')
-if (exact.length === 0) {
-  const candidateExists = projects.some((project) => project?.name === candidateProject)
-  fail(candidateExists ? 'PRODUCTION_PAGES_PROJECT_CONFLICT' : 'PRODUCTION_PAGES_PROJECT_MISSING')
+export async function resolveProductionPagesProject({
+  environment = process.env,
+  fetchImpl = fetch,
+  emit = (line) => console.log(line),
+  appendOutput = appendGitHubOutput,
+} = {}) {
+  const account = requiredAccount(environment);
+  const credential = pagesCredential(environment);
+  if (!credential.token) {
+    throw new PagesProjectError(
+      credential.dedicated
+        ? "PAGES_READ_TOKEN_MISSING"
+        : "PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE",
+    );
+  }
+
+  const request = createRequester({
+    account,
+    token: credential.token,
+    fetchImpl,
+  });
+  const projectsResult = await collectPages({
+    request,
+    path: "/pages/projects",
+    operation: "LIST_PROJECTS",
+    query: { per_page: "20" },
+    failureClassification: "PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE",
+  });
+  const listEvidence = {
+    listAccessEstablished: true,
+    listHttpStatus: projectsResult.httpStatus,
+    listCfErrorCode: projectsResult.cfErrorCode,
+  };
+
+  const exactProjects = projectsResult.rows.filter(
+    (project) => project?.name === EXPECTED_PROJECT,
+  );
+  if (exactProjects.length === 0) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_PROJECT_NOT_FOUND",
+      listEvidence,
+    );
+  }
+  if (exactProjects.length !== 1) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_PROJECT_AMBIGUOUS",
+      listEvidence,
+    );
+  }
+
+  const detail = await request(
+    `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}`,
+    "GET_PROJECT",
+    "PRODUCTION_PAGES_PROJECT_INVALID",
+    listEvidence,
+  );
+  if (detail.body?.result?.name !== EXPECTED_PROJECT) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_PROJECT_INVALID",
+      listEvidence,
+    );
+  }
+
+  const domains = await collectPages({
+    request,
+    path: `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}/domains`,
+    operation: "LIST_PROJECT_DOMAINS",
+    query: { per_page: "20" },
+    failureClassification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    listEvidence,
+  });
+  const deployments = await collectPages({
+    request,
+    path: `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}/deployments`,
+    operation: "LIST_PRODUCTION_DEPLOYMENTS",
+    query: { env: "production", per_page: "20" },
+    failureClassification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    listEvidence,
+  });
+  if (domains.rows.length !== 0) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+
+  const baselineType =
+    deployments.rows.length === 0 ? "EMPTY_UNROUTED" : "EXISTING_DEPLOYMENT";
+  emitCredentialAccess(emit, credential, {
+    httpStatus: projectsResult.httpStatus,
+    cfErrorCode: projectsResult.cfErrorCode,
+    access: "PASS",
+  });
+  emit(`PRODUCTION_PAGES_PROJECT=${EXPECTED_PROJECT}`);
+  emit("PRODUCTION_PAGES_PROJECT_MATCH_COUNT=ONE");
+  emit("PRODUCTION_PAGES_PROJECT_READY=PASS");
+  emit("PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=NONE");
+  emit("PRODUCTION_PAGES_BASELINE=PASS");
+  emit(`PRODUCTION_PAGES_BASELINE_TYPE=${baselineType}`);
+  await appendOutput({ project: EXPECTED_PROJECT, baselineType, environment });
+  return { project: EXPECTED_PROJECT, baselineType };
 }
 
-const detail = await get(`/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(expectedProject)}`)
-if (!detail.ok || detail.body?.result?.name !== expectedProject) fail('PRODUCTION_PAGES_PROJECT_DETAIL_UNPROVEN')
-
-const domains = Array.isArray(detail.body.result.domains) ? detail.body.result.domains : []
-const deployments = await get(`/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(expectedProject)}/deployments?env=production&page=1&per_page=20`)
-if (!deployments.ok) fail('PRODUCTION_PAGES_PROJECT_DEPLOYMENT_STATE_UNPROVEN')
-const productionDeployments = Array.isArray(deployments.body?.result) ? deployments.body.result : []
-const publicDomainState = domains.length === 0 && productionDeployments.length === 0 ? 'NONE' : 'EXISTING_KNOWN'
-
-console.log(`PRODUCTION_PAGES_PROJECT=${expectedProject}`)
-console.log('PRODUCTION_PAGES_PROJECT_READY=PASS')
-console.log(`PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=${publicDomainState}`)
-if (process.env.GITHUB_OUTPUT) {
-  const { appendFile } = await import('node:fs/promises')
-  await appendFile(process.env.GITHUB_OUTPUT, `project=${expectedProject}\npublic_domain_state=${publicDomainState}\n`)
+export function emitPagesProjectFailure(
+  error,
+  emit = (line) => console.log(line),
+  environment = process.env,
+) {
+  const credential = pagesCredential(environment);
+  const safeError =
+    error instanceof PagesProjectError
+      ? error
+      : new PagesProjectError("PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE");
+  const accessDenied =
+    safeError.classification === "PAGES_READ_TOKEN_ACCESS_DENIED";
+  const access = accessDenied
+    ? "FAIL"
+    : safeError.listAccessEstablished
+      ? "PASS"
+      : "FAIL";
+  const evidence = accessDenied
+    ? {
+        operation: safeError.operation,
+        httpStatus: safeError.httpStatus,
+        cfErrorCode: safeError.cfErrorCode,
+      }
+    : {
+        operation: "LIST_PROJECTS",
+        httpStatus: safeError.listAccessEstablished
+          ? safeError.listHttpStatus
+          : safeError.httpStatus,
+        cfErrorCode: safeError.listAccessEstablished
+          ? safeError.listCfErrorCode
+          : safeError.cfErrorCode,
+      };
+  emitCredentialAccess(emit, credential, { ...evidence, access });
+  emit(
+    `PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=${safeError.classification}`,
+  );
 }
 
-async function get(path) {
+function pagesCredential(environment) {
+  const dedicated = Object.hasOwn(environment, "CLOUDFLARE_PAGES_READ_TOKEN");
+  const token = dedicated
+    ? environment.CLOUDFLARE_PAGES_READ_TOKEN?.trim()
+    : environment.CLOUDFLARE_API_TOKEN?.trim();
+  return { dedicated, token: token || "" };
+}
+
+function requiredAccount(environment) {
+  const account = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
+  if (!account) {
+    throw new PagesProjectError("PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE");
+  }
+  return account;
+}
+
+function createRequester({ account, token, fetchImpl }) {
+  return async (path, operation, failureClassification, listEvidence = {}) => {
+    let response;
+    try {
+      response = await fetchImpl(
+        `${API_BASE}/accounts/${encodeURIComponent(account)}${path}`,
+        {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(20_000),
+        },
+      );
+    } catch {
+      throw new PagesProjectError(failureClassification, {
+        operation,
+        ...listEvidence,
+      });
+    }
+
+    const httpStatus = safeHttpStatus(response?.status);
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      throw new PagesProjectError(failureClassification, {
+        operation,
+        httpStatus,
+        ...listEvidence,
+      });
+    }
+    const cfErrorCode = safeCloudflareErrorCode(body);
+    if (httpStatus === "401" || httpStatus === "403") {
+      throw new PagesProjectError("PAGES_READ_TOKEN_ACCESS_DENIED", {
+        operation,
+        httpStatus,
+        cfErrorCode,
+        ...listEvidence,
+      });
+    }
+    if (!response.ok || body?.success !== true) {
+      throw new PagesProjectError(failureClassification, {
+        operation,
+        httpStatus,
+        cfErrorCode,
+        ...listEvidence,
+      });
+    }
+    return { body, httpStatus, cfErrorCode };
+  };
+}
+
+async function collectPages({
+  request,
+  path,
+  operation,
+  query,
+  failureClassification,
+  listEvidence = {},
+}) {
+  const rows = [];
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const params = new URLSearchParams({ ...query, page: String(page) });
+    const result = await request(
+      `${path}?${params}`,
+      operation,
+      failureClassification,
+      listEvidence,
+    );
+    if (!Array.isArray(result.body?.result)) {
+      throw new PagesProjectError(failureClassification, {
+        operation,
+        httpStatus: result.httpStatus,
+        cfErrorCode: result.cfErrorCode,
+        ...listEvidence,
+      });
+    }
+    rows.push(...result.body.result);
+    const totalPages = Number(result.body?.result_info?.total_pages);
+    if (Number.isInteger(totalPages) && totalPages > 0) {
+      if (page >= totalPages) return { rows, ...result };
+      continue;
+    }
+    if (result.body.result.length < Number(query.per_page))
+      return { rows, ...result };
+  }
+  throw new PagesProjectError(failureClassification, {
+    operation,
+    ...listEvidence,
+  });
+}
+
+function emitCredentialAccess(
+  emit,
+  credential,
+  { operation = "LIST_PROJECTS", httpStatus, cfErrorCode, access },
+) {
+  if (!credential.dedicated) return;
+  emit(`PAGES_READ_TOKEN_PRESENT=${credential.token ? "PASS" : "FAIL"}`);
+  emit(`PAGES_READ_TOKEN_ACCESS=${access}`);
+  emit(`PAGES_READ_API_OPERATION=${operation}`);
+  emit(`PAGES_READ_API_HTTP_STATUS=${httpStatus}`);
+  emit(`PAGES_READ_API_CF_ERROR_CODE=${cfErrorCode}`);
+}
+
+function safeHttpStatus(value) {
+  return Number.isInteger(value) && value >= 100 && value <= 599
+    ? String(value)
+    : "0";
+}
+
+function safeCloudflareErrorCode(body) {
+  if (!Array.isArray(body?.errors)) return "NONE";
+  const error = body.errors.find(
+    (item) => Number.isSafeInteger(item?.code) && item.code >= 1000,
+  );
+  return error ? String(error.code) : "NONE";
+}
+
+async function appendGitHubOutput({ project, baselineType, environment }) {
+  if (!environment.GITHUB_OUTPUT) return;
+  await appendFile(
+    environment.GITHUB_OUTPUT,
+    `project=${project}\nbaseline_type=${baselineType}\n`,
+  );
+}
+
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
   try {
-    const response = await fetch(`${apiBase}${path}`, {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(20_000),
-    })
-    let body
-    try { body = await response.json() } catch { body = undefined }
-    return { ok: response.ok && body?.success === true, body }
-  } catch { return { ok: false, body: undefined } }
-}
-
-function required(name) {
-  const value = process.env[name]?.trim()
-  if (!value) fail(`CONFIG_${name}`)
-  return value
-}
-
-function fail(code) {
-  console.log(`PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=${code}`)
-  process.exitCode = 1
-  throw new Error(code)
+    await resolveProductionPagesProject();
+  } catch (error) {
+    emitPagesProjectFailure(error);
+    process.exitCode = 1;
+  }
 }
