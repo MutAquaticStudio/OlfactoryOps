@@ -44,7 +44,9 @@ describe("RC10 final readiness operations", () => {
     expect(backup).toContain("verify-v2-rc10-backup-r2-private.mjs");
     expect(backup).not.toContain("r2 bucket list --json");
     expect(backup).not.toContain("r2-private.txt");
+    expect(backup).not.toContain("wrangler r2 bucket create");
     expect(backupR2Private).toContain("/r2/buckets/");
+    expect(backupR2Private).toContain('method: "POST"');
     expect(backupR2Private).toContain("/domains/managed");
     expect(backupR2Private).toContain("/domains/custom");
     expect(backupR2Private).not.toContain("console.error");
