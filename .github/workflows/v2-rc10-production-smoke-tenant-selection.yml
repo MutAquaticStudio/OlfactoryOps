@@ -1,0 +1,94 @@
+name: V2 RC10 Production Smoke Tenant Selection
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_selection:
+        description: Type SELECT_RC10_PRODUCTION_SMOKE_TENANT.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc10-production-smoke-tenant-selection
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: release
+        name: Validate immutable RC10 tenant-selection request
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRM_SELECTION: ${{ inputs.confirm_selection }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_SELECTION" = SELECT_RC10_PRODUCTION_SMOKE_TENANT
+          test "$RELEASE_SHA" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          printf 'release_sha=%s\n' "$RC10_SHA" >> "$GITHUB_OUTPUT"
+
+  inspect:
+    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.release_sha }}
+          path: release
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - name: Install exact RC10 dependencies without provider credentials
+        working-directory: release
+        run: npm ci --ignore-scripts
+      - name: List active tenant hostname candidates with a read-only database session
+        env:
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          node ops/scripts/inspect-v2-rc10-production-smoke-tenant-selection.mjs | tee "$RUNNER_TEMP/production-smoke-tenant-selection.txt"
+          test -s "$RUNNER_TEMP/production-smoke-tenant-selection.txt"
+          grep -Fx 'SMOKE_TENANT_SELECTION_REQUIRED=YES' "$RUNNER_TEMP/production-smoke-tenant-selection.txt"
+      - name: Remove runner-local tenant-selection evidence
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/production-smoke-tenant-selection.txt"
