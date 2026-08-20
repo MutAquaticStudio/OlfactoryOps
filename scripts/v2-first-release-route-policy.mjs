@@ -15,13 +15,11 @@ export const PUBLIC_ROUTE_SPECS = [
     key: "api",
     pattern: "api.labofscents.org/*",
     replacementService: PRODUCTION_SERVICES.api,
-    healthUrl: "https://api.labofscents.org/health",
   },
   {
     key: "tenantRouter",
     pattern: "*.labofscents.org/*",
     replacementService: PRODUCTION_SERVICES.router,
-    healthUrl: "https://next.labofscents.org/",
   },
 ];
 
@@ -205,8 +203,15 @@ export async function handoffApprovedRoutes({
   baseline,
   releaseSha,
   expectedHyperdriveId,
+  tenantHostname,
   fetchImpl = fetch,
+  healthAttempts = 6,
+  sleep = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
 }) {
+  if (!validTenantHostname(tenantHostname)) {
+    return { pass: false, state: "SMOKE_TENANT_UNPROVEN" };
+  }
   const baselineState = await verifyCurrentRouteBaseline({
     account,
     token,
@@ -251,8 +256,13 @@ export async function handoffApprovedRoutes({
       },
     });
     if (!update.ok) {
-      await restoreApprovedRoutes({ account, token, baseline, fetchImpl });
-      return { pass: false, state: "ROUTE_HANDOFF_FAILED" };
+      return handoffFailure({
+        state: "ROUTE_HANDOFF_FAILED",
+        account,
+        token,
+        baseline,
+        fetchImpl,
+      });
     }
     const verified = await verifyRouteTarget({
       account,
@@ -263,12 +273,30 @@ export async function handoffApprovedRoutes({
       fetchImpl,
     });
     if (!verified) {
-      await restoreApprovedRoutes({ account, token, baseline, fetchImpl });
-      return { pass: false, state: "ROUTE_HANDOFF_VERIFICATION_FAILED" };
+      return handoffFailure({
+        state: "ROUTE_HANDOFF_VERIFICATION_FAILED",
+        account,
+        token,
+        baseline,
+        fetchImpl,
+      });
     }
-    if (!(await publicHealthProbe({ url: replacement.healthUrl, fetchImpl }))) {
-      await restoreApprovedRoutes({ account, token, baseline, fetchImpl });
-      return { pass: false, state: "ROUTE_HANDOFF_HEALTH_FAILED" };
+    const health = await publicHealthProbe({
+      routeKey: replacement.key,
+      tenantHostname,
+      releaseSha,
+      fetchImpl,
+      attempts: healthAttempts,
+      sleep,
+    });
+    if (!health.pass) {
+      return handoffFailure({
+        state: health.state,
+        account,
+        token,
+        baseline,
+        fetchImpl,
+      });
     }
   }
   return { pass: true, state: "READY" };
@@ -666,7 +694,50 @@ async function cloudflareRequest({
   }
 }
 
-async function publicHealthProbe({ url, fetchImpl }) {
+async function publicHealthProbe({
+  routeKey,
+  tenantHostname,
+  releaseSha,
+  fetchImpl,
+  attempts,
+  sleep,
+}) {
+  const url =
+    routeKey === "api"
+      ? "https://api.labofscents.org/health"
+      : "https://" + tenantHostname + "/";
+  let identityUnproven = false;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const result = await singlePublicHealthProbe({
+      routeKey,
+      url,
+      releaseSha,
+      fetchImpl,
+    });
+    if (result.pass) return { pass: true, state: "READY" };
+    identityUnproven ||= result.identityUnproven;
+    if (attempt + 1 < attempts) await sleep(5_000);
+  }
+  return {
+    pass: false,
+    state:
+      routeKey === "api"
+        ? identityUnproven
+          ? "API_EDGE_RELEASE_IDENTITY_UNPROVEN"
+          : "API_EDGE_NOT_READY"
+        : identityUnproven
+          ? "TENANT_ROUTER_EDGE_RELEASE_IDENTITY_UNPROVEN"
+          : "TENANT_ROUTER_EDGE_NOT_READY",
+  };
+}
+
+async function singlePublicHealthProbe({
+  routeKey,
+  url,
+  releaseSha,
+  fetchImpl,
+}) {
   try {
     const response = await fetchImpl(url, {
       method: "GET",
@@ -675,10 +746,42 @@ async function publicHealthProbe({ url, fetchImpl }) {
       headers: { "cache-control": "no-cache", pragma: "no-cache" },
       signal: AbortSignal.timeout(20_000),
     });
-    return response?.status >= 200 && response?.status < 300;
+    if (!(response?.status >= 200 && response?.status < 300)) {
+      return { pass: false, identityUnproven: false };
+    }
+    if (routeKey === "api") {
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        body = undefined;
+      }
+      return {
+        pass: body?.releaseGitSha === releaseSha,
+        identityUnproven: true,
+      };
+    }
+    return {
+      pass: response.headers?.get("x-olfactoryops-release-sha") === releaseSha,
+      identityUnproven: true,
+    };
   } catch {
-    return false;
+    return { pass: false, identityUnproven: false };
   }
+}
+
+async function handoffFailure({ state, account, token, baseline, fetchImpl }) {
+  const rollback = await restoreApprovedRoutes({
+    account,
+    token,
+    baseline,
+    fetchImpl,
+  });
+  return {
+    pass: false,
+    state,
+    rollback: rollback.pass ? "PASS" : "FAIL",
+  };
 }
 
 function safeHttpStatus(value) {
@@ -697,6 +800,13 @@ function safeCloudflareErrorCode(payload) {
 
 function validAccount(value) {
   return typeof value === "string" && value.length >= 8 && value.length <= 128;
+}
+
+function validTenantHostname(value) {
+  return (
+    typeof value === "string" &&
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/.test(value)
+  );
 }
 
 function failure(state) {

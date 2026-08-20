@@ -18,6 +18,10 @@ const policy = readFileSync(
   "scripts/v2-first-release-route-policy.mjs",
   "utf8",
 );
+const handoffExecutor = readFileSync(
+  "scripts/execute-v2-first-release-route-handoff.mjs",
+  "utf8",
+);
 const baselineVerifier = readFileSync(
   "scripts/persist-v2-first-release-route-baseline.mjs",
   "utf8",
@@ -59,6 +63,15 @@ describe("first-release route policy workflows", () => {
     );
     expect(dispatcher).toContain("execute-v2-first-release-route-handoff.mjs");
     expect(dispatcher).toContain("PRODUCTION_HYPERDRIVE_ID");
+    expect(dispatcher).toContain(
+      "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ secrets.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}",
+    );
+    expect(dispatcher).toContain(
+      "PRODUCTION_SMOKE_TENANT_HOSTNAME: ${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}",
+    );
+    expect(dispatcher).not.toContain(
+      "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}",
+    );
     expect(
       dispatcher.indexOf("prepare-v2-first-release-unrouted-config.mjs"),
     ).toBeLessThan(
@@ -103,6 +116,9 @@ describe("first-release route policy workflows", () => {
     expect(policy).toContain("RELEASE_GIT_SHA");
     expect(policy).toContain("RELEASE_ENVIRONMENT");
     expect(policy).toContain("PAGES_ORIGIN");
+    expect(policy).toContain("API_EDGE_RELEASE_IDENTITY_UNPROVEN");
+    expect(policy).toContain("TENANT_ROUTER_EDGE_RELEASE_IDENTITY_UNPROVEN");
+    expect(handoffExecutor).toContain("FIRST_RELEASE_ROUTE_ROLLBACK");
   });
 
   it("keeps route identifiers and target names out of safe emitted evidence", () => {

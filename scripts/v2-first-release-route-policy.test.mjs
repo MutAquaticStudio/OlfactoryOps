@@ -14,12 +14,14 @@ import {
 const account = "account-fixture";
 const releaseSha = "f".repeat(40);
 const hyperdriveId = "hyperdrive-fixture";
+const tenantHostname = "smoke-fixture.next.labofscents.org";
 
-function response(body, status = 200) {
+function response(body, status = 200, headers = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
     json: async () => body,
+    headers: { get: (name) => headers[name.toLowerCase()] ?? null },
   };
 }
 
@@ -101,6 +103,8 @@ function fixture() {
     ],
     productionPresent: false,
     healthFailure: false,
+    apiReleaseMismatch: false,
+    routerReleaseMismatch: false,
     releaseMismatch: false,
     predecessorVersionOverride: undefined,
     deleted: [],
@@ -110,11 +114,20 @@ function fixture() {
     const url = new URL(String(input));
     const path = url.pathname;
     state.requests.push({ method: init.method ?? "GET", path });
-    if (
-      url.hostname === "api.labofscents.org" ||
-      url.hostname === "next.labofscents.org"
-    ) {
-      return response({}, state.healthFailure ? 503 : 200);
+    if (url.hostname === "api.labofscents.org") {
+      return response(
+        {
+          releaseGitSha: state.apiReleaseMismatch ? "0".repeat(40) : releaseSha,
+        },
+        state.healthFailure ? 503 : 200,
+      );
+    }
+    if (url.hostname === tenantHostname) {
+      return response({}, state.healthFailure ? 503 : 200, {
+        "x-olfactoryops-release-sha": state.routerReleaseMismatch
+          ? "0".repeat(40)
+          : releaseSha,
+      });
     }
     if (path === "/client/v4/zones") {
       return response({
@@ -195,6 +208,21 @@ async function capture(context) {
   });
 }
 
+function handoff(context, captured, overrides = {}) {
+  return handoffApprovedRoutes({
+    account,
+    token: "token-fixture",
+    baseline: captured.manifest,
+    releaseSha,
+    expectedHyperdriveId: hyperdriveId,
+    tenantHostname,
+    fetchImpl: context.fetchImpl,
+    healthAttempts: 1,
+    sleep: async () => {},
+    ...overrides,
+  });
+}
+
 describe("first-release route policy", () => {
   it("captures a deterministic absence-and-route-handoff baseline without exposing targets in safe evidence", async () => {
     const context = fixture();
@@ -256,16 +284,7 @@ describe("first-release route policy", () => {
         fetchImpl: context.fetchImpl,
       }),
     ).resolves.toEqual({ pass: false, state: "CUTOVER_ROUTE_BASELINE_DRIFT" });
-    await expect(
-      handoffApprovedRoutes({
-        account,
-        token: "token-fixture",
-        baseline: captured.manifest,
-        releaseSha,
-        expectedHyperdriveId: hyperdriveId,
-        fetchImpl: context.fetchImpl,
-      }),
-    ).resolves.toMatchObject({
+    await expect(handoff(context, captured)).resolves.toMatchObject({
       pass: false,
       state: "CUTOVER_ROUTE_BASELINE_DRIFT",
     });
@@ -280,16 +299,10 @@ describe("first-release route policy", () => {
     context.state.productionPresent = true;
     context.state.predecessorVersionOverride = "version-replaced";
 
-    await expect(
-      handoffApprovedRoutes({
-        account,
-        token: "token-fixture",
-        baseline: captured.manifest,
-        releaseSha,
-        expectedHyperdriveId: hyperdriveId,
-        fetchImpl: context.fetchImpl,
-      }),
-    ).resolves.toEqual({ pass: false, state: "PREVIOUS_TARGET_UNPROVEN" });
+    await expect(handoff(context, captured)).resolves.toEqual({
+      pass: false,
+      state: "PREVIOUS_TARGET_UNPROVEN",
+    });
     expect(
       context.state.requests.some((request) => request.method === "PUT"),
     ).toBe(false);
@@ -300,16 +313,10 @@ describe("first-release route policy", () => {
     const captured = await capture(context);
     context.state.productionPresent = true;
 
-    await expect(
-      handoffApprovedRoutes({
-        account,
-        token: "token-fixture",
-        baseline: captured.manifest,
-        releaseSha,
-        expectedHyperdriveId: hyperdriveId,
-        fetchImpl: context.fetchImpl,
-      }),
-    ).resolves.toEqual({ pass: true, state: "READY" });
+    await expect(handoff(context, captured)).resolves.toEqual({
+      pass: true,
+      state: "READY",
+    });
     expect(context.state.routes.map((route) => route.script)).toEqual([
       PRODUCTION_SERVICES.api,
       PRODUCTION_SERVICES.router,
@@ -337,16 +344,11 @@ describe("first-release route policy", () => {
     context.state.productionPresent = true;
     context.state.healthFailure = true;
 
-    await expect(
-      handoffApprovedRoutes({
-        account,
-        token: "token-fixture",
-        baseline: captured.manifest,
-        releaseSha,
-        expectedHyperdriveId: hyperdriveId,
-        fetchImpl: context.fetchImpl,
-      }),
-    ).resolves.toEqual({ pass: false, state: "ROUTE_HANDOFF_HEALTH_FAILED" });
+    await expect(handoff(context, captured)).resolves.toEqual({
+      pass: false,
+      state: "API_EDGE_NOT_READY",
+      rollback: "PASS",
+    });
     expect(context.state.routes.map((route) => route.script)).toEqual([
       "existing-api-service",
       "existing-router-service",
@@ -359,20 +361,54 @@ describe("first-release route policy", () => {
     context.state.productionPresent = true;
     context.state.releaseMismatch = true;
 
-    await expect(
-      handoffApprovedRoutes({
-        account,
-        token: "token-fixture",
-        baseline: captured.manifest,
-        releaseSha,
-        expectedHyperdriveId: hyperdriveId,
-        fetchImpl: context.fetchImpl,
-      }),
-    ).resolves.toEqual({ pass: false, state: "RC10_TARGET_UNPROVEN" });
+    await expect(handoff(context, captured)).resolves.toEqual({
+      pass: false,
+      state: "RC10_TARGET_UNPROVEN",
+    });
     expect(
       context.state.requests.some((request) => request.method === "PUT"),
     ).toBe(false);
   });
+
+  it("fails closed before any handoff for an invalid dedicated smoke tenant", async () => {
+    const context = fixture();
+    const captured = await capture(context);
+    context.state.productionPresent = true;
+
+    await expect(
+      handoff(context, captured, { tenantHostname: "next.labofscents.org" }),
+    ).resolves.toEqual({ pass: false, state: "SMOKE_TENANT_UNPROVEN" });
+    expect(
+      context.state.requests.some((request) => request.method === "PUT"),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["API", "apiReleaseMismatch", "API_EDGE_RELEASE_IDENTITY_UNPROVEN"],
+    [
+      "tenant Router",
+      "routerReleaseMismatch",
+      "TENANT_ROUTER_EDGE_RELEASE_IDENTITY_UNPROVEN",
+    ],
+  ])(
+    "restores the approved baseline when %s edge release identity is unproven",
+    async (_name, stateKey, expectedState) => {
+      const context = fixture();
+      const captured = await capture(context);
+      context.state.productionPresent = true;
+      context.state[stateKey] = true;
+
+      await expect(handoff(context, captured)).resolves.toEqual({
+        pass: false,
+        state: expectedState,
+        rollback: "PASS",
+      });
+      expect(context.state.routes.map((route) => route.script)).toEqual([
+        "existing-api-service",
+        "existing-router-service",
+      ]);
+    },
+  );
 
   it("refuses cleanup before restoration and deletes only exact first-release resources afterward", async () => {
     const context = fixture();
