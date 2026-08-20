@@ -78,6 +78,20 @@ describe("production platform owner readiness", () => {
   it("fails closed when any required post-bootstrap invariant is absent", () => {
     expect(
       summarizePlatformOwnerReadiness({
+        active_owners: 0,
+        all_mfa_required: false,
+        all_platform_owner_roles: false,
+        all_active: false,
+        bootstrap_audit_present: false,
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        "ACTIVE_PLATFORM_OWNER_COUNT=ZERO",
+        "PLATFORM_OWNER_READY=UNPROVEN",
+      ]),
+    );
+    expect(
+      summarizePlatformOwnerReadiness({
         active_owners: 1,
         all_mfa_required: true,
         all_platform_owner_roles: true,

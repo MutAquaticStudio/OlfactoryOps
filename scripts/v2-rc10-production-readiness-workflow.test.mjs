@@ -20,6 +20,9 @@ describe('RC10 readiness workflow', () => {
     expect(workflow).toContain('PLATFORM_OWNER_MFA_REQUIRED=PASS')
     expect(workflow).toContain('PLATFORM_OWNER_AUDIT_EVENT=PASS')
     expect(workflow).toContain('PLATFORM_OWNER_READY=PASS')
+    expect(workflow).toContain('CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP')
+    expect(workflow).toContain('CANDIDATE_ACCEPTANCE_MODE=LEGACY_PRE_BOOTSTRAP')
+    expect(workflow).toContain('REAL_PLATFORM_OWNER_PRESERVED=PASS')
     expect(workflow).toContain('PRODUCTION_READY=YES')
     expect(workflow).toContain('v2-production-ready')
   })
@@ -29,5 +32,30 @@ describe('RC10 readiness workflow', () => {
     expect(workflow).not.toMatch(/\b(POST|PUT|PATCH|DELETE)\b/)
     expect(workflow).not.toContain('PRODUCTION_DATABASE_URL >>')
     expect(workflow).toContain('git -C release diff --quiet "$RC9_SHA" "$RELEASE_SHA"')
+  })
+
+  it('accepts post-bootstrap evidence only when the authoritative owner proof is complete', () => {
+    const postBootstrapStart = workflow.indexOf(
+      "if grep -Fq 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP' \"$log\"; then",
+    )
+    const commonAcceptanceStart = workflow.indexOf(
+      "grep -Fq 'CANDIDATE_BROWSER_ACCEPTANCE=PASS' \"$log\"",
+      postBootstrapStart,
+    )
+    expect(postBootstrapStart).toBeGreaterThanOrEqual(0)
+    expect(commonAcceptanceStart).toBeGreaterThan(postBootstrapStart)
+    const postBootstrap = workflow.slice(postBootstrapStart, commonAcceptanceStart)
+
+    for (const marker of [
+      'REAL_PLATFORM_OWNER_PRESERVED=PASS',
+      'ACTIVE_PLATFORM_OWNER_COUNT=ONE',
+      'PLATFORM_OWNER_ROLE=PASS',
+      'PLATFORM_OWNER_STATUS_ACTIVE=PASS',
+      'PLATFORM_OWNER_MFA_REQUIRED=PASS',
+      'PLATFORM_OWNER_AUDIT_EVENT=PASS',
+      'PLATFORM_OWNER_READY=PASS',
+    ]) {
+      expect(postBootstrap).toContain(marker)
+    }
   })
 })
