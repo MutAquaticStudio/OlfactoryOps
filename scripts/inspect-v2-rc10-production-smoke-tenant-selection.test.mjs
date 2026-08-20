@@ -97,11 +97,15 @@ describe('RC10 production smoke tenant selection inventory', () => {
       { hostname: 'alpha.next.labofscents.org', candidate_count: 1 },
     ])
     const output = []
+    const emittedArguments = []
 
     const result = await inspectProductionSmokeTenantCandidates({
       environment: { PRODUCTION_DATABASE_URL: 'fixture-database-url' },
       pgModule: pgFor(client),
-      emit: (line) => output.push(line),
+      emit: (...args) => {
+        emittedArguments.push(args)
+        output.push(args[0])
+      },
     })
 
     expect(result.pass).toBe(true)
@@ -116,6 +120,7 @@ describe('RC10 production smoke tenant selection inventory', () => {
     expect(productionSmokeTenantSelectionSql).not.toMatch(/\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b/i)
     expect(output.join('\n')).not.toContain('fixture-database-url')
     expect(output.join('\n')).not.toMatch(/(?:email|user_id|organization_id|membership|password)/i)
+    expect(emittedArguments).toEqual(output.map((line) => [line]))
     expect(client.closed).toBe(true)
   })
 
