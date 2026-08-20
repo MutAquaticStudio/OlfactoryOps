@@ -68,6 +68,20 @@ describe('RC10 readiness workflow', () => {
     expect(workflow).toContain('git -C release diff --quiet "$RC9_SHA" "$RELEASE_SHA"')
   })
 
+  it('retains repository credentials only for immutable validation and readiness-tag publication', () => {
+    const validation = workflow.slice(
+      workflow.indexOf('  validate-input:'),
+      workflow.indexOf('  assess:'),
+    )
+    const readinessTag = workflow.slice(workflow.indexOf('  publish-readiness-tag:'))
+
+    expect(validation).toContain('persist-credentials: true')
+    expect(validation).toContain('git fetch --no-tags origin "$RELEASE_BRANCH"')
+    expect(readinessTag).toContain('persist-credentials: true')
+    expect(readinessTag).toContain('git push origin refs/tags/v2-production-ready')
+    expect(workflow.match(/persist-credentials: true/g)).toHaveLength(2)
+  })
+
   it('accepts post-bootstrap evidence only when the authoritative owner proof is complete', () => {
     const postBootstrapStart = workflow.indexOf(
       "if grep -Fq 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP' \"$log\"; then",
