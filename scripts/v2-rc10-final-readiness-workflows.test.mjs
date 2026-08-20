@@ -290,6 +290,10 @@ describe("RC10 final readiness operations", () => {
     expect(rollback).toContain("CLOUDFLARE_PAGES_READ_TOKEN");
     expect(rollback).toContain("resolveProductionPagesProject");
     expect(rollback).toContain("emitPagesProjectFailure");
+    expect(rollback).toContain("DEPLOYMENT_STATE");
+    expect(rollback).toContain("API_HTTP_STATUS");
+    expect(rollback).toContain("API_CF_ERROR_CODE");
+    expect(rollback).not.toContain("response.text");
   });
 
   it("provides a protected post-cutover public acceptance harness", () => {
