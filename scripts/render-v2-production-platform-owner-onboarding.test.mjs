@@ -10,7 +10,9 @@ const input = {
 test("renders a route-free workers.dev config pinned to RC10 production Hyperdrive", () => {
   const rendered = renderPlatformOwnerOnboardingConfig(input);
   expect(rendered).toContain("workers_dev = true");
-  expect(rendered).toContain('main = "worker/v2-platform-owner-onboarding.ts"');
+  expect(rendered).toContain(
+    'main = "../../worker/v2-platform-owner-onboarding.ts"',
+  );
   expect(rendered).toContain(
     'RELEASE_GIT_SHA = "fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd"',
   );

@@ -83,6 +83,7 @@ if (
   throw new Error("PLATFORM_OWNER_ONBOARDING_WORKFLOW_ROUTE_BOUNDARY=FAIL");
 if (
   !renderer.includes("workers_dev = true") ||
+  !renderer.includes('main = "../../worker/v2-platform-owner-onboarding.ts"') ||
   /(?:routes\s*=|\[\[routes\]\]|custom_domain\s*=)/.test(renderer)
 )
   throw new Error("PLATFORM_OWNER_ONBOARDING_ROUTE_BOUNDARY=FAIL");
