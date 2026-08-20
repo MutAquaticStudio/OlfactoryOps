@@ -193,9 +193,18 @@ jobs:
           printf '%s' "$url" > "$OWNER_ONBOARDING_QA_DIR/url"
           chmod 600 "$OWNER_ONBOARDING_QA_DIR/url"
           token="$(cat "$OWNER_ONBOARDING_QA_DIR/dispatch-token")"
+          runtime_status="$(curl --silent --max-time 20 --output "$OWNER_ONBOARDING_QA_DIR/runtime-status.json" --write-out '%{http_code}' -H "x-olfactoryops-owner-onboarding-dispatch: $token" "$url/__status" || printf '000')"
+          test "$runtime_status" = 200
+          node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(v?.state!=='PENDING')process.exit(2)" "$OWNER_ONBOARDING_QA_DIR/runtime-status.json"
+          printf 'OWNER_ONBOARDING_RUNTIME_PREFLIGHT=PASS\n' >> "$GITHUB_ENV"
           dispatch_status="$(curl --silent --max-time 20 --output "$OWNER_ONBOARDING_QA_DIR/dispatch.json" --write-out '%{http_code}' --request POST -H "x-olfactoryops-owner-onboarding-dispatch: $token" "$url/__dispatch" || printf '000')"
-          test "$dispatch_status" = 202
+          if [ "$dispatch_status" != 202 ]; then
+            delivery_state="$(node -e "const fs=require('node:fs');const state=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.state;const safe=new Set(['EMAIL_REJECTED_4XX','EMAIL_REJECTED_5XX','EMAIL_TRANSPORT_FAILURE','USER_STATE_UNAVAILABLE','CLOSED','UNAVAILABLE']);if(!safe.has(state))process.exit(2);process.stdout.write(state)" "$OWNER_ONBOARDING_QA_DIR/dispatch.json")"
+            printf 'OWNER_ONBOARDING_EMAIL_DELIVERY=FAIL_%s\n' "$delivery_state" >> "$GITHUB_ENV"
+            exit 1
+          fi
           node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(v?.state!=='EMAIL_SENT')process.exit(2)" "$OWNER_ONBOARDING_QA_DIR/dispatch.json"
+          printf 'OWNER_ONBOARDING_EMAIL_DELIVERY=PASS\n' >> "$GITHUB_ENV"
           for attempt in $(seq 1 90); do
             status="$(curl --silent --max-time 20 --output "$OWNER_ONBOARDING_QA_DIR/status.json" --write-out '%{http_code}' -H "x-olfactoryops-owner-onboarding-dispatch: $token" "$url/__status" || printf '000')"
             if [ "$status" = 200 ] && node -e "const fs=require('node:fs');try{process.exit(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.state==='COMPLETE'?0:1)}catch{process.exit(1)}" "$OWNER_ONBOARDING_QA_DIR/status.json"; then
