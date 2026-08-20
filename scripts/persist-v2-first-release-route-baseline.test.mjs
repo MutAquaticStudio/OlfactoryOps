@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -97,6 +98,31 @@ function fetchFixture({ baselineValue } = {}) {
 }
 
 describe("first-release route baseline persistence", () => {
+  it("runs the direct CLI entrypoint without undefined-argument destructuring", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/persist-v2-first-release-route-baseline.mjs"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH ?? "",
+          SystemRoot: process.env.SystemRoot ?? "",
+          TEMP: process.env.TEMP ?? "",
+          TMP: process.env.TMP ?? "",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("PRECUTOVER_ROUTE_BASELINE=FAIL");
+    expect(result.stdout).toContain(
+      "FIRST_RELEASE_BASELINE_FAILURE=CREDENTIAL_OR_CONTEXT_UNAVAILABLE",
+    );
+    expect(result.stderr).not.toContain("TypeError");
+    expect(result.stdout).not.toContain("TypeError");
+  });
+
   it("stores a captured baseline without emitting its service or route identifiers", async () => {
     const directory = mkdtempSync(join(tmpdir(), "first-release-baseline-"));
     const file = join(directory, "baseline");
