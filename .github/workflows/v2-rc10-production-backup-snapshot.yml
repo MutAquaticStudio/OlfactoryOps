@@ -138,20 +138,16 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          dir="$RUNNER_TEMP/rc10-production-backup"
-          evidence="$dir/r2-private.txt"
           set +e
-          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs > "$evidence"
+          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs
           bucket_status=$?
           set -e
           if [ "$bucket_status" -eq 10 ]; then
             npx wrangler r2 bucket create "$BACKUP_BUCKET" > /dev/null 2>/dev/null
-            BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs > "$evidence"
+            BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs
           elif [ "$bucket_status" -ne 0 ]; then
-            cat "$evidence"
             exit "$bucket_status"
           fi
-          cat "$evidence"
       - name: Upload, download, checksum, and validate the same private object
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
