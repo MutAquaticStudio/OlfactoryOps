@@ -14,13 +14,22 @@ export async function executeFirstReleaseRouteHandoff({
   const token = environment.CLOUDFLARE_API_TOKEN?.trim();
   const releaseSha = environment.RELEASE_SHA?.trim();
   const expectedHyperdriveId = environment.PRODUCTION_HYPERDRIVE_ID?.trim();
+  const tenantHostname = environment.PRODUCTION_SMOKE_TENANT_HOSTNAME?.trim();
   const baseline = parseBaseline(
     environment.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE,
   );
-  if (!account || !token || !releaseSha || !expectedHyperdriveId || !baseline) {
+  if (
+    !account ||
+    !token ||
+    !releaseSha ||
+    !expectedHyperdriveId ||
+    !tenantHostname ||
+    !baseline
+  ) {
     emit("CURRENT_ROUTE_BASELINE_MATCH=FAIL");
     emit("API_ROUTE_HANDOFF=FAIL");
     emit("TENANT_ROUTER_ROUTE_HANDOFF=FAIL");
+    emit("FIRST_RELEASE_ROUTE_ROLLBACK=NOT_NEEDED");
     return { pass: false, state: "BASELINE_UNAVAILABLE" };
   }
   const result = await handoffApprovedRoutes({
@@ -29,6 +38,7 @@ export async function executeFirstReleaseRouteHandoff({
     baseline,
     releaseSha,
     expectedHyperdriveId,
+    tenantHostname,
     fetchImpl,
   });
   if (!result.pass) {
@@ -38,6 +48,7 @@ export async function executeFirstReleaseRouteHandoff({
     );
     emit("API_ROUTE_HANDOFF=FAIL");
     emit("TENANT_ROUTER_ROUTE_HANDOFF=FAIL");
+    emit("FIRST_RELEASE_ROUTE_ROLLBACK=" + (result.rollback ?? "NOT_NEEDED"));
     emit("FIRST_RELEASE_ROUTE_HANDOFF_FAILURE=" + result.state);
     return result;
   }
