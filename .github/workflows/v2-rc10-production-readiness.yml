@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - id: validate
         name: Validate immutable RC10 and release branch
         shell: bash
@@ -299,7 +299,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - name: Create the immutable production-ready tag once
         shell: bash
         run: |
