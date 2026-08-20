@@ -246,6 +246,9 @@ describe("RC10 final readiness operations", () => {
     expect(pages).not.toContain("production-candidate");
     expect(pagesResolver).toContain("CLOUDFLARE_PAGES_READ_TOKEN");
     expect(pagesResolver).toContain("PAGES_READ_TOKEN_ACCESS");
+    expect(pagesResolver).toContain("PAGES_READ_TOKEN_ACTIVE");
+    expect(pagesResolver).toContain("PAGES_READ_TOKEN_ACCOUNT_BINDING");
+    expect(pagesResolver).toContain("PAGES_READ_TOKEN_PERMISSION");
     expect(pagesResolver).toContain("/pages/projects/");
     expect(pagesResolver).not.toMatch(
       /method:\s*["'](?:POST|PUT|PATCH|DELETE)/i,

@@ -3,7 +3,6 @@ import { pathToFileURL } from "node:url";
 
 const API_BASE = "https://api.cloudflare.com/client/v4";
 const EXPECTED_PROJECT = "olfactoryops-v2-production";
-const MAX_PAGES = 10;
 
 export class PagesProjectError extends Error {
   constructor(
@@ -53,7 +52,6 @@ export async function resolveProductionPagesProject({
     request,
     path: "/pages/projects",
     operation: "LIST_PROJECTS",
-    query: { per_page: "20" },
     failureClassification: "PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE",
   });
   const listEvidence = {
@@ -100,7 +98,6 @@ export async function resolveProductionPagesProject({
     request,
     path: `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}/domains`,
     operation: "LIST_PROJECT_DOMAINS",
-    query: { per_page: "20" },
     failureClassification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
     listEvidence,
   });
@@ -108,7 +105,7 @@ export async function resolveProductionPagesProject({
     request,
     path: `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}/deployments`,
     operation: "LIST_PRODUCTION_DEPLOYMENTS",
-    query: { env: "production", per_page: "20" },
+    query: { env: "production" },
     failureClassification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
     listEvidence,
   });
@@ -159,11 +156,12 @@ export function emitPagesProjectFailure(
       : new PagesProjectError("PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE");
   const accessDenied =
     safeError.classification === "PAGES_READ_TOKEN_ACCESS_DENIED";
-  const access = accessDenied
-    ? "FAIL"
-    : safeError.listAccessEstablished
-      ? "PASS"
-      : "FAIL";
+  const access =
+    accessDenied || safeError.classification === "PAGES_READ_TOKEN_MISSING"
+      ? "FAIL"
+      : safeError.listAccessEstablished
+        ? "PASS"
+        : "UNPROVEN";
   const evidence = accessDenied
     ? {
         operation: safeError.operation,
@@ -255,40 +253,36 @@ async function collectPages({
   request,
   path,
   operation,
-  query,
+  query = {},
   failureClassification,
   listEvidence = {},
 }) {
-  const rows = [];
-  for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const params = new URLSearchParams({ ...query, page: String(page) });
-    const result = await request(
-      `${path}?${params}`,
-      operation,
-      failureClassification,
-      listEvidence,
-    );
-    if (!Array.isArray(result.body?.result)) {
-      throw new PagesProjectError(failureClassification, {
-        operation,
-        httpStatus: result.httpStatus,
-        cfErrorCode: result.cfErrorCode,
-        ...listEvidence,
-      });
-    }
-    rows.push(...result.body.result);
-    const totalPages = Number(result.body?.result_info?.total_pages);
-    if (Number.isInteger(totalPages) && totalPages > 0) {
-      if (page >= totalPages) return { rows, ...result };
-      continue;
-    }
-    if (result.body.result.length < Number(query.per_page))
-      return { rows, ...result };
-  }
-  throw new PagesProjectError(failureClassification, {
+  const params = new URLSearchParams(query);
+  const suffix = params.size === 0 ? "" : `?${params}`;
+  const result = await request(
+    `${path}${suffix}`,
     operation,
-    ...listEvidence,
-  });
+    failureClassification,
+    listEvidence,
+  );
+  if (!Array.isArray(result.body?.result)) {
+    throw new PagesProjectError(failureClassification, {
+      operation,
+      httpStatus: result.httpStatus,
+      cfErrorCode: result.cfErrorCode,
+      ...listEvidence,
+    });
+  }
+  const totalPages = Number(result.body?.result_info?.total_pages);
+  if (!Number.isInteger(totalPages) || totalPages < 0 || totalPages > 1) {
+    throw new PagesProjectError(failureClassification, {
+      operation,
+      httpStatus: result.httpStatus,
+      cfErrorCode: result.cfErrorCode,
+      ...listEvidence,
+    });
+  }
+  return { rows: result.body.result, ...result };
 }
 
 async function verifyCanonicalDeploymentBaseline({
@@ -407,7 +401,11 @@ function emitCredentialAccess(
   { operation = "LIST_PROJECTS", httpStatus, cfErrorCode, access },
 ) {
   if (!credential.dedicated) return;
+  const proven = access === "PASS";
   emit(`PAGES_READ_TOKEN_PRESENT=${credential.token ? "PASS" : "FAIL"}`);
+  emit(`PAGES_READ_TOKEN_ACTIVE=${proven ? "PASS" : "UNPROVEN"}`);
+  emit(`PAGES_READ_TOKEN_ACCOUNT_BINDING=${proven ? "PASS" : "UNPROVEN"}`);
+  emit(`PAGES_READ_TOKEN_PERMISSION=${proven ? "PASS" : "UNPROVEN"}`);
   emit(`PAGES_READ_TOKEN_ACCESS=${access}`);
   emit(`PAGES_READ_API_OPERATION=${operation}`);
   emit(`PAGES_READ_API_HTTP_STATUS=${httpStatus}`);
