@@ -6,6 +6,7 @@ import {
 } from "./resolve-v2-production-pages-project.mjs";
 
 const project = "olfactoryops-v2-production";
+const productionBranch = "production";
 
 function response(body, status = 200) {
   return {
@@ -30,28 +31,63 @@ function readEnvironment(token = "pages-read-fixture") {
   };
 }
 
-function successfulFetch({ deployments = [], domains = [] } = {}) {
-  return vi
+function productionDeployment(overrides = {}) {
+  return {
+    id: "deployment-fixture",
+    project_name: project,
+    environment: "production",
+    is_skipped: false,
+    latest_stage: { status: "success" },
+    deployment_trigger: { metadata: { branch: productionBranch } },
+    url: "https://deployment-fixture.olfactoryops-v2-production.pages.dev",
+    ...overrides,
+  };
+}
+
+function successfulFetch({
+  deployments = [],
+  domains = [],
+  canonicalDeployment = null,
+} = {}) {
+  const fetchImpl = vi
     .fn()
     .mockResolvedValueOnce(pagesResult([{ name: project }]))
     .mockResolvedValueOnce(
-      response({ success: true, result: { name: project } }),
+      response({
+        success: true,
+        result: {
+          name: project,
+          production_branch: productionBranch,
+          canonical_deployment: canonicalDeployment,
+        },
+      }),
     )
     .mockResolvedValueOnce(pagesResult(domains))
     .mockResolvedValueOnce(pagesResult(deployments));
+  if (canonicalDeployment !== null) {
+    fetchImpl.mockResolvedValueOnce(
+      response({ success: true, result: canonicalDeployment }),
+    );
+  }
+  return fetchImpl;
 }
 
 describe("resolve RC10 production Pages project", () => {
   it("fails closed when the dedicated Pages Read credential is absent", async () => {
     const output = [];
+    const fetchImpl = vi.fn();
     const error = await resolveProductionPagesProject({
-      environment: readEnvironment(""),
-      fetchImpl: vi.fn(),
+      environment: {
+        ...readEnvironment(""),
+        CLOUDFLARE_API_TOKEN: "general-token-must-not-be-used",
+      },
+      fetchImpl,
       emit: (line) => output.push(line),
     }).catch((caught) => caught);
 
     expect(error).toBeInstanceOf(PagesProjectError);
     expect(error.classification).toBe("PAGES_READ_TOKEN_MISSING");
+    expect(fetchImpl).not.toHaveBeenCalled();
     emitPagesProjectFailure(
       error,
       (line) => output.push(line),
@@ -170,6 +206,7 @@ describe("resolve RC10 production Pages project", () => {
         "PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=NONE",
         "PRODUCTION_PAGES_BASELINE=PASS",
         "PRODUCTION_PAGES_BASELINE_TYPE=EMPTY_UNROUTED",
+        "PRODUCTION_PAGES_CANONICAL_DEPLOYMENT=NONE",
       ]),
     );
     expect(outputWrites).toHaveLength(1);
@@ -187,6 +224,62 @@ describe("resolve RC10 production Pages project", () => {
     });
   });
 
+  it("proves an existing baseline through the configured production branch and canonical deployment", async () => {
+    const canonicalDeployment = productionDeployment();
+    const fetchImpl = successfulFetch({
+      canonicalDeployment,
+      deployments: [canonicalDeployment],
+    });
+    const output = [];
+
+    const result = await resolveProductionPagesProject({
+      environment: readEnvironment(),
+      fetchImpl,
+      emit: (line) => output.push(line),
+      appendOutput: async () => {},
+    });
+
+    expect(result).toEqual({ project, baselineType: "EXISTING_DEPLOYMENT" });
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+    expect(fetchImpl.mock.calls[4][0]).toContain(
+      "/deployments/deployment-fixture",
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([
+        "PRODUCTION_PAGES_PROJECT_PRODUCTION_BRANCH=CONFIGURED",
+        "PRODUCTION_PAGES_BASELINE_TYPE=EXISTING_DEPLOYMENT",
+        "PRODUCTION_PAGES_CANONICAL_DEPLOYMENT=VERIFIED",
+      ]),
+    );
+    expect(output.join("\n")).not.toContain("deployment-fixture");
+  });
+
+  it("rejects an unbound or branch-mismatched existing deployment baseline", async () => {
+    const canonicalDeployment = productionDeployment();
+    const noCanonical = await resolveProductionPagesProject({
+      environment: readEnvironment(),
+      fetchImpl: successfulFetch({ deployments: [canonicalDeployment] }),
+    }).catch((caught) => caught);
+    const wrongBranch = await resolveProductionPagesProject({
+      environment: readEnvironment(),
+      fetchImpl: successfulFetch({
+        canonicalDeployment,
+        deployments: [
+          productionDeployment({
+            deployment_trigger: { metadata: { branch: "other" } },
+          }),
+        ],
+      }),
+    }).catch((caught) => caught);
+
+    expect(noCanonical).toMatchObject({
+      classification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    });
+    expect(wrongBranch).toMatchObject({
+      classification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    });
+  });
+
   it("preserves the legacy general-token caller without claiming Pages Read evidence", async () => {
     const output = [];
     await resolveProductionPagesProject({
@@ -195,12 +288,8 @@ describe("resolve RC10 production Pages project", () => {
         CLOUDFLARE_API_TOKEN: "general-fixture",
       },
       fetchImpl: successfulFetch({
-        deployments: [
-          {
-            latest_stage: { status: "success" },
-            is_skipped: false,
-          },
-        ],
+        canonicalDeployment: productionDeployment(),
+        deployments: [productionDeployment()],
       }),
       emit: (line) => output.push(line),
       appendOutput: async () => {},

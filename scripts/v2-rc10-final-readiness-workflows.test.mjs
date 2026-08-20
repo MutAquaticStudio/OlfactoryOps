@@ -228,13 +228,17 @@ describe("RC10 final readiness operations", () => {
   });
 
   it("preflights only the exact unrouted production Pages project with Pages Read authority", () => {
+    const projectReadPreflight = pages.split(
+      "- name: Verify read-only rollback identifiers and Pages baseline",
+    )[0];
     expect(pages).toContain("olfactoryops-v2-production");
     expect(pages).toContain("CLOUDFLARE_PAGES_READ_TOKEN");
     expect(pages).toContain("Preflight the dedicated Pages read credential");
+    expect(pages).toContain("verify-v2-production-rollback-readiness.mjs");
     expect(pages).toContain(
       "node scripts/resolve-v2-production-pages-project.mjs",
     );
-    expect(pages).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(projectReadPreflight).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(pages).not.toMatch(
       /wrangler|pages\s+project\s+create|pages\s+deploy/i,
     );
@@ -279,12 +283,10 @@ describe("RC10 final readiness operations", () => {
   });
 
   it("supports an empty unrouted Pages rollback baseline", () => {
-    expect(rollback).toContain("EMPTY_UNROUTED");
-    expect(rollback).toContain("EXISTING_DEPLOYMENT");
     expect(rollback).toContain("olfactoryops-v2-production");
     expect(rollback).toContain("CLOUDFLARE_PAGES_READ_TOKEN");
-    expect(rollback).toContain("/pages/projects/");
-    expect(rollback).toContain("/domains?per_page=20&page=1");
+    expect(rollback).toContain("resolveProductionPagesProject");
+    expect(rollback).toContain("emitPagesProjectFailure");
   });
 
   it("provides a protected post-cutover public acceptance harness", () => {

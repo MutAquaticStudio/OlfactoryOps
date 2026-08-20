@@ -60,3 +60,13 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/resolve-v2-production-pages-project.mjs
+      - name: Verify read-only rollback identifiers and Pages baseline
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
+          PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-production-rollback-readiness.mjs

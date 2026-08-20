@@ -84,7 +84,12 @@ export async function resolveProductionPagesProject({
     "PRODUCTION_PAGES_PROJECT_INVALID",
     listEvidence,
   );
-  if (detail.body?.result?.name !== EXPECTED_PROJECT) {
+  const projectDetail = detail.body?.result;
+  const productionBranch = projectDetail?.production_branch;
+  if (
+    projectDetail?.name !== EXPECTED_PROJECT ||
+    !validProductionBranch(productionBranch)
+  ) {
     throw new PagesProjectError(
       "PRODUCTION_PAGES_PROJECT_INVALID",
       listEvidence,
@@ -114,8 +119,13 @@ export async function resolveProductionPagesProject({
     );
   }
 
-  const baselineType =
-    deployments.rows.length === 0 ? "EMPTY_UNROUTED" : "EXISTING_DEPLOYMENT";
+  const baseline = await verifyCanonicalDeploymentBaseline({
+    request,
+    canonicalDeployment: projectDetail.canonical_deployment,
+    deployments: deployments.rows,
+    productionBranch,
+    listEvidence,
+  });
   emitCredentialAccess(emit, credential, {
     httpStatus: projectsResult.httpStatus,
     cfErrorCode: projectsResult.cfErrorCode,
@@ -123,12 +133,18 @@ export async function resolveProductionPagesProject({
   });
   emit(`PRODUCTION_PAGES_PROJECT=${EXPECTED_PROJECT}`);
   emit("PRODUCTION_PAGES_PROJECT_MATCH_COUNT=ONE");
+  emit("PRODUCTION_PAGES_PROJECT_PRODUCTION_BRANCH=CONFIGURED");
   emit("PRODUCTION_PAGES_PROJECT_READY=PASS");
   emit("PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=NONE");
   emit("PRODUCTION_PAGES_BASELINE=PASS");
-  emit(`PRODUCTION_PAGES_BASELINE_TYPE=${baselineType}`);
-  await appendOutput({ project: EXPECTED_PROJECT, baselineType, environment });
-  return { project: EXPECTED_PROJECT, baselineType };
+  emit(`PRODUCTION_PAGES_BASELINE_TYPE=${baseline.type}`);
+  emit(`PRODUCTION_PAGES_CANONICAL_DEPLOYMENT=${baseline.canonical}`);
+  await appendOutput({
+    project: EXPECTED_PROJECT,
+    baselineType: baseline.type,
+    environment,
+  });
+  return { project: EXPECTED_PROJECT, baselineType: baseline.type };
 }
 
 export function emitPagesProjectFailure(
@@ -273,6 +289,116 @@ async function collectPages({
     operation,
     ...listEvidence,
   });
+}
+
+async function verifyCanonicalDeploymentBaseline({
+  request,
+  canonicalDeployment,
+  deployments,
+  productionBranch,
+  listEvidence,
+}) {
+  if (canonicalDeployment === null) {
+    if (deployments.length === 0) {
+      return { type: "EMPTY_UNROUTED", canonical: "NONE" };
+    }
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+
+  const deploymentId = canonicalDeployment?.id;
+  if (
+    !validProductionDeployment(
+      canonicalDeployment,
+      productionBranch,
+      deploymentId,
+    )
+  ) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+  const listedMatches = deployments.filter(
+    (deployment) => deployment?.id === deploymentId,
+  );
+  if (
+    listedMatches.length !== 1 ||
+    !validProductionDeployment(listedMatches[0], productionBranch, deploymentId)
+  ) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+
+  const detail = await request(
+    `/pages/projects/${encodeURIComponent(EXPECTED_PROJECT)}/deployments/${encodeURIComponent(deploymentId)}`,
+    "GET_CANONICAL_PRODUCTION_DEPLOYMENT",
+    "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    listEvidence,
+  );
+  if (
+    !validProductionDeployment(
+      detail.body?.result,
+      productionBranch,
+      deploymentId,
+    )
+  ) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+  return { type: "EXISTING_DEPLOYMENT", canonical: "VERIFIED" };
+}
+
+function validProductionDeployment(deployment, productionBranch, expectedId) {
+  return (
+    validOpaqueId(deployment?.id) &&
+    deployment.id === expectedId &&
+    deployment.project_name === EXPECTED_PROJECT &&
+    deployment.environment === "production" &&
+    deployment.is_skipped !== true &&
+    deployment.latest_stage?.status === "success" &&
+    deployment.deployment_trigger?.metadata?.branch === productionBranch &&
+    validPagesDeploymentOrigin(deployment.url)
+  );
+}
+
+function validProductionBranch(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 255 &&
+    !/[\r\n]/.test(value)
+  );
+}
+
+function validOpaqueId(value) {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    !/[\r\n]/.test(value)
+  );
+}
+
+function validPagesDeploymentOrigin(value) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(`.${EXPECTED_PROJECT}.pages.dev`) &&
+      !url.username &&
+      !url.password &&
+      !url.port
+    );
+  } catch {
+    return false;
+  }
 }
 
 function emitCredentialAccess(

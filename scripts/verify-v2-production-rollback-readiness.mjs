@@ -20,7 +20,7 @@ if (account && workerToken) {
     ]),
   );
 }
-if (account && pagesToken && project === "olfactoryops-v2-production") {
+if (account && project === "olfactoryops-v2-production") {
   pagesResult = await pagesRollback();
 }
 
@@ -51,39 +51,20 @@ async function workerRollback(service) {
 }
 
 async function pagesRollback() {
-  const detail = await get(
-    `/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(project)}`,
-    pagesToken,
-  );
-  if (detail?.result?.name !== project) {
+  const pagesEnvironment = {
+    CLOUDFLARE_ACCOUNT_ID: account,
+    CLOUDFLARE_PAGES_READ_TOKEN: pagesToken || "",
+  };
+  try {
+    const resolution = await resolveProductionPagesProject({
+      environment: pagesEnvironment,
+      appendOutput: async () => {},
+    });
+    return { ready: true, baseline: resolution.baselineType };
+  } catch (error) {
+    emitPagesProjectFailure(error, undefined, pagesEnvironment);
     return { ready: false, baseline: "UNPROVEN" };
   }
-  const domains = await get(
-    `/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(project)}/domains?per_page=20&page=1`,
-    pagesToken,
-  );
-  const customDomains = Array.isArray(domains?.result)
-    ? domains.result
-    : undefined;
-  if (!customDomains || customDomains.length !== 0) {
-    return { ready: false, baseline: "UNPROVEN" };
-  }
-  const deployments = await get(
-    `/accounts/${encodeURIComponent(account)}/pages/projects/${encodeURIComponent(project)}/deployments?env=production&per_page=20&page=1`,
-    pagesToken,
-  );
-  if (!deployments) return { ready: false, baseline: "UNPROVEN" };
-  const successful = Array.isArray(deployments.result)
-    ? deployments.result.filter(
-        (item) =>
-          item?.latest_stage?.status === "success" &&
-          item?.is_skipped !== true &&
-          validOrigin(item?.url, project),
-      )
-    : [];
-  return successful.length > 0
-    ? { ready: true, baseline: "EXISTING_DEPLOYMENT" }
-    : { ready: true, baseline: "EMPTY_UNROUTED" };
 }
 
 async function get(path, token) {
@@ -108,17 +89,7 @@ function validId(value) {
   );
 }
 
-function validOrigin(value, expectedProject) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      url.hostname.endsWith(`.${expectedProject}.pages.dev`) &&
-      !url.username &&
-      !url.password &&
-      !url.port
-    );
-  } catch {
-    return false;
-  }
-}
+import {
+  emitPagesProjectFailure,
+  resolveProductionPagesProject,
+} from "./resolve-v2-production-pages-project.mjs";
