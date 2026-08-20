@@ -208,7 +208,7 @@ jobs:
           PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
           PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}
-          PRODUCTION_SMOKE_TENANT_HOSTNAME: next.labofscents.org
+          PRODUCTION_SMOKE_TENANT_HOSTNAME: ${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}
           RELEASE_WORKTREE: ${{ github.workspace }}/release
         run: node ops/scripts/verify-v2-production-smoke-tenant-readiness.mjs | tee "$RUNNER_TEMP/smoke-tenant.txt"
       - name: Verify production runtime role, privileges, and RLS read-only

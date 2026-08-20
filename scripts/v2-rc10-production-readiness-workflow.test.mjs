@@ -43,6 +43,24 @@ describe('RC10 readiness workflow', () => {
     )
   })
 
+  it('takes its smoke tenant target from the production Environment rather than the base domain', () => {
+    const smokeTargetStart = workflow.indexOf(
+      '- name: Verify the configured production smoke tenant target',
+    )
+    const nextStep = workflow.indexOf(
+      '- name: Verify production runtime role, privileges, and RLS read-only',
+      smokeTargetStart,
+    )
+
+    expect(smokeTargetStart).toBeGreaterThanOrEqual(0)
+    expect(nextStep).toBeGreaterThan(smokeTargetStart)
+    const smokeTarget = workflow.slice(smokeTargetStart, nextStep)
+    expect(smokeTarget).toContain(
+      'PRODUCTION_SMOKE_TENANT_HOSTNAME: ${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}',
+    )
+    expect(smokeTarget).not.toContain('PRODUCTION_SMOKE_TENANT_HOSTNAME: next.labofscents.org')
+  })
+
   it('does not contain public deployment commands', () => {
     expect(workflow).not.toMatch(/wrangler\s+(deploy|pages)/i)
     expect(workflow).not.toMatch(/\b(POST|PUT|PATCH|DELETE)\b/)
