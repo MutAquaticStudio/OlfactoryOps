@@ -27,6 +27,22 @@ describe('RC10 readiness workflow', () => {
     expect(workflow).toContain('v2-production-ready')
   })
 
+  it('supplies the approved first-release baseline only to the read-only rollback verifier', () => {
+    const rollbackStart = workflow.indexOf(
+      '- name: Verify rollback identifiers and read-only recovery surfaces',
+    )
+    const nextStep = workflow.indexOf(
+      '- name: Verify immutable scientific image identity',
+      rollbackStart,
+    )
+
+    expect(rollbackStart).toBeGreaterThanOrEqual(0)
+    expect(nextStep).toBeGreaterThan(rollbackStart)
+    expect(workflow.slice(rollbackStart, nextStep)).toContain(
+      'PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}',
+    )
+  })
+
   it('does not contain public deployment commands', () => {
     expect(workflow).not.toMatch(/wrangler\s+(deploy|pages)/i)
     expect(workflow).not.toMatch(/\b(POST|PUT|PATCH|DELETE)\b/)
