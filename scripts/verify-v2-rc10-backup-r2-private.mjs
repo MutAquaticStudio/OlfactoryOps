@@ -1,5 +1,12 @@
 const base = "https://api.cloudflare.com/client/v4";
 
+class R2PrivacyError extends Error {
+  constructor(safeCode) {
+    super();
+    this.safeCode = safeCode;
+  }
+}
+
 try {
   const account = required("CLOUDFLARE_ACCOUNT_ID");
   const token = required("CLOUDFLARE_API_TOKEN");
@@ -84,11 +91,4 @@ function required(name) {
 
 function fail(code) {
   throw new R2PrivacyError(code);
-}
-
-class R2PrivacyError extends Error {
-  constructor(safeCode) {
-    super();
-    this.safeCode = safeCode;
-  }
 }
