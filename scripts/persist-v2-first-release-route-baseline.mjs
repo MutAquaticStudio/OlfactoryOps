@@ -2,14 +2,11 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import {
-  FIRST_RELEASE_BASELINE_VARIABLE,
   captureFirstReleaseRouteBaseline,
+  fingerprint,
   parseBaseline,
   sameBaseline,
-  serializeBaseline,
 } from "./v2-first-release-route-policy.mjs";
-
-const githubApi = "https://api.github.com";
 
 export async function persistFirstReleaseRouteBaseline({
   environment = process.env,
@@ -19,18 +16,19 @@ export async function persistFirstReleaseRouteBaseline({
   const account = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
   const token = environment.CLOUDFLARE_API_TOKEN?.trim();
   const releaseSha = environment.RELEASE_SHA?.trim();
-  const repository = environment.GITHUB_REPOSITORY?.trim();
-  const githubToken = environment.GITHUB_TOKEN?.trim();
+  const persistedBaseline =
+    environment.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE?.trim();
   const outputFile = environment.FIRST_RELEASE_BASELINE_FILE?.trim();
-  if (
-    !account ||
-    !token ||
-    !releaseSha ||
-    !repository ||
-    !githubToken ||
-    !outputFile
-  ) {
+  if (!account || !token || !releaseSha || !outputFile) {
     return emitFailure(emit, "CREDENTIAL_OR_CONTEXT_UNAVAILABLE");
+  }
+  if (!persistedBaseline) {
+    return emitFailure(emit, "PERSISTENCE_UNAVAILABLE");
+  }
+
+  const stored = parseBaseline(persistedBaseline);
+  if (!stored) {
+    return emitFailure(emit, "PERSISTENCE_INVALID");
   }
 
   const captured = await captureFirstReleaseRouteBaseline({
@@ -40,30 +38,11 @@ export async function persistFirstReleaseRouteBaseline({
     fetchImpl,
   });
   if (!captured.pass) return emitFailure(emit, captured.state);
-
-  const stored = await readEnvironmentVariable({
-    repository,
-    githubToken,
-    fetchImpl,
-  });
-  if (stored.state === "UNPROVEN")
-    return emitFailure(emit, "PERSISTENCE_UNPROVEN");
-  if (stored.value) {
-    const existing = parseBaseline(stored.value);
-    if (!existing || !sameBaseline(existing, captured.manifest)) {
-      return emitFailure(emit, "CUTOVER_ROUTE_BASELINE_DRIFT");
-    }
-  } else {
-    const created = await createEnvironmentVariable({
-      repository,
-      githubToken,
-      value: serializeBaseline(captured.manifest),
-      fetchImpl,
-    });
-    if (!created) return emitFailure(emit, "PERSISTENCE_UNPROVEN");
+  if (!sameBaseline(stored, captured.manifest)) {
+    return emitFailure(emit, "CUTOVER_ROUTE_BASELINE_DRIFT");
   }
 
-  writeFileSync(outputFile, serializeBaseline(captured.manifest), {
+  writeFileSync(outputFile, persistedBaseline, {
     encoding: "utf8",
     mode: 0o600,
   });
@@ -71,79 +50,9 @@ export async function persistFirstReleaseRouteBaseline({
   emit("PRECUTOVER_ROUTE_BASELINE=PASS");
   emit("PREVIOUS_API_ROUTE_TARGET_PROVEN=PASS");
   emit("PREVIOUS_TENANT_ROUTER_ROUTE_TARGET_PROVEN=PASS");
-  emit(
-    "FIRST_RELEASE_BASELINE_PERSISTENCE=" +
-      (stored.value ? "VERIFIED" : "CREATED"),
-  );
-  emit("FIRST_RELEASE_BASELINE_FINGERPRINT=" + captured.fingerprint);
-  return { pass: true, fingerprint: captured.fingerprint };
-}
-
-async function readEnvironmentVariable({ repository, githubToken, fetchImpl }) {
-  const response = await githubRequest({
-    repository,
-    githubToken,
-    fetchImpl,
-    path:
-      "/environments/production/variables/" + FIRST_RELEASE_BASELINE_VARIABLE,
-  });
-  if (response.status === 404) return { state: "ABSENT" };
-  if (!response.ok || typeof response.body?.value !== "string") {
-    return { state: "UNPROVEN" };
-  }
-  return { state: "PRESENT", value: response.body.value };
-}
-
-async function createEnvironmentVariable({
-  repository,
-  githubToken,
-  value,
-  fetchImpl,
-}) {
-  const response = await githubRequest({
-    repository,
-    githubToken,
-    fetchImpl,
-    method: "POST",
-    path: "/environments/production/variables",
-    body: { name: FIRST_RELEASE_BASELINE_VARIABLE, value },
-  });
-  return response.ok;
-}
-
-async function githubRequest({
-  repository,
-  githubToken,
-  fetchImpl,
-  path,
-  method = "GET",
-  body,
-}) {
-  try {
-    const response = await fetchImpl(
-      githubApi + "/repos/" + repository + path,
-      {
-        method,
-        headers: {
-          authorization: "Bearer " + githubToken,
-          accept: "application/vnd.github+json",
-          "x-github-api-version": "2022-11-28",
-          ...(body ? { "content-type": "application/json" } : {}),
-        },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-        signal: AbortSignal.timeout(20_000),
-      },
-    );
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      payload = undefined;
-    }
-    return { ok: Boolean(response.ok), status: response.status, body: payload };
-  } catch {
-    return { ok: false, status: 0, body: undefined };
-  }
+  emit("FIRST_RELEASE_BASELINE_PERSISTENCE=VERIFIED");
+  emit("FIRST_RELEASE_BASELINE_FINGERPRINT=" + fingerprint(stored));
+  return { pass: true, fingerprint: fingerprint(stored) };
 }
 
 function emitFailure(emit, state) {

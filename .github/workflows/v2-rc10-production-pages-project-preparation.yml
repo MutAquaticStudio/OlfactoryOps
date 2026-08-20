@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
   group: v2-rc10-production-pages-project-preparation
@@ -61,22 +60,23 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/resolve-v2-production-pages-project.mjs
-      - name: Capture and persist the first-production route baseline without route mutation
+      - name: Capture and verify the approved first-production route baseline without route mutation
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           RELEASE_SHA: ${{ inputs.release_sha }}
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
           FIRST_RELEASE_BASELINE_FILE: ${{ runner.temp }}/first-release-route-baseline
         shell: bash
         run: |
           set -euo pipefail
           umask 077
+          cleanup() {
+            rm -f "$FIRST_RELEASE_BASELINE_FILE"
+          }
+          trap cleanup EXIT
           node scripts/persist-v2-first-release-route-baseline.mjs
           test -s "$FIRST_RELEASE_BASELINE_FILE"
-          printf 'PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE=%s\n' "$(cat "$FIRST_RELEASE_BASELINE_FILE")" >> "$GITHUB_ENV"
-          rm -f "$FIRST_RELEASE_BASELINE_FILE"
       - name: Verify read-only rollback identifiers and Pages baseline
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -84,6 +84,7 @@ jobs:
           CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
           PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
           RELEASE_SHA: ${{ inputs.release_sha }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
         shell: bash
         run: |
           set -euo pipefail

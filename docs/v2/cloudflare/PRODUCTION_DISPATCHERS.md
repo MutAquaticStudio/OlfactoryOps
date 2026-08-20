@@ -25,12 +25,14 @@ When the exact RC10 production Workers are absent but the public API and
 tenant-router patterns already have deterministic named Worker targets, the
 readiness gate uses FIRST_RELEASE_ABSENCE_AND_ROUTE_HANDOFF_BASELINE.
 
-The Pages preparation workflow captures exactly those two routes, verifies the
-previous targets have one active version, proves the three RC10 production
-Workers are absent and have no Custom Domains, and persists the approved
-snapshot in the protected production Environment variable
-PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE. It emits only a fingerprint and safe
-classifications, never route IDs or target names.
+An authorized production control-plane administrator provisions the canonical
+snapshot in the protected `PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE` Environment
+variable. The Pages preparation workflow captures exactly those two routes,
+verifies the previous targets have one active version, proves the three RC10
+production Workers are absent and have no Custom Domains, and compares the
+live state with that approved snapshot. It never administers GitHub Environment
+variables and emits only a fingerprint and safe classifications, never route
+IDs or target names.
 
 The dispatcher first deploys the exact RC10 API and tenant-router Workers with
 their public routes removed from the rendered deployment config. Only the
