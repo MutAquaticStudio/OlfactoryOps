@@ -38,6 +38,8 @@ test("keeps email delivery failures bounded and preflights the runtime before de
   expect(worker).toContain('return "EMAIL_TRANSPORT_FAILURE"');
   expect(worker).toContain('state: "USER_STATE_UNAVAILABLE"');
   expect(worker).not.toContain("state: delivery.error");
+  expect(workflow).toContain("OWNER_ONBOARDING_WORKER_READINESS=PASS");
+  expect(workflow).toContain("OWNER_ONBOARDING_WORKER_READINESS=FAIL");
   expect(
     workflow.indexOf("OWNER_ONBOARDING_RUNTIME_PREFLIGHT=PASS"),
   ).toBeLessThan(workflow.indexOf('dispatch_status="$(curl'));
