@@ -15,7 +15,7 @@ export async function persistFirstReleaseRouteBaseline({
   environment = process.env,
   fetchImpl = fetch,
   emit = (line) => console.log(line),
-}) {
+} = {}) {
   const account = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
   const token = environment.CLOUDFLARE_API_TOKEN?.trim();
   const releaseSha = environment.RELEASE_SHA?.trim();
