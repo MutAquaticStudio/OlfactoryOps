@@ -87,11 +87,11 @@ export async function inspectProductionSmokeTenantCandidates({
 
     const report = summarizeProductionSmokeTenantCandidates(result.rows)
     const pass = !report.includes('SMOKE_TENANT_CANDIDATE_COUNT=UNPROVEN')
-    report.forEach(emit)
+    report.forEach((line) => emit(line))
     return { pass, report }
   } catch {
     const report = unprovenReport()
-    report.forEach(emit)
+    report.forEach((line) => emit(line))
     return { pass: false, report }
   } finally {
     if (transactionOpen) {
