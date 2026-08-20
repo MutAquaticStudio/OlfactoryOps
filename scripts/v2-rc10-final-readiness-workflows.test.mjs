@@ -226,6 +226,11 @@ describe("RC10 final readiness operations", () => {
   it("prepares only the exact unrouted production Pages project", () => {
     expect(pages).toContain("olfactoryops-v2-production");
     expect(pages).toContain("pages project create");
+    expect(pages).toContain("PRODUCTION_PAGES_PROJECT_CREATE=UNACKNOWLEDGED");
+    expect(pages).toContain(
+      'node scripts/resolve-v2-production-pages-project.mjs > "$evidence"',
+    );
+    expect(pages).toContain("grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS'");
     expect(pages).not.toContain("pages deploy");
     expect(pages).not.toContain("production-candidate");
   });
