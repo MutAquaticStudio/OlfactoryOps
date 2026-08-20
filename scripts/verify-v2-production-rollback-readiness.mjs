@@ -1,8 +1,10 @@
-const account = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-const workerToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
-const pagesToken = process.env.CLOUDFLARE_PAGES_READ_TOKEN?.trim();
-const project =
-  process.env.PRODUCTION_PAGES_PROJECT?.trim() || "olfactoryops-v2-production";
+import { pathToFileURL } from "node:url";
+
+import {
+  emitPagesProjectFailure,
+  resolveProductionPagesProject,
+} from "./resolve-v2-production-pages-project.mjs";
+
 const apiBase = "https://api.cloudflare.com/client/v4";
 const services = {
   cloudRuntime: "olfactoryops-v2-cloud-runtime-production",
@@ -10,47 +12,117 @@ const services = {
   router: "olfactoryops-v2-tenant-router-production",
 };
 
-let workerResults = Object.keys(services).map((name) => [name, false]);
-let pagesResult = { ready: false, baseline: "UNPROVEN" };
-if (account && workerToken) {
-  workerResults = await Promise.all(
+export async function verifyProductionRollbackReadiness({
+  environment = process.env,
+  fetchImpl = fetch,
+  emit = (line) => console.log(line),
+} = {}) {
+  const account = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const workerToken = environment.CLOUDFLARE_API_TOKEN?.trim();
+  const pagesToken = environment.CLOUDFLARE_PAGES_READ_TOKEN?.trim();
+  const project =
+    environment.PRODUCTION_PAGES_PROJECT?.trim() ||
+    "olfactoryops-v2-production";
+
+  const workerResults = await Promise.all(
     Object.entries(services).map(async ([name, service]) => [
       name,
-      await workerRollback(service),
+      account && workerToken
+        ? await inspectWorkerRollback({
+            account,
+            service,
+            token: workerToken,
+            fetchImpl,
+          })
+        : unavailableWorkerRollback(),
     ]),
   );
-}
-if (account && project === "olfactoryops-v2-production") {
-  pagesResult = await pagesRollback();
+  const pagesResult =
+    account && project === "olfactoryops-v2-production"
+      ? await pagesRollback({ account, pagesToken, emit })
+      : { ready: false, baseline: "UNPROVEN" };
+
+  for (const [name, result] of workerResults) {
+    const prefix = `ROLLBACK_${name.toUpperCase()}`;
+    emit(`${prefix}_API_HTTP_STATUS=${result.httpStatus}`);
+    emit(`${prefix}_API_CF_ERROR_CODE=${result.cfErrorCode}`);
+    emit(`${prefix}_DEPLOYMENT_STATE=${result.state}`);
+    emit(`${prefix}_READY=${result.ready ? "PASS" : "FAIL"}`);
+  }
+  emit(`ROLLBACK_PAGES_BASELINE=${pagesResult.baseline}`);
+  emit(`ROLLBACK_PAGES_READY=${pagesResult.ready ? "PASS" : "FAIL"}`);
+  const pass =
+    pagesResult.ready && workerResults.every(([, result]) => result.ready);
+  emit(`PRODUCTION_ROLLBACK_READY=${pass ? "PASS" : "UNPROVEN"}`);
+  return {
+    pass,
+    pagesResult,
+    workerResults: Object.fromEntries(workerResults),
+  };
 }
 
-for (const [name, result] of workerResults) {
-  console.log(
-    `ROLLBACK_${name.toUpperCase()}_READY=${result ? "PASS" : "FAIL"}`,
-  );
-}
-console.log(`ROLLBACK_PAGES_BASELINE=${pagesResult.baseline}`);
-console.log(`ROLLBACK_PAGES_READY=${pagesResult.ready ? "PASS" : "FAIL"}`);
-const pass = pagesResult.ready && workerResults.every(([, result]) => result);
-console.log(`PRODUCTION_ROLLBACK_READY=${pass ? "PASS" : "UNPROVEN"}`);
-if (!pass) process.exitCode = 1;
-
-async function workerRollback(service) {
-  const body = await get(
+export async function inspectWorkerRollback({
+  account,
+  service,
+  token,
+  fetchImpl = fetch,
+}) {
+  const response = await get(
     `/accounts/${encodeURIComponent(account)}/workers/scripts/${encodeURIComponent(service)}/deployments`,
-    workerToken,
+    token,
+    fetchImpl,
   );
-  const deployment = body?.result?.deployments?.[0];
-  const versions = Array.isArray(deployment?.versions)
-    ? deployment.versions
+  if (!response.body) {
+    return {
+      ready: false,
+      state: "API_FAILURE",
+      httpStatus: response.httpStatus,
+      cfErrorCode: response.cfErrorCode,
+    };
+  }
+  const deployments = Array.isArray(response.body?.result?.deployments)
+    ? response.body.result.deployments
     : [];
-  const version = versions.find(
+  if (deployments.length === 0) {
+    return {
+      ready: false,
+      state: "NO_DEPLOYMENT",
+      httpStatus: response.httpStatus,
+      cfErrorCode: response.cfErrorCode,
+    };
+  }
+  const versions = Array.isArray(deployments[0]?.versions)
+    ? deployments[0].versions
+    : [];
+  const activeVersions = versions.filter(
     (item) => item?.percentage === 100 && validId(item?.version_id),
   );
-  return Boolean(deployment && version);
+  if (activeVersions.length !== 1) {
+    return {
+      ready: false,
+      state: "NO_SINGLE_ACTIVE_VERSION",
+      httpStatus: response.httpStatus,
+      cfErrorCode: response.cfErrorCode,
+    };
+  }
+  return {
+    ready: true,
+    state: "READY",
+    httpStatus: response.httpStatus,
+    cfErrorCode: response.cfErrorCode,
+  };
 }
 
-async function pagesRollback() {
+function unavailableWorkerRollback() {
+  return {
+    ready: false,
+    state: "CREDENTIAL_UNAVAILABLE",
+    httpStatus: "0",
+    cfErrorCode: "NONE",
+  };
+}
+
+async function pagesRollback({ account, pagesToken, emit }) {
   const pagesEnvironment = {
     CLOUDFLARE_ACCOUNT_ID: account,
     CLOUDFLARE_PAGES_READ_TOKEN: pagesToken || "",
@@ -59,26 +131,51 @@ async function pagesRollback() {
     const resolution = await resolveProductionPagesProject({
       environment: pagesEnvironment,
       appendOutput: async () => {},
+      emit,
     });
     return { ready: true, baseline: resolution.baselineType };
   } catch (error) {
-    emitPagesProjectFailure(error, undefined, pagesEnvironment);
+    emitPagesProjectFailure(error, emit, pagesEnvironment);
     return { ready: false, baseline: "UNPROVEN" };
   }
 }
 
-async function get(path, token) {
+async function get(path, token, fetchImpl) {
   try {
-    const response = await fetch(`${apiBase}${path}`, {
+    const response = await fetchImpl(`${apiBase}${path}`, {
       headers: { authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return undefined;
-    const body = await response.json();
-    return body?.success === true ? body : undefined;
+    const httpStatus = safeHttpStatus(response?.status);
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      body = undefined;
+    }
+    const cfErrorCode = safeCloudflareErrorCode(body);
+    return {
+      body: response?.ok && body?.success === true ? body : undefined,
+      httpStatus,
+      cfErrorCode,
+    };
   } catch {
-    return undefined;
+    return { body: undefined, httpStatus: "0", cfErrorCode: "NONE" };
   }
+}
+
+function safeHttpStatus(value) {
+  return Number.isInteger(value) && value >= 100 && value <= 599
+    ? String(value)
+    : "0";
+}
+
+function safeCloudflareErrorCode(body) {
+  if (!Array.isArray(body?.errors)) return "NONE";
+  const error = body.errors.find(
+    (item) => Number.isSafeInteger(item?.code) && item.code >= 1000,
+  );
+  return error ? String(error.code) : "NONE";
 }
 
 function validId(value) {
@@ -89,7 +186,10 @@ function validId(value) {
   );
 }
 
-import {
-  emitPagesProjectFailure,
-  resolveProductionPagesProject,
-} from "./resolve-v2-production-pages-project.mjs";
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
+  const result = await verifyProductionRollbackReadiness();
+  if (!result.pass) process.exitCode = 1;
+}
