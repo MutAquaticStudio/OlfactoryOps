@@ -43,6 +43,7 @@ describe("RC10 final readiness operations", () => {
     expect(backup).toContain("--format=custom --no-owner --no-acl");
     expect(backup).toContain("verify-v2-rc10-backup-r2-private.mjs");
     expect(backup).not.toContain("r2 bucket list --json");
+    expect(backup).not.toContain("r2-private.txt");
     expect(backupR2Private).toContain("/r2/buckets/");
     expect(backupR2Private).toContain("/domains/managed");
     expect(backupR2Private).toContain("/domains/custom");
@@ -73,7 +74,15 @@ describe("RC10 final readiness operations", () => {
     } catch (error) {
       output = String(error.stdout);
     }
-    expect(output).toBe("BACKUP_BUCKET_PRIVATE=UNPROVEN\n");
+    expect(output).toBe(
+      [
+        "BACKUP_BUCKET_PRIVATE=UNPROVEN",
+        "BACKUP_R2_API_OPERATION=UNPROVEN",
+        "BACKUP_R2_API_HTTP_STATUS=UNPROVEN",
+        "BACKUP_R2_API_CF_ERROR_CODE=NONE",
+        "",
+      ].join("\n"),
+    );
     expect(output).not.toMatch(/ReferenceError|CONFIG_|CLOUDFLARE_API_TOKEN/);
   });
 
