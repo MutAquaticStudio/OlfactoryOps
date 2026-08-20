@@ -27,6 +27,8 @@ const requiredWorkflow = [
   "PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}",
   "PRODUCTION_OWNER_ONBOARDING_RESEND_API_KEY",
   "PRODUCTION_OWNER_ONBOARDING_EMAIL_FROM",
+  "OWNER_ONBOARDING_WORKER_READINESS=PASS",
+  "OWNER_ONBOARDING_WORKER_READINESS=FAIL",
   "OWNER_ONBOARDING_RUNTIME_PREFLIGHT=PASS",
   "OWNER_ONBOARDING_EMAIL_DELIVERY=PASS",
   "PLATFORM_OWNER_USER_ONBOARDING=PASS",
@@ -63,6 +65,9 @@ const deployIndex = workflow.indexOf(
 const runtimePreflightIndex = workflow.indexOf(
   "OWNER_ONBOARDING_RUNTIME_PREFLIGHT=PASS",
 );
+const readinessIndex = workflow.indexOf(
+  "OWNER_ONBOARDING_WORKER_READINESS=PASS",
+);
 const cleanupIndex = workflow.indexOf(
   "Delete only the temporary onboarding Worker and runner-local evidence",
 );
@@ -83,6 +88,8 @@ if (
   cleanupIndex < 0 ||
   prerequisiteIndex > deployIndex ||
   runtimePreflightIndex < deployIndex ||
+  readinessIndex < deployIndex ||
+  readinessIndex > runtimePreflightIndex ||
   deployIndex > cleanupIndex ||
   !workflow.includes("OWNER_ONBOARDING_TEMP_WORKER_DEPLOY_ATTEMPTED=YES")
 )
