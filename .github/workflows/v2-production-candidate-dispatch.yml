@@ -417,7 +417,7 @@ jobs:
         if: ${{ needs.validate-candidate-revision.outputs.candidate_acceptance_mode == 'POST_BOOTSTRAP' }}
         shell: bash
         env:
-          PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           RELEASE_WORKTREE: ${{ github.workspace }}/rc9
         run: |
           set -euo pipefail
