@@ -103,11 +103,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
+          path: release
+          persist-credentials: false
       - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+          cache-dependency-path: release/package-lock.json
+      - run: npm ci --prefix release
       - name: Require protected production deployment inputs
         shell: bash
         run: |
@@ -119,15 +122,17 @@ jobs:
           test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$V2_API_PRODUCTION_GIT_SHA"
       - name: Render and deploy the exact production API candidate
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           npm run prisma:generate:v2
           npm run generate:v2-worker-transport
           node scripts/render-v2-api-production-config.mjs
-          node ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-api-production.toml api
+          node ../ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-api-production.toml api
           npx wrangler deploy --config .qa/wrangler.v2-api-production.toml
       - name: Bind rotated production API secrets without logging values
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
@@ -138,6 +143,7 @@ jobs:
           done
       - name: Verify production API secret binding names only
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           secret_names="$(npx wrangler secret list --config .qa/wrangler.v2-api-production.toml)"
