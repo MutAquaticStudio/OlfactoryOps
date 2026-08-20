@@ -95,6 +95,9 @@ describe("resolve RC10 production Pages project", () => {
     );
     expect(output).toEqual([
       "PAGES_READ_TOKEN_PRESENT=FAIL",
+      "PAGES_READ_TOKEN_ACTIVE=UNPROVEN",
+      "PAGES_READ_TOKEN_ACCOUNT_BINDING=UNPROVEN",
+      "PAGES_READ_TOKEN_PERMISSION=UNPROVEN",
       "PAGES_READ_TOKEN_ACCESS=FAIL",
       "PAGES_READ_API_OPERATION=LIST_PROJECTS",
       "PAGES_READ_API_HTTP_STATUS=0",
@@ -130,6 +133,9 @@ describe("resolve RC10 production Pages project", () => {
     });
     expect(output).toEqual([
       "PAGES_READ_TOKEN_PRESENT=PASS",
+      "PAGES_READ_TOKEN_ACTIVE=UNPROVEN",
+      "PAGES_READ_TOKEN_ACCOUNT_BINDING=UNPROVEN",
+      "PAGES_READ_TOKEN_PERMISSION=UNPROVEN",
       "PAGES_READ_TOKEN_ACCESS=FAIL",
       "PAGES_READ_API_OPERATION=LIST_PROJECTS",
       "PAGES_READ_API_HTTP_STATUS=403",
@@ -185,12 +191,10 @@ describe("resolve RC10 production Pages project", () => {
 
     expect(result).toEqual({ project, baselineType: "EMPTY_UNROUTED" });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
-    expect(fetchImpl.mock.calls[0][0]).toContain(
-      "/pages/projects?per_page=20&page=1",
-    );
-    expect(fetchImpl.mock.calls[2][0]).toContain("/domains?per_page=20&page=1");
-    expect(fetchImpl.mock.calls[3][0]).toContain(
-      "/deployments?env=production&per_page=20&page=1",
+    expect(fetchImpl.mock.calls[0][0]).toMatch(/\/pages\/projects$/);
+    expect(fetchImpl.mock.calls[2][0]).toMatch(/\/domains$/);
+    expect(fetchImpl.mock.calls[3][0]).toMatch(
+      /\/deployments\?env=production$/,
     );
     for (const [, options] of fetchImpl.mock.calls) {
       expect(options.headers.authorization).toBe("Bearer pages-read-fixture");
@@ -198,6 +202,9 @@ describe("resolve RC10 production Pages project", () => {
     expect(output).toEqual(
       expect.arrayContaining([
         "PAGES_READ_TOKEN_PRESENT=PASS",
+        "PAGES_READ_TOKEN_ACTIVE=PASS",
+        "PAGES_READ_TOKEN_ACCOUNT_BINDING=PASS",
+        "PAGES_READ_TOKEN_PERMISSION=PASS",
         "PAGES_READ_TOKEN_ACCESS=PASS",
         "PAGES_READ_API_OPERATION=LIST_PROJECTS",
         "PAGES_READ_API_HTTP_STATUS=200",
@@ -222,6 +229,27 @@ describe("resolve RC10 production Pages project", () => {
     expect(error).toMatchObject({
       classification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
     });
+  });
+
+  it("fails closed rather than sending unsupported pagination parameters", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response({
+        success: true,
+        result: [{ name: project }],
+        result_info: { total_pages: 2 },
+      }),
+    );
+
+    const error = await resolveProductionPagesProject({
+      environment: readEnvironment(),
+      fetchImpl,
+    }).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      classification: "PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE",
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).not.toMatch(/[?&](?:page|per_page)=/);
   });
 
   it("proves an existing baseline through the configured production branch and canonical deployment", async () => {
