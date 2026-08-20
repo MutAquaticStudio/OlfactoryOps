@@ -1,0 +1,245 @@
+name: V2 RC10 Production Platform Owner User Onboarding
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_onboarding:
+        description: Type PREPARE_RC10_PLATFORM_OWNER_USER_ONBOARDING.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc10-production-platform-owner-user-onboarding
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RELEASE_BRANCH: codex/v2-production-go-live
+  EXPECTED_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: release
+        name: Validate immutable RC10 onboarding request
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRM_ONBOARDING: ${{ inputs.confirm_onboarding }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_ONBOARDING" = PREPARE_RC10_PLATFORM_OWNER_USER_ONBOARDING
+          test "$RELEASE_SHA" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          echo "release_sha=$RC10_SHA" >> "$GITHUB_OUTPUT"
+
+  onboard:
+    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      TEMP_OWNER_ONBOARDING_WORKER_NAME: oo-v2-platform-owner-onboarding-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.release_sha }}
+          path: release
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            ops/package-lock.json
+            release/package-lock.json
+      - name: Install operations and exact RC10 dependencies without provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --prefix ops
+          npm ci --ignore-scripts --prefix release
+          release/node_modules/.bin/prisma generate --schema release/infra/postgres/prisma/schema.prisma >/dev/null 2>&1
+      - name: Prepare exact RC10 route-free onboarding Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(git -C release rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$PRODUCTION_HYPERDRIVE_ID" = "$EXPECTED_HYPERDRIVE_ID"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
+          qa_dir="$GITHUB_WORKSPACE/release/.qa/oo-v2-platform-owner-onboarding-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$qa_dir"
+          chmod 700 "$qa_dir"
+          cp ops/worker/v2-platform-owner-onboarding.ts.template release/worker/v2-platform-owner-onboarding.ts
+          TEMP_OWNER_ONBOARDING_WORKER_NAME="$TEMP_OWNER_ONBOARDING_WORKER_NAME" RELEASE_SHA="$RELEASE_SHA" PRODUCTION_HYPERDRIVE_ID="$PRODUCTION_HYPERDRIVE_ID" OWNER_ONBOARDING_WRANGLER_CONFIG="$qa_dir/wrangler.toml" node ops/scripts/render-v2-production-platform-owner-onboarding.mjs
+          test "$(grep -Ec '^name = "oo-v2-platform-owner-onboarding-[0-9]+-[0-9]+"$' "$qa_dir/wrangler.toml")" = 1
+          ! grep -Eq '(^routes\s*=|^\[\[routes\]\]|custom_domain\s*=)' "$qa_dir/wrangler.toml"
+          printf 'OWNER_ONBOARDING_QA_DIR=%s\n' "$qa_dir" >> "$GITHUB_ENV"
+      - name: Require the protected identity and email-delivery prerequisites before deployment
+        shell: bash
+        env:
+          PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
+          V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+          V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+          V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+          RESEND_API_KEY: ${{ secrets.PRODUCTION_OWNER_ONBOARDING_RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.PRODUCTION_OWNER_ONBOARDING_EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          test -n "$PLATFORM_OWNER_BOOTSTRAP_EMAIL"
+          test -n "$V2_SESSION_PEPPER"
+          test -n "$V2_PASSWORD_PEPPER"
+          test -n "$V2_INVITATION_ENCRYPTION_KEY"
+          test -n "$RESEND_API_KEY"
+          test -n "$EMAIL_FROM"
+      - name: Preflight the run-scoped temporary Worker absence
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$TEMP_OWNER_ONBOARDING_WORKER_NAME" in oo-v2-platform-owner-onboarding-[0-9]*-[0-9]*) ;; *) exit 1 ;; esac
+          status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_OWNER_ONBOARDING_WORKER_NAME" || printf '000')"
+          test "$status" = 404
+          printf 'OWNER_ONBOARDING_TEMP_WORKER_PREFLIGHT=PASS\n' >> "$GITHUB_ENV"
+      - name: Deploy the temporary exact RC10 Workers.dev onboarding Worker
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          WRANGLER_WRITE_LOGS: "false"
+          WRANGLER_SEND_METRICS: "false"
+          WRANGLER_SEND_ERROR_REPORTS: "false"
+        run: |
+          set -euo pipefail
+          umask 077
+          test "${#TEMP_OWNER_ONBOARDING_WORKER_NAME}" -le 63
+          printf 'OWNER_ONBOARDING_TEMP_WORKER_DEPLOY_ATTEMPTED=YES\n' >> "$GITHUB_ENV"
+          (cd "$OWNER_ONBOARDING_QA_DIR" && "$GITHUB_WORKSPACE/release/node_modules/.bin/wrangler" deploy --config wrangler.toml >deploy.stdout 2>deploy.stderr)
+          echo 'OWNER_ONBOARDING_TEMP_WORKER_DEPLOY=PASS'
+      - name: Bind onboarding secrets without logging identity, token, or credential values
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
+          V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+          V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+          V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+          RESEND_API_KEY: ${{ secrets.PRODUCTION_OWNER_ONBOARDING_RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.PRODUCTION_OWNER_ONBOARDING_EMAIL_FROM }}
+        run: |
+          set -euo pipefail
+          umask 077
+          node - <<'NODE' > "$OWNER_ONBOARDING_QA_DIR/secrets.json"
+          const { randomBytes } = require('node:crypto')
+          const fs = require('node:fs')
+          const required = ['PLATFORM_OWNER_BOOTSTRAP_EMAIL', 'V2_SESSION_PEPPER', 'V2_PASSWORD_PEPPER', 'V2_INVITATION_ENCRYPTION_KEY', 'RESEND_API_KEY', 'EMAIL_FROM']
+          for (const key of required) if (!process.env[key]) process.exit(2)
+          const secrets = Object.fromEntries(required.map((key) => [key, process.env[key]]))
+          secrets.ONBOARDING_LINK_TOKEN = randomBytes(24).toString('hex')
+          secrets.ONBOARDING_DISPATCH_TOKEN = randomBytes(24).toString('hex')
+          fs.writeFileSync(1, JSON.stringify(secrets))
+          NODE
+          chmod 600 "$OWNER_ONBOARDING_QA_DIR/secrets.json"
+          (cd "$OWNER_ONBOARDING_QA_DIR" && "$GITHUB_WORKSPACE/release/node_modules/.bin/wrangler" secret bulk secrets.json --config wrangler.toml >secret.stdout 2>secret.stderr)
+          node -e "const s=require('node:fs').readFileSync(process.argv[1],'utf8');const v=JSON.parse(s);if(!/^[a-f0-9]{48}$/i.test(v.ONBOARDING_DISPATCH_TOKEN))process.exit(2);require('node:fs').writeFileSync(process.argv[2],v.ONBOARDING_DISPATCH_TOKEN,{mode:0o600})" "$OWNER_ONBOARDING_QA_DIR/secrets.json" "$OWNER_ONBOARDING_QA_DIR/dispatch-token"
+          rm -f "$OWNER_ONBOARDING_QA_DIR/secrets.json"
+      - name: Send the one-time registration link and await human completion
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          subdomain_file="$OWNER_ONBOARDING_QA_DIR/subdomain.json"
+          curl --silent --show-error --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" --output "$subdomain_file"
+          url="$(node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.result?.subdomain;if(!/^[a-z0-9-]+$/.test(v??''))process.exit(2);process.stdout.write('https://${TEMP_OWNER_ONBOARDING_WORKER_NAME}.'+v+'.workers.dev')" "$subdomain_file")"
+          printf '%s' "$url" > "$OWNER_ONBOARDING_QA_DIR/url"
+          chmod 600 "$OWNER_ONBOARDING_QA_DIR/url"
+          token="$(cat "$OWNER_ONBOARDING_QA_DIR/dispatch-token")"
+          dispatch_status="$(curl --silent --max-time 20 --output "$OWNER_ONBOARDING_QA_DIR/dispatch.json" --write-out '%{http_code}' --request POST -H "x-olfactoryops-owner-onboarding-dispatch: $token" "$url/__dispatch" || printf '000')"
+          test "$dispatch_status" = 202
+          node -e "const fs=require('node:fs');const v=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(v?.state!=='EMAIL_SENT')process.exit(2)" "$OWNER_ONBOARDING_QA_DIR/dispatch.json"
+          for attempt in $(seq 1 90); do
+            status="$(curl --silent --max-time 20 --output "$OWNER_ONBOARDING_QA_DIR/status.json" --write-out '%{http_code}' -H "x-olfactoryops-owner-onboarding-dispatch: $token" "$url/__status" || printf '000')"
+            if [ "$status" = 200 ] && node -e "const fs=require('node:fs');try{process.exit(JSON.parse(fs.readFileSync(process.argv[1],'utf8'))?.state==='COMPLETE'?0:1)}catch{process.exit(1)}" "$OWNER_ONBOARDING_QA_DIR/status.json"; then
+              printf 'OWNER_ONBOARDING_HUMAN_VERIFICATION=PASS\n' >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo 'OWNER_ONBOARDING_HUMAN_VERIFICATION=TIMEOUT'
+          exit 1
+      - name: Verify the normal onboarding result without assigning Platform Owner
+        shell: bash
+        env:
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+          PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
+          PLATFORM_BOOTSTRAP_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test "$OWNER_ONBOARDING_HUMAN_VERIFICATION" = PASS
+          node ops/scripts/diagnose-v2-production-platform-owner-bootstrap.mjs > "$OWNER_ONBOARDING_QA_DIR/verification.txt"
+          grep -Fx 'BOOTSTRAP_USER_MATCH_COUNT=ONE' "$OWNER_ONBOARDING_QA_DIR/verification.txt"
+          grep -Fx 'BOOTSTRAP_USER_VERIFIED=YES' "$OWNER_ONBOARDING_QA_DIR/verification.txt"
+          grep -Fx 'ACTIVE_PLATFORM_OWNER_COUNT=ZERO' "$OWNER_ONBOARDING_QA_DIR/verification.txt"
+          echo 'PLATFORM_OWNER_USER_ONBOARDING=PASS'
+      - name: Delete only the temporary onboarding Worker and runner-local evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$TEMP_OWNER_ONBOARDING_WORKER_NAME" in oo-v2-platform-owner-onboarding-[0-9]*-[0-9]*) ;; *) exit 1 ;; esac
+          if [ "${OWNER_ONBOARDING_TEMP_WORKER_PREFLIGHT:-}" = PASS ] && [ "${OWNER_ONBOARDING_TEMP_WORKER_DEPLOY_ATTEMPTED:-}" = YES ]; then
+            status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_OWNER_ONBOARDING_WORKER_NAME" || printf '000')"
+            case "$status" in
+              200) delete_status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' --request DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' --data '{}' "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_OWNER_ONBOARDING_WORKER_NAME" || printf '000')"; test "$delete_status" = 200 ;;
+              404) ;;
+              *) exit 1 ;;
+            esac
+            final_status="$(curl --silent --max-time 20 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/$TEMP_OWNER_ONBOARDING_WORKER_NAME" || printf '000')"
+            test "$final_status" = 404
+          fi
+          qa_dir="${OWNER_ONBOARDING_QA_DIR:-}"
+          if [ -n "$qa_dir" ]; then case "$qa_dir" in "$GITHUB_WORKSPACE"/release/.qa/oo-v2-platform-owner-onboarding-*) rm -rf "$qa_dir" ;; *) exit 1 ;; esac; fi
+          echo 'PLATFORM_OWNER_USER_ONBOARDING_CLEANUP=PASS'

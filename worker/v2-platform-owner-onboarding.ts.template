@@ -1,0 +1,208 @@
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPlatformRepository } from "../services/platform/src/prisma-repository.js";
+import { PlatformService } from "../services/platform/src/service.js";
+import { sendResendEmail } from "./provider-adapters.js";
+
+export type PlatformOwnerOnboardingEnv = {
+  HYPERDRIVE: Hyperdrive;
+  PLATFORM_OWNER_BOOTSTRAP_EMAIL: string;
+  V2_SESSION_PEPPER: string;
+  V2_PASSWORD_PEPPER: string;
+  V2_INVITATION_ENCRYPTION_KEY: string;
+  ONBOARDING_LINK_TOKEN: string;
+  ONBOARDING_DISPATCH_TOKEN: string;
+  RESEND_API_KEY: string;
+  EMAIL_FROM: string;
+  V2_WORKSPACE_BASE_DOMAIN: string;
+  V2_API_PUBLIC_HOSTNAME?: string;
+  V2_PUBLIC_PAGES_HOSTNAME?: string;
+  V2_PLATFORM_ADMIN_HOSTNAME?: string;
+};
+
+const dispatchHeader = "x-olfactoryops-owner-onboarding-dispatch";
+const noStore = {
+  "cache-control": "no-store",
+  "referrer-policy": "no-referrer",
+};
+
+function response(status: number, body: Record<string, unknown>) {
+  return Response.json(body, { status, headers: noStore });
+}
+
+function page(status: number, body: string) {
+  return new Response(body, {
+    status,
+    headers: {
+      ...noStore,
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy":
+        "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    },
+  });
+}
+
+function validToken(value: string | undefined) {
+  return typeof value === "string" && /^[a-f0-9]{48}$/i.test(value);
+}
+
+function equalSecret(left: string | null, right: string | undefined) {
+  if (!left || !right || left.length !== right.length) return false;
+  let mismatch = 0;
+  for (let index = 0; index < left.length; index += 1)
+    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return mismatch === 0;
+}
+
+function required(value: string | undefined, name: string) {
+  if (!value || value.length < 16) throw new Error(`${name}_NOT_CONFIGURED`);
+  return value;
+}
+
+function serviceFor(env: PlatformOwnerOnboardingEnv) {
+  const prisma = new PrismaClient({
+    adapter: new PrismaPg({
+      connectionString: env.HYPERDRIVE.connectionString,
+    }),
+  });
+  const repository = new PrismaPlatformRepository(prisma);
+  const platform = new PlatformService(repository, {
+    baseDomain: env.V2_WORKSPACE_BASE_DOMAIN,
+    publicHostnames: [
+      env.V2_API_PUBLIC_HOSTNAME,
+      env.V2_PUBLIC_PAGES_HOSTNAME,
+      env.V2_PLATFORM_ADMIN_HOSTNAME,
+    ].filter((value): value is string => Boolean(value)),
+    sessionPepper: required(env.V2_SESSION_PEPPER, "V2_SESSION_PEPPER"),
+    passwordPepper: required(env.V2_PASSWORD_PEPPER, "V2_PASSWORD_PEPPER"),
+    invitationEncryptionKey: required(
+      env.V2_INVITATION_ENCRYPTION_KEY,
+      "V2_INVITATION_ENCRYPTION_KEY",
+    ),
+  });
+  return { prisma, repository, platform };
+}
+
+async function userState(env: PlatformOwnerOnboardingEnv) {
+  const services = serviceFor(env);
+  try {
+    const user = await services.repository.findUserByEmail(
+      env.PLATFORM_OWNER_BOOTSTRAP_EMAIL.trim().toLowerCase(),
+    );
+    return user
+      ? user.verifiedAt
+        ? "COMPLETE"
+        : "EXISTS_UNVERIFIED"
+      : "PENDING";
+  } finally {
+    await services.prisma.$disconnect().catch(() => undefined);
+  }
+}
+
+function beginPage(token: string) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Complete secure registration</title><body><main><h1>Complete secure registration</h1><form method="post" action="/__complete?t=${token}"><label>Display name <input name="displayName" autocomplete="name" maxlength="120" required></label><label>Password <input name="password" type="password" autocomplete="new-password" minlength="12" required></label><button type="submit">Create and verify account</button></form></main></body></html>`;
+}
+
+async function dispatch(request: Request, env: PlatformOwnerOnboardingEnv) {
+  if (
+    !equalSecret(
+      request.headers.get(dispatchHeader),
+      env.ONBOARDING_DISPATCH_TOKEN,
+    )
+  )
+    return response(404, { state: "NOT_FOUND" });
+  if (
+    !validToken(env.ONBOARDING_LINK_TOKEN) ||
+    !env.RESEND_API_KEY?.trim() ||
+    !env.EMAIL_FROM?.trim()
+  )
+    return response(503, { state: "UNAVAILABLE" });
+  if ((await userState(env)) !== "PENDING")
+    return response(409, { state: "CLOSED" });
+  const url = new URL(request.url);
+  const delivery = await sendResendEmail(fetch, {
+    apiKey: env.RESEND_API_KEY,
+    from: env.EMAIL_FROM,
+    to: env.PLATFORM_OWNER_BOOTSTRAP_EMAIL.trim().toLowerCase(),
+    subject: "Complete your OlfactoryOps Platform Owner registration",
+    text: `Open this one-time secure registration link within 45 minutes: ${url.origin}/__begin?t=${env.ONBOARDING_LINK_TOKEN}`,
+  });
+  return delivery.delivered
+    ? response(202, { state: "EMAIL_SENT" })
+    : response(503, { state: "UNAVAILABLE" });
+}
+
+async function complete(request: Request, env: PlatformOwnerOnboardingEnv) {
+  const url = new URL(request.url);
+  if (!equalSecret(url.searchParams.get("t"), env.ONBOARDING_LINK_TOKEN))
+    return page(404, "Not found");
+  const form = await request.formData().catch(() => undefined);
+  const password =
+    typeof form?.get("password") === "string"
+      ? String(form.get("password"))
+      : "";
+  const displayName =
+    typeof form?.get("displayName") === "string"
+      ? String(form.get("displayName")).trim().slice(0, 120)
+      : "";
+  if (password.length < 12 || !displayName)
+    return page(422, "Registration details could not be accepted.");
+  const services = serviceFor(env);
+  try {
+    const email = env.PLATFORM_OWNER_BOOTSTRAP_EMAIL.trim().toLowerCase();
+    if (await services.repository.findUserByEmail(email))
+      return page(409, "This registration link is no longer available.");
+    const result = await services.platform.signup({
+      organizationName: "Platform Owner Workspace",
+      workspaceSlug: `platform-owner-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`,
+      email,
+      displayName,
+      password,
+    });
+    await services.platform.verifyEmail(result.verificationToken);
+    return page(
+      200,
+      "Your account has been created and verified. You may close this page.",
+    );
+  } catch {
+    return page(503, "Registration is temporarily unavailable.");
+  } finally {
+    await services.prisma.$disconnect().catch(() => undefined);
+  }
+}
+
+export default {
+  async fetch(
+    request: Request,
+    env: PlatformOwnerOnboardingEnv,
+  ): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (request.method === "GET" && path === "/__health")
+      return response(200, { state: "READY" });
+    if (request.method === "POST" && path === "/__dispatch")
+      return dispatch(request, env);
+    if (request.method === "GET" && path === "/__status") {
+      if (
+        !equalSecret(
+          request.headers.get(dispatchHeader),
+          env.ONBOARDING_DISPATCH_TOKEN,
+        )
+      )
+        return response(404, { state: "NOT_FOUND" });
+      try {
+        return response(200, { state: await userState(env) });
+      } catch {
+        return response(503, { state: "UNAVAILABLE" });
+      }
+    }
+    if (request.method === "GET" && path === "/__begin") {
+      const token = new URL(request.url).searchParams.get("t");
+      return equalSecret(token, env.ONBOARDING_LINK_TOKEN)
+        ? page(200, beginPage(token!))
+        : page(404, "Not found");
+    }
+    if (request.method === "POST" && path === "/__complete")
+      return complete(request, env);
+    return response(404, { state: "NOT_FOUND" });
+  },
+} satisfies ExportedHandler<PlatformOwnerOnboardingEnv>;
