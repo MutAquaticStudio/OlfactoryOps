@@ -20,7 +20,7 @@ describe('production smoke tenant readiness', () => {
     expect(isProductionSmokeTenantHostname('SMOKE.next.labofscents.org')).toBe(false)
   })
 
-  it('proves one active hostname, organization, user, and membership without emitting identity data', async () => {
+  it('proves one active hostname, organization, verified Viewer, and no Platform Operator without emitting identity data', async () => {
     const output = []
     const client = {
       connect: vi.fn(),
@@ -38,6 +38,8 @@ describe('production smoke tenant readiness', () => {
     const [query] = client.query.mock.calls[0]
     expect(query).toContain('public.v2_users')
     expect(query).toContain('public.v2_memberships')
+    expect(query).toContain("membership.role_key = 'Viewer'")
+    expect(query).toContain('public.v2_platform_operators')
     expect(query).toMatch(/^SELECT EXISTS/)
     expect(query).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP)\b/)
     expect(output).toEqual([

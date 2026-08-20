@@ -43,6 +43,7 @@ describe('RC10 production smoke identity inventory', () => {
   it('reports a safe existing non-Platform-Owner identity and its single-label tenant hostname only', () => {
     const report = summarizeProductionSmokeIdentityAvailability({
       smoke_tenant_available: true,
+      smoke_tenant_count: 1,
       smoke_login_identity_available: true,
       active_platform_owner_available: true,
       smoke_tenant_hostname: 'smoke-fixture.next.labofscents.org',
@@ -50,37 +51,43 @@ describe('RC10 production smoke identity inventory', () => {
 
     expect(report).toEqual([
       'EXISTING_SMOKE_TENANT_AVAILABLE=YES',
+      'EXISTING_SMOKE_TENANT_SELECTION=ONE',
       'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=YES',
       'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=NO',
       'EXISTING_SMOKE_TENANT_HOSTNAME=smoke-fixture.next.labofscents.org',
     ])
   })
 
-  it('requires provisioning instead of treating the Platform Owner as a smoke identity', () => {
-    const report = summarizeProductionSmokeIdentityAvailability({
-      smoke_tenant_available: true,
-      smoke_login_identity_available: false,
-      active_platform_owner_available: true,
-      smoke_tenant_hostname: null,
-    })
-
-    expect(report).toEqual([
-      'EXISTING_SMOKE_TENANT_AVAILABLE=YES',
-      'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=NO',
-      'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=YES',
-    ])
-  })
-
-  it('suppresses a hostname unless it has the exact single-label tenant shape and a qualifying identity', () => {
+  it('returns the one active tenant hostname even when no normal login identity exists', () => {
     expect(
       summarizeProductionSmokeIdentityAvailability({
         smoke_tenant_available: true,
+        smoke_tenant_count: 1,
+        smoke_login_identity_available: false,
+        active_platform_owner_available: true,
+        smoke_tenant_hostname: 'smoke-fixture.next.labofscents.org',
+      }),
+    ).toEqual([
+      'EXISTING_SMOKE_TENANT_AVAILABLE=YES',
+      'EXISTING_SMOKE_TENANT_SELECTION=ONE',
+      'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=NO',
+      'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=YES',
+      'EXISTING_SMOKE_TENANT_HOSTNAME=smoke-fixture.next.labofscents.org',
+    ])
+  })
+
+  it('suppresses an invalid hostname and fails the identity availability closed', () => {
+    expect(
+      summarizeProductionSmokeIdentityAvailability({
+        smoke_tenant_available: true,
+        smoke_tenant_count: 1,
         smoke_login_identity_available: true,
         active_platform_owner_available: false,
         smoke_tenant_hostname: 'nested.smoke.next.labofscents.org',
       }),
     ).toEqual([
       'EXISTING_SMOKE_TENANT_AVAILABLE=YES',
+      'EXISTING_SMOKE_TENANT_SELECTION=ONE',
       'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=NO',
       'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=NO',
     ])
@@ -89,6 +96,7 @@ describe('RC10 production smoke identity inventory', () => {
   it('executes one read-only aggregate query and emits no identity data', async () => {
     const client = new FakeClient({
       smoke_tenant_available: true,
+      smoke_tenant_count: 1,
       smoke_login_identity_available: true,
       active_platform_owner_available: true,
       smoke_tenant_hostname: 'smoke-fixture.next.labofscents.org',
@@ -124,10 +132,28 @@ describe('RC10 production smoke identity inventory', () => {
     expect(result.pass).toBe(false)
     expect(output).toEqual([
       'EXISTING_SMOKE_TENANT_AVAILABLE=NO',
+      'EXISTING_SMOKE_TENANT_SELECTION=UNPROVEN',
       'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=NO',
       'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=NO',
     ])
     expect(output.join('\n')).not.toContain('query-detail-not-for-output')
     expect(client.closed).toBe(true)
+  })
+
+  it('does not select one tenant when multiple active tenant candidates exist', () => {
+    expect(
+      summarizeProductionSmokeIdentityAvailability({
+        smoke_tenant_available: true,
+        smoke_tenant_count: 2,
+        smoke_login_identity_available: false,
+        active_platform_owner_available: true,
+        smoke_tenant_hostname: 'smoke-fixture.next.labofscents.org',
+      }),
+    ).toEqual([
+      'EXISTING_SMOKE_TENANT_AVAILABLE=YES',
+      'EXISTING_SMOKE_TENANT_SELECTION=MULTIPLE',
+      'EXISTING_SMOKE_LOGIN_IDENTITY_AVAILABLE=NO',
+      'PLATFORM_OWNER_CREDENTIAL_REUSE_REQUIRED=YES',
+    ])
   })
 })
