@@ -17,7 +17,7 @@ export function renderPlatformOwnerOnboardingConfig({
   if (hyperdriveId !== productionHyperdriveId)
     throw new Error("OWNER_ONBOARDING_CONFIG_INVALID_HYPERDRIVE");
   return `name = "${workerName}"
-main = "worker/v2-platform-owner-onboarding.ts"
+main = "../../worker/v2-platform-owner-onboarding.ts"
 compatibility_date = "2026-08-11"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
