@@ -61,23 +61,34 @@ jobs:
     environment: production
     env:
       RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+      OPS_SHA: ${{ github.sha }}
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ env.OPS_SHA }}
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ env.RELEASE_SHA }}
+          path: release
           persist-credentials: false
       - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+          cache-dependency-path: release/package-lock.json
+      - name: Install exact RC10 dependencies without provider credentials
+        working-directory: release
+        run: npm ci
       - name: Require exact protected production revalidation
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/release" rev-parse HEAD)" = "$RELEASE_SHA"
+          test "$(git -C "$GITHUB_WORKSPACE/ops" rev-parse HEAD)" = "$OPS_SHA"
           test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RELEASE_SHA"
           test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RELEASE_SHA"
       - name: Assign the one-time Platform Owner without logging identity or credentials
@@ -85,6 +96,7 @@ jobs:
         env:
           PLATFORM_OWNER_BOOTSTRAP_EMAIL: ${{ secrets.PLATFORM_OWNER_BOOTSTRAP_EMAIL }}
           PLATFORM_BOOTSTRAP_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
           PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT: production
           CONFIRM_PLATFORM_OWNER_BOOTSTRAP: ${{ inputs.confirm_platform_owner_bootstrap }}
           V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED: ASSIGN_PLATFORM_OWNER
@@ -95,4 +107,4 @@ jobs:
           test "$PLATFORM_OWNER_BOOTSTRAP_ENVIRONMENT" = "production"
           test "$CONFIRM_PLATFORM_OWNER_BOOTSTRAP" = "ASSIGN_PLATFORM_OWNER"
           test "$V2_PRODUCTION_PLATFORM_OWNER_BOOTSTRAP_APPROVED" = "ASSIGN_PLATFORM_OWNER"
-          npm run bootstrap:platform-owner
+          node ops/scripts/bootstrap-v2-production-platform-owner-pg.mjs
