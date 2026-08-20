@@ -227,6 +227,9 @@ describe("RC10 final readiness operations", () => {
     expect(pages).toContain("olfactoryops-v2-production");
     expect(pages).toContain("pages project create");
     expect(pages).toContain("PRODUCTION_PAGES_PROJECT_CREATE=UNACKNOWLEDGED");
+    expect(pages).toContain("emit_resolution_failure()");
+    expect(pages).toContain("PRODUCTION_PAGES_PROJECT_STATE_UNPROVEN");
+    expect(pages).toContain("PRODUCTION_PAGES_PROJECT_DETAIL_UNPROVEN");
     expect(pages).toContain(
       'node scripts/resolve-v2-production-pages-project.mjs > "$evidence"',
     );
