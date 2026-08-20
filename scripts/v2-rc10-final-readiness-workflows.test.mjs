@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -51,6 +52,29 @@ describe("RC10 final readiness operations", () => {
     expect(backup).not.toMatch(
       /pages deploy|wrangler deploy|custom.domain|routes\s*=/i,
     );
+  });
+
+  it("emits only safe evidence when protected R2 configuration is unavailable", () => {
+    let output = "";
+    try {
+      execFileSync(
+        process.execPath,
+        ["scripts/verify-v2-rc10-backup-r2-private.mjs"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            BACKUP_BUCKET: "",
+            CLOUDFLARE_ACCOUNT_ID: "",
+            CLOUDFLARE_API_TOKEN: "",
+          },
+        },
+      );
+    } catch (error) {
+      output = String(error.stdout);
+    }
+    expect(output).toBe("BACKUP_BUCKET_PRIVATE=UNPROVEN\n");
+    expect(output).not.toMatch(/ReferenceError|CONFIG_|CLOUDFLARE_API_TOKEN/);
   });
 
   it("prepares only the exact unrouted production Pages project", () => {
