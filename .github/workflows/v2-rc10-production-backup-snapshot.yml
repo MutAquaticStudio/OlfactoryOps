@@ -69,6 +69,15 @@ jobs:
           cache: npm
       - name: Install pinned operations tooling without provider credentials
         run: npm ci --ignore-scripts
+      - name: Preflight the dedicated private R2 backup bucket
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BACKUP_TOKEN: ${{ secrets.CLOUDFLARE_R2_BACKUP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs
       - name: Create and validate a runner-local custom-format dump
         env:
           PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
@@ -130,19 +139,10 @@ jobs:
           echo "BACKUP_TYPE=PRIVATE_R2_PG_DUMP"
           echo "BACKUP_CREATED_AT=$timestamp"
           echo "BACKUP_LOCAL_ARCHIVE_VALIDATION=PASS"
-      - name: Ensure the dedicated R2 bucket is private
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc10-backup-r2-private.mjs
       - name: Upload, download, checksum, and validate the same private object
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_BACKUP_TOKEN: ${{ secrets.CLOUDFLARE_R2_BACKUP_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -154,10 +154,34 @@ jobs:
           original="$(cat "$dir/checksum")"
           pg_restore_bin="$(cat "$dir/pg-restore-bin")"
           downloaded="$dir/downloaded.dump"
-          npx wrangler r2 object put "$BACKUP_BUCKET/$key" --remote --file "$dump" > /dev/null 2>/dev/null
-          npx wrangler r2 object get "$BACKUP_BUCKET/$key" --remote --file "$downloaded" > /dev/null 2>/dev/null
-          test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$original"
-          "$pg_restore_bin" --list "$downloaded" > /dev/null
+          if ! CLOUDFLARE_API_TOKEN="$CLOUDFLARE_R2_BACKUP_TOKEN" ./node_modules/.bin/wrangler r2 object put "$BACKUP_BUCKET/$key" --remote --file "$dump" > /dev/null 2>"$dir/object-put.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_PUT"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=WRANGLER"
+            exit 1
+          fi
+          if ! CLOUDFLARE_API_TOKEN="$CLOUDFLARE_R2_BACKUP_TOKEN" ./node_modules/.bin/wrangler r2 object get "$BACKUP_BUCKET/$key" --remote --file "$downloaded" > /dev/null 2>"$dir/object-get.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_GET"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=WRANGLER"
+            exit 1
+          fi
+          if ! test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$original"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_VERIFY"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=UNCLASSIFIED"
+            exit 1
+          fi
+          if ! "$pg_restore_bin" --list "$downloaded" > /dev/null 2>"$dir/pg_restore-downloaded.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_VERIFY"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=UNCLASSIFIED"
+            exit 1
+          fi
           echo "BACKUP_OBJECT_EXISTS=PASS"
           echo "BACKUP_CHECKSUM=PASS"
           echo "BACKUP_ARCHIVE_VALIDATION=PASS"
@@ -165,4 +189,8 @@ jobs:
       - name: Delete all local backup evidence
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/rc10-production-backup"
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/rc10-production-backup"
+          test ! -e "$RUNNER_TEMP/rc10-production-backup"
+          echo "BACKUP_LOCAL_CLEANUP=PASS"
