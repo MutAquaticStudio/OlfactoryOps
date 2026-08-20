@@ -4,13 +4,16 @@ import {
   emitPagesProjectFailure,
   resolveProductionPagesProject,
 } from "./resolve-v2-production-pages-project.mjs";
+import {
+  PRODUCTION_SERVICES,
+  captureFirstReleaseRouteBaseline,
+  parseBaseline,
+  sameBaseline,
+  verifyCurrentRouteBaseline,
+} from "./v2-first-release-route-policy.mjs";
 
 const apiBase = "https://api.cloudflare.com/client/v4";
-const services = {
-  cloudRuntime: "olfactoryops-v2-cloud-runtime-production",
-  api: "olfactoryops-v2-api-production",
-  router: "olfactoryops-v2-tenant-router-production",
-};
+const services = PRODUCTION_SERVICES;
 
 export async function verifyProductionRollbackReadiness({
   environment = process.env,
@@ -23,6 +26,7 @@ export async function verifyProductionRollbackReadiness({
   const project =
     environment.PRODUCTION_PAGES_PROJECT?.trim() ||
     "olfactoryops-v2-production";
+  const releaseSha = environment.RELEASE_SHA?.trim();
 
   const workerResults = await Promise.all(
     Object.entries(services).map(async ([name, service]) => [
@@ -41,6 +45,17 @@ export async function verifyProductionRollbackReadiness({
     account && project === "olfactoryops-v2-production"
       ? await pagesRollback({ account, pagesToken, emit })
       : { ready: false, baseline: "UNPROVEN" };
+  const existingDeploymentBaseline = workerResults.every(
+    ([, result]) => result.ready,
+  );
+  const firstReleaseResult = await inspectFirstReleaseRollback({
+    account,
+    token: workerToken,
+    releaseSha,
+    baselineValue: environment.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE,
+    workerResults: Object.fromEntries(workerResults),
+    fetchImpl,
+  });
 
   for (const [name, result] of workerResults) {
     const prefix = `ROLLBACK_${name.toUpperCase()}`;
@@ -51,14 +66,89 @@ export async function verifyProductionRollbackReadiness({
   }
   emit(`ROLLBACK_PAGES_BASELINE=${pagesResult.baseline}`);
   emit(`ROLLBACK_PAGES_READY=${pagesResult.ready ? "PASS" : "FAIL"}`);
+  emit(
+    "ROLLBACK_BASELINE_TYPE=" +
+      (existingDeploymentBaseline
+        ? "EXISTING_DEPLOYMENT_BASELINE"
+        : firstReleaseResult.ready
+          ? "FIRST_RELEASE_ABSENCE_AND_ROUTE_HANDOFF_BASELINE"
+          : "UNPROVEN"),
+  );
+  emit(
+    "PRECUTOVER_ROUTE_BASELINE=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
+  emit(
+    "PREVIOUS_API_ROUTE_TARGET_PROVEN=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
+  emit(
+    "PREVIOUS_TENANT_ROUTER_ROUTE_TARGET_PROVEN=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
+  emit(
+    "FIRST_RELEASE_ROLLBACK_POLICY=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
+  emit(
+    "ROLLBACK_TO_EXISTING_ROUTE_TARGET_READY=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
+  emit(
+    "ROLLBACK_TO_ABSENCE_READY=" +
+      (firstReleaseResult.ready ? "PASS" : "UNPROVEN"),
+  );
   const pass =
-    pagesResult.ready && workerResults.every(([, result]) => result.ready);
+    pagesResult.ready &&
+    (existingDeploymentBaseline || firstReleaseResult.ready);
   emit(`PRODUCTION_ROLLBACK_READY=${pass ? "PASS" : "UNPROVEN"}`);
   return {
     pass,
     pagesResult,
     workerResults: Object.fromEntries(workerResults),
+    firstReleaseResult,
   };
+}
+
+async function inspectFirstReleaseRollback({
+  account,
+  token,
+  releaseSha,
+  baselineValue,
+  workerResults,
+  fetchImpl,
+}) {
+  const positivelyAbsent = Object.values(workerResults).every(
+    (result) =>
+      result.state === "API_FAILURE" &&
+      result.httpStatus === "404" &&
+      result.cfErrorCode === "10007",
+  );
+  const baseline = parseBaseline(baselineValue);
+  if (!positivelyAbsent || !account || !token || !baseline) {
+    return { ready: false, state: "UNPROVEN" };
+  }
+  if (baseline.releaseSha !== releaseSha) {
+    return { ready: false, state: "RELEASE_MISMATCH" };
+  }
+  const captured = await captureFirstReleaseRouteBaseline({
+    account,
+    token,
+    releaseSha,
+    fetchImpl,
+  });
+  if (!captured.pass || !sameBaseline(captured.manifest, baseline)) {
+    return { ready: false, state: "CUTOVER_ROUTE_BASELINE_DRIFT" };
+  }
+  const current = await verifyCurrentRouteBaseline({
+    account,
+    token,
+    baseline,
+    fetchImpl,
+  });
+  return current.pass
+    ? { ready: true, state: "READY" }
+    : { ready: false, state: current.state };
 }
 
 export async function inspectWorkerRollback({

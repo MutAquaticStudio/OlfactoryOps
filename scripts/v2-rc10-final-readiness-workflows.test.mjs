@@ -228,9 +228,20 @@ describe("RC10 final readiness operations", () => {
   });
 
   it("preflights only the exact unrouted production Pages project with Pages Read authority", () => {
-    const projectReadPreflight = pages.split(
-      "- name: Verify read-only rollback identifiers and Pages baseline",
-    )[0];
+    const projectReadPreflight = pages.slice(
+      pages.indexOf("- name: Preflight the dedicated Pages read credential"),
+      pages.indexOf(
+        "- name: Capture and persist the first-production route baseline",
+      ),
+    );
+    const routeBaselineCapture = pages.slice(
+      pages.indexOf(
+        "- name: Capture and persist the first-production route baseline",
+      ),
+      pages.indexOf(
+        "- name: Verify read-only rollback identifiers and Pages baseline",
+      ),
+    );
     expect(pages).toContain("olfactoryops-v2-production");
     expect(pages).toContain("CLOUDFLARE_PAGES_READ_TOKEN");
     expect(pages).toContain("Preflight the dedicated Pages read credential");
@@ -239,6 +250,13 @@ describe("RC10 final readiness operations", () => {
       "node scripts/resolve-v2-production-pages-project.mjs",
     );
     expect(projectReadPreflight).not.toContain("CLOUDFLARE_API_TOKEN");
+    expect(routeBaselineCapture).toContain("CLOUDFLARE_API_TOKEN");
+    expect(routeBaselineCapture).toContain(
+      "persist-v2-first-release-route-baseline.mjs",
+    );
+    expect(routeBaselineCapture).not.toMatch(
+      /curl\s+.*(?:POST|PUT|PATCH|DELETE)/i,
+    );
     expect(pages).not.toMatch(
       /wrangler|pages\s+project\s+create|pages\s+deploy/i,
     );

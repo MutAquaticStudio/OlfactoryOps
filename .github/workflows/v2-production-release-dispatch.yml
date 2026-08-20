@@ -16,6 +16,7 @@ on:
           - tenant-router
           - pages
           - cloud-runtime
+          - route-handoff
           - smoke
       confirm_production:
         description: Type the exact confirmation required for the selected operation.
@@ -62,6 +63,7 @@ jobs:
             tenant-router) expected_confirmation=DEPLOY_PRODUCTION_TENANT_ROUTER ;;
             pages) expected_confirmation=DEPLOY_PRODUCTION_PAGES ;;
             cloud-runtime) expected_confirmation=DEPLOY_PRODUCTION_CLOUD_RUNTIME ;;
+            route-handoff) expected_confirmation=HANDOFF_PRODUCTION_FIRST_RELEASE_ROUTES ;;
             smoke) expected_confirmation=RUN_PRODUCTION_SMOKE ;;
             *) exit 1 ;;
           esac
@@ -95,6 +97,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
           ref: ${{ needs.validate-production-revision.outputs.release_sha }}
       - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
         with:
@@ -117,6 +124,7 @@ jobs:
           npm run prisma:generate:v2
           npm run generate:v2-worker-transport
           node scripts/render-v2-api-production-config.mjs
+          node ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-api-production.toml api
           npx wrangler deploy --config .qa/wrangler.v2-api-production.toml
       - name: Bind rotated production API secrets without logging values
         shell: bash
@@ -203,6 +211,7 @@ jobs:
           set -euo pipefail
           npm run prisma:generate:v2
           node scripts/render-v2-tenant-router-production-config.mjs
+          node ../ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-tenant-router-production.toml tenantRouter
           npx wrangler deploy --config .qa/wrangler.v2-tenant-router-production.toml
 
   deploy-production-pages:
@@ -261,6 +270,29 @@ jobs:
           set -euo pipefail
           npm run build
           npx wrangler pages deploy dist --project-name "$PRODUCTION_PAGES_PROJECT" --branch production --commit-hash "${{ needs.validate-production-revision.outputs.release_sha }}" --commit-message "production candidate ${{ needs.validate-production-revision.outputs.release_sha }}" --commit-dirty=false
+
+  handoff-production-first-release-routes:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'route-handoff' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - name: Reverify the approved baseline and hand off only exact RC10 route targets
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+          PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/execute-v2-first-release-route-handoff.mjs
 
   deploy-production-cloud-runtime:
     if: ${{ needs.validate-production-revision.outputs.operation == 'cloud-runtime' }}
