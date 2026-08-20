@@ -60,14 +60,23 @@ jobs:
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/pages-project-resolution.txt"
-          trap 'rm -f "$evidence"' EXIT
+          create_error="$RUNNER_TEMP/pages-project-create.err"
+          trap 'rm -f "$evidence" "$create_error"' EXIT
           set +e
           node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
             grep -Fq 'PRODUCTION_PAGES_PROJECT_RESOLUTION_FAILURE=PRODUCTION_PAGES_PROJECT_MISSING' "$evidence"
-            npx wrangler pages project create "$PRODUCTION_PAGES_PROJECT" --production-branch production > /dev/null
+            set +e
+            npx wrangler pages project create "$PRODUCTION_PAGES_PROJECT" --production-branch production > /dev/null 2>"$create_error"
+            create_status=$?
+            set -e
+            if [ "$create_status" -eq 0 ]; then
+              echo 'PRODUCTION_PAGES_PROJECT_CREATE=ACKNOWLEDGED'
+            else
+              echo 'PRODUCTION_PAGES_PROJECT_CREATE=UNACKNOWLEDGED'
+            fi
           fi
           node scripts/resolve-v2-production-pages-project.mjs > "$evidence"
           grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$evidence"
