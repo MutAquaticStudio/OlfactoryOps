@@ -231,12 +231,12 @@ describe("RC10 final readiness operations", () => {
     const projectReadPreflight = pages.slice(
       pages.indexOf("- name: Preflight the dedicated Pages read credential"),
       pages.indexOf(
-        "- name: Capture and persist the first-production route baseline",
+        "- name: Capture and verify the approved first-production route baseline",
       ),
     );
     const routeBaselineCapture = pages.slice(
       pages.indexOf(
-        "- name: Capture and persist the first-production route baseline",
+        "- name: Capture and verify the approved first-production route baseline",
       ),
       pages.indexOf(
         "- name: Verify read-only rollback identifiers and Pages baseline",
@@ -254,6 +254,13 @@ describe("RC10 final readiness operations", () => {
     expect(routeBaselineCapture).toContain(
       "persist-v2-first-release-route-baseline.mjs",
     );
+    expect(routeBaselineCapture).toContain(
+      "vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE",
+    );
+    expect(routeBaselineCapture).not.toContain("GITHUB_TOKEN");
+    expect(routeBaselineCapture).not.toContain("github.token");
+    expect(routeBaselineCapture).not.toContain("$GITHUB_ENV");
+    expect(pages).not.toContain("actions: write");
     expect(routeBaselineCapture).not.toMatch(
       /curl\s+.*(?:POST|PUT|PATCH|DELETE)/i,
     );

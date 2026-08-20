@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import {
+  captureFirstReleaseRouteBaseline,
+  serializeBaseline,
+} from "./v2-first-release-route-policy.mjs";
 import { persistFirstReleaseRouteBaseline } from "./persist-v2-first-release-route-baseline.mjs";
 
 const releaseSha = "f".repeat(40);
@@ -16,12 +20,17 @@ function response(body, status = 200) {
   };
 }
 
-function fetchFixture({ baselineValue } = {}) {
+function fetchFixture({
+  apiService = "old-api",
+  routeInventoryAvailable = true,
+  previousTargetAvailable = true,
+  rc10ResourcePresent = false,
+} = {}) {
   const routes = [
     {
       id: "route-api-fixture",
       pattern: "api.labofscents.org/*",
-      script: "old-api",
+      script: apiService,
     },
     {
       id: "route-router-fixture",
@@ -34,17 +43,7 @@ function fetchFixture({ baselineValue } = {}) {
     const url = new URL(String(input));
     calls.push({ method: init.method ?? "GET", url: url.pathname });
     if (url.hostname === "api.github.com") {
-      if (
-        url.pathname.endsWith("/" + "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE")
-      ) {
-        return baselineValue
-          ? response({
-              name: "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE",
-              value: baselineValue,
-            })
-          : response({ message: "not found" }, 404);
-      }
-      return response({ name: "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE" }, 201);
+      throw new Error("GitHub must not be contacted");
     }
     if (url.pathname === "/client/v4/zones") {
       return response({
@@ -53,7 +52,9 @@ function fetchFixture({ baselineValue } = {}) {
       });
     }
     if (url.pathname === "/client/v4/zones/zone-fixture/workers/routes") {
-      return response({ success: true, result: routes });
+      return routeInventoryAvailable
+        ? response({ success: true, result: routes })
+        : response({ success: false, errors: [{ code: 10000 }] }, 403);
     }
     if (url.pathname.endsWith("/workers/domains")) {
       return response({ success: true, result: [] });
@@ -78,7 +79,24 @@ function fetchFixture({ baselineValue } = {}) {
     if (url.pathname.includes("/deployments")) {
       const service = decodeURIComponent(url.pathname.split("/").at(-2));
       if (service.startsWith("olfactoryops-v2-")) {
-        return response({ success: false, errors: [{ code: 10007 }] }, 404);
+        return rc10ResourcePresent
+          ? response({
+              success: true,
+              result: {
+                deployments: [
+                  {
+                    strategy: "percentage",
+                    versions: [
+                      { percentage: 100, version_id: "version-fixture" },
+                    ],
+                  },
+                ],
+              },
+            })
+          : response({ success: false, errors: [{ code: 10007 }] }, 404);
+      }
+      if (!previousTargetAvailable) {
+        return response({ success: false, errors: [{ code: 10000 }] }, 403);
       }
       return response({
         success: true,
@@ -97,7 +115,29 @@ function fetchFixture({ baselineValue } = {}) {
   return { fetchImpl, calls };
 }
 
-describe("first-release route baseline persistence", () => {
+async function canonicalBaseline() {
+  const fixture = fetchFixture();
+  const captured = await captureFirstReleaseRouteBaseline({
+    account: "account-fixture",
+    token: "cf-token",
+    releaseSha,
+    fetchImpl: fixture.fetchImpl,
+  });
+  expect(captured.pass).toBe(true);
+  return serializeBaseline(captured.manifest);
+}
+
+function diagnosticEnvironment({ baseline, file }) {
+  return {
+    CLOUDFLARE_ACCOUNT_ID: "account-fixture",
+    CLOUDFLARE_API_TOKEN: "cf-token",
+    RELEASE_SHA: releaseSha,
+    PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: baseline,
+    FIRST_RELEASE_BASELINE_FILE: file,
+  };
+}
+
+describe("first-release route baseline verification", () => {
   it("runs the direct CLI entrypoint without undefined-argument destructuring", () => {
     const result = spawnSync(
       process.execPath,
@@ -123,32 +163,132 @@ describe("first-release route baseline persistence", () => {
     expect(result.stdout).not.toContain("TypeError");
   });
 
-  it("stores a captured baseline without emitting its service or route identifiers", async () => {
+  it("fails closed when the approved baseline is missing without capturing a new baseline", async () => {
+    const output = [];
+    const fixture = fetchFixture();
+    const result = await persistFirstReleaseRouteBaseline({
+      environment: diagnosticEnvironment({ baseline: "", file: "unused" }),
+      fetchImpl: fixture.fetchImpl,
+      emit: (line) => output.push(line),
+    });
+
+    expect(result).toEqual({ pass: false, state: "PERSISTENCE_UNAVAILABLE" });
+    expect(output).toEqual([
+      "PRECUTOVER_ROUTE_BASELINE=FAIL",
+      "FIRST_RELEASE_BASELINE_FAILURE=PERSISTENCE_UNAVAILABLE",
+    ]);
+    expect(fixture.calls).toEqual([]);
+  });
+
+  it("fails closed when the approved baseline is malformed without calling Cloudflare", async () => {
+    const output = [];
+    const fixture = fetchFixture();
+    const result = await persistFirstReleaseRouteBaseline({
+      environment: diagnosticEnvironment({
+        baseline: "invalid",
+        file: "unused",
+      }),
+      fetchImpl: fixture.fetchImpl,
+      emit: (line) => output.push(line),
+    });
+
+    expect(result).toEqual({ pass: false, state: "PERSISTENCE_INVALID" });
+    expect(output).toEqual([
+      "PRECUTOVER_ROUTE_BASELINE=FAIL",
+      "FIRST_RELEASE_BASELINE_FAILURE=PERSISTENCE_INVALID",
+    ]);
+    expect(fixture.calls).toEqual([]);
+  });
+
+  it("verifies an identical approved baseline without contacting GitHub or emitting baseline contents", async () => {
+    const baseline = await canonicalBaseline();
     const directory = mkdtempSync(join(tmpdir(), "first-release-baseline-"));
     const file = join(directory, "baseline");
     const output = [];
     const fixture = fetchFixture();
     try {
       const result = await persistFirstReleaseRouteBaseline({
-        environment: {
-          CLOUDFLARE_ACCOUNT_ID: "account-fixture",
-          CLOUDFLARE_API_TOKEN: "cf-token",
-          RELEASE_SHA: releaseSha,
-          GITHUB_REPOSITORY: "owner/repo",
-          GITHUB_TOKEN: "github-token",
-          FIRST_RELEASE_BASELINE_FILE: file,
-        },
+        environment: diagnosticEnvironment({ baseline, file }),
         fetchImpl: fixture.fetchImpl,
         emit: (line) => output.push(line),
       });
+
       expect(result.pass).toBe(true);
-      expect(readFileSync(file, "utf8")).not.toBe("");
+      expect(readFileSync(file, "utf8")).toBe(baseline);
+      expect(output).toEqual(
+        expect.arrayContaining([
+          "PRECUTOVER_ROUTE_BASELINE=PASS",
+          "PREVIOUS_API_ROUTE_TARGET_PROVEN=PASS",
+          "PREVIOUS_TENANT_ROUTER_ROUTE_TARGET_PROVEN=PASS",
+          "FIRST_RELEASE_BASELINE_PERSISTENCE=VERIFIED",
+        ]),
+      );
+      expect(output.join("\n")).not.toContain(baseline);
       expect(output.join("\n")).not.toContain("old-api");
       expect(output.join("\n")).not.toContain("route-api-fixture");
       expect(output.join("\n")).not.toContain("cf-token");
-      expect(fixture.calls.some((call) => call.method === "POST")).toBe(true);
+      expect(fixture.calls.every((call) => call.method === "GET")).toBe(true);
+      expect(fixture.calls.some((call) => call.url.includes("github"))).toBe(
+        false,
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("fails on live route drift and never overwrites the approved baseline", async () => {
+    const baseline = await canonicalBaseline();
+    const output = [];
+    const fixture = fetchFixture({ apiService: "different-api" });
+    const result = await persistFirstReleaseRouteBaseline({
+      environment: diagnosticEnvironment({ baseline, file: "unused" }),
+      fetchImpl: fixture.fetchImpl,
+      emit: (line) => output.push(line),
+    });
+
+    expect(result).toEqual({
+      pass: false,
+      state: "CUTOVER_ROUTE_BASELINE_DRIFT",
+    });
+    expect(output).toEqual([
+      "PRECUTOVER_ROUTE_BASELINE=FAIL",
+      "FIRST_RELEASE_BASELINE_FAILURE=CUTOVER_ROUTE_BASELINE_DRIFT",
+    ]);
+  });
+
+  it.each([
+    [
+      "route inventory",
+      { routeInventoryAvailable: false },
+      "ROUTE_INVENTORY_UNPROVEN",
+    ],
+    [
+      "previous target",
+      { previousTargetAvailable: false },
+      "PREVIOUS_TARGET_UNPROVEN",
+    ],
+    [
+      "unexpected RC10 resource",
+      { rc10ResourcePresent: true },
+      "RC10_RESOURCE_BASELINE_UNPROVEN",
+    ],
+  ])(
+    "fails closed when the %s cannot establish the live baseline",
+    async (_, options, state) => {
+      const baseline = await canonicalBaseline();
+      const output = [];
+      const fixture = fetchFixture(options);
+      const result = await persistFirstReleaseRouteBaseline({
+        environment: diagnosticEnvironment({ baseline, file: "unused" }),
+        fetchImpl: fixture.fetchImpl,
+        emit: (line) => output.push(line),
+      });
+
+      expect(result).toEqual({ pass: false, state });
+      expect(output).toEqual([
+        "PRECUTOVER_ROUTE_BASELINE=FAIL",
+        "FIRST_RELEASE_BASELINE_FAILURE=" + state,
+      ]);
+    },
+  );
 });

@@ -18,14 +18,29 @@ const policy = readFileSync(
   "scripts/v2-first-release-route-policy.mjs",
   "utf8",
 );
+const baselineVerifier = readFileSync(
+  "scripts/persist-v2-first-release-route-baseline.mjs",
+  "utf8",
+);
 
 describe("first-release route policy workflows", () => {
-  it("captures a durable baseline before Stage 5 can declare rollback readiness", () => {
-    expect(preparation).toContain("actions: write");
+  it("verifies an externally provisioned baseline before Stage 5 can declare rollback readiness", () => {
+    expect(preparation).toContain("contents: read");
+    expect(preparation).not.toContain("actions: write");
     expect(preparation).toContain(
       "persist-v2-first-release-route-baseline.mjs",
     );
-    expect(preparation).toContain("PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE");
+    expect(preparation).toContain(
+      "PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}",
+    );
+    expect(preparation).not.toContain("GITHUB_TOKEN");
+    expect(preparation).not.toContain("GITHUB_REPOSITORY");
+    expect(preparation).not.toContain("github.token");
+    expect(preparation).not.toContain("$GITHUB_ENV");
+    expect(baselineVerifier).not.toContain("GITHUB_TOKEN");
+    expect(baselineVerifier).not.toContain("githubApi");
+    expect(baselineVerifier).not.toContain("api.github.com");
+    expect(baselineVerifier).not.toContain('method: "POST"');
     expect(
       preparation.indexOf("persist-v2-first-release-route-baseline.mjs"),
     ).toBeLessThan(
