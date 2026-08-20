@@ -2,7 +2,10 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPlatformRepository } from "../services/platform/src/prisma-repository.js";
 import { PlatformService } from "../services/platform/src/service.js";
-import { sendResendEmail } from "./provider-adapters.js";
+import {
+  sendResendEmail,
+  type ProviderDeliveryResult,
+} from "./provider-adapters.js";
 
 export type PlatformOwnerOnboardingEnv = {
   HYPERDRIVE: Hyperdrive;
@@ -99,6 +102,14 @@ async function userState(env: PlatformOwnerOnboardingEnv) {
   }
 }
 
+function deliveryState(delivery: ProviderDeliveryResult) {
+  if (delivery.delivered) return "EMAIL_SENT";
+  const status = /^Resend returned ([1-5]\d\d)$/.exec(delivery.error)?.[1];
+  if (status?.startsWith("4")) return "EMAIL_REJECTED_4XX";
+  if (status?.startsWith("5")) return "EMAIL_REJECTED_5XX";
+  return "EMAIL_TRANSPORT_FAILURE";
+}
+
 function beginPage(token: string) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Complete secure registration</title><body><main><h1>Complete secure registration</h1><form method="post" action="/__complete?t=${token}"><label>Display name <input name="displayName" autocomplete="name" maxlength="120" required></label><label>Password <input name="password" type="password" autocomplete="new-password" minlength="12" required></label><button type="submit">Create and verify account</button></form></main></body></html>`;
 }
@@ -117,7 +128,13 @@ async function dispatch(request: Request, env: PlatformOwnerOnboardingEnv) {
     !env.EMAIL_FROM?.trim()
   )
     return response(503, { state: "UNAVAILABLE" });
-  if ((await userState(env)) !== "PENDING")
+  let registrationState: Awaited<ReturnType<typeof userState>>;
+  try {
+    registrationState = await userState(env);
+  } catch {
+    return response(503, { state: "USER_STATE_UNAVAILABLE" });
+  }
+  if (registrationState !== "PENDING")
     return response(409, { state: "CLOSED" });
   const url = new URL(request.url);
   const delivery = await sendResendEmail(fetch, {
@@ -127,9 +144,8 @@ async function dispatch(request: Request, env: PlatformOwnerOnboardingEnv) {
     subject: "Complete your OlfactoryOps Platform Owner registration",
     text: `Open this one-time secure registration link within 45 minutes: ${url.origin}/__begin?t=${env.ONBOARDING_LINK_TOKEN}`,
   });
-  return delivery.delivered
-    ? response(202, { state: "EMAIL_SENT" })
-    : response(503, { state: "UNAVAILABLE" });
+  const state = deliveryState(delivery);
+  return response(state === "EMAIL_SENT" ? 202 : 503, { state });
 }
 
 async function complete(request: Request, env: PlatformOwnerOnboardingEnv) {
