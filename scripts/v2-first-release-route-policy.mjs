@@ -197,6 +197,122 @@ export async function verifyCurrentRouteBaseline({
   return { pass: true, state: "READY" };
 }
 
+export async function verifyPostCutoverRouteRollback({
+  account,
+  token,
+  baseline,
+  releaseSha,
+  fetchImpl = fetch,
+}) {
+  const unavailable = {
+    pass: false,
+    state: "BASELINE_INVALID",
+    previousTargets: emptyPreviousTargets(),
+    cleanupReady: false,
+  };
+  if (
+    !validAccount(account) ||
+    !validManifest(baseline) ||
+    !exactSha.test(releaseSha ?? "")
+  ) {
+    return unavailable;
+  }
+  if (baseline.releaseSha !== releaseSha) {
+    return { ...unavailable, state: "RELEASE_MISMATCH" };
+  }
+
+  const zone = await readProductionZone({ account, token, fetchImpl });
+  if (!zone || zone.id !== baseline.zoneId) {
+    return { ...unavailable, state: "ZONE_DRIFT" };
+  }
+  const response = await cloudflareRequest({
+    account,
+    token,
+    fetchImpl,
+    path: "/zones/" + encodeURIComponent(zone.id) + "/workers/routes",
+  });
+  if (!response.ok || !Array.isArray(response.result)) {
+    return { ...unavailable, state: "ROUTE_INVENTORY_UNPROVEN" };
+  }
+  for (const route of baseline.routes) {
+    const replacement = PUBLIC_ROUTE_SPECS.find(
+      (specification) => specification.key === route.key,
+    );
+    const matches = response.result.filter(
+      (current) => current?.pattern === route.pattern,
+    );
+    if (
+      !replacement ||
+      matches.length !== 1 ||
+      matches[0]?.id !== route.id ||
+      matches[0]?.script !== replacement.replacementService
+    ) {
+      return { ...unavailable, state: "ROUTE_HANDOFF_DRIFT" };
+    }
+  }
+
+  const previousTargets = {};
+  for (const route of baseline.routes) {
+    previousTargets[route.key] =
+      (await activeWorkerVersionId({
+        account,
+        token,
+        service: route.script,
+        fetchImpl,
+      })) === route.versionId;
+  }
+  if (!Object.values(previousTargets).every(Boolean)) {
+    return {
+      pass: false,
+      state: "PREVIOUS_TARGET_UNPROVEN",
+      previousTargets,
+      cleanupReady: false,
+    };
+  }
+
+  const routeIsApprovedHandoff = new Map(
+    baseline.routes.map((route) => [
+      route.id,
+      PUBLIC_ROUTE_SPECS.find((specification) => specification.key === route.key)
+        ?.replacementService,
+    ]),
+  );
+  const rc10Services = new Set(Object.values(PRODUCTION_SERVICES));
+  if (
+    response.result.some(
+      (route) =>
+        rc10Services.has(route?.script) &&
+        routeIsApprovedHandoff.get(route?.id) !== route.script,
+    )
+  ) {
+    return {
+      pass: false,
+      state: "RC10_ROUTE_CLEANUP_UNPROVEN",
+      previousTargets,
+      cleanupReady: false,
+    };
+  }
+  const domains = await cloudflareRequest({
+    account,
+    token,
+    fetchImpl,
+    path: "/accounts/" + encodeURIComponent(account) + "/workers/domains",
+  });
+  if (
+    !domains.ok ||
+    !Array.isArray(domains.result) ||
+    domains.result.some((domain) => rc10Services.has(domain?.service))
+  ) {
+    return {
+      pass: false,
+      state: "RC10_CUSTOM_DOMAIN_CLEANUP_UNPROVEN",
+      previousTargets,
+      cleanupReady: false,
+    };
+  }
+  return { pass: true, state: "READY", previousTargets, cleanupReady: true };
+}
+
 export async function handoffApprovedRoutes({
   account,
   token,
@@ -449,6 +565,12 @@ export function validManifest(value) {
     Object.values(PRODUCTION_SERVICES).every((service) =>
       value.absentServices.includes(service),
     ),
+  );
+}
+
+function emptyPreviousTargets() {
+  return Object.fromEntries(
+    PUBLIC_ROUTE_SPECS.map((specification) => [specification.key, false]),
   );
 }
 
