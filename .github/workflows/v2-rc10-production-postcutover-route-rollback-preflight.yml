@@ -1,0 +1,115 @@
+name: V2 RC10 Production Post-Cutover Route Rollback Preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      confirm_preflight:
+        description: Type VERIFY_RC10_POSTCUTOVER_ROUTE_ROLLBACK.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-production-release-dispatch
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RC9_TAG: v2-production-rc9
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  READY_TAG: v2-production-ready
+  RC11_TAG: v2-production-rc11
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable post-cutover rollback preflight request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_preflight }}" = VERIFY_RC10_POSTCUTOVER_ROUTE_ROLLBACK
+          test "${{ inputs.release_sha }}" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$READY_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$RC9_TAG")" = "$RC9_SHA"
+          ! git show-ref --verify --quiet "refs/tags/$RC11_TAG"
+
+  preflight:
+    needs: validate
+    if: ${{ github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate immutable release tags after approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$READY_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$RC9_TAG")" = "$RC9_SHA"
+          ! git show-ref --verify --quiet "refs/tags/$RC11_TAG"
+      - name: Verify post-cutover first-release route rollback capability read-only
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          ROLLBACK_DIRECTORY: ${{ runner.temp }}/v2-rc10-postcutover-route-rollback-preflight-${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$ROLLBACK_DIRECTORY"
+          chmod 700 "$ROLLBACK_DIRECTORY"
+          rollback_evidence="$ROLLBACK_DIRECTORY/evidence.txt"
+          set +e
+          node scripts/verify-v2-production-postcutover-route-rollback.mjs | tee "$rollback_evidence"
+          rollback_status=${PIPESTATUS[0]}
+          set -e
+          chmod 600 "$rollback_evidence"
+          grep -E '^(POSTCUTOVER_ROUTE_(HANDOFF_STATE|INVENTORY_(ATTEMPTED|HTTP_STATUS|CF_ERROR_CODE))|PREVIOUS_(API|TENANT_ROUTER)_ROUTE_TARGET_PROVEN|FIRST_RELEASE_ROUTE_ROLLBACK_POLICY|ROLLBACK_TO_(EXISTING_ROUTE_TARGET|ABSENCE)_READY|PRODUCTION_ROUTE_ROLLBACK_READY|POSTCUTOVER_ROUTE_ROLLBACK_FAILURE)=' "$rollback_evidence"
+          test "$rollback_status" -eq 0
+          grep -Fx 'POSTCUTOVER_ROUTE_HANDOFF_STATE=PASS' "$rollback_evidence"
+          grep -Fx 'PREVIOUS_API_ROUTE_TARGET_PROVEN=PASS' "$rollback_evidence"
+          grep -Fx 'PREVIOUS_TENANT_ROUTER_ROUTE_TARGET_PROVEN=PASS' "$rollback_evidence"
+          grep -Fx 'FIRST_RELEASE_ROUTE_ROLLBACK_POLICY=PASS' "$rollback_evidence"
+          grep -Fx 'ROLLBACK_TO_EXISTING_ROUTE_TARGET_READY=PASS' "$rollback_evidence"
+          grep -Fx 'ROLLBACK_TO_ABSENCE_READY=PASS' "$rollback_evidence"
+          grep -Fx 'PRODUCTION_ROUTE_ROLLBACK_READY=PASS' "$rollback_evidence"
+      - name: Remove runner-local rollback preflight evidence
+        if: ${{ always() }}
+        env:
+          ROLLBACK_DIRECTORY: ${{ runner.temp }}/v2-rc10-postcutover-route-rollback-preflight-${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$ROLLBACK_DIRECTORY"
+          test ! -e "$ROLLBACK_DIRECTORY"
