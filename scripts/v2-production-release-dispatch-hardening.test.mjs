@@ -75,6 +75,7 @@ describe("production dispatcher hardening", () => {
     expect(workflow).toContain("- pages-domain-handoff");
     expect(workflow).toContain("HANDOFF_PRODUCTION_PAGES_DOMAIN");
     expect(pagesDomain).toContain("environment: production");
+    expect(pagesDomain).toContain("timeout-minutes: 20");
     expect(pagesDomain).toContain(
       "handoff-v2-rc10-production-pages-domain.mjs preflight",
     );
@@ -93,6 +94,12 @@ describe("production dispatcher hardening", () => {
     expect(pagesDomain).not.toContain("workers/routes");
     expect(pagesDomain).not.toMatch(/env:\n\s+CLOUDFLARE_API_TOKEN:/);
     expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_PREDECESSOR_UNPROVEN");
+    expect(pagesDomainHandoff).toContain(
+      "const PUBLIC_IDENTITY_MAX_ATTEMPTS = 31",
+    );
+    expect(pagesDomainHandoff).toContain(
+      "await sleep(PUBLIC_IDENTITY_RETRY_MS)",
+    );
     expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_RECOVERY=PASS");
     expect(pagesDomainHandoff).toContain(
       "PRODUCTION_PAGES_DOMAIN_API_OPERATION=",

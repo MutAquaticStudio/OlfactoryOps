@@ -297,6 +297,43 @@ describe("RC10 production Pages domain handoff", () => {
     ]);
   });
 
+  it("waits through the bounded Pages custom-domain provisioning interval before recovery", async () => {
+    const { fetchImpl, state } = createFetch();
+    let baseline;
+    await preflightProductionPagesDomainHandoff({
+      environment: environment(),
+      fetchImpl,
+      writeBaseline: async (_path, value) => {
+        baseline = value;
+      },
+    });
+
+    let manifestAttempts = 0;
+    const sleeps = [];
+    await handoffProductionPagesDomain({
+      environment: environment(),
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (
+          url.hostname === "labofscents.org" &&
+          url.pathname === "/release.json" &&
+          manifestAttempts++ < 12
+        )
+          return response({}, 404);
+        return fetchImpl(input, init);
+      },
+      readBaseline: async () => baseline,
+      writeBaseline: async (_path, value) => {
+        baseline = value;
+      },
+      sleep: async (milliseconds) => sleeps.push(milliseconds),
+    });
+
+    expect(sleeps).toEqual(Array(12).fill(30_000));
+    expect(state.cname).toBe(expected);
+    expect(state.domains).toEqual([{ name: "labofscents.org" }]);
+  });
+
   it("rejects a non-Pages predecessor before any public control-plane mutation", async () => {
     const { fetchImpl, state } = createFetch();
     state.cname = "unapproved.example.net";
