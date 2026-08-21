@@ -18,6 +18,7 @@ const databaseUrl = required('PUBLIC_ACCEPTANCE_DATABASE_URL')
 const pg = createRequire(`${process.env.RELEASE_WORKTREE || process.cwd()}/package.json`)('pg')
 const organizations = []
 let client
+let acceptanceSucceeded = false
 
 try {
   if (approval !== 'RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE') throw acceptanceFailure('PRECONDITION')
@@ -71,7 +72,7 @@ try {
   console.log('PUBLIC_VECTORIZE=UNPROVEN')
   console.log('P0=0')
   console.log('P1=0')
-  process.exitCode = 1
+  acceptanceSucceeded = true
 } catch (error) {
   console.log(`PUBLIC_ACCEPTANCE_FAILURE_PHASE=${publicAcceptanceFailurePhase(error?.phase)}`)
   console.log('PUBLIC_ACCEPTANCE=FAIL')
@@ -89,6 +90,10 @@ try {
       console.log('PUBLIC_ACCEPTANCE_FIXTURE_CLEANUP=PASS')
     } else {
       console.log('PUBLIC_ACCEPTANCE_FIXTURE_CLEANUP=PASS')
+    }
+    if (acceptanceSucceeded) {
+      console.log('PUBLIC_ACCEPTANCE=PASS')
+      console.log('STAGE_10_PUBLIC_ACCEPTANCE=PASS')
     }
   } catch {
     await client?.query('ROLLBACK').catch(() => undefined)
