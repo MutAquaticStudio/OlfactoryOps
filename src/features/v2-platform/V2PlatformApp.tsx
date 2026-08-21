@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { featureCapabilities, isWorkspaceFeatureAvailableInPublicCutover } from './feature-route-contract.js'
 
 const PublicSensoryFeedback = lazy(async () => ({ default: (await import('../v2-trials-sensory')).PublicSensoryFeedback }))
 const TrialsSensoryWorkspace = lazy(async () => ({ default: (await import('../v2-trials-sensory')).TrialsSensoryWorkspace }))
@@ -22,8 +23,8 @@ const agentRuntimeApiBase = apiBase.replace(/\/platform$/, '/agent-runtime')
 const commerceApiBase = apiBase.replace(/\/platform$/, '/commerce')
 const advancedApiBase = apiBase.replace(/\/platform$/, '/advanced')
 const stagingPublicCutover = import.meta.env.VITE_V2_STAGING_PUBLIC_CUTOVER === 'true'
+const publicFeatureRouteCutover = import.meta.env.PROD || stagingPublicCutover
 const workspaceBaseDomain = import.meta.env.VITE_V2_WORKSPACE_BASE_DOMAIN || 'olfactoryops.com'
-const stagingExcludedSections = new Set(['trials', 'production', 'commerce', 'advanced'])
 
 const copy = {
   'en-US': {
@@ -162,11 +163,15 @@ function WorkspaceView({ text, locale, onLocale, onNavigate }: { text: PlatformC
     { key: 'notifications', label: text.notifications, permissions: ['notifications.view'] },
     { key: 'privacy', label: text.privacy, permissions: ['security.profile.view'] },
     { key: 'observability', label: text.observability, permissions: ['observability.view'] },
-  ].filter((item) => !stagingPublicCutover || !stagingExcludedSections.has(item.key)).filter((item) => item.permissions.some((permission) => session?.capabilities?.[permission] === true)), [session, text])
+  ].filter((item) => isWorkspaceFeatureAvailableInPublicCutover(item.key, publicFeatureRouteCutover)).filter((item) => item.permissions.some((permission) => session?.capabilities?.[permission] === true)), [session, text])
   if (busy) return <main className="v2-platform-page"><div className="v2-loading">{text.loading}</div></main>
   if (error && !session) return <main className="v2-platform-page"><div className="v2-auth-card"><div className="v2-alert is-error">{error}</div></div></main>
   const signOut = async () => { await request('/auth/logout', { method: 'POST' }).catch(() => undefined); onNavigate('/v2/login') }
-  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{session?.membership.organizationName || text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => void signOut()}>{text.signOut}</button></div></div><div className="v2-workspace-layout"><aside className="v2-workspace-nav" aria-label="V2 workspace navigation">{items.map((item) => <button type="button" key={item.key} className={active === item.key ? 'is-active' : ''} onClick={() => { setActive(item.key); onNavigate(`/v2/workspace${item.key === 'workspace' ? '' : `/${item.key}`}`) }}>{item.label}</button>)}</aside><section className="v2-workspace-content" data-testid="v2-workspace"><span className="v2-eyebrow">{text.status}</span><h1>{session?.membership.organizationName}</h1><p className="v2-muted">{session?.user.email}</p><div className="v2-metric-grid"><div><span>{text.role}</span><strong>{session?.membership.role}</strong></div><div><span>{text.address}</span><strong>{session?.membership.organizationSlug}.{workspaceBaseDomain}</strong></div><div><span>{text.session}</span><strong>Protected</strong></div></div>{stagingPublicCutover && stagingExcludedSections.has(active) ? <UnavailableStagingSurface /> : <V2Section active={active} text={text} locale={locale} session={session} onNavigate={onNavigate} />} </section></div></main>
+  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{session?.membership.organizationName || text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => void signOut()}>{text.signOut}</button></div></div><div className="v2-workspace-layout"><aside className="v2-workspace-nav" aria-label="V2 workspace navigation">{items.map((item) => <button type="button" key={item.key} className={active === item.key ? 'is-active' : ''} onClick={() => { setActive(item.key); onNavigate(`/v2/workspace${item.key === 'workspace' ? '' : `/${item.key}`}`) }}>{item.label}</button>)}</aside><section className="v2-workspace-content" data-testid="v2-workspace"><span className="v2-eyebrow">{text.status}</span><h1>{session?.membership.organizationName}</h1><p className="v2-muted">{session?.user.email}</p><div className="v2-metric-grid"><div><span>{text.role}</span><strong>{session?.membership.role}</strong></div><div><span>{text.address}</span><strong>{session?.membership.organizationSlug}.{workspaceBaseDomain}</strong></div><div><span>{text.session}</span><strong>Protected</strong></div></div>{!isWorkspaceFeatureAvailableInPublicCutover(active, publicFeatureRouteCutover) ? <UnavailableWorkspaceFeatureSurface /> : <V2Section active={active} text={text} locale={locale} session={session} onNavigate={onNavigate} />} </section></div></main>
+}
+
+function UnavailableWorkspaceFeatureSurface() {
+  return <div className="v2-panel" role="status"><h2>Not available in this release</h2><p>This workspace feature is not included in the current public runtime.</p></div>
 }
 
 function V2Section({ active, text, locale, session, onNavigate }: { active: string; text: PlatformCopy; locale: Locale; session: V2Session | null; onNavigate: (path: string) => void }) {
@@ -181,8 +186,8 @@ function V2Section({ active, text, locale, session, onNavigate }: { active: stri
     if (active === 'members') void Promise.all([request<{ members: typeof members }>('/workspace/members'), request<{ invitations: V2Invitation[] }>('/workspace/invitations')]).then(([memberPayload, invitationPayload]) => { setMembers(memberPayload.members); setInvitations(invitationPayload.invitations) }).catch((error) => setNotice(error instanceof Error ? error.message : text.noAccess))
   }, [active, text.noAccess])
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(error instanceof Error ? error.message : 'Request failed') } }
-  const requiredPermissions: Record<string, string[]> = { materials: ['materials.view'], formulas: ['formula.view'], 'design-studio': ['formula.edit'], trials: ['trials.viewAll', 'trials.viewAssigned'], production: ['production.view'], commerce: ['commerce.view', 'orders.view'], agents: ['agent.view', 'agent.execute', 'agent.manageTools', 'agent.confirmWrite', 'agent.evaluate', 'agent.observe'], advanced: ['optimizer.view', 'imports.view', 'dataops.view', 'bulk.preview'], suppliers: ['suppliers.view'], inventory: ['inventory.view'], procurement: ['procurement.view'], security: ['security.sessions.view'], members: ['members.view'], domains: ['domains.view'], billing: ['billing.capabilities'], notifications: ['notifications.view'], observability: ['observability.view'], workspace: ['tenant.view'] }
-  if (requiredPermissions[active] && !requiredPermissions[active].some((permission) => session?.capabilities?.[permission] === true)) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
+  const requiredPermissions = featureCapabilities(active)
+  if (requiredPermissions.length > 0 && !requiredPermissions.some((permission) => session?.capabilities?.[permission] === true)) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
   if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
   if (active === 'formulas' || active === 'design-studio') return <FormulaIntelligencePanel active={active} />
   if (active === 'trials') return <Suspense fallback={<WorkspaceSurfaceFallback />}><TrialsSensoryWorkspace apiBase={trialsApiBase} capabilities={session?.capabilities ?? {}} initialTrialId={trialRouteId()} onNavigate={onNavigate} /></Suspense>
