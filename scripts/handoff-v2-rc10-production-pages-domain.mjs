@@ -67,10 +67,21 @@ export async function verifyProductionPagesDomainToken({
   if (!exactApexRecord(Array.isArray(records) ? records : [])) {
     throw new PagesDomainHandoffError("PAGES_DOMAIN_DNS_RECORD_UNPROVEN");
   }
+  const project = await request(
+    `/pages/projects/${encodeURIComponent(PROJECT)}`,
+    "GET",
+  );
+  if (
+    project?.name !== PROJECT ||
+    project?.production_branch !== "production"
+  ) {
+    throw new PagesDomainHandoffError("PAGES_PROJECT_UNPROVEN");
+  }
   emit("CLOUDFLARE_TOKEN_ACTIVE=PASS");
   emit(`CLOUDFLARE_ZONE_SCOPE=${HOSTNAME}`);
   emit("CLOUDFLARE_ZONE_READ=PASS");
   emit("CLOUDFLARE_DNS_READ=PASS");
+  emit("CLOUDFLARE_PAGES_PROJECT_READ=PASS");
 }
 
 export async function preflightProductionPagesDomainHandoff({
