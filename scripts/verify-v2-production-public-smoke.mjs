@@ -161,7 +161,7 @@ function requiredTenantUrl(name) {
 
 function isProductionTenantHostname(hostname) {
   const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.labofscents\.org$/.exec(hostname)
-  return Boolean(match) && !new Set(['api', 'admin', 'www']).has(match[1])
+  return Boolean(match) && !new Set(['api', 'admin', 'next', 'www']).has(match[1])
 }
 
 function html(value) { return /^text\/html(?:;|$)/i.test(value) }

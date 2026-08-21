@@ -4,8 +4,15 @@ import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const productionSmokeTenantHostnamePattern =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/;
+  /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.labofscents\.org$/;
 export const productionSmokeMembershipRole = "Viewer";
+
+export function isProductionSmokeTenantHostname(value) {
+  const match = typeof value === "string"
+    ? productionSmokeTenantHostnamePattern.exec(value)
+    : null;
+  return Boolean(match) && !new Set(["api", "admin", "next", "www"]).has(match[1]);
+}
 
 export const smokeIdentityAdvisoryLockSql =
   "SELECT pg_advisory_xact_lock(hashtext('olfactoryops:v2:production-smoke-identity'))";
@@ -101,7 +108,7 @@ export function provisioningConfig(environment = process.env) {
 
   if (
     !releaseRoot ||
-    !productionSmokeTenantHostnamePattern.test(tenantHostname ?? "") ||
+    !isProductionSmokeTenantHostname(tenantHostname) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
     typeof password !== "string" ||
     password.length < 16 ||

@@ -5,7 +5,10 @@ const releaseRoot = process.env.RELEASE_WORKTREE || process.cwd()
 const pg = createRequire(`${releaseRoot}/package.json`)('pg')
 
 export function isProductionSmokeTenantHostname(value) {
-  return typeof value === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/.test(value)
+  const match = typeof value === 'string'
+    ? /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.labofscents\.org$/.exec(value)
+    : null
+  return Boolean(match) && !new Set(['api', 'admin', 'next', 'www']).has(match[1])
 }
 
 export async function verifyProductionSmokeTenantReadiness({

@@ -14,7 +14,7 @@ import {
 const account = "account-fixture";
 const releaseSha = "f".repeat(40);
 const hyperdriveId = "hyperdrive-fixture";
-const tenantHostname = "smoke-fixture.next.labofscents.org";
+const tenantHostname = "smoke-fixture.labofscents.org";
 
 function response(body, status = 200, headers = {}) {
   return {
