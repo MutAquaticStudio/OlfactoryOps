@@ -172,6 +172,7 @@ class SmokeFailure extends Error {
 function safePublicLoginEvidence(line) {
   return /^PUBLIC_LOGIN_HTTP_STATUS=(?:[1-5]\d\d|UNAVAILABLE)$/.test(line) ||
     /^PUBLIC_LOGIN_RESPONSE=(?:JSON|NON_JSON|TRANSPORT)$/.test(line) ||
+    /^PUBLIC_LOGIN_ERROR_CODE=(?:ORIGIN_DENIED|ORIGIN_REQUIRED|TENANT_ACCESS_DENIED|HOSTNAME_NOT_ACTIVE|EMAIL_NOT_VERIFIED|INVALID_CREDENTIALS|RUNTIME_NOT_CONFIGURED|RUNTIME_UNAVAILABLE|NOT_CONFIGURED|RATE_LIMITED|OTHER|UNPROVEN)$/.test(line) ||
     /^PUBLIC_LOGIN_SESSION_COOKIE=(?:PASS|FAIL|UNPROVEN)$/.test(line) ||
     /^PUBLIC_LOGIN_CSRF=(?:PASS|FAIL|UNPROVEN)$/.test(line)
 }
@@ -183,6 +184,22 @@ function safeLoginStatus(response) {
     : 'UNAVAILABLE'
 }
 
+function safeLoginErrorCode(body) {
+  const code = body?.error?.code
+  return new Set([
+    'ORIGIN_DENIED',
+    'ORIGIN_REQUIRED',
+    'TENANT_ACCESS_DENIED',
+    'HOSTNAME_NOT_ACTIVE',
+    'EMAIL_NOT_VERIFIED',
+    'INVALID_CREDENTIALS',
+    'RUNTIME_NOT_CONFIGURED',
+    'RUNTIME_UNAVAILABLE',
+    'NOT_CONFIGURED',
+    'RATE_LIMITED',
+  ]).has(code) ? code : 'OTHER'
+}
+
 export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
   if (!response) {
     return {
@@ -190,6 +207,7 @@ export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
       evidence: [
         'PUBLIC_LOGIN_HTTP_STATUS=UNAVAILABLE',
         'PUBLIC_LOGIN_RESPONSE=TRANSPORT',
+        'PUBLIC_LOGIN_ERROR_CODE=UNPROVEN',
         'PUBLIC_LOGIN_SESSION_COOKIE=UNPROVEN',
         'PUBLIC_LOGIN_CSRF=UNPROVEN',
       ],
@@ -201,6 +219,7 @@ export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
       evidence: [
         `PUBLIC_LOGIN_HTTP_STATUS=${safeLoginStatus(response)}`,
         'PUBLIC_LOGIN_RESPONSE=NON_JSON',
+        'PUBLIC_LOGIN_ERROR_CODE=UNPROVEN',
         'PUBLIC_LOGIN_SESSION_COOKIE=UNPROVEN',
         'PUBLIC_LOGIN_CSRF=UNPROVEN',
       ],
@@ -218,6 +237,7 @@ export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
     evidence: [
       `PUBLIC_LOGIN_HTTP_STATUS=${safeLoginStatus(response)}`,
       'PUBLIC_LOGIN_RESPONSE=JSON',
+      `PUBLIC_LOGIN_ERROR_CODE=${safeLoginErrorCode(body)}`,
       `PUBLIC_LOGIN_SESSION_COOKIE=${sessionCookie ? 'PASS' : 'FAIL'}`,
       `PUBLIC_LOGIN_CSRF=${csrf ? 'PASS' : 'FAIL'}`,
     ],

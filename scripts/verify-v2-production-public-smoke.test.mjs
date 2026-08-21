@@ -31,7 +31,7 @@ describe('V2 public smoke contract', () => {
       response: { status: 503 },
       parsedJson: true,
       cookie: undefined,
-      body: { csrfToken: secret },
+      body: { csrfToken: secret, error: { code: 'ORIGIN_DENIED', message: secret } },
     })
 
     expect(result).toEqual({
@@ -39,11 +39,21 @@ describe('V2 public smoke contract', () => {
       evidence: [
         'PUBLIC_LOGIN_HTTP_STATUS=503',
         'PUBLIC_LOGIN_RESPONSE=JSON',
+        'PUBLIC_LOGIN_ERROR_CODE=ORIGIN_DENIED',
         'PUBLIC_LOGIN_SESSION_COOKIE=FAIL',
         'PUBLIC_LOGIN_CSRF=FAIL',
       ],
     })
     expect(JSON.stringify(result)).not.toContain(secret)
+  })
+
+  it('normalizes an unknown response code without emitting it', () => {
+    expect(classifyPublicLogin({
+      response: { status: 403 },
+      parsedJson: true,
+      cookie: undefined,
+      body: { error: { code: 'raw-untrusted-code' } },
+    }).evidence).toContain('PUBLIC_LOGIN_ERROR_CODE=OTHER')
   })
 
   it('preserves the successful secure-cookie and CSRF login contract', () => {
@@ -66,6 +76,7 @@ describe('V2 public smoke contract', () => {
       evidence: [
         'PUBLIC_LOGIN_HTTP_STATUS=UNAVAILABLE',
         'PUBLIC_LOGIN_RESPONSE=TRANSPORT',
+        'PUBLIC_LOGIN_ERROR_CODE=UNPROVEN',
         'PUBLIC_LOGIN_SESSION_COOKIE=UNPROVEN',
         'PUBLIC_LOGIN_CSRF=UNPROVEN',
       ],
@@ -74,6 +85,7 @@ describe('V2 public smoke contract', () => {
 
   it('keeps raw response errors out of the smoke evidence contract', () => {
     expect(source).toContain('PUBLIC_LOGIN_HTTP_STATUS=')
+    expect(source).toContain('PUBLIC_LOGIN_ERROR_CODE=')
     expect(source).toContain('PUBLIC_LOGIN_SESSION_COOKIE=')
     expect(source).not.toContain('body?.error?.message')
     expect(source).not.toContain('console.error')
