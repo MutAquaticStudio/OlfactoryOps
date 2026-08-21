@@ -1,0 +1,110 @@
+name: V2 RC11 Release Source Finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact minimal RC11 source SHA from the approved manifest.
+        required: true
+        type: string
+      confirm_finalization:
+        description: Type FINALIZE_RC11_RELEASE_SOURCE.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v2-rc11-release-source-finalization
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_sha: ${{ steps.release.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+          path: ops
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v2-production-rc11
+          fetch-depth: 0
+          persist-credentials: false
+          path: release
+      - id: release
+        name: Validate the immutable minimal RC11 source
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRM_FINALIZATION: ${{ inputs.confirm_finalization }}
+          RC11_RELEASE_MANIFEST_PATH: ${{ github.workspace }}/ops/releases/v2-production-rc11.json
+          RC11_SOURCE_WORKTREE: ${{ github.workspace }}/release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_FINALIZATION" = FINALIZE_RC11_RELEASE_SOURCE
+          test "$RELEASE_SHA" = 98cfac77853ffb0b6b69235bb3483117dc3b6961
+          git -C ops fetch --force origin refs/heads/codex/v2-production-rc11:refs/remotes/origin/codex/v2-production-rc11
+          test "$(git -C ops rev-parse origin/codex/v2-production-rc11)" = "$RELEASE_SHA"
+          git -C ops fetch --force --tags origin
+          test "$(git -C ops rev-list -n 1 v2-production-rc10)" = fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+          ! git -C ops show-ref --verify --quiet refs/tags/v2-production-rc11
+          node ops/scripts/v2-rc11-release-policy.mjs
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+  finalize:
+    needs: validate
+    if: ${{ github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: true
+          path: ops
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: codex/v2-production-rc11
+          fetch-depth: 0
+          persist-credentials: false
+          path: release
+      - name: Revalidate source after production approval
+        env:
+          RC11_RELEASE_MANIFEST_PATH: ${{ github.workspace }}/ops/releases/v2-production-rc11.json
+          RC11_SOURCE_WORKTREE: ${{ github.workspace }}/release
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C ops fetch --force origin refs/heads/codex/v2-production-rc11:refs/remotes/origin/codex/v2-production-rc11
+          test "$(git -C ops rev-parse origin/codex/v2-production-rc11)" = 98cfac77853ffb0b6b69235bb3483117dc3b6961
+          git -C ops fetch --force --tags origin
+          ! git -C ops show-ref --verify --quiet refs/tags/v2-production-rc11
+          node ops/scripts/v2-rc11-release-policy.mjs
+      - name: Create the immutable annotated RC11 source tag once
+        working-directory: ops
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin refs/heads/codex/v2-production-rc11:refs/remotes/origin/codex/v2-production-rc11
+          test "$(git rev-parse origin/codex/v2-production-rc11)" = 98cfac77853ffb0b6b69235bb3483117dc3b6961
+          git fetch --force --tags origin
+          ! git show-ref --verify --quiet refs/tags/v2-production-rc11
+          git config user.name github-actions
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a v2-production-rc11 98cfac77853ffb0b6b69235bb3483117dc3b6961 -m 'RC11 minimal scientific UI release source'
+          git push origin refs/tags/v2-production-rc11
+          test "$(git rev-list -n 1 v2-production-rc11)" = 98cfac77853ffb0b6b69235bb3483117dc3b6961
+          echo 'RC11_RELEASE_SOURCE_FINALIZATION=PASS'
+          echo 'RC11_RELEASE_TAG=v2-production-rc11'
+          echo 'RC10_PRESERVED=YES'
+          echo 'RC11_SOURCE_DEPLOYED=NO'

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "name": "RC11 UI release",
+    "baseTag": "v2-production-rc10",
+    "baseSha": "fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd",
+    "sourceBranch": "codex/v2-production-rc11",
+    "sourceSha": "98cfac77853ffb0b6b69235bb3483117dc3b6961",
+    "sourceTag": "v2-production-rc11",
+    "liveTag": "v2-production-live-rc11"
+  },
+  "approvedFiles": [
+    { "path": "docs/v2/SCIENTIFIC_CREATIVE_SAAS_DESIGN_SYSTEM.md", "sha256": "92ee0cc340db79bca076cd04c9fe6e0b95bc5bf7ee49a350a213487cd51200c4" },
+    { "path": "e2e/v2-platform-redesign.playwright.ts", "sha256": "c75bf786b91c3ced0b364a1f014c68a20ad532452ff6d2e7e306b18a01f14f3c" },
+    { "path": "src/features/v2-agent-runtime/AgentRuntimeWorkspace.tsx", "sha256": "6b4dd76fc87f7a71ea23bcaca4e2a29c9cf09464cd7b17f89cb82bfd9f4312bc" },
+    { "path": "src/features/v2-platform/V2PlatformApp.test.ts", "sha256": "f75934297633a18c2eaa38a433550cbab11ca8f7760aaaa7d1e517245b97af66" },
+    { "path": "src/features/v2-platform/V2PlatformApp.tsx", "sha256": "6ac3ac87a40ff154030e9b2eb5532578fd959b9bdc087ec87eb7c18173611fd0" },
+    { "path": "src/index.css", "sha256": "a27eb28cbcb0887a7ce450c9d46d65633c0cb2cfda671547589d9502679e25e1" },
+    { "path": "src/styles/features.css", "sha256": "94cd52da9c773b6356da5d4e274caf42c77c698ef514c7773931b364195124b4" }
+  ],
+  "invariants": {
+    "databaseMutation": false,
+    "migrationDelta": false,
+    "routePolicyChange": false,
+    "apiContractChange": false,
+    "workerSourceChange": false,
+    "dependencyChange": false
+  }
+}
