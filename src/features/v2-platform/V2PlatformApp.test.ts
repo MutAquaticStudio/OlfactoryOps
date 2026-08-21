@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { workspaceErrorMessage, workspaceNavigation } from './V2PlatformApp.js'
+import { platformApiBaseFromRuntime, platformPathMode, platformRequestHeaders, safeV2ReturnPath, v2LoginPathForLocation, workspaceErrorMessage, workspaceNavigation, workspaceRedirectTarget } from './V2PlatformApp.js'
 
 describe('V2 scientific creative workspace shell', () => {
   it('keeps the production navigation focused on supported workspace areas', () => {
@@ -20,5 +20,48 @@ describe('V2 scientific creative workspace shell', () => {
   it('keeps authorization and unavailable-environment guidance bounded', () => {
     expect(workspaceErrorMessage(new Error('Forbidden'), 'save this draft')).toContain('workspace role')
     expect(workspaceErrorMessage(new Error('runtime not configured'), 'open this workspace')).toContain('not available')
+  })
+
+  it('accepts only trusted workspace locations returned by public auth', () => {
+    expect(workspaceRedirectTarget('https://atelier-nox.labofscents.org/v2/workspace')).toBe('https://atelier-nox.labofscents.org/v2/workspace')
+    expect(workspaceRedirectTarget('https://untrusted.example.test/v2/workspace')).toBeUndefined()
+    expect(workspaceRedirectTarget('javascript:alert(1)')).toBeUndefined()
+  })
+
+  it('keeps CSRF on every mutation but avoids a needless session-read preflight', () => {
+    expect(platformRequestHeaders(undefined, 'fresh-token')).toEqual({})
+    expect(platformRequestHeaders('GET', 'fresh-token')).toEqual({})
+    expect(platformRequestHeaders('HEAD', 'fresh-token')).toEqual({})
+    expect(platformRequestHeaders('POST', 'fresh-token')).toEqual({ 'Content-Type': 'application/json', 'X-CSRF-Token': 'fresh-token' })
+    expect(platformRequestHeaders('PATCH', undefined)).toEqual({ 'Content-Type': 'application/json' })
+  })
+
+  it('keeps direct public login and signup routes, including V2 aliases, refreshable', () => {
+    expect(platformPathMode('/login')).toBe('login')
+    expect(platformPathMode('/signup')).toBe('signup')
+    expect(platformPathMode('/v2/login')).toBe('login')
+    expect(platformPathMode('/v2/signup')).toBe('signup')
+  })
+
+  it('keeps only safe V2 return paths when protected workspace bootstrap redirects to login', () => {
+
+    expect(safeV2ReturnPath('/v2/workspace?tab=billing#usage')).toBe('/v2/workspace?tab=billing#usage')
+    expect(safeV2ReturnPath('/v2/login')).toBeUndefined()
+    expect(safeV2ReturnPath('https://untrusted.example.test/v2/workspace')).toBeUndefined()
+    expect(safeV2ReturnPath('javascript:alert(1)')).toBeUndefined()
+    expect(v2LoginPathForLocation('/v2/workspace', '?tab=billing', '#usage')).toBe('/login?next=%2Fv2%2Fworkspace%3Ftab%3Dbilling%23usage')
+  })
+
+  it('resolves public auth only against the configured production or candidate API runtime', () => {
+    expect(platformApiBaseFromRuntime('https://api.labofscents.org/api/v1')).toBe('https://api.labofscents.org/api/v1/v2/platform')
+    expect(platformApiBaseFromRuntime('https://api-next.labofscents.org/api/v1')).toBe('https://api-next.labofscents.org/api/v1/v2/platform')
+    expect(platformApiBaseFromRuntime(undefined)).toBe('/api/v1/v2/platform')
+    expect(platformApiBaseFromRuntime('https://api.labofscents.org/api/v1')).not.toBe(platformApiBaseFromRuntime('https://api-next.labofscents.org/api/v1'))
+  })
+
+  it('keeps a rejected workspace redirect out of product-facing error text', () => {
+    const message = workspaceErrorMessage(new Error('WORKSPACE_REDIRECT_REJECTED'), 'sign in')
+    expect(message).toBe('Unable to sign in. Please try again.')
+    expect(message).not.toContain('WORKSPACE_REDIRECT_REJECTED')
   })
 })
