@@ -9,6 +9,7 @@ import {
   trustedWorkspaceRedirectUrl,
   workspaceBaseDomainFromRuntime,
   workspaceUrlForHostname,
+  workspaceRedirectOriginsFromRuntime,
 } from './workspaceHostnames'
 
 describe('workspace hostname allocation', () => {
@@ -56,5 +57,10 @@ describe('workspace hostname allocation', () => {
     expect(trustedWorkspaceRedirectUrl('https://atelier-nox.labofscents.org:8443/v2/workspace')).toBeUndefined()
     expect(trustedWorkspaceRedirectUrl('https://user@atelier-nox.labofscents.org/v2/workspace')).toBeUndefined()
     expect(trustedWorkspaceRedirectUrl('javascript:alert(1)')).toBeUndefined()
+  })
+
+  it('allows only explicit HTTPS custom workspace origins from browser runtime configuration', () => {
+    expect(workspaceRedirectOriginsFromRuntime('https://custom.example.test, https://user@unsafe.example.test, http://unsafe.example.test')).toEqual(['https://custom.example.test'])
+    expect(workspaceRedirectOriginsFromRuntime(undefined)).toEqual([])
   })
 })

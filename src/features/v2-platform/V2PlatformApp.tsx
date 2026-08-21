@@ -24,6 +24,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { featureCapabilities, isWorkspaceFeatureAvailableInPublicCutover } from './feature-route-contract.js'
 import { trustedWorkspaceRedirectUrl } from '../../data/workspaceHostnames'
+import { browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins } from '../../data/workspaceHostnameRuntime'
 
 const PublicSensoryFeedback = lazy(async () => ({ default: (await import('../v2-trials-sensory')).PublicSensoryFeedback }))
 const TrialsSensoryWorkspace = lazy(async () => ({ default: (await import('../v2-trials-sensory')).TrialsSensoryWorkspace }))
@@ -177,7 +178,7 @@ function UnavailableStagingSurface() {
 }
 
 export function workspaceRedirectTarget(workspaceUrl: string | undefined) {
-  return trustedWorkspaceRedirectUrl(workspaceUrl)
+  return trustedWorkspaceRedirectUrl(workspaceUrl, browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins)
 }
 
 function navigateToTrustedWorkspace(workspaceUrl: string | undefined, onNavigate: (path: string) => void) {

@@ -1,4 +1,4 @@
-const productionWorkspaceBaseDomain = 'labofscents.org'
+export const defaultWorkspaceBaseDomain = 'labofscents.org'
 
 /** These names have first-party routing or Cloudflare-for-SaaS responsibilities. */
 export const reservedWorkspaceSlugs = new Set([
@@ -23,11 +23,10 @@ export type WorkspaceHostnameKind = 'SYSTEM' | 'CUSTOM'
 export type WorkspaceHostnameStatus = 'ACTIVE' | 'PENDING_VALIDATION' | 'FAILED' | 'ARCHIVED'
 
 export function workspaceBaseDomainFromRuntime(value: string | undefined) {
-  const domain = value?.trim().toLowerCase().replace(/\.$/, '') || productionWorkspaceBaseDomain
-  return hostnamePattern.test(domain) ? domain : productionWorkspaceBaseDomain
+  const domain = value?.trim().toLowerCase().replace(/\.$/, '') || defaultWorkspaceBaseDomain
+  return hostnamePattern.test(domain) ? domain : defaultWorkspaceBaseDomain
 }
 
-export const defaultWorkspaceBaseDomain = workspaceBaseDomainFromRuntime(import.meta.env.VITE_V2_WORKSPACE_BASE_DOMAIN)
 
 export function normalizeWorkspaceBaseDomain(value: string | undefined) {
   const domain = value?.trim().toLowerCase().replace(/\.$/, '') || defaultWorkspaceBaseDomain
@@ -61,7 +60,7 @@ export function workspaceUrlForHostname(hostname: string | undefined) {
   return normalized ? `https://${normalized}` : undefined
 }
 
-function allowedWorkspaceRedirectOriginsFromRuntime(value: string | undefined) {
+export function workspaceRedirectOriginsFromRuntime(value: string | undefined) {
   return (value || '')
     .split(',')
     .map((origin) => origin.trim())
@@ -75,7 +74,6 @@ function allowedWorkspaceRedirectOriginsFromRuntime(value: string | undefined) {
     })
 }
 
-const configuredWorkspaceRedirectOrigins = allowedWorkspaceRedirectOriginsFromRuntime(import.meta.env.VITE_V2_WORKSPACE_ALLOWED_ORIGINS)
 
 /**
  * The API decides which workspace a user may enter. The browser accepts that
@@ -85,7 +83,7 @@ const configuredWorkspaceRedirectOrigins = allowedWorkspaceRedirectOriginsFromRu
 export function trustedWorkspaceRedirectUrl(
   value: string | undefined,
   baseDomain = defaultWorkspaceBaseDomain,
-  allowedCustomOrigins = configuredWorkspaceRedirectOrigins,
+  allowedCustomOrigins: readonly string[] = [],
 ) {
   if (!value) return undefined
   try {
