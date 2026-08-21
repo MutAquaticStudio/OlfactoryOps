@@ -24,7 +24,7 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import { featureCapabilities, isWorkspaceFeatureAvailableInPublicCutover } from './feature-route-contract.js'
 import { trustedWorkspaceRedirectUrl } from '../../data/workspaceHostnames'
-import { browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins } from '../../data/workspaceHostnameRuntime'
+import { browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins } from './workspaceHostnameRuntime'
 
 const PublicSensoryFeedback = lazy(async () => ({ default: (await import('../v2-trials-sensory')).PublicSensoryFeedback }))
 const TrialsSensoryWorkspace = lazy(async () => ({ default: (await import('../v2-trials-sensory')).TrialsSensoryWorkspace }))
