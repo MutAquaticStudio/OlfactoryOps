@@ -117,8 +117,8 @@ jobs:
           umask 077
           mkdir -p "$(dirname "$ROLLBACK_EVIDENCE_FILE")"
           set +e
-          node scripts/verify-v2-production-rollback-readiness.mjs > "$ROLLBACK_EVIDENCE_FILE"
-          rollback_status=$?
+          node scripts/verify-v2-production-rollback-readiness.mjs | tee "$ROLLBACK_EVIDENCE_FILE"
+          rollback_status=${PIPESTATUS[0]}
           set -e
           grep -E '^(ROLLBACK_(CLOUDRUNTIME|API|ROUTER)_(API_HTTP_STATUS|API_CF_ERROR_CODE|DEPLOYMENT_STATE|READY)|ROLLBACK_PAGES_(BASELINE|READY)|ROLLBACK_BASELINE_TYPE|PRECUTOVER_ROUTE_BASELINE|PREVIOUS_(API|TENANT_ROUTER)_ROUTE_TARGET_PROVEN|FIRST_RELEASE_ROLLBACK_POLICY|ROLLBACK_TO_(EXISTING_ROUTE_TARGET|ABSENCE)_READY|PRODUCTION_ROLLBACK_READY)=' "$ROLLBACK_EVIDENCE_FILE"
           test "$rollback_status" -eq 0
