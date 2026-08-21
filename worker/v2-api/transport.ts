@@ -123,6 +123,32 @@ export function stagingCors(request: Request, config: V2TransportConfig) {
   return { headers, trustedHost: allowed }
 }
 
+/**
+ * Preserve CORS for trusted origins even when route dispatch or Worker
+ * initialization fails before invokeControllerRoute can establish transport.
+ * Untrusted origins intentionally receive no access-control headers.
+ */
+export function trustedErrorCors(request: Request, config: V2TransportConfig) {
+  try {
+    return stagingCors(request, config).headers
+  } catch {
+    return new Headers({ 'cache-control': 'no-store', vary: 'Origin' })
+  }
+}
+
+export function unmatchedRouteResponse(request: Request, config: V2TransportConfig) {
+  return json(404, { error: { code: 'NOT_FOUND', message: 'The requested V2 route was not found.' } }, trustedErrorCors(request, config))
+}
+
+export function runtimeInitializationFailureResponse(request: Request, config: V2TransportConfig, status: 500 | 503) {
+  return json(status, {
+    error: {
+      code: status === 503 ? 'RUNTIME_NOT_CONFIGURED' : 'RUNTIME_UNAVAILABLE',
+      message: status === 503 ? 'The staging runtime is not configured.' : 'The staging runtime could not be initialized.',
+    },
+  }, trustedErrorCors(request, config))
+}
+
 export async function invokeControllerRoute(input: V2TransportRequest): Promise<Response> {
   let cors: { headers: Headers; trustedHost?: string } = { headers: new Headers({ 'cache-control': 'no-store' }) }
   try {
