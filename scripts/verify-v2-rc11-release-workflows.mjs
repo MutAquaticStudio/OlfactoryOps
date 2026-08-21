@@ -35,6 +35,7 @@ export function verifyRc11ReleaseWorkflows() {
   const rollback = source("v2-rc11-production-upgrade-rollback.yml");
   const acceptance = source("v2-rc11-production-public-acceptance.yml");
   const finalizer = source("v2-rc11-production-live-finalization.yml");
+  const candidateRenderer = readFileSync(join(root, "scripts", "render-v2-rc11-cloud-runtime-candidate-config.mjs"), "utf8");
   const all = [candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join("\n");
 
   for (const [name, value] of Object.entries({ candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer })) {
@@ -46,6 +47,17 @@ export function verifyRc11ReleaseWorkflows() {
     requireText(value, "environment: production", `${name}: protected environment`);
   }
   requireText(candidate, "RC10_RUNTIME_BASE_SHA", "candidate: legacy runtime base evidence");
+  requireText(candidate, "path: release-tooling", "candidate: trusted main-owned renderer checkout");
+  requireText(candidate, "path: release", "candidate: immutable RC11 source checkout");
+  requireText(candidate, "render-v2-rc11-cloud-runtime-candidate-config.mjs render", "candidate: Cloud Runtime isolation renderer");
+  requireText(candidate, "render-v2-rc11-cloud-runtime-candidate-config.mjs verify", "candidate: Cloud Runtime isolation verifier");
+  forbid(candidate, /node scripts\/validate-cloud-runtime-config\.mjs wrangler\.v2-cloud-runtime\.production-candidate\.toml/, "candidate: legacy validation cannot permit production queue ownership");
+  requireText(candidateRenderer, "CANDIDATE_WORKER_NAME_ISOLATED=PASS", "candidate renderer: isolated Worker evidence");
+  requireText(candidateRenderer, "CANDIDATE_WORKFLOW_NAME_ISOLATED=PASS", "candidate renderer: isolated Workflow evidence");
+  requireText(candidateRenderer, "PRODUCTION_WORKFLOW_NAME_ABSENT_FROM_CANDIDATE_OWNERSHIP=PASS", "candidate renderer: production Workflow absence");
+  requireText(candidateRenderer, "PRODUCTION_QUEUE_CONSUMERS_ABSENT=PASS", "candidate renderer: production queue consumer absence");
+  requireText(candidateRenderer, "PUBLIC_ROUTES_ABSENT=PASS", "candidate renderer: public route absence");
+  requireText(candidateRenderer, "PUBLIC_CUSTOM_DOMAINS_ABSENT=PASS", "candidate renderer: public custom-domain absence");
   requireText(readiness, "contents: read", "readiness: no tag permission");
   requireText(readiness, "v2-production-live)\" = \"$RC10_RUNTIME_BASE_SHA", "readiness: preserves legacy live tag");
   forbid(readiness, /git tag\b|git push\b/, "readiness: no readiness tag mutation");

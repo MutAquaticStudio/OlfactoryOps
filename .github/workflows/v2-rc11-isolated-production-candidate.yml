@@ -161,16 +161,26 @@ jobs:
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
       RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out trusted main-owned release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: release-tooling
+      - name: Check out immutable RC11 source
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          path: release
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: release/package-lock.json
       - run: npm ci
+        working-directory: release
       - name: Render only an isolated Cloud Runtime service
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
@@ -178,20 +188,13 @@ jobs:
           test -n "$PRODUCTION_HYPERDRIVE_ID"
           test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
           for value in "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST"; do test -n "$value"; done
+          test -f ../release-tooling/scripts/render-v2-rc11-cloud-runtime-candidate-config.mjs
+          node ../release-tooling/scripts/render-v2-rc11-cloud-runtime-candidate-config.mjs render --template wrangler.v2-cloud-runtime-production.example.toml --output wrangler.v2-cloud-runtime.production-candidate.toml
           node --input-type=module <<'EOF'
-          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { existsSync, readFileSync } from 'node:fs'
           import { dirname, relative, resolve } from 'node:path'
           const configPath = 'wrangler.v2-cloud-runtime.production-candidate.toml'
-          let config = readFileSync('wrangler.v2-cloud-runtime-production.example.toml', 'utf8')
-          config = config.replace('name = "olfactoryops-v2-cloud-runtime-production"', 'name = "olfactoryops-v2-cloud-runtime-production-candidate"')
-          config = config.replaceAll('REPLACE_WITH_GIT_SHA', process.env.RELEASE_SHA)
-          config = config.replaceAll('REPLACE_WITH_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
-          config = config.replaceAll('REPLACE_WITH_FEATURE_IMAGE_DIGEST', process.env.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST)
-          config = config.replaceAll('REPLACE_WITH_MODEL_IMAGE_DIGEST', process.env.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST)
-          config = config.replaceAll('REPLACE_WITH_FEATURE_IMAGE', process.env.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE)
-          config = config.replaceAll('REPLACE_WITH_MODEL_IMAGE', process.env.PRODUCTION_SCIENTIFIC_MODEL_IMAGE)
-          if (config.includes('REPLACE_WITH_')) throw new Error('candidate Cloud Runtime config has unresolved placeholders')
-          writeFileSync(configPath, config)
+          const config = readFileSync(configPath, 'utf8')
           const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
           if (!main) throw new Error('candidate Cloud Runtime config is missing main')
           const repositoryRoot = resolve('.')
@@ -206,10 +209,11 @@ jobs:
           console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
           EOF
           npm run prisma:generate:v2
-          node scripts/validate-cloud-runtime-config.mjs wrangler.v2-cloud-runtime.production-candidate.toml
+          node ../release-tooling/scripts/render-v2-rc11-cloud-runtime-candidate-config.mjs verify --config wrangler.v2-cloud-runtime.production-candidate.toml
           npx wrangler deploy --config wrangler.v2-cloud-runtime.production-candidate.toml --keep-vars
       - name: Bind the rotated private runtime secret by name only
         shell: bash
+        working-directory: release
         run: |
           set -euo pipefail
           printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config wrangler.v2-cloud-runtime.production-candidate.toml
