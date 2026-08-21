@@ -332,6 +332,9 @@ describe("RC10 final readiness operations", () => {
     expect(publicHarness).toContain("PUBLIC_ACCEPTANCE_FIXTURE_CLEANUP=PASS");
     expect(publicHarness).toContain("PUBLIC_ACCEPTANCE_FAILURE_PHASE=");
     expect(publicHarness).toContain("acceptanceOperation('MATERIALS'");
+    expect(publicHarness.indexOf("class PublicAcceptanceFailure")).toBeLessThan(
+      publicHarness.indexOf("try {"),
+    );
     expect(publicHarness).toContain("PUBLIC_CROSS_TENANT_READ_DENIAL=PASS");
     expect(publicHarness).toContain("PUBLIC_PLATFORM_ADMIN_ISOLATION=PASS");
   });
