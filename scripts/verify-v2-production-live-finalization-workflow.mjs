@@ -16,7 +16,7 @@ const required = [
   'v2-production-rc11',
   'verify-v2-production-live-finalization.mjs',
   'verify-v2-production-rollback-readiness.mjs',
-  'rollback_status=$?',
+  'rollback_status=${PIPESTATUS[0]}',
   'ROLLBACK_PAGES_(BASELINE|READY)',
   'PUBLIC_ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}',
   'PRODUCTION_ROLLBACK_READY=PASS',
