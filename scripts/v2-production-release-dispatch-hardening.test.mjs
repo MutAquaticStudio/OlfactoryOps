@@ -17,6 +17,10 @@ const triggerConfig = readFileSync(
   "scripts/prepare-v2-cloud-runtime-trigger-config.mjs",
   "utf8",
 );
+const pagesDomainHandoff = readFileSync(
+  "scripts/handoff-v2-rc10-production-pages-domain.mjs",
+  "utf8",
+);
 
 describe("production dispatcher hardening", () => {
   it("is main-only and exact-RC10/readiness-tag gated", () => {
@@ -61,6 +65,37 @@ describe("production dispatcher hardening", () => {
     expect(resolver).toContain("PAGES_PRODUCTION_FIVE_ROUTES=PASS");
     expect(router).not.toContain("PRODUCTION_CANDIDATE_PAGES_ORIGIN");
     expect(router).not.toContain("production-candidate.${");
+  });
+
+  it("keeps the public Pages apex handoff exact, compensating, and independent from Worker route edits", () => {
+    const pagesDomain = workflow.slice(
+      workflow.indexOf("  handoff-production-pages-domain:"),
+      workflow.indexOf("  handoff-production-first-release-routes:"),
+    );
+    expect(workflow).toContain("- pages-domain-handoff");
+    expect(workflow).toContain("HANDOFF_PRODUCTION_PAGES_DOMAIN");
+    expect(pagesDomain).toContain("environment: production");
+    expect(pagesDomain).toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs preflight",
+    );
+    expect(pagesDomain).toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs handoff",
+    );
+    expect(pagesDomain).toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs recover",
+    );
+    expect(pagesDomain).toContain(
+      "if: ${{ failure() && steps.preflight.outcome == 'success' }}",
+    );
+    expect(pagesDomain).toContain("if: ${{ always() }}");
+    expect(pagesDomain).toContain("PAGES_DOMAIN_BASELINE_FILE");
+    expect(pagesDomain).not.toContain("wrangler pages deploy");
+    expect(pagesDomain).not.toContain("workers/routes");
+    expect(pagesDomain).not.toMatch(/env:\n\s+CLOUDFLARE_API_TOKEN:/);
+    expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_PREDECESSOR_UNPROVEN");
+    expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_RECOVERY=PASS");
+    expect(pagesDomainHandoff).not.toContain("console.error");
+    expect(pagesDomainHandoff).not.toContain("error.message");
   });
 
   it("selects the exact production Pages deployment from canonical metadata", () => {
