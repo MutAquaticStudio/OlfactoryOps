@@ -127,6 +127,9 @@ describe("production dispatcher hardening", () => {
     );
     expect(tokenPreflight).not.toContain("wrangler");
     expect(tokenPreflight).not.toContain("curl");
+    expect(pagesDomainHandoff).toContain(
+      'emit("CLOUDFLARE_PAGES_PROJECT_READ=PASS")',
+    );
   });
 
   it("selects the exact production Pages deployment from canonical metadata", () => {

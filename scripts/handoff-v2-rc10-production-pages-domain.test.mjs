@@ -157,11 +157,41 @@ describe("RC10 production Pages domain handoff", () => {
       "CLOUDFLARE_ZONE_SCOPE=labofscents.org",
       "CLOUDFLARE_ZONE_READ=PASS",
       "CLOUDFLARE_DNS_READ=PASS",
+      "CLOUDFLARE_PAGES_PROJECT_READ=PASS",
     ]);
     expect(state.calls.every((call) => call.method === "GET")).toBe(true);
     expect(state.cname).toBe(predecessor);
     expect(state.domains).toEqual([]);
     expect(emitted.join("\n")).not.toContain("provider-token");
+  });
+
+  it("fails closed on a rejected Pages project read without writing provider state", async () => {
+    const { fetchImpl, state } = createFetch();
+    const error = await verifyProductionPagesDomainToken({
+      environment: environment(),
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/pages/projects/olfactoryops-v2-production"))
+          return response(
+            {
+              success: false,
+              errors: [
+                { code: 10000, message: "do-not-print-provider-response" },
+              ],
+            },
+            403,
+          );
+        return fetchImpl(input, init);
+      },
+    }).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(PagesDomainHandoffError);
+    expect(error.operation).toBe("PAGES_PROJECT_READ");
+    expect(error.httpStatus).toBe("403");
+    expect(error.cfErrorCode).toBe("10000");
+    expect(state.calls.every((call) => call.method === "GET")).toBe(true);
+    expect(state.cname).toBe(predecessor);
+    expect(state.domains).toEqual([]);
   });
 
   it("emits only bounded telemetry for a rejected Pages project preflight", async () => {
