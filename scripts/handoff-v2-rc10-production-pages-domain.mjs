@@ -52,6 +52,27 @@ export function emitPagesDomainHandoffFailure(
   emit(`PRODUCTION_PAGES_DOMAIN_HANDOFF_FAILURE=${safeError.classification}`);
 }
 
+export async function verifyProductionPagesDomainToken({
+  environment = process.env,
+  fetchImpl = fetch,
+  emit = (line) => console.log(line),
+} = {}) {
+  const context = requiredContext(environment, { baselineRequired: false });
+  const request = createRequester(context, fetchImpl);
+  const zone = await exactZone(request);
+  const records = await request(
+    `/zones/${encodeURIComponent(zone.id)}/dns_records?name.exact=${encodeURIComponent(HOSTNAME)}&per_page=20`,
+    "GET",
+  );
+  if (!exactApexRecord(Array.isArray(records) ? records : [])) {
+    throw new PagesDomainHandoffError("PAGES_DOMAIN_DNS_RECORD_UNPROVEN");
+  }
+  emit("CLOUDFLARE_TOKEN_ACTIVE=PASS");
+  emit(`CLOUDFLARE_ZONE_SCOPE=${HOSTNAME}`);
+  emit("CLOUDFLARE_ZONE_READ=PASS");
+  emit("CLOUDFLARE_DNS_READ=PASS");
+}
+
 export async function preflightProductionPagesDomainHandoff({
   environment = process.env,
   fetchImpl = fetch,
@@ -419,12 +440,17 @@ function projectNameForCname(value) {
   return value.slice(0, -".pages.dev".length);
 }
 
-function requiredContext(environment) {
+function requiredContext(environment, { baselineRequired = true } = {}) {
   const account = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
   const token = environment.CLOUDFLARE_API_TOKEN?.trim();
   const releaseSha = environment.RELEASE_SHA?.trim().toLowerCase();
   const baselineFile = environment.PAGES_DOMAIN_BASELINE_FILE?.trim();
-  if (!account || !token || !baselineFile || releaseSha !== RC10_SHA) {
+  if (
+    !account ||
+    !token ||
+    (baselineRequired && !baselineFile) ||
+    releaseSha !== RC10_SHA
+  ) {
     throw new PagesDomainHandoffError("PAGES_DOMAIN_CONTEXT_INVALID");
   }
   return { account, token, releaseSha, baselineFile };
@@ -569,7 +595,9 @@ function defaultSleep(milliseconds) {
 async function main() {
   const command = process.argv[2];
   try {
-    if (command === "preflight") await preflightProductionPagesDomainHandoff();
+    if (command === "token-preflight") await verifyProductionPagesDomainToken();
+    else if (command === "preflight")
+      await preflightProductionPagesDomainHandoff();
     else if (command === "handoff") await handoffProductionPagesDomain();
     else if (command === "recover") await recoverProductionPagesDomainHandoff();
     else throw new PagesDomainHandoffError("PAGES_DOMAIN_COMMAND_INVALID");

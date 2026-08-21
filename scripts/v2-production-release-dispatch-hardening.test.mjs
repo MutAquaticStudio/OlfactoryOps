@@ -107,6 +107,28 @@ describe("production dispatcher hardening", () => {
     expect(pagesDomainHandoff).not.toContain("error.message");
   });
 
+  it("runs the Pages-domain token preflight as a production-gated GET-only operation", () => {
+    const tokenPreflight = workflow.slice(
+      workflow.indexOf("  preflight-production-pages-domain-token:"),
+      workflow.indexOf("  handoff-production-pages-domain:"),
+    );
+    expect(workflow).toContain("- pages-domain-token-preflight");
+    expect(workflow).toContain("VERIFY_PRODUCTION_PAGES_DOMAIN_TOKEN");
+    expect(tokenPreflight).toContain("environment: production");
+    expect(tokenPreflight).toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs token-preflight",
+    );
+    expect(tokenPreflight).not.toContain("PAGES_DOMAIN_BASELINE_FILE");
+    expect(tokenPreflight).not.toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs handoff",
+    );
+    expect(tokenPreflight).not.toContain(
+      "handoff-v2-rc10-production-pages-domain.mjs recover",
+    );
+    expect(tokenPreflight).not.toContain("wrangler");
+    expect(tokenPreflight).not.toContain("curl");
+  });
+
   it("selects the exact production Pages deployment from canonical metadata", () => {
     expect(resolver).toContain(
       "deployment_trigger?.metadata?.branch === branch",

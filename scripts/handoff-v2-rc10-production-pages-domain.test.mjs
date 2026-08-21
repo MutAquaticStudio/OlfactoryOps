@@ -6,6 +6,7 @@ import {
   handoffProductionPagesDomain,
   preflightProductionPagesDomainHandoff,
   recoverProductionPagesDomainHandoff,
+  verifyProductionPagesDomainToken,
 } from "./handoff-v2-rc10-production-pages-domain.mjs";
 
 const releaseSha = "fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd";
@@ -141,6 +142,28 @@ function createFetch({ publicReady = true } = {}) {
 }
 
 describe("RC10 production Pages domain handoff", () => {
+  it("proves only exact Zone and DNS read access without writing a baseline or control-plane state", async () => {
+    const { fetchImpl, state } = createFetch();
+    const emitted = [];
+
+    await verifyProductionPagesDomainToken({
+      environment: environment(),
+      fetchImpl,
+      emit: (line) => emitted.push(line),
+    });
+
+    expect(emitted).toEqual([
+      "CLOUDFLARE_TOKEN_ACTIVE=PASS",
+      "CLOUDFLARE_ZONE_SCOPE=labofscents.org",
+      "CLOUDFLARE_ZONE_READ=PASS",
+      "CLOUDFLARE_DNS_READ=PASS",
+    ]);
+    expect(state.calls.every((call) => call.method === "GET")).toBe(true);
+    expect(state.cname).toBe(predecessor);
+    expect(state.domains).toEqual([]);
+    expect(emitted.join("\n")).not.toContain("provider-token");
+  });
+
   it("emits only bounded telemetry for a rejected Pages project preflight", async () => {
     const rawError = "do-not-print-provider-response";
     const error = await preflightProductionPagesDomainHandoff({
