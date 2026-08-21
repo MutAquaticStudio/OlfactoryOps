@@ -7,6 +7,8 @@ const PROJECT = "olfactoryops-v2-production";
 const HOSTNAME = "labofscents.org";
 const EXPECTED_CNAME = `${PROJECT}.pages.dev`;
 const ROUTES = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+const PUBLIC_IDENTITY_MAX_ATTEMPTS = 31;
+const PUBLIC_IDENTITY_RETRY_MS = 30_000;
 const CONTROL_PLANE_OPERATIONS = new Set([
   "PAGES_PROJECT_READ",
   "PAGES_DEPLOYMENT_LIST",
@@ -328,9 +330,10 @@ async function updateApexCname({ request, baseline }) {
 }
 
 async function waitForPublicPagesIdentity({ releaseSha, fetchImpl, sleep }) {
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < PUBLIC_IDENTITY_MAX_ATTEMPTS; attempt += 1) {
     if (await publicPagesIdentity({ releaseSha, fetchImpl })) return;
-    if (attempt < 11) await sleep(5_000);
+    if (attempt < PUBLIC_IDENTITY_MAX_ATTEMPTS - 1)
+      await sleep(PUBLIC_IDENTITY_RETRY_MS);
   }
   throw new PagesDomainHandoffError("PAGES_DOMAIN_PUBLIC_IDENTITY_UNPROVEN");
 }
