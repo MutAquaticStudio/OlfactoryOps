@@ -23,6 +23,8 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { featureCapabilities, isWorkspaceFeatureAvailableInPublicCutover } from './feature-route-contract.js'
+import { trustedWorkspaceRedirectUrl } from '../../data/workspaceHostnames'
+import { browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins } from './workspaceHostnameRuntime'
 
 const PublicSensoryFeedback = lazy(async () => ({ default: (await import('../v2-trials-sensory')).PublicSensoryFeedback }))
 const TrialsSensoryWorkspace = lazy(async () => ({ default: (await import('../v2-trials-sensory')).TrialsSensoryWorkspace }))
@@ -36,7 +38,30 @@ type Locale = 'en-US' | 'vi-VN'
 type V2Session = { user: { email: string; displayName: string; verified: boolean }; membership: { organizationName: string; organizationSlug: string; role: string }; capabilities: Record<string, boolean> }
 type V2Invitation = { id: string; email: string; role: string; status: string; expiresAt: string; createdAt: string }
 
-const apiBase = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/api\/v1\/?$/, '/api/v1/v2/platform')
+export function platformApiBaseFromRuntime(value: string | undefined) {
+  return (value || '/api/v1').replace(/\/api\/v1\/?$/, '/api/v1/v2/platform')
+}
+
+const apiBase = platformApiBaseFromRuntime(import.meta.env.VITE_API_BASE_URL)
+
+export function safeV2ReturnPath(value: string | null | undefined) {
+  if (!value) return undefined
+  try {
+    const parsed = new URL(value, 'https://olfactoryops.invalid')
+    if (parsed.origin !== 'https://olfactoryops.invalid') return undefined
+    if (parsed.pathname !== '/v2' && !parsed.pathname.startsWith('/v2/')) return undefined
+    if (['/v2/login', '/v2/signup', '/v2/invitations/accept'].includes(parsed.pathname)) return undefined
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    return undefined
+  }
+}
+
+export function v2LoginPathForLocation(pathname: string, search = '', hash = '') {
+  const next = safeV2ReturnPath(`${pathname}${search}${hash}`)
+  return next ? `/login?next=${encodeURIComponent(next)}` : '/login'
+}
+
 const labApiBase = apiBase.replace(/\/platform$/, '/lab')
 const formulaApiBase = apiBase.replace(/\/platform$/, '/formula-intelligence')
 const trialsApiBase = apiBase.replace(/\/platform$/, '/trials')
@@ -58,7 +83,7 @@ const copy = {
 type PlatformCopy = { [K in keyof typeof copy['en-US']]: string }
 
 function currentLocale(): Locale { return window.localStorage.getItem('olfactoryops.locale') === 'vi-VN' ? 'vi-VN' : 'en-US' }
-function pathMode() { const path = window.location.pathname; if (path === '/signup' || path === '/v2/signup') return 'signup'; if (path === '/login' || path === '/v2/login') return 'login'; if (path === '/v2/platform-admin') return 'platform-admin'; if (path === '/v2/invitations/accept') return 'accept'; if (path.startsWith('/v2/public/sensory/')) return 'public-sensory'; return 'workspace' }
+export function platformPathMode(pathname = window.location.pathname) { const path = pathname; if (path === '/signup' || path === '/v2/signup') return 'signup'; if (path === '/login' || path === '/v2/login') return 'login'; if (path === '/v2/platform-admin') return 'platform-admin'; if (path === '/v2/invitations/accept') return 'accept'; if (path.startsWith('/v2/public/sensory/')) return 'public-sensory'; return 'workspace' }
 function workspaceSection() {
   const segments = window.location.pathname.split('/').filter(Boolean)
   const workspaceIndex = segments.indexOf('workspace')
@@ -101,9 +126,15 @@ export function workspaceErrorMessage(error: unknown, action: string) {
   return `Unable to ${action}. Please try again.`
 }
 
+export function platformRequestHeaders(method: string | undefined, csrf: string | undefined) {
+  const isReadRequest = ['GET', 'HEAD'].includes(method?.toUpperCase() ?? 'GET')
+  if (isReadRequest) return {}
+  return { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}) }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const csrf = document.cookie.match(/(?:^|;\s*)oo_v2_csrf=([^;]+)/)?.[1] || window.localStorage.getItem('oo_v2_csrf') || undefined
-  const response = await fetch(`${apiBase}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(csrf ? { 'X-CSRF-Token': decodeURIComponent(csrf) } : {}), ...(init?.headers || {}) } })
+  const response = await fetch(`${apiBase}${path}`, { ...init, credentials: 'include', headers: { ...platformRequestHeaders(init?.method, csrf), ...(init?.headers || {}) } })
   const payload = await response.json().catch(() => ({})) as { error?: { message?: string }; message?: string }
   if (!response.ok) throw new Error(payload.error?.message || payload.message || 'Request failed')
   return payload as T
@@ -127,8 +158,8 @@ async function formulaRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function V2PlatformApp() {
   const [locale, setLocale] = useState<Locale>(currentLocale)
-  const [mode, setMode] = useState(pathMode)
-  useEffect(() => { const onPop = () => setMode(pathMode()); window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop) }, [])
+  const [mode, setMode] = useState(platformPathMode)
+  useEffect(() => { const onPop = () => setMode(platformPathMode()); window.addEventListener('popstate', onPop); return () => window.removeEventListener('popstate', onPop) }, [])
   const text = copy[locale]
   const toggleLocale = () => { const next = locale === 'en-US' ? 'vi-VN' : 'en-US'; window.localStorage.setItem('olfactoryops.locale', next); setLocale(next) }
   if (mode === 'login' || mode === 'signup') return <AuthView mode={mode} text={text} onLocale={toggleLocale} onNavigate={navigate} />
@@ -146,17 +177,33 @@ function UnavailableStagingSurface() {
   return <main className="v2-platform-page"><section className="v2-auth-card"><span className="v2-eyebrow">Staging boundary</span><h1>This V2 surface is not in the public staging cutover.</h1><p>Only the Platform, Materials/Lab Ops, Formula/Design, Evidence, Scientific, and Agent boundaries are enabled here.</p></section></main>
 }
 
+export function workspaceRedirectTarget(workspaceUrl: string | undefined) {
+  return trustedWorkspaceRedirectUrl(workspaceUrl, browserWorkspaceBaseDomain, browserWorkspaceRedirectOrigins)
+}
+
+function navigateToTrustedWorkspace(workspaceUrl: string | undefined, onNavigate: (path: string) => void) {
+  const redirect = workspaceRedirectTarget(workspaceUrl)
+  const returnPath = safeV2ReturnPath(new URLSearchParams(window.location.search).get('next'))
+  if (workspaceUrl && !redirect) return false
+  if (redirect && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+    window.location.assign(returnPath ? new URL(returnPath, redirect).toString() : redirect)
+    return true
+  }
+  onNavigate('/v2/workspace')
+  return true
+}
+
 function InvitationAcceptView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
   const [form, setForm] = useState({ token: '', email: '', displayName: '', password: '' })
   const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null)
-  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(null); try { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/invitations/accept', { method: 'POST', body: JSON.stringify(form) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); if (result.workspaceUrl && !['localhost', '127.0.0.1'].includes(window.location.hostname)) window.location.assign(result.workspaceUrl); else onNavigate('/v2/workspace') } catch (err) { setError(workspaceErrorMessage(err, 'accept this invitation')) } finally { setBusy(false) } }
+  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(null); try { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/invitations/accept', { method: 'POST', body: JSON.stringify(form) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); if (!navigateToTrustedWorkspace(result.workspaceUrl, onNavigate)) throw new Error('WORKSPACE_REDIRECT_REJECTED') } catch (err) { setError(workspaceErrorMessage(err, 'accept this invitation')) } finally { setBusy(false) } }
   return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate('/login')}>{text.signIn}</button></div></div><section className="v2-auth-card" data-testid="v2-invitation-accept"><span className="v2-eyebrow">{text.members}</span><h1>Accept invitation</h1><p>Use the invited email and one-time token to join this workspace.</p><form onSubmit={submit}><label>Invitation token<input required value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} /></label><label>{text.email}<input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>{text.name}<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>{text.password}<input type="password" required minLength={12} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : 'Accept invitation'}</button></form></section></main>
 }
 
 function AuthView({ mode, text, onLocale, onNavigate }: { mode: 'login' | 'signup'; text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
   const [form, setForm] = useState({ email: '', password: '', displayName: '', organizationName: '', workspaceSlug: '' })
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState<string | null>(null); const [error, setError] = useState<string | null>(null)
-  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(null); setNotice(null); try { if (mode === 'login') { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); if (result.workspaceUrl && !['localhost', '127.0.0.1'].includes(window.location.hostname)) window.location.assign(result.workspaceUrl); else onNavigate('/v2/workspace') } else { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/signup', { method: 'POST', body: JSON.stringify(form) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); setNotice(`${text.verify}${result.workspaceUrl ? ` ${result.workspaceUrl}` : ''}`) } } catch (err) { setError(workspaceErrorMessage(err, mode === 'login' ? 'sign in' : 'create this workspace')) } finally { setBusy(false) } }
+  const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(null); setNotice(null); try { if (mode === 'login') { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); if (!navigateToTrustedWorkspace(result.workspaceUrl, onNavigate)) throw new Error('WORKSPACE_REDIRECT_REJECTED') } else { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/signup', { method: 'POST', body: JSON.stringify(form) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); setNotice(text.verify) } } catch (err) { setError(workspaceErrorMessage(err, mode === 'login' ? 'sign in' : 'create this workspace')) } finally { setBusy(false) } }
   return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate(mode === 'login' ? '/signup' : '/login')}>{mode === 'login' ? text.signUp : text.signIn}</button></div></div><section className="v2-auth-card" data-testid="v2-auth-card"><span className="v2-eyebrow">{text.status}</span><h1>{mode === 'login' ? text.signIn : text.signUp}</h1><p>{mode === 'login' ? text.switchSignup : text.switchLogin}</p><form onSubmit={submit}>{mode === 'signup' ? <><label>{text.name}<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>{text.workspace}<input required value={form.organizationName} onChange={(e) => setForm({ ...form, organizationName: e.target.value })} /></label><label>{text.slug}<input required value={form.workspaceSlug} onChange={(e) => setForm({ ...form, workspaceSlug: e.target.value })} /></label></> : null}<label>{text.email}<input type="email" required autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>{text.password}<input type="password" required minLength={12} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : mode === 'login' ? text.submitLogin : text.submitSignup}</button></form></section></main>
 }
 
@@ -237,7 +284,7 @@ function WorkspaceView({ text, locale, onLocale, onNavigate }: { text: PlatformC
         return request<V2Session>('/me')
       })
       .then(setSession)
-      .catch((requestError) => { setError(workspaceErrorMessage(requestError, 'open the workspace')); onNavigate('/login') })
+      .catch((requestError) => { setError(workspaceErrorMessage(requestError, 'open the workspace')); onNavigate(v2LoginPathForLocation(window.location.pathname, window.location.search, window.location.hash)) })
       .finally(() => setBusy(false))
   }, [onNavigate])
 

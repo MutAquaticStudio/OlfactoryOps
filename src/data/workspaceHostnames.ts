@@ -22,6 +22,12 @@ const hostnamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.
 export type WorkspaceHostnameKind = 'SYSTEM' | 'CUSTOM'
 export type WorkspaceHostnameStatus = 'ACTIVE' | 'PENDING_VALIDATION' | 'FAILED' | 'ARCHIVED'
 
+export function workspaceBaseDomainFromRuntime(value: string | undefined) {
+  const domain = value?.trim().toLowerCase().replace(/\.$/, '') || defaultWorkspaceBaseDomain
+  return hostnamePattern.test(domain) ? domain : defaultWorkspaceBaseDomain
+}
+
+
 export function normalizeWorkspaceBaseDomain(value: string | undefined) {
   const domain = value?.trim().toLowerCase().replace(/\.$/, '') || defaultWorkspaceBaseDomain
   return hostnamePattern.test(domain) ? domain : defaultWorkspaceBaseDomain
@@ -52,6 +58,55 @@ export function systemWorkspaceHostname(slug: string, baseDomain = defaultWorksp
 export function workspaceUrlForHostname(hostname: string | undefined) {
   const normalized = normalizeWorkspaceHostname(hostname)
   return normalized ? `https://${normalized}` : undefined
+}
+
+export function workspaceRedirectOriginsFromRuntime(value: string | undefined) {
+  return (value || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => {
+      try {
+        const parsed = new URL(origin)
+        return parsed.protocol === 'https:' && parsed.origin === origin && !parsed.username && !parsed.password && parsed.port === ''
+      } catch {
+        return false
+      }
+    })
+}
+
+
+/**
+ * The API decides which workspace a user may enter. The browser accepts that
+ * URL only when it is the expected system hostname or an explicit custom-origin
+ * allowlist entry compiled into the public surface.
+ */
+export function trustedWorkspaceRedirectUrl(
+  value: string | undefined,
+  baseDomain = defaultWorkspaceBaseDomain,
+  allowedCustomOrigins: readonly string[] = [],
+) {
+  if (!value) return undefined
+  try {
+    const parsed = new URL(value)
+    const isSystemWorkspace = isSystemWorkspaceHostname(parsed.hostname, baseDomain)
+    const isAllowedCustomWorkspace = allowedCustomOrigins.includes(parsed.origin)
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.origin !== `https://${parsed.hostname}` ||
+      parsed.username ||
+      parsed.password ||
+      parsed.port ||
+      parsed.pathname !== '/v2/workspace' ||
+      parsed.search ||
+      parsed.hash ||
+      (!isSystemWorkspace && !isAllowedCustomWorkspace)
+    ) {
+      return undefined
+    }
+    return parsed.toString()
+  } catch {
+    return undefined
+  }
 }
 
 /**
