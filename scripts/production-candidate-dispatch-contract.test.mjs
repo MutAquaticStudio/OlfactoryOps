@@ -13,7 +13,7 @@ function job(name, nextName) {
 test('candidate dispatcher accepts only the immutable RC10 tag', () => {
   const validation = job('validate-candidate-revision', 'deploy-candidate-pages')
 
-  expect(validation).toContain('RC10_TAG: v2-production-rc10')
+  expect(workflow).toContain('RC10_TAG: v2-production-rc10')
   expect(validation).toContain('test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"')
   expect(validation).not.toContain('git merge-base --is-ancestor')
   expect(validation).not.toContain('git tag --contains')
