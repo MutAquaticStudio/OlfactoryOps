@@ -94,6 +94,15 @@ describe("production dispatcher hardening", () => {
     expect(pagesDomain).not.toMatch(/env:\n\s+CLOUDFLARE_API_TOKEN:/);
     expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_PREDECESSOR_UNPROVEN");
     expect(pagesDomainHandoff).toContain("PAGES_DOMAIN_RECOVERY=PASS");
+    expect(pagesDomainHandoff).toContain(
+      "PRODUCTION_PAGES_DOMAIN_API_OPERATION=",
+    );
+    expect(pagesDomainHandoff).toContain(
+      "PRODUCTION_PAGES_DOMAIN_API_HTTP_STATUS=",
+    );
+    expect(pagesDomainHandoff).toContain(
+      "PRODUCTION_PAGES_DOMAIN_API_CF_ERROR_CODE=",
+    );
     expect(pagesDomainHandoff).not.toContain("console.error");
     expect(pagesDomainHandoff).not.toContain("error.message");
   });

@@ -7,12 +7,49 @@ const PROJECT = "olfactoryops-v2-production";
 const HOSTNAME = "labofscents.org";
 const EXPECTED_CNAME = `${PROJECT}.pages.dev`;
 const ROUTES = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+const CONTROL_PLANE_OPERATIONS = new Set([
+  "PAGES_PROJECT_READ",
+  "PAGES_DEPLOYMENT_LIST",
+  "ZONE_LIST",
+  "PAGES_DOMAIN_LIST",
+  "APEX_DNS_RECORD_LIST",
+  "PAGES_PROJECT_LIST",
+  "PAGES_DOMAIN_ADD",
+  "APEX_DNS_RECORD_UPDATE",
+  "PAGES_DOMAIN_DELETE",
+]);
 
 export class PagesDomainHandoffError extends Error {
-  constructor(classification) {
+  constructor(
+    classification,
+    {
+      operation = "NOT_APPLICABLE",
+      httpStatus = "NOT_APPLICABLE",
+      cfErrorCode = "NONE",
+    } = {},
+  ) {
     super();
     this.classification = classification;
+    this.operation = CONTROL_PLANE_OPERATIONS.has(operation)
+      ? operation
+      : "NOT_APPLICABLE";
+    this.httpStatus = safeHttpStatus(httpStatus);
+    this.cfErrorCode = safeCloudflareErrorCode(cfErrorCode);
   }
+}
+
+export function emitPagesDomainHandoffFailure(
+  error,
+  emit = (line) => console.log(line),
+) {
+  const safeError =
+    error instanceof PagesDomainHandoffError
+      ? error
+      : new PagesDomainHandoffError("PAGES_DOMAIN_UNCLASSIFIED");
+  emit(`PRODUCTION_PAGES_DOMAIN_API_OPERATION=${safeError.operation}`);
+  emit(`PRODUCTION_PAGES_DOMAIN_API_HTTP_STATUS=${safeError.httpStatus}`);
+  emit(`PRODUCTION_PAGES_DOMAIN_API_CF_ERROR_CODE=${safeError.cfErrorCode}`);
+  emit(`PRODUCTION_PAGES_DOMAIN_HANDOFF_FAILURE=${safeError.classification}`);
 }
 
 export async function preflightProductionPagesDomainHandoff({
@@ -395,6 +432,7 @@ function requiredContext(environment) {
 
 function createRequester(context, fetchImpl) {
   return async (path, method, body, paginated = false) => {
+    const operation = controlPlaneOperation(path, method);
     let response;
     try {
       response = await fetchImpl(requestUrl(context.account, path), {
@@ -409,6 +447,7 @@ function createRequester(context, fetchImpl) {
     } catch {
       throw new PagesDomainHandoffError(
         "PAGES_DOMAIN_CONTROL_PLANE_UNAVAILABLE",
+        { operation, httpStatus: 0 },
       );
     }
     let envelope;
@@ -417,16 +456,22 @@ function createRequester(context, fetchImpl) {
     } catch {
       throw new PagesDomainHandoffError(
         "PAGES_DOMAIN_CONTROL_PLANE_UNAVAILABLE",
+        { operation, httpStatus: response.status },
       );
     }
     if (!response.ok || envelope?.success !== true) {
-      throw new PagesDomainHandoffError("PAGES_DOMAIN_CONTROL_PLANE_REJECTED");
+      throw new PagesDomainHandoffError("PAGES_DOMAIN_CONTROL_PLANE_REJECTED", {
+        operation,
+        httpStatus: response.status,
+        cfErrorCode: cloudflareEnvelopeErrorCode(envelope),
+      });
     }
     if (paginated) {
       const rows = Array.isArray(envelope.result) ? envelope.result : undefined;
       if (!rows)
         throw new PagesDomainHandoffError(
           "PAGES_DEPLOYMENT_INVENTORY_UNPROVEN",
+          { operation, httpStatus: response.status },
         );
       const totalPages = Number(envelope.result_info?.total_pages);
       return {
@@ -440,6 +485,41 @@ function createRequester(context, fetchImpl) {
     }
     return envelope.result;
   };
+}
+
+function controlPlaneOperation(path, method) {
+  if (path === "/zones" || path.startsWith("/zones?")) return "ZONE_LIST";
+  if (path.includes("/dns_records") && method === "GET")
+    return "APEX_DNS_RECORD_LIST";
+  if (path.includes("/dns_records") && method === "PATCH")
+    return "APEX_DNS_RECORD_UPDATE";
+  if (path === "/pages/projects") return "PAGES_PROJECT_LIST";
+  if (path.endsWith(`/pages/projects/${PROJECT}`)) return "PAGES_PROJECT_READ";
+  if (path.includes("/deployments")) return "PAGES_DEPLOYMENT_LIST";
+  if (path.endsWith(`/domains/${HOSTNAME}`) && method === "DELETE")
+    return "PAGES_DOMAIN_DELETE";
+  if (path.endsWith("/domains") && method === "POST") return "PAGES_DOMAIN_ADD";
+  if (path.endsWith("/domains")) return "PAGES_DOMAIN_LIST";
+  return "NOT_APPLICABLE";
+}
+
+function safeHttpStatus(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 599
+    ? String(value)
+    : "NOT_APPLICABLE";
+}
+
+function safeCloudflareErrorCode(value) {
+  return Number.isSafeInteger(value) && value >= 1000 ? String(value) : "NONE";
+}
+
+function cloudflareEnvelopeErrorCode(envelope) {
+  if (!Array.isArray(envelope?.errors)) return "NONE";
+  const error = envelope.errors.find(
+    (candidate) =>
+      Number.isSafeInteger(candidate?.code) && candidate.code >= 1000,
+  );
+  return error?.code ?? "NONE";
 }
 
 function requestUrl(account, path) {
@@ -494,11 +574,7 @@ async function main() {
     else if (command === "recover") await recoverProductionPagesDomainHandoff();
     else throw new PagesDomainHandoffError("PAGES_DOMAIN_COMMAND_INVALID");
   } catch (error) {
-    const classification =
-      error instanceof PagesDomainHandoffError
-        ? error.classification
-        : "PAGES_DOMAIN_UNCLASSIFIED";
-    console.log(`PRODUCTION_PAGES_DOMAIN_HANDOFF_FAILURE=${classification}`);
+    emitPagesDomainHandoffFailure(error);
     process.exitCode = 1;
   }
 }

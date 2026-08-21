@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  emitPagesDomainHandoffFailure,
   PagesDomainHandoffError,
   handoffProductionPagesDomain,
   preflightProductionPagesDomainHandoff,
@@ -140,6 +141,32 @@ function createFetch({ publicReady = true } = {}) {
 }
 
 describe("RC10 production Pages domain handoff", () => {
+  it("emits only bounded telemetry for a rejected Pages project preflight", async () => {
+    const rawError = "do-not-print-provider-response";
+    const error = await preflightProductionPagesDomainHandoff({
+      environment: environment(),
+      fetchImpl: async () =>
+        response(
+          { success: false, errors: [{ code: 10000, message: rawError }] },
+          403,
+        ),
+      writeBaseline: async () => {},
+    }).catch((caught) => caught);
+    const emitted = [];
+
+    emitPagesDomainHandoffFailure(error, (line) => emitted.push(line));
+
+    expect(error).toBeInstanceOf(PagesDomainHandoffError);
+    expect(emitted).toEqual([
+      "PRODUCTION_PAGES_DOMAIN_API_OPERATION=PAGES_PROJECT_READ",
+      "PRODUCTION_PAGES_DOMAIN_API_HTTP_STATUS=403",
+      "PRODUCTION_PAGES_DOMAIN_API_CF_ERROR_CODE=10000",
+      "PRODUCTION_PAGES_DOMAIN_HANDOFF_FAILURE=PAGES_DOMAIN_CONTROL_PLANE_REJECTED",
+    ]);
+    expect(emitted.join("\n")).not.toContain(rawError);
+    expect(emitted.join("\n")).not.toContain("provider-token");
+  });
+
   it("captures only an exact Pages predecessor baseline without leaking opaque provider data", async () => {
     const { fetchImpl, state } = createFetch();
     const emitted = [];
