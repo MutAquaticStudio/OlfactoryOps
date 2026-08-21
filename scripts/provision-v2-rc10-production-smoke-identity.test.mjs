@@ -139,8 +139,30 @@ describe("RC10 dedicated production smoke identity provisioning", () => {
     expect(verifySmokeIdentitySql).toContain("NOT EXISTS");
   });
 
-  it("rolls back without reusing an existing identity", async () => {
+  it("idempotently accepts an existing safe Viewer identity without writing", async () => {
     const client = new FakeClient({ existingUser: true });
+
+    await provisionDedicatedProductionSmokeIdentity(client, {
+      tenantHostname: environment.PRODUCTION_SMOKE_TENANT_HOSTNAME,
+      email: environment.PRODUCTION_SMOKE_LOGIN_EMAIL,
+      passwordHash: "pbkdf2:v2:sha256:120000:salt_fixture:digest_fixture",
+      createId: fakeId,
+    });
+
+    expect(client.queries.map(({ sql }) => sql)).toContain("COMMIT");
+    expect(client.queries.map(({ sql }) => sql)).not.toContain(
+      insertSmokeUserSql,
+    );
+    expect(client.queries.map(({ sql }) => sql)).not.toContain(
+      insertSmokeMembershipSql,
+    );
+    expect(client.queries.map(({ sql }) => sql)).not.toContain(
+      appendSmokeIdentityAuditSql,
+    );
+  });
+
+  it("rolls back when an existing identity fails the selected-tenant postcondition", async () => {
+    const client = new FakeClient({ existingUser: true, postcondition: false });
 
     await expect(
       provisionDedicatedProductionSmokeIdentity(client, {

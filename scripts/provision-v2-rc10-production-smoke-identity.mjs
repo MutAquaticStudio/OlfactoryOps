@@ -177,6 +177,27 @@ export async function provisionDedicatedProductionSmokeIdentity(
     const existingUser = await client.query(existingSmokeUserLookupSql, [
       email,
     ]);
+    if (existingUser.rowCount === 1) {
+      const existingUserId = existingUser.rows[0]?.id;
+      if (typeof existingUserId !== "string" || !existingUserId) {
+        throw new Error("SMOKE_IDENTITY_ALREADY_EXISTS");
+      }
+      await client.query("SELECT set_config('app.user_id', $1, true)", [
+        existingUserId,
+      ]);
+      const existingIdentity = await client.query(verifySmokeIdentitySql, [
+        existingUserId,
+        organizationId,
+      ]);
+      if (
+        existingIdentity.rows[0]?.identity_ready !== true ||
+        existingIdentity.rows[0]?.no_platform_operator !== true
+      ) {
+        throw new Error("SMOKE_IDENTITY_ALREADY_EXISTS");
+      }
+      await client.query("COMMIT");
+      return;
+    }
     if (existingUser.rowCount !== 0)
       throw new Error("SMOKE_IDENTITY_ALREADY_EXISTS");
 
