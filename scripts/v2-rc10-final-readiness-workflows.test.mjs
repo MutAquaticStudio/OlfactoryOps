@@ -335,6 +335,10 @@ describe("RC10 final readiness operations", () => {
     expect(publicHarness.indexOf("class PublicAcceptanceFailure")).toBeLessThan(
       publicHarness.indexOf("try {"),
     );
+    expect(publicHarness).toContain("idempotencyKey: `public-material-a-${suffix}`");
+    expect(publicHarness).toContain("idempotencyKey: `public-material-b-${suffix}`");
+    expect(publicHarness).toContain("idempotencyKey: `public-cross-write-${suffix}`");
+    expect(publicHarness).toContain("headers['idempotency-key'] = idempotencyKey");
     expect(publicHarness).toContain("PUBLIC_CROSS_TENANT_READ_DENIAL=PASS");
     expect(publicHarness).toContain("PUBLIC_PLATFORM_ADMIN_ISOLATION=PASS");
   });
