@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { publicAcceptanceFailurePhase } from './v2-production-public-acceptance-classification.mjs'
 
+class PublicAcceptanceFailure extends Error {
+  constructor(phase) {
+    super(publicAcceptanceFailurePhase(phase))
+    this.phase = publicAcceptanceFailurePhase(phase)
+  }
+}
+
 const expectedSha = required('RELEASE_SHA').toLowerCase()
 const apiUrl = requiredUrl('PUBLIC_API_URL')
 const appUrl = requiredUrl('PUBLIC_APP_URL')
@@ -163,12 +170,6 @@ async function acceptanceOperation(phase, operation) {
   } catch (error) {
     if (error instanceof PublicAcceptanceFailure) throw error
     throw acceptanceFailure(phase)
-  }
-}
-class PublicAcceptanceFailure extends Error {
-  constructor(phase) {
-    super(publicAcceptanceFailurePhase(phase))
-    this.phase = publicAcceptanceFailurePhase(phase)
   }
 }
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`CONFIG_${name}`); return value }
