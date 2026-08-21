@@ -6,6 +6,17 @@ const temporaryBranches = [
   ["codex", "cloudflare-cloud-native-runtime"].join("/"),
 ];
 
+const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+const localPackageLinks = Object.entries(packageLock.packages ?? {}).filter(
+  ([path, entry]) =>
+    path.startsWith("../") ||
+    (entry?.link === true && String(entry.resolved ?? "").startsWith("../")),
+);
+
+if (localPackageLinks.length > 0) {
+  throw new Error("package lock must not contain local worktree package links");
+}
+
 function sourceFiles(root) {
   return readdirSync(root, { recursive: true })
     .filter((entry) => entry.endsWith(".yml") || entry.endsWith(".mjs"))
@@ -76,3 +87,4 @@ for (const [file, fragments] of requiredTagContracts) {
 
 console.log("TEMP_RELEASE_BRANCH_RUNTIME_REFERENCES=0");
 console.log("IMMUTABLE_RELEASE_TAG_CONTRACTS=PASS");
+console.log("PORTABLE_PACKAGE_LOCK_CONTRACT=PASS");
