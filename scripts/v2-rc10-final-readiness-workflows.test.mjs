@@ -324,6 +324,10 @@ describe("RC10 final readiness operations", () => {
   it("provides a protected post-cutover public acceptance harness", () => {
     expect(acceptance).toContain("v2-production-ready");
     expect(acceptance).toContain("RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE");
+    expect(acceptance).toContain(
+      "PUBLIC_TENANT_URL: https://${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}",
+    );
+    expect(acceptance).not.toContain("PUBLIC_TENANT_URL: https://next.labofscents.org");
     expect(acceptance).not.toMatch(/wrangler\s+(deploy|pages)/i);
     expect(publicHarness).toContain("PUBLIC_ACCEPTANCE_FIXTURE_CLEANUP=PASS");
     expect(publicHarness).toContain("PUBLIC_CROSS_TENANT_READ_DENIAL=PASS");
