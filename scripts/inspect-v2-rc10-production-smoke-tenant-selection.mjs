@@ -4,7 +4,13 @@ import { resolve } from 'node:path'
 
 export const maxSmokeTenantCandidates = 20
 
-const smokeHostnamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/
+const smokeHostnamePattern = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.labofscents\.org$/
+const reservedProductionHostnames = new Set(['api', 'admin', 'next', 'www'])
+
+export function isProductionSmokeTenantHostname(hostname) {
+  const match = typeof hostname === 'string' ? smokeHostnamePattern.exec(hostname) : null
+  return Boolean(match) && !reservedProductionHostnames.has(match[1])
+}
 
 export const productionSmokeTenantSelectionSql = `
   SELECT
@@ -12,7 +18,8 @@ export const productionSmokeTenantSelectionSql = `
     count(*) OVER ()::int AS candidate_count
   FROM public.v2_workspace_hostnames AS hostname
   INNER JOIN public.v2_organizations AS organization ON organization.id = hostname.organization_id
-  WHERE hostname.hostname ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.next\\.labofscents\\.org$'
+  WHERE hostname.hostname ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.labofscents\\.org$'
+    AND hostname.hostname NOT IN ('api.labofscents.org', 'admin.labofscents.org', 'next.labofscents.org', 'www.labofscents.org')
     AND hostname.status = 'ACTIVE'
     AND organization.status = 'ACTIVE'
   ORDER BY hostname.hostname ASC
@@ -45,7 +52,7 @@ export function summarizeProductionSmokeTenantCandidates(rows) {
 
   const hostnames = rows.map((row) => row?.hostname)
   if (
-    hostnames.some((hostname) => typeof hostname !== 'string' || !smokeHostnamePattern.test(hostname)) ||
+    hostnames.some((hostname) => !isProductionSmokeTenantHostname(hostname)) ||
     new Set(hostnames).size !== hostnames.length
   ) {
     return unprovenReport()

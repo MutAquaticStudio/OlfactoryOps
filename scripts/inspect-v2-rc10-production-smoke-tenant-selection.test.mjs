@@ -47,14 +47,14 @@ describe('RC10 production smoke tenant selection inventory', () => {
   it('emits only a deterministically ordered bounded hostname list', () => {
     expect(
       summarizeProductionSmokeTenantCandidates([
-        { hostname: 'zeta.next.labofscents.org', candidate_count: 2 },
-        { hostname: 'alpha.next.labofscents.org', candidate_count: 2 },
+        { hostname: 'zeta.labofscents.org', candidate_count: 2 },
+        { hostname: 'alpha.labofscents.org', candidate_count: 2 },
       ]),
     ).toEqual([
       'SMOKE_TENANT_SELECTION_REQUIRED=YES',
       'SMOKE_TENANT_CANDIDATE_COUNT=2',
-      'SMOKE_TENANT_CANDIDATE_1=alpha.next.labofscents.org',
-      'SMOKE_TENANT_CANDIDATE_2=zeta.next.labofscents.org',
+      'SMOKE_TENANT_CANDIDATE_1=alpha.labofscents.org',
+      'SMOKE_TENANT_CANDIDATE_2=zeta.labofscents.org',
     ])
   })
 
@@ -73,19 +73,24 @@ describe('RC10 production smoke tenant selection inventory', () => {
 
     expect(
       summarizeProductionSmokeTenantCandidates([
-        { hostname: 'nested.alpha.next.labofscents.org', candidate_count: 1 },
+        { hostname: 'nested.alpha.labofscents.org', candidate_count: 1 },
       ]),
     ).toEqual(expected)
     expect(
       summarizeProductionSmokeTenantCandidates([
-        { hostname: 'alpha.next.labofscents.org', candidate_count: 2 },
-        { hostname: 'alpha.next.labofscents.org', candidate_count: 2 },
+        { hostname: 'api.labofscents.org', candidate_count: 1 },
+      ]),
+    ).toEqual(expected)
+    expect(
+      summarizeProductionSmokeTenantCandidates([
+        { hostname: 'alpha.labofscents.org', candidate_count: 2 },
+        { hostname: 'alpha.labofscents.org', candidate_count: 2 },
       ]),
     ).toEqual(expected)
     expect(
       summarizeProductionSmokeTenantCandidates(
         Array.from({ length: maxSmokeTenantCandidates + 1 }, (_, index) => ({
-          hostname: `tenant-${index}.next.labofscents.org`,
+          hostname: `tenant-${index}.labofscents.org`,
           candidate_count: maxSmokeTenantCandidates + 1,
         })),
       ),
@@ -94,7 +99,7 @@ describe('RC10 production smoke tenant selection inventory', () => {
 
   it('uses a read-only transaction and emits no data other than hostnames', async () => {
     const client = new FakeClient([
-      { hostname: 'alpha.next.labofscents.org', candidate_count: 1 },
+      { hostname: 'alpha.labofscents.org', candidate_count: 1 },
     ])
     const output = []
     const emittedArguments = []

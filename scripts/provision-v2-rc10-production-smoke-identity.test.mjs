@@ -7,6 +7,7 @@ import {
   existingSmokeUserLookupSql,
   insertSmokeMembershipSql,
   insertSmokeUserSql,
+  isProductionSmokeTenantHostname,
   provisionDedicatedProductionSmokeIdentity,
   provisionProductionSmokeIdentity,
   safeProvisioningFailure,
@@ -19,7 +20,7 @@ const environment = {
   RELEASE_WORKTREE: "/safe/release",
   PRODUCTION_DATABASE_URL:
     "postgresql://admin:fixture@db.example.invalid/olfactoryops",
-  PRODUCTION_SMOKE_TENANT_HOSTNAME: "smoke-fixture.next.labofscents.org",
+  PRODUCTION_SMOKE_TENANT_HOSTNAME: "smoke-fixture.labofscents.org",
   PRODUCTION_SMOKE_LOGIN_EMAIL: "smoke-user@example.invalid",
   PRODUCTION_SMOKE_LOGIN_PASSWORD: "fixture-password-at-least-sixteen",
   V2_PASSWORD_PEPPER: "fixture-password-pepper-at-least-sixteen",
@@ -98,6 +99,13 @@ function pgFor(client) {
 }
 
 describe("RC10 dedicated production smoke identity provisioning", () => {
+  it("accepts only a non-public production tenant hostname", () => {
+    expect(isProductionSmokeTenantHostname("smoke-fixture.labofscents.org")).toBe(true);
+    expect(isProductionSmokeTenantHostname("smoke.next.labofscents.org")).toBe(false);
+    expect(isProductionSmokeTenantHostname("api.labofscents.org")).toBe(false);
+    expect(isProductionSmokeTenantHostname("next.labofscents.org")).toBe(false);
+  });
+
   it("creates only a verified active Viewer membership inside the selected active tenant", async () => {
     const client = new FakeClient();
 

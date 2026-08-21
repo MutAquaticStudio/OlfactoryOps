@@ -7,17 +7,19 @@ import {
 
 const environment = {
   PRODUCTION_DATABASE_URL: 'fixture-database-url',
-  PRODUCTION_SMOKE_TENANT_HOSTNAME: 'smoke-fixture.next.labofscents.org',
+  PRODUCTION_SMOKE_TENANT_HOSTNAME: 'smoke-fixture.labofscents.org',
   PRODUCTION_SMOKE_LOGIN_EMAIL: 'smoke-fixture@example.test',
   PRODUCTION_SMOKE_LOGIN_PASSWORD: 'fixture-password',
 }
 
 describe('production smoke tenant readiness', () => {
   it('requires the same single-label hostname shape accepted by the tenant router', () => {
-    expect(isProductionSmokeTenantHostname('smoke-fixture.next.labofscents.org')).toBe(true)
+    expect(isProductionSmokeTenantHostname('smoke-fixture.labofscents.org')).toBe(true)
+    expect(isProductionSmokeTenantHostname('api.labofscents.org')).toBe(false)
     expect(isProductionSmokeTenantHostname('next.labofscents.org')).toBe(false)
-    expect(isProductionSmokeTenantHostname('nested.smoke.next.labofscents.org')).toBe(false)
-    expect(isProductionSmokeTenantHostname('SMOKE.next.labofscents.org')).toBe(false)
+    expect(isProductionSmokeTenantHostname('labofscents.org')).toBe(false)
+    expect(isProductionSmokeTenantHostname('nested.smoke.labofscents.org')).toBe(false)
+    expect(isProductionSmokeTenantHostname('SMOKE.labofscents.org')).toBe(false)
   })
 
   it('proves one active hostname, organization, verified Viewer, and no Platform Operator without emitting identity data', async () => {
@@ -58,7 +60,7 @@ describe('production smoke tenant readiness', () => {
     const result = await verifyProductionSmokeTenantReadiness({
       environment: {
         ...environment,
-        PRODUCTION_SMOKE_TENANT_HOSTNAME: 'next.labofscents.org',
+        PRODUCTION_SMOKE_TENANT_HOSTNAME: 'api.labofscents.org',
         PRODUCTION_SMOKE_LOGIN_PASSWORD: '',
       },
       clientFactory,

@@ -29,6 +29,7 @@ describe('V2 public smoke contract', () => {
     expect(isProductionTenantHostname('smoke.labofscents.org')).toBe(true)
     expect(isProductionTenantHostname('rc9-release-31736285494-469ca8942a.next.labofscents.org')).toBe(false)
     expect(isProductionTenantHostname('api.labofscents.org')).toBe(false)
+    expect(isProductionTenantHostname('next.labofscents.org')).toBe(false)
     expect(isProductionTenantHostname('labofscents.org')).toBe(false)
   })
 

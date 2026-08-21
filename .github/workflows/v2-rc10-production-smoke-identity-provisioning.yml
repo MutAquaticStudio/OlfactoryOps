@@ -52,7 +52,11 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_PROVISIONING" = PROVISION_RC10_DEDICATED_SMOKE_IDENTITY
           test "$RELEASE_SHA" = "$RC10_SHA"
-          [[ "$TENANT_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$TENANT_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.labofscents\.org$ ]]
+          test "$TENANT_HOSTNAME" != api.labofscents.org
+          test "$TENANT_HOSTNAME" != admin.labofscents.org
+          test "$TENANT_HOSTNAME" != next.labofscents.org
+          test "$TENANT_HOSTNAME" != www.labofscents.org
           git fetch --no-tags origin "$RELEASE_BRANCH"
           test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
           git fetch --force --tags origin
