@@ -1,7 +1,7 @@
 import { pbkdf2Sync, randomBytes } from 'node:crypto'
 import { stdin, stdout, stderr } from 'node:process'
 
-const ADMIN_EMAIL = 'admin@labofscents.org'
+const ADMIN_EMAIL = 'm.thuanwork@gmail.com'
 const ITERATIONS = 100_000
 const KEY_LENGTH = 32
 const SALT_BYTES = 16

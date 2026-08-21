@@ -1,0 +1,35 @@
+# Render this template only after staging Hyperdrive and secret bindings exist.
+# It has no D1 binding and is never a production configuration.
+name = "olfactoryops-v2-api-staging"
+main = "worker/v2-api/index.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+routes = [
+  { pattern = "api-beta.labofscents.org/*", zone_name = "labofscents.org" },
+]
+
+[vars]
+RELEASE_ENVIRONMENT = "staging"
+RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
+V2_API_PUBLIC_HOSTNAME = "api-beta.labofscents.org"
+V2_PUBLIC_PAGES_HOSTNAME = "beta.labofscents.org"
+V2_WORKSPACE_BASE_DOMAIN = "api-beta.labofscents.org"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_HYPERDRIVE_ID"
+
+[[r2_buckets]]
+binding = "R2_ARTIFACTS"
+bucket_name = "olfactoryops-v2-artifacts-staging"
+
+[[services]]
+binding = "CLOUD_RUNTIME"
+service = "olfactoryops-v2-cloud-runtime-staging"
+
+# Secrets are set only through the Cloudflare control plane:
+# V2_SESSION_PEPPER
+# V2_PASSWORD_PEPPER
+# V2_INVITATION_ENCRYPTION_KEY

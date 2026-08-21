@@ -11,12 +11,36 @@ node_modules
 dist
 dist-api
 dist-worker
+dist-v2-api-worker
+dist-v2-tenant-router
+dist-v2-api-production-check
+dist-v2-tenant-router-production-check
+dist-tenant-router
+dist-cloud-runtime
+dist-cloud-runtime-production-check
+dist-worker-test
 dist-ssr
 .wrangler
 *.local
 .env
+.env.*
+!.env.example
 .dev.vars
 .dev.vars.*
+reports/evidence/
+reports/*.md
+reports/ux-playwright/
+reports/v2-role-playwright/
+reports/releases/
+reports/bundle-analysis-latest.json
+.qa/
+.scientific-runtime/
+__pycache__/
+test-results/
+.qa-isolated-worker-*/
+.d1-migration-audit/
+.olfactoryops-agent.local.json
+.olfactoryops-idempotency.local.json
 
 # Editor directories and files
 .vscode/*
@@ -28,3 +52,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.vercel
+server/src/routes/v2-*.worker.ts
+worker/v2-api/generated-route-specs.ts

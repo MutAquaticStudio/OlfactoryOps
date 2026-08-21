@@ -1,0 +1,24 @@
+# Staging-only wildcard tenant router. It is intentionally independent from
+# worker/tenant-app-router.ts, which remains the legacy D1 compatibility path.
+name = "olfactoryops-v2-tenant-router-staging"
+main = "worker/v2-tenant-router.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+# Cloudflare's active advanced certificate covers *.api-beta.labofscents.org.
+# The exact api-beta host has its own more-specific API Worker route and cannot
+# match this one-label tenant wildcard.
+routes = [
+  { pattern = "*.api-beta.labofscents.org/*", zone_name = "labofscents.org" },
+]
+
+[vars]
+PAGES_ORIGIN = "https://olfactoryops-beta.pages.dev"
+V2_WORKSPACE_BASE_DOMAIN = "api-beta.labofscents.org"
+RELEASE_ENVIRONMENT = "staging"
+RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_HYPERDRIVE_ID"

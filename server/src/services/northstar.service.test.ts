@@ -4,7 +4,7 @@ import { ForbiddenException, UnauthorizedException, UnprocessableEntityException
 import { NorthStarService } from './northstar.service'
 
 const fixedSessionFixtureNow = new Date('2026-07-10T07:00:00.000Z')
-const adminEmail = 'admin@labofscents.org'
+const adminEmail = 'm.thuanwork@gmail.com'
 const adminPassword = 'UnitTestAdminPassword2026!'
 
 const testMfaEncryptionKey = 'unit-test-mfa-encryption-key-2026-07-18'
@@ -35,6 +35,7 @@ function createTestService() {
       },
     ],
     mfaEncryptionKey: testMfaEncryptionKey,
+    billingMode: 'self_service',
   })
 }
 
@@ -126,6 +127,91 @@ describe('NorthStarService', () => {
     expect(credentialForEmail(service, adminEmail)?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
   })
 
+  it('allocates a collision-resistant session ID without overwriting a hydrated session', () => {
+    const service = createTestService()
+    const internals = service as unknown as { sessions: Array<{ id: string }> }
+    const collisionId = `SES-${String(internals.sessions.length + 1).padStart(4, '0')}`
+    internals.sessions = internals.sessions.map((session, index) => (index === 0 ? { ...session, id: collisionId } : session))
+
+    const login = service.login(adminEmail, adminPassword).data
+
+    expect(login.session.id).toMatch(/^SES-[a-f0-9]{32}$/)
+    expect(login.session.id).not.toBe(collisionId)
+    expect(new Set(internals.sessions.map((session) => session.id)).size).toBe(internals.sessions.length)
+  })
+
+  it('resets a password with a one-time expiring token and revokes active sessions', () => {
+    const service = createTestService()
+    const active = service.login(adminEmail, adminPassword).data.session
+    const requested = service.beginPasswordReset(adminEmail)
+
+    expect(requested.data.accepted).toBe(true)
+    expect(requested.delivery?.token).toHaveLength(43)
+
+    const completed = service.completePasswordReset({
+      token: requested.delivery?.token,
+      password: 'ReplacedAdminPassword2026!',
+    }).data
+
+    expect(completed.accepted).toBe(true)
+    expect(() => service.authenticateSession(active.id)).toThrow(UnauthorizedException)
+    expect(() => service.login(adminEmail, adminPassword)).toThrow(ForbiddenException)
+    expect(service.login(adminEmail, 'ReplacedAdminPassword2026!').data.session.email).toBe(adminEmail)
+    expect(() => service.completePasswordReset({ token: requested.delivery?.token, password: 'AnotherPassword2026!' })).toThrow(ForbiddenException)
+  })
+
+  it('creates a hashed, single-use email verification link without exposing it in signup data', () => {
+    const service = createAuthenticatedService()
+    const signup = service.signup({
+      organizationName: 'Verified Atelier',
+      workspaceSlug: 'verified-atelier',
+      email: 'owner@verified-atelier.test',
+      name: 'Verified Owner',
+      password: 'VerifiedAtelier2026!',
+    }).data
+    const delivery = service.takeEmailVerificationDelivery()
+
+    expect(signup.emailVerification).toMatchObject({ status: 'PENDING', email: 'owner@verified-atelier.test' })
+    expect(JSON.stringify(signup)).not.toContain(delivery?.token ?? '')
+    expect(delivery?.token).toHaveLength(43)
+    const records = (service as unknown as { emailVerificationRecords: Array<{ tokenHash: string }> }).emailVerificationRecords
+    expect(records[0]?.tokenHash).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(records[0]?.tokenHash).not.toBe(delivery?.token)
+
+    const completed = service.completeEmailVerification(delivery?.token).data
+    expect(completed).toMatchObject({ accepted: true, alreadyVerified: false, emailVerification: { status: 'VERIFIED' } })
+    expect(service.emailVerificationStatus().data).toMatchObject({ status: 'VERIFIED', canResend: false })
+    expect(service.completeEmailVerification(delivery?.token).data).toMatchObject({ accepted: true, alreadyVerified: true })
+
+    const replacement = service.beginEmailVerification().data
+    const replacementDelivery = service.takeEmailVerificationDelivery()
+    expect(replacement.emailVerification.status).toBe('PENDING')
+    expect(replacementDelivery?.token).toHaveLength(43)
+    expect(replacementDelivery?.token).not.toBe(delivery?.token)
+  })
+
+  it('updates account credentials only after current-password verification and revokes every active session', () => {
+    const service = createAuthenticatedService()
+    const currentSession = service.me().data.session
+
+    expect(() => service.updateAccountCredentials({
+      currentPassword: 'wrong-password',
+      email: 'owner.updated@example.test',
+    })).toThrow(ForbiddenException)
+
+    const updated = service.updateAccountCredentials({
+      currentPassword: adminPassword,
+      email: 'owner.updated@example.test',
+      newPassword: 'UpdatedOwnerPassword2026!',
+    }).data
+
+    expect(updated.email).toBe('owner.updated@example.test')
+    expect(updated.requiresReauthentication).toBe(true)
+    expect(() => service.authenticateSession(currentSession.id)).toThrow(UnauthorizedException)
+    expect(() => service.login(adminEmail, adminPassword)).toThrow(ForbiddenException)
+    expect(service.login('owner.updated@example.test', 'UpdatedOwnerPassword2026!').data.session.email).toBe('owner.updated@example.test')
+  })
+
   it('blocks active memberships that have not completed password setup', () => {
     const service = createTestService()
 
@@ -160,7 +246,8 @@ describe('NorthStarService', () => {
     expect(initial.displayName).toBe('Thuan Le Minh')
     expect(initial.organizationId).toBe('org-nxl')
     expect(initial.sidebarMode).toBe('expanded')
-    expect(initial.accentColor).toBe('#4d9bff')
+    expect(initial.accentColor).toBe('#0f766e')
+    expect(initial.formulaWorkspace).toEqual({ library: true, summary: true, ifra: true, evaporation: true })
 
     const updated = service.updateUserSettings({
       displayName: 'Maison Owner',
@@ -170,6 +257,7 @@ describe('NorthStarService', () => {
       reduceMotion: true,
       emailDigest: 'daily',
       accentColor: '#F5B04C',
+      formulaWorkspace: { library: false, summary: true, ifra: true, evaporation: false },
       organizationId: 'org-other',
     }).data
     const tenantSettings = service.customizationConsole().data.settings
@@ -182,6 +270,7 @@ describe('NorthStarService', () => {
     expect(updated.settings.reduceMotion).toBe(true)
     expect(updated.settings.emailDigest).toBe('daily')
     expect(updated.settings.accentColor).toBe('#f5b04c')
+    expect(updated.settings.formulaWorkspace).toEqual({ library: false, summary: true, ifra: true, evaporation: false })
     expect(updated.settings.organizationId).toBe('org-nxl')
     expect(updated.audit.action).toBe('user.settings.update')
     expect(updated.invariant).toContain('scoped to the authenticated user')
@@ -195,6 +284,7 @@ describe('NorthStarService', () => {
       sidebarMode: 'floating',
       emailDigest: 'hourly',
       accentColor: 'url(javascript:alert(1))',
+      formulaWorkspace: { library: 'hide', summary: 'show' },
     }).data.settings
 
     expect(invalid.preferredLanding).toBe('inventory')
@@ -202,11 +292,12 @@ describe('NorthStarService', () => {
     expect(invalid.sidebarMode).toBe('rail')
     expect(invalid.emailDigest).toBe('daily')
     expect(invalid.accentColor).toBe('#f5b04c')
+    expect(invalid.formulaWorkspace).toEqual({ library: false, summary: true, ifra: true, evaporation: false })
   })
 
   it('commits lab usage through OUT movements and reverses by compensation', () => {
     const service = createAuthenticatedService()
-    const commit = service.commitLabUsage('frm-0421', 12.5).data
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5).data
 
     expect(commit.usage.status).toBe('COMMITTED')
     expect(commit.usage.weighingSession?.status).toBe('READY')
@@ -221,9 +312,37 @@ describe('NorthStarService', () => {
     expect(reverse.invariant).toContain('reverse by compensation')
   })
 
+  it('partially reverses a selected lot before completing the remaining compensation', () => {
+    const service = createAuthenticatedService()
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5).data
+    const allocation = commit.usage.allocations[0]!
+    const partialGrams = Number((allocation.allocatedGrams / 2).toFixed(4))
+
+    const partial = service.reverseLabUsage(commit.usage.id, {
+      actor: 'Lab Manager',
+      reason: 'Recovered unused portion',
+      allocations: [{ materialId: allocation.materialId, lotId: allocation.lotId, grams: partialGrams }],
+    }).data
+
+    expect(partial.usage.status).toBe('PARTIALLY_REVERSED')
+    expect(partial.movements).toHaveLength(1)
+    expect(partial.movements[0]?.quantityGrams).toBe(partialGrams)
+    expect(() =>
+      service.reverseLabUsage(commit.usage.id, {
+        allocations: [{ materialId: allocation.materialId, lotId: allocation.lotId, grams: allocation.allocatedGrams }],
+      }),
+    ).toThrow(UnprocessableEntityException)
+
+    const complete = service.reverseLabUsage(commit.usage.id).data
+    expect(complete.usage.status).toBe('REVERSED')
+    expect(complete.usage.reversalMovements?.reduce((total, movement) => total + movement.quantityGrams, 0)).toBeCloseTo(
+      commit.usage.allocations.reduce((total, item) => total + item.allocatedGrams, 0),
+    )
+  })
+
   it('exposes lab usage history, detail, and reverse-by-id evidence', () => {
     const service = createAuthenticatedService()
-    const commit = service.commitLabUsage('frm-0421', 12.5, {
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5, {
       purpose: 'sample',
       projectCode: 'NXL-RD-0421',
       sampleCode: 'SMP-0421-A',
@@ -252,14 +371,14 @@ describe('NorthStarService', () => {
   it('records lab weighing sessions without creating inventory movements', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const actuals = plan.allocations.map((allocation, index) => ({
       materialId: allocation.materialId,
       lotId: allocation.lotId,
       actualGrams: index === 0 ? Number((allocation.allocatedGrams * 1.01).toFixed(4)) : allocation.allocatedGrams,
     }))
 
-    const result = service.recordLabWeighingSession('frm-0421', 12.5, {
+    const result = service.recordLabWeighingSession('frm-accord-citrus', 12.5, {
       actuals,
       tolerancePercent: 2,
       operator: 'Bench Chemist',
@@ -274,11 +393,11 @@ describe('NorthStarService', () => {
 
   it('commits lab usage with actual weighed quantities', () => {
     const service = createAuthenticatedService()
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const firstAllocation = plan.allocations[0]!
     const actualGrams = Number((firstAllocation.allocatedGrams * 0.99).toFixed(4))
 
-    const commit = service.commitLabUsage('frm-0421', 12.5, {
+    const commit = service.commitLabUsage('frm-accord-citrus', 12.5, {
       actuals: [
         {
           materialId: firstAllocation.materialId,
@@ -299,11 +418,11 @@ describe('NorthStarService', () => {
   it('blocks out-of-tolerance lab weighing commits before inventory changes', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
-    const plan = service.labUsagePlan('frm-0421', 12.5).data
+    const plan = service.labUsagePlan('frm-accord-citrus', 12.5).data
     const firstAllocation = plan.allocations[0]!
 
     expect(() =>
-      service.commitLabUsage('frm-0421', 12.5, {
+      service.commitLabUsage('frm-accord-citrus', 12.5, {
         actuals: [
           {
             materialId: firstAllocation.materialId,
@@ -315,6 +434,19 @@ describe('NorthStarService', () => {
         operator: 'Bench Chemist',
       }),
     ).toThrow(UnprocessableEntityException)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('requires a currently published formula before planning or posting lab inventory usage', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    expect(() => service.labUsagePlan('frm-0421', 12.5)).toThrowError(
+      'Formula FRM-0421 must be published before lab inventory usage',
+    )
+    expect(() => service.commitLabUsage('frm-0421', 12.5)).toThrowError(
+      'Formula FRM-0421 must be published before lab inventory usage',
+    )
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
   })
 
@@ -457,6 +589,173 @@ describe('NorthStarService', () => {
     expect(result.invariant).toContain('active session')
   })
 
+  it('prevents a newly provisioned workspace from reading or purchasing another tenant material', () => {
+    const service = createAuthenticatedService()
+    const privateMaterial = service.createMaterial({
+      name: 'NOXELIS Private Material',
+      cas: '98765-43-2',
+      costPerGram: 0.14,
+      libraryScope: 'TENANT',
+    }).data.material
+    const publishedMaterial = service.createMaterial({
+      name: 'OlfactoryOps Shared Material',
+      cas: '98765-43-3',
+      costPerGram: 0.18,
+    }).data.material
+    const signup = service.signup({
+      email: 'scope.owner@example.test',
+      name: 'Scope Owner',
+      organizationName: 'Scope QA Lab',
+      workspaceSlug: 'scope-qa-lab',
+      password: 'ScopeQaOwner2026!',
+    }).data
+
+    expect(signup.organization.id).toBe('org-scope-qa-lab')
+    const sharedBergamot = service.materials().data.find((material) => material.id === 'mat-bergamot')
+    expect(sharedBergamot).toMatchObject({ libraryScope: 'GLOBAL' })
+    expect(sharedBergamot?.organizationId).toBeUndefined()
+    expect(service.materials().data).toContainEqual(expect.objectContaining({
+      id: publishedMaterial.id,
+      libraryScope: 'GLOBAL',
+    }))
+    expect(service.materials().data.some((material) => material.id === privateMaterial.id)).toBe(false)
+    expect(() => service.material(privateMaterial.id)).toThrow(/not found/i)
+    expect(() => service.compareSupplierRfq({ materialId: privateMaterial.id, quantityGrams: 50 })).toThrow(/not found/i)
+    expect(() => service.updateMaterial('mat-bergamot', { family: 'Cross-tenant edit' })).toThrow(ForbiddenException)
+
+    const ownMaterial = service.createMaterial({
+      name: 'Tenant Bergamot Reference',
+      cas: '67890-12-3',
+      costPerGram: 0.14,
+    }).data.material
+    expect(() => service.createMaterial({
+      name: 'Unauthorized Shared Material',
+      cas: '67890-12-4',
+      libraryScope: 'GLOBAL',
+    })).toThrow(ForbiddenException)
+    const updatedOwnMaterial = service.updateMaterial(ownMaterial.id, { family: 'Tenant-owned citrus' }).data.material
+    service.createSupplier({
+      name: 'Scope Tenant Supplier',
+      country: 'TH',
+      contactEmail: 'scope-supplier@example.test',
+      preferredMaterialIds: [ownMaterial.id],
+    })
+    const comparison = service.compareSupplierRfq({ materialId: ownMaterial.id, quantityGrams: 50 }).data
+
+    expect(service.materials().data.some((material) => material.id === ownMaterial.id)).toBe(true)
+    expect(updatedOwnMaterial).toMatchObject({
+      libraryScope: 'TENANT',
+      organizationId: signup.organization.id,
+      family: 'Tenant-owned citrus',
+    })
+    expect(service.materialDedupe('67890-12-3').data.matches).toHaveLength(1)
+    expect(comparison.materialId).toBe(ownMaterial.id)
+  })
+
+  it('enforces storage capacity and records a two-step in-transit transfer without changing stock quantity', () => {
+    const service = createAuthenticatedService()
+    const lot = service.inventoryConsole().data.lots.find((candidate) => candidate.quantityGrams > 0 && candidate.reservedGrams === 0)
+    expect(lot).toBeDefined()
+    const sourceQuantity = lot!.quantityGrams
+    const destination = service.createStorageLocation({
+      name: 'Phase 6 QA Destination',
+      zone: 'Warehouse',
+      capacityGrams: sourceQuantity + 10,
+      kind: 'Bin',
+    }).data.location
+    const transit = service.createStorageLocation({
+      name: 'Phase 6 QA Transit',
+      zone: 'Dispatch',
+      capacityGrams: sourceQuantity + 10,
+      kind: 'Transit',
+      status: 'IN_TRANSIT',
+    }).data.location
+    const constrained = service.createStorageLocation({
+      name: 'Phase 6 QA Constrained',
+      zone: 'Warehouse',
+      capacityGrams: Math.max(0.1, sourceQuantity - 0.1),
+      kind: 'Bin',
+    }).data.location
+
+    expect(() => service.transferInventory({ lotId: lot!.id, toLocation: constrained.name })).toThrow(UnprocessableEntityException)
+
+    const started = service.transferInventory({ lotId: lot!.id, toLocation: destination.name, viaTransit: true }).data
+    expect(started.lot.location).toBe(transit.name)
+    expect(started.lot.inTransitToLocation).toBe(destination.name)
+    expect(started.movement.direction).toBe('MOVE')
+    expect(started.lot.quantityGrams).toBe(sourceQuantity)
+
+    const completed = service.completeInventoryTransfer(lot!.id).data
+    expect(completed.lot.location).toBe(destination.name)
+    expect(completed.lot.inTransitToLocation).toBeUndefined()
+    expect(completed.lot.quantityGrams).toBe(sourceQuantity)
+    expect(completed.movement.ref).toContain('transfer complete')
+  })
+
+  it('records expiry and waste controls without mutating the original movement history', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as { lots: Array<{ id: string; expiryDate: string; qualityStatus: string; quantityGrams: number; reservedGrams: number }> }
+    const lot = internals.lots.find((candidate) => candidate.quantityGrams > 5 && candidate.reservedGrams === 0)
+    expect(lot).toBeDefined()
+    lot!.expiryDate = '2020-01-01'
+    const beforeExpiryMovements = service.inventoryMovements().data.length
+    const expiry = service.refreshInventoryExpiry().data
+
+    expect(expiry.expiredLotIds).toContain(lot!.id)
+    expect(service.lotsList().data.find((candidate) => candidate.id === lot!.id)?.qualityStatus).toBe('EXPIRED')
+    expect(service.inventoryMovements().data).toHaveLength(beforeExpiryMovements)
+
+    const activeLot = service.inventoryConsole().data.lots.find((candidate) => candidate.quantityGrams > 5 && candidate.reservedGrams === 0 && candidate.id !== lot!.id)
+    expect(() => service.writeOffInventory({ lotId: activeLot!.id, quantityGrams: 1 })).toThrow(UnprocessableEntityException)
+    const writeOff = service.writeOffInventory({ lotId: activeLot!.id, quantityGrams: 1, reason: 'Damaged container disposal' }).data
+
+    expect(writeOff.movement.type).toBe('WASTE')
+    expect(writeOff.movement.direction).toBe('OUT')
+    expect(writeOff.lot.quantityGrams).toBeCloseTo(activeLot!.quantityGrams - 1)
+  })
+
+  it('quarantines private document uploads until scanned and approved, with tenant-scoped history', () => {
+    const service = createAuthenticatedService()
+    const prepared = service.prepareDocumentUpload({
+      type: 'SDS',
+      linkedTo: 'mat-iso',
+      fileName: 'iso-e-super-sds-v4.pdf',
+      mimeType: 'application/pdf',
+      tags: ['supplier', 'sds'],
+    }).data
+    const uploaded = service.commitDocumentUpload(prepared, {
+      sizeBytes: 2048,
+      checksum: `sha256:${'a'.repeat(64)}`,
+      ocrTextPreview: 'Iso E Super safety data sheet',
+    }).data
+
+    expect(uploaded.document.status).toBe('QUARANTINED')
+    expect(() => service.requestDocumentSignedUrl(uploaded.document.id)).toThrow(ForbiddenException)
+
+    const scanned = service.recordDocumentScanResult(uploaded.document.id, {
+      status: 'CLEAN',
+      provider: 'QA scanner',
+      textPreview: 'Iso E Super safety data sheet, section one',
+    }).data
+    expect(scanned.document.status).toBe('REVIEW_REQUIRED')
+    expect(scanned.document.scanStatus).toBe('CLEAN')
+
+    const approved = service.approveDocument(uploaded.document.id).data
+    expect(approved.document.status).toBe('APPROVED')
+    expect(service.documentVersions(uploaded.document.id).data.versions).toHaveLength(1)
+    expect(service.searchDocuments('safety data').data.documents.map((document) => document.id)).toContain(uploaded.document.id)
+
+    service.signup({
+      email: 'document.scope.owner@example.test',
+      name: 'Document Scope Owner',
+      organizationName: 'Document Scope Lab',
+      workspaceSlug: 'document-scope-lab',
+      password: 'DocumentScope2026!',
+    })
+    expect(service.documents().data.some((document) => document.id === uploaded.document.id)).toBe(false)
+    expect(() => service.documentVersions(uploaded.document.id)).toThrow(/not found/i)
+  })
+
   it('invites tenant members without creating a usable credential', () => {
     const service = createAuthenticatedService()
     const result = service.inviteMember({
@@ -512,6 +811,9 @@ describe('NorthStarService', () => {
     expect(() => service.billingConsole()).toThrow(ForbiddenException)
     expect(() => service.selectBillingPlan({ planId: 'PLAN-ARTISAN' })).toThrow(ForbiddenException)
     expect(() => service.openBillingPortal()).toThrow(ForbiddenException)
+    expect(service.analyticsDashboard().data.invariant).toContain('read-only')
+    expect(() => service.costingValuation()).toThrow(ForbiddenException)
+    expect(() => service.costingSku('SKU-ISO-050')).toThrow(ForbiddenException)
   })
 
   it('routes normal-user inventory updates through admin approval before mutating stock', () => {
@@ -778,7 +1080,8 @@ describe('NorthStarService', () => {
     }).data
 
     expect(result.organization.slug).toBe('atelier-smoke')
-    expect(result.organization.customDomain).toBe('atelier-smoke.labofscents.org')
+    expect(result.organization.systemHostname).toBe('atelier-smoke.labofscents.org')
+    expect(result.organization.customDomain).toBeUndefined()
     expect(result.organization.plan).toBe('Free')
     expect(result.brand.organizationId).toBe(result.organization.id)
     expect(result.membership.id).toBe('MBR-ATELIER-SMOKE')
@@ -792,8 +1095,11 @@ describe('NorthStarService', () => {
     expect(result.subscription.organizationId).toBe(result.organization.id)
     expect(result.subscription.planId).toBe('PLAN-APPRENTICE')
     expect(result.sso.organizationId).toBe(result.organization.id)
-    expect(result.sso.domain).toBe('atelier-smoke.labofscents.org')
-    expect(result.sso.status).toBe('verified')
+    expect(result.sso.domain).toBe('')
+    expect(result.sso.status).toBe('draft')
+    expect(result.customDomain).toMatchObject({ status: 'NOT_REQUESTED' })
+    expect(result.systemHostname).toBe('atelier-smoke.labofscents.org')
+    expect(result.workspaceUrl).toBe('https://atelier-smoke.labofscents.org')
     expect(result.audit.action).toBe('auth.signup')
     expect(credentialForEmail(service, 'owner@atelier-smoke.test')?.passwordHash).toMatch(/^pbkdf2:v1:sha256:/)
     expect(service.me().data.userSettings).toMatchObject({
@@ -803,9 +1109,18 @@ describe('NorthStarService', () => {
       displayName: 'Atelier Owner',
       preferredLanding: 'dashboard',
     })
+    expect(service.memberSummary().data).toMatchObject({
+      totalMembers: 1,
+      activeMembers: 1,
+      invitedMembers: 0,
+      deactivatedMembers: 0,
+      activeSessions: 1,
+      roleCounts: [{ role: 'Owner', count: 1 }],
+    })
+    expect(service.memberSummary().data).not.toHaveProperty('memberships')
     expect(() => service.tenantConsole()).toThrow(ForbiddenException)
     expect(service.billingConsole().data.subscription.organizationId).toBe(result.organization.id)
-    expect(service.billingConsole().data.sso.domain).toBe('atelier-smoke.labofscents.org')
+    expect(service.billingConsole().data.sso.domain).toBe('')
     expect(service.billingConsole().data.usage).toMatchObject({
       organizationId: result.organization.id,
       formulas: 0,
@@ -834,6 +1149,47 @@ describe('NorthStarService', () => {
       }),
     ).toThrow(UnprocessableEntityException)
     expect(() => service.tenantProbe('org-weak-signup-lab')).toThrow(ForbiddenException)
+  })
+
+  it('allocates a system hostname but does not assign a customer hostname during public signup', () => {
+    const service = createAuthenticatedService()
+
+    const legacyClient = service.signup({
+      organizationName: 'Legacy Signup Lab',
+      workspaceSlug: 'legacy-signup-lab',
+      customDomain: 'legacy-signup-lab.labofscents.org',
+      email: 'owner@legacy-signup.test',
+      name: 'Legacy Owner',
+      password: 'LegacyOwner2026',
+    }).data
+
+    expect(legacyClient.organization.customDomain).toBeUndefined()
+    expect(legacyClient.systemHostname).toBe('legacy-signup-lab.labofscents.org')
+    expect(legacyClient.customDomain.status).toBe('NOT_REQUESTED')
+    expect(service.customDomains().data.domains).toEqual([])
+
+    const anotherService = createAuthenticatedService()
+    expect(() => anotherService.signup({
+      organizationName: 'Unsafe Signup Lab',
+      workspaceSlug: 'unsafe-signup-lab',
+      customDomain: 'app.customer-domain.test',
+      email: 'owner@unsafe-signup.test',
+      name: 'Unsafe Owner',
+      password: 'UnsafeOwner2026',
+    })).toThrow('Connect a custom domain after workspace creation')
+  })
+
+  it('rejects reserved workspace slugs before any tenant record is created', () => {
+    const service = createAuthenticatedService()
+
+    expect(() => service.signup({
+      organizationName: 'API Workspace',
+      workspaceSlug: 'api',
+      email: 'owner@reserved-slug.test',
+      name: 'Reserved Owner',
+      password: 'ReservedOwner2026',
+    })).toThrow('Workspace slug is reserved')
+    expect(() => service.tenantProbe('org-api')).toThrow(ForbiddenException)
   })
 
   it('does not require MFA for formula approval when role is allowed', () => {
@@ -1014,7 +1370,12 @@ describe('NorthStarService', () => {
       fieldType: 'date',
       required: true,
     }).data
-    const branding = service.updateBranding({ accentColor: '#37d6a0', displayName: 'NOXELIS Atelier' }).data
+    const branding = service.updateBranding({
+      accentColor: '#37d6a0',
+      displayName: 'NOXELIS Atelier',
+      logoMode: 'image',
+      logoImageUrl: 'https://assets.example.test/noxelis-atelier.svg',
+    }).data
 
     expect(consoleState.customFields.length).toBeGreaterThan(0)
     expect(consoleState.branding.displayName).toBe('NOXELIS Lab')
@@ -1027,7 +1388,96 @@ describe('NorthStarService', () => {
     expect(field.customField.key).toBe('ifra_review_date')
     expect(field.audit.action).toBe('customization.customField.create')
     expect(branding.branding.accentColor).toBe('#37d6a0')
+    expect(branding.branding.logoMode).toBe('image')
+    expect(branding.branding.logoImageUrl).toBe('https://assets.example.test/noxelis-atelier.svg')
     expect(branding.audit.action).toBe('customization.branding.update')
+  })
+
+  it('keeps role policies, tenant audit, and customization records isolated between workspaces', () => {
+    const service = createAuthenticatedService()
+    const nxlViewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    service.setRolePermissions('Viewer', [...(nxlViewer?.allowedPermissions ?? []), 'inventory.adjust'])
+    service.updateSettings({ currency: 'EUR', defaultDilutionPercent: 12 })
+    service.updateFeatureFlag('formulaCostVisibility', false)
+    const nxlNumber = service.nextNumber('formula').data
+    service.createCustomField({ entity: 'supplier', label: 'NOXELIS review owner', fieldType: 'text' })
+
+    const signup = service.signup({
+      organizationName: 'Isolation Atelier',
+      workspaceSlug: 'isolation-atelier',
+      email: 'owner@isolation-atelier.test',
+      name: 'Isolation Owner',
+      password: 'IsolationAtelier2026!',
+    }).data
+    const internals = service as unknown as {
+      sessions: Array<{ id: string; role: string }>
+      membershipRecords: Array<{ id: string; organizationId: string; role: string }>
+    }
+    internals.sessions = internals.sessions.map((session) =>
+      session.id === signup.session.id ? { ...session, role: 'Admin' } : session,
+    )
+    internals.membershipRecords = internals.membershipRecords.map((membership) =>
+      membership.organizationId === signup.organization.id && membership.id === signup.membership.id
+        ? { ...membership, role: 'Admin' }
+        : membership,
+    )
+
+    const atelierViewer = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    service.setRolePermissions('Viewer', [...(atelierViewer?.allowedPermissions ?? []), 'production.qc'])
+    service.updateSettings({ currency: 'GBP', defaultDilutionPercent: 18 })
+    service.updateFeatureFlag('formulaCostVisibility', true)
+    const atelierNumber = service.nextNumber('formula').data
+    service.createCustomField({ entity: 'supplier', label: 'Atelier release code', fieldType: 'text' })
+    const atelierAudit = service.auditLogs().data
+
+    expect(atelierNumber.value).toBe('FRM-0422')
+    expect(atelierAudit.length).toBeGreaterThan(0)
+    expect(atelierAudit.every((event) => event.organizationId === signup.organization.id && event.scope === 'tenant')).toBe(true)
+
+    service.login(adminEmail, adminPassword)
+    const nxlMatrix = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    const nxlCustomization = service.customizationConsole().data
+    const nxlAudit = service.auditLogs().data
+    const nxlExport = service.auditExport().data
+
+    expect(nxlNumber.value).toBe('FRM-0422')
+    expect(nxlMatrix?.allowedPermissions).toContain('inventory.adjust')
+    expect(nxlMatrix?.allowedPermissions).not.toContain('production.qc')
+    expect(nxlCustomization.settings.currency).toBe('EUR')
+    expect(nxlCustomization.featureFlags.find((flag) => flag.key === 'formulaCostVisibility')?.enabled).toBe(false)
+    expect(nxlCustomization.customFields.some((field) => field.label === 'NOXELIS review owner')).toBe(true)
+    expect(nxlCustomization.customFields.some((field) => field.label === 'Atelier release code')).toBe(false)
+    expect(nxlAudit.every((event) => event.organizationId === 'org-nxl' && event.scope === 'tenant')).toBe(true)
+    expect(nxlExport.organizationId).toBe('org-nxl')
+    expect(() => service.tenantProbe(signup.organization.id)).toThrow(ForbiddenException)
+
+    service.login('owner@isolation-atelier.test', 'IsolationAtelier2026!')
+    const restoredAtelierMatrix = service.permissionMatrix().data.matrix.find((row) => row.role === 'Viewer')
+    const restoredAtelierCustomization = service.customizationConsole().data
+
+    expect(restoredAtelierMatrix?.allowedPermissions).toContain('production.qc')
+    expect(restoredAtelierMatrix?.allowedPermissions).not.toContain('inventory.adjust')
+    expect(restoredAtelierCustomization.settings.currency).toBe('GBP')
+    expect(restoredAtelierCustomization.featureFlags.find((flag) => flag.key === 'formulaCostVisibility')?.enabled).toBe(true)
+    expect(restoredAtelierCustomization.customFields.some((field) => field.label === 'Atelier release code')).toBe(true)
+    expect(restoredAtelierCustomization.customFields.some((field) => field.label === 'NOXELIS review owner')).toBe(false)
+  })
+
+  it('exposes workspace branding to signed-in members and validates shared names', () => {
+    const service = createAuthenticatedService()
+
+    const branding = service.workspaceBranding().data
+
+    expect(branding.organizationId).toBe('org-nxl')
+    expect(branding.displayName).toBe('NOXELIS Lab')
+    expect(() => service.updateBranding({ displayName: 'x' })).toThrow(UnprocessableEntityException)
+    expect(() => service.updateBranding({ logoMode: 'image' })).toThrow(UnprocessableEntityException)
+    expect(() => service.updateBranding({ logoMode: 'image', logoImageUrl: 'http://assets.example.test/logo.png' })).toThrow(
+      UnprocessableEntityException,
+    )
+    expect(() => service.updateBranding({ logoMode: 'image', logoImageUrl: 'https://user:pass@assets.example.test/logo.png' })).toThrow(
+      UnprocessableEntityException,
+    )
   })
 
   it('blocks unsafe customization changes', () => {
@@ -1043,12 +1493,12 @@ describe('NorthStarService', () => {
     expect(() => service.updateBranding({ accentColor: 'blue' })).toThrow(UnprocessableEntityException)
   })
 
-  it('creates materials with CAS duplicate guard and no stock side effect', () => {
+  it('publishes curator-created materials globally with CAS duplicate guard and no stock side effect', () => {
     const service = createAuthenticatedService()
     const beforeStockRows = service.inventorySummary().data.length
     const result = service.createMaterial({
-      name: 'Vetiveryl Acetate',
-      cas: '68917-34-0',
+      name: 'Test-only Vetiver Material',
+      cas: '9999999-99-9',
       family: 'Woody vetiver',
       tier: 'Base',
       density: 0.99,
@@ -1057,14 +1507,16 @@ describe('NorthStarService', () => {
       logP: 4.8,
       source: 'Manual supplier onboarding',
     }).data
-    const dedupe = service.materialDedupe('68917-34-0').data
+    const dedupe = service.materialDedupe('9999999-99-9').data
 
-    expect(result.material.id).toBe('mat-vetiveryl-acetate')
-    expect(result.audit.action).toBe('material.create')
-    expect(result.invariant).toContain('does not create stock')
+    expect(result.material.id).toMatch(/^mat-test-only-vetiver-material-[a-z0-9]+$/)
+    expect(result.material.libraryScope).toBe('GLOBAL')
+    expect(result.material.organizationId).toBeUndefined()
+    expect(result.audit.action).toBe('material.global.publish')
+    expect(result.invariant).toContain('without creating stock')
     expect(dedupe.duplicate).toBe(true)
     expect(service.inventorySummary().data.length).toBe(beforeStockRows + 1)
-    expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '68917-34-0' })).toThrow(
+    expect(() => service.createMaterial({ name: 'Duplicate Vetiver', cas: '9999999-99-9' })).toThrow(
       UnprocessableEntityException,
     )
   })
@@ -1148,6 +1600,29 @@ describe('NorthStarService', () => {
     expect(accord.formula.code).toBe('ACC-0423')
     expect(accord.formula.formulaType).toBe('ACCORD')
     expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+  })
+
+  it('keeps an accord editable while blocking review until final-product context is saved', () => {
+    const service = createAuthenticatedService()
+    const accord = service.createFormulaDraft({ name: 'Contextual accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    service.addFormulaLine(accord.id, { materialId: 'mat-iso', grams: 100 })
+
+    expect(() => service.submitFormulaForReview(accord.id, { reviewer: adminEmail })).toThrow('Add final-product concentration and IFRA category')
+
+    const stillBlocked = service.updateFormulaDraft(accord.id, {
+      expectedRevision: accord.draftRevision + 1,
+      finalProductConcentrationPercent: 20,
+      ifraCategory: ' ',
+    }).data.formula
+    expect(stillBlocked.requiresFinalProductContext).toBe(true)
+
+    const updated = service.updateFormulaDraft(accord.id, {
+      expectedRevision: stillBlocked.draftRevision,
+      finalProductConcentrationPercent: 20,
+      ifraCategory: '4',
+    }).data.formula
+    expect(updated.requiresFinalProductContext).toBe(false)
+    expect(() => service.submitFormulaForReview(updated.id, { reviewer: adminEmail })).not.toThrow()
   })
 
   it('consumes the selected inventory lot when adding an inventory-sourced formula line', () => {
@@ -1263,6 +1738,40 @@ describe('NorthStarService', () => {
     ).toThrow(UnprocessableEntityException)
   })
 
+  it('composes a Fine Fragrance from pinned Accord snapshots without inventory movement', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const opening = service.createFormulaDraft({ name: 'Opening accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    const base = service.createFormulaDraft({ name: 'Base accord', formulaType: 'ACCORD', targetGrams: 100 }).data.formula
+    const openingLine = service.addFormulaLine(opening.id, { materialId: 'mat-iso', grams: 100 }).data.line
+    service.addFormulaLine(base.id, { materialId: 'mat-hedione', grams: 100 })
+
+    expect(() => service.composeFineFragrance({ targetGrams: 100, accordComponents: [{ formulaId: opening.id, grams: 100 }] })).toThrow('between two')
+
+    const composed = service.composeFineFragrance({
+      name: 'Composed Fine Fragrance', targetGrams: 100, concentrationType: 'EDP', finalProductConcentrationPercent: 20, ifraCategory: '4',
+      accordComponents: [{ formulaId: opening.id, grams: 45 }, { formulaId: base.id, grams: 45 }],
+      materialLines: [{ materialId: 'mat-ethanol', grams: 10, pyramidNote: 'Solvent' }],
+    }).data
+    const pinnedOpening = composed.formula.lines.find((line) => line.childFormulaId === opening.id)
+    expect(composed.formula.formulaType).toBe('FINE_FRAGRANCE')
+    expect(composed.formula.lines.filter((line) => line.childFormulaId)).toHaveLength(2)
+    expect(pinnedOpening?.childFormulaVersionId).toBeTruthy()
+    expect(pinnedOpening?.childFormulaChecksum).toMatch(/^sha256:/)
+    expect(composed.leaves.find((leaf) => leaf.materialId === 'mat-iso')?.effectivePercent).toBeCloseTo(45)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+
+    const resized = service.updateFormulaLine(composed.formula.id, pinnedOpening!.id, { grams: 40 }).data
+    const resizedOpening = resized.formula.lines.find((line) => line.id === pinnedOpening!.id)
+    expect(resizedOpening?.childFormulaVersionId).toBe(pinnedOpening?.childFormulaVersionId)
+    expect(resizedOpening?.childFormulaChecksum).toBe(pinnedOpening?.childFormulaChecksum)
+
+    service.updateFormulaLine(opening.id, openingLine.id, { materialId: 'mat-bergamot', grams: 100 })
+    const resolvedAfterAccordEdit = service.resolveFormula(composed.formula.id).data
+    expect(resolvedAfterAccordEdit.leaves.find((leaf) => leaf.materialId === 'mat-iso')?.effectivePercent).toBeCloseTo(40)
+    expect(resolvedAfterAccordEdit.leaves.some((leaf) => leaf.materialId === 'mat-bergamot')).toBe(false)
+  })
+
   it('reviews, approves, evaluates, compares, locks, forks, and exports formula versions without stock movement', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
@@ -1331,6 +1840,126 @@ describe('NorthStarService', () => {
     )
   })
 
+  it('keeps trial release non-consuming and links actual lab usage, sensory evidence, and reversal history', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const draft = service.createFormulaDraft({ name: 'Sensory Trial Accord', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Ready for trial release' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved for controlled trial' }).data
+
+    const planned = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version, sampleCode: 'TRL-SENSORY-001' }).data.trial
+    const released = service.releaseTrial(planned.id).data.trial
+    expect(released.lifecycle).toBe('RELEASED_FOR_TRIAL')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+
+    const usage = service.commitLabUsage(draft.id, 10, { trialId: planned.id, purpose: 'trial', sampleCode: planned.sampleCode }).data.usage
+    const afterCommit = service.trialDetail(planned.id).data.trial
+    expect(usage.trialId).toBe(planned.id)
+    expect(afterCommit.lifecycle).toBe('MIXED')
+    expect(service.inventoryMovements().data.slice(0, 2).every((movement) => movement.type === 'LAB_CONSUMPTION')).toBe(true)
+
+    const sensory = service.createTrialSensorySession(planned.id, { presentationMode: 'BLIND' }).data.session
+    const link = service.createTrialPublicLink(planned.id, { sessionId: sensory.id, presentationMode: 'BLIND' }).data.link
+    const blind = service.publicTrialPresentation(link.token).data
+    expect(blind.title).toBe('Blind fragrance trial')
+    expect(blind).not.toHaveProperty('formulaId')
+    const scores = { OPENING: 8, HEART: 7, DRYDOWN: 8, LONGEVITY: 7, OVERALL: 8 }
+    const publicObservation = service.submitPublicTrialObservation(link.token, { timepoint: 'OVERALL', scores, descriptors: ['bright', 'woody'], observation: 'Balanced drydown.', idempotencyKey: 'public-observation-001' }).data
+    expect(publicObservation.duplicate).toBeUndefined()
+    expect(service.submitPublicTrialObservation(link.token, { timepoint: 'OVERALL', scores, idempotencyKey: 'public-observation-001' }).data.duplicate).toBe(true)
+
+    const decided = service.closeTrial(planned.id, { outcome: 'ACCEPT', rationale: 'Panel accepted the controlled trial.' }).data.trial
+    expect(decided.lifecycle).toBe('DECIDED')
+    service.reverseLabUsage(usage.id)
+    expect(service.trialDetail(planned.id).data.trial.usageLink?.reversedAt).toBeTruthy()
+  })
+
+  it('returns only completed tenant-scoped sensory history for an immutable formula version', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({ name: 'Comparable sensory baseline', targetGrams: 100, finalProductConcentrationPercent: 20 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Comparable history baseline.' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved formula version.' }).data
+
+    for (let index = 1; index <= 3; index += 1) {
+      const trial = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version, sampleCode: `TRL-MEMORY-${index}` }).data.trial
+      service.releaseTrial(trial.id)
+      service.commitLabUsage(draft.id, 10, { trialId: trial.id, purpose: 'trial', sampleCode: trial.sampleCode })
+      const sensory = service.createTrialSensorySession(trial.id, { presentationMode: 'BLIND' }).data.session
+      const link = service.createTrialPublicLink(trial.id, { sessionId: sensory.id, presentationMode: 'BLIND' }).data.link
+      service.submitPublicTrialObservation(link.token, {
+        timepoint: 'OVERALL',
+        scores: { OPENING: 7 + index / 10, HEART: 7, DRYDOWN: 8, LONGEVITY: 7, OVERALL: 8 },
+        descriptors: ['bright', 'amber'],
+        observation: 'Controlled comparable observation.',
+        idempotencyKey: `memory-observation-${index}`,
+      })
+      service.closeTrial(trial.id, { outcome: 'ACCEPT', rationale: 'Completed comparable evidence.' })
+    }
+
+    const evidence = service.formulaTrialEvidence(draft.id, approval.version.version).data
+    expect(evidence.evidence.status).toBe('READY')
+    expect(evidence.evidence.sampleCount).toBe(3)
+    expect(evidence.evidence.averages.OVERALL).toBe(8)
+    expect(evidence.evidence.trialIds).toHaveLength(3)
+    const lineage = service.operationalLineage('FORMULA', draft.id).data
+    expect(lineage.impact.trials).toBe(3)
+    expect(lineage.impact.lots).toBeGreaterThan(0)
+
+    service.signup({
+      organizationName: 'Evidence Isolation Lab', workspaceSlug: 'evidence-isolation', email: 'owner@evidence-isolation.test', name: 'Evidence Owner', password: 'EvidenceIsolation2026!',
+    })
+    expect(() => service.formulaTrialEvidence(draft.id, approval.version.version)).toThrow('was not found')
+  })
+
+  it('uses tenant-scoped approved substitutions as an explicit optimizer control', () => {
+    const service = createAuthenticatedService()
+    const created = service.upsertApprovedMaterialSubstitution({
+      sourceMaterialId: 'mat-hedione', replacementMaterialId: 'mat-iso', evidenceReference: 'Internal comparative evaluation 2026-08', roleSimilarity: 'MEDIUM', strengthFactor: 1,
+    }).data.substitution
+    expect(created.status).toBe('APPROVED')
+    expect(service.approvedMaterialSubstitutions().data).toContainEqual(expect.objectContaining({ id: created.id, sourceMaterialId: 'mat-hedione' }))
+    service.signup({
+      organizationName: 'Substitution Isolation Lab', workspaceSlug: 'substitution-isolation', email: 'owner@substitution-isolation.test', name: 'Substitution Owner', password: 'SubstitutionIsolation2026!',
+    })
+    expect(service.approvedMaterialSubstitutions().data).toHaveLength(0)
+  })
+
+  it('keeps comparable evidence and formula metadata unavailable to sensory panelists', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createFormulaDraft({ name: 'Panelist redaction baseline', targetGrams: 100 }).data.formula
+    service.addFormulaLine(draft.id, { materialId: 'mat-hedione', grams: 70 })
+    service.addFormulaLine(draft.id, { materialId: 'mat-iso', grams: 30 })
+    service.submitFormulaForReview(draft.id, { reviewer: adminEmail, comment: 'Prepare a blind panelist trial.' })
+    const approval = service.approveFormula(draft.id, { comment: 'Approved for blind panel.' }).data
+    const trial = service.createTrial({ formulaId: draft.id, formulaVersion: approval.version.version }).data.trial
+
+    const invited = service.inviteMember({
+      email: 'panelist.evidence@example.test',
+      name: 'Evidence Panelist',
+      role: 'SENSORY_PANELIST',
+      brandIds: ['brand-nxl'],
+    }).data
+    service.setMembershipStatus(invited.membership.id, 'ACTIVE')
+    provisionTestCredential(service, 'panelist.evidence@example.test', 'PanelistEvidence2026!')
+    const login = service.login('panelist.evidence@example.test', 'PanelistEvidence2026!').data
+    service.authenticateSession(login.session.id)
+
+    const detail = service.trialDetail(trial.id).data
+    expect(detail.comparableEvidence).toMatchObject({
+      status: 'NOT_AVAILABLE',
+      sampleCount: 0,
+      confidence: 'NOT_EVALUATED',
+      averages: {},
+      trialIds: [],
+    })
+    expect(detail.trial.formulaSnapshot.formulaId).toBe('')
+    expect(detail.trial.formulaSnapshot.formulaName).toBe('')
+  })
+
   it('keeps Formula records isolated between workspaces', () => {
     const service = createAuthenticatedService()
     const signup = service.signup({
@@ -1356,6 +1985,49 @@ describe('NorthStarService', () => {
     expect(() => service.createProductionBatch(tenantFormula.id, 10)).toThrowError('was not found')
     expect(() => service.costingFormula(tenantFormula.id)).toThrowError('was not found')
     expect(() => service.generateDocument({ type: 'Formula Spec Sheet', linkedTo: tenantFormula.id })).toThrowError('was not found')
+  })
+
+  it('scopes procurement evidence and analytics read models to the active workspace', () => {
+    const service = createAuthenticatedService()
+    const adminSupplierCount = service.suppliers().data.length
+    const signup = service.signup({
+      organizationName: 'Procurement Isolation Lab',
+      workspaceSlug: 'procurement-isolation',
+      email: 'owner@procurement-isolation.test',
+      name: 'Procurement Owner',
+      password: 'ProcurementIsolation2026!',
+    }).data
+
+    expect(service.suppliers().data).toEqual([])
+    expect(service.purchaseOrders().data).toEqual([])
+    expect(service.analyticsDashboard().data.burnRate).toEqual([])
+
+    const material = service.createMaterial({
+      name: 'Tenant Receipt Material',
+      cas: '1200-00-1',
+      family: 'Tenant isolate',
+      odor: ['clean'],
+      costPerGram: 0.5,
+    }).data.material
+    const supplier = service.createSupplier({
+      name: 'Tenant Receipt Supplier',
+      country: 'TH',
+      contactEmail: 'buyer@tenant-receipt.example',
+      preferredMaterialIds: [material.id],
+    }).data.supplier
+    const purchaseOrder = service.createPurchaseOrder({
+      supplierId: supplier.id,
+      lines: [{ materialId: material.id, quantityGrams: 20, unitCost: 0.6 }],
+    }).data.purchaseOrder
+
+    expect(supplier.organizationId).toBe(signup.organization.id)
+    expect(purchaseOrder.organizationId).toBe(signup.organization.id)
+    expect(service.suppliers().data).toHaveLength(1)
+    expect(service.purchaseOrders().data).toHaveLength(1)
+
+    service.login(adminEmail, adminPassword)
+    expect(service.suppliers().data).toHaveLength(adminSupplierCount)
+    expect(service.purchaseOrders().data.some((order) => order.id === purchaseOrder.id)).toBe(false)
   })
 
   it('scopes Formula inventory sources to the active workspace', () => {
@@ -1577,6 +2249,7 @@ describe('NorthStarService', () => {
 
     const batch = service.createProductionBatch('frm-0421', 25).data
     expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/must consume inventory/)
+    expect(() => service.costingBatch(batch.id)).toThrow(/must be released/)
 
     service.consumeProductionBatch(batch.id)
     const filtration = service.updateProductionBatchStatus(batch.id, 'FILTRATION').data
@@ -1595,6 +2268,85 @@ describe('NorthStarService', () => {
     expect(released.batch.genealogy.outputLotId).toBe(released.batch.outputLot?.id)
     expect(released.batch.yieldVariancePercent).toBeLessThan(0)
     expect(released.invariant).toContain('audited and gated')
+
+    const costSheet = service.costingBatch(batch.id).data
+    expect(costSheet.costingBasis).toBe('RELEASED_OUTPUT')
+    expect(costSheet.materialCostBasis).toBe('ACTUAL_LOT_CONSUMPTION')
+    expect(costSheet.outputGrams).toBe(released.batch.outputLot?.quantityGrams)
+    expect(costSheet.costPerGram).toBeCloseTo(costSheet.totalCost / costSheet.outputGrams, 4)
+  })
+
+  it('runs structured P1 production QC, reconciled yield, private CoA, and actual costing', () => {
+    const service = createAuthenticatedService()
+    const template = service.createProductionQcTemplate({
+      formulaId: 'frm-0421',
+      name: 'Citrus release specification',
+      checks: [
+        { id: 'DENSITY', label: 'Density', kind: 'NUMERIC', required: true, min: 0.9, max: 1.1, unit: 'g/ml' },
+        { id: 'ODOR', label: 'Organoleptic', kind: 'TEXT', required: true, expectedText: 'match' },
+      ],
+    }).data.template
+    const batch = service.createProductionBatch('frm-0421', 25).data
+    expect(batch.qcTemplateId).toBe(template.id)
+    service.planProductionBatch(batch.id, { equipment: 'Pilot kettle PK-02' })
+    service.consumeProductionBatch(batch.id)
+    service.updateProductionBatchStatus(batch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(batch.id, 'QC')
+
+    service.recordProductionQcResult(batch.id, { templateCheckId: 'DENSITY', observedValue: '0.98' })
+    service.recordProductionQcResult(batch.id, { templateCheckId: 'ODOR', observedValue: 'match' })
+    expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/next lifecycle gate/)
+    const approved = service.approveProductionQc(batch.id).data.batch
+    expect(approved.status).toBe('BOTTLING')
+    expect(() => service.updateProductionBatchStatus(batch.id, 'RELEASED')).toThrow(/reconciled yield/)
+
+    const yieldRecord = service.recordProductionYield(batch.id, { yieldGrams: 24.5, wasteGrams: 0.5, laborCost: 3, overheadCost: 1 }).data.record
+    expect(yieldRecord.status).toBe('RECONCILED')
+    const released = service.updateProductionBatchStatus(batch.id, 'RELEASED').data.batch
+    expect(released.outputLot?.quantityGrams).toBe(24.5)
+    expect(released.coaDocumentId).toContain(`DOC-COA-${batch.id}`)
+    expect(service.documents().data.find((document) => document.id === released.coaDocumentId)?.status).toBe('REVIEW_REQUIRED')
+    const costSheet = service.costingBatch(batch.id).data
+    expect(costSheet.laborCost).toBe(3)
+    expect(costSheet.overheadCost).toBe(1)
+  })
+
+  it('carries a released formula through finished-good FEFO fulfillment and source COGS', () => {
+    const service = createAuthenticatedService()
+    const batch = service.createProductionBatch('frm-0421', 25).data
+    service.consumeProductionBatch(batch.id)
+    service.updateProductionBatchStatus(batch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(batch.id, 'QC')
+    service.qcProductionBatch(batch.id, 'PASSED')
+    service.updateProductionBatchStatus(batch.id, 'RELEASED')
+
+    const finishedGood = service.finishedGoodLots().data.find((lot) => lot.batchId === batch.id)
+    expect(finishedGood?.qualityStatus).toBe('RELEASED')
+    expect(finishedGood?.costPerGram).toBeGreaterThan(0)
+
+    const sku = service.createCatalogSku({
+      formulaId: 'frm-0421',
+      name: `Released formula pack ${batch.id}`,
+      packSizeGrams: 10,
+      price: 30,
+    }).data.sku
+    expect(sku.productKind).toBe('FORMULA')
+    expect(sku.canSellPacks).toBeGreaterThan(0)
+
+    const quote = service.createQuote({ customerId: 'CUS-DEMO', skuId: sku.id, quantityPacks: 1 }).data.quote
+    service.updateQuoteStatus(quote.id, { status: 'ACCEPTED' })
+    const order = service.convertQuoteToOrder(quote.id).data.order
+    const reservation = service.reserveOrder(order.id).data
+    const fulfillment = service.fulfillOrder(order.id).data
+    const finishedGoodCosting = service.finishedGoodCosting().data
+
+    expect(reservation.allocations.every((allocation) => allocation.sourceType === 'FINISHED_GOOD')).toBe(true)
+    expect(fulfillment.movements).toHaveLength(0)
+    expect(fulfillment.finishedGoodMovements[0]?.cogsAmount).toBeGreaterThan(0)
+    expect(finishedGoodCosting.cogs).toBeGreaterThan(0)
+    expect(finishedGoodCosting.movements.map((movement) => movement.type)).toEqual(
+      expect.arrayContaining(['PRODUCTION_OUTPUT', 'RESERVATION', 'FULFILLMENT']),
+    )
   })
 
   it('receives purchase orders into inventory through lot and IN movement', () => {
@@ -1605,6 +2357,28 @@ describe('NorthStarService', () => {
     expect(receipt.movement.direction).toBe('IN')
     expect(receipt.priceHistory.source).toBe('PO_RECEIPT')
     expect(receipt.invariant).toContain('creates lot and IN movement')
+  })
+
+  it('keeps material compliance tenant-scoped', () => {
+    const service = createAuthenticatedService()
+    const compliance = service.upsertMaterialCompliance('mat-vanillin', {
+      status: 'BLOCKED',
+      ifraCategoryLimits: [{ category: '4', limitPercent: 0.1 }],
+      allergens: [{ name: 'Vanillin', cas: '121-33-5', concentrationPercent: 100 }],
+      euUkFlags: ['EU_ALLERGEN_DECLARATION'],
+      source: 'Supplier compliance statement',
+      sourceVersion: '2026.1',
+    }).data.profile
+
+    expect(compliance.status).toBe('BLOCKED')
+    expect(service.materialCompliance('mat-vanillin').data?.id).toBe(compliance.id)
+    expect(() => service.createPurchaseOrder({
+      supplierId: 'SUP-003',
+      materialId: 'mat-vanillin',
+      quantityGrams: 100,
+      unitCost: 0.12,
+    })).toThrow(/blocked by its compliance profile/)
+
   })
 
   it('runs procurement supplier, PO state, partial receipt, and price history workflow', () => {
@@ -1647,6 +2421,138 @@ describe('NorthStarService', () => {
 
     const history = service.materialPriceHistory('mat-vanillin').data
     expect(history.filter((entry) => entry.purchaseOrderId === draft.purchaseOrder.id)).toHaveLength(2)
+  })
+
+  it('quarantines P1 procurement receipts until value-based landed cost and inspection acceptance', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({
+      supplierId: 'SUP-003',
+      currency: 'USD',
+      lines: [
+        { materialId: 'mat-bergamot', quantityGrams: 40, unitCost: 0.1 },
+        { materialId: 'mat-vanillin', quantityGrams: 20, unitCost: 0.3 },
+      ],
+    }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+
+    const receipt = service.createProcurementReceipt(draft.id, {
+      lines: [
+        { materialId: 'mat-bergamot', receivedGrams: 40, supplierLotRef: 'BER-LOT-9' },
+        { materialId: 'mat-vanillin', receivedGrams: 20, supplierLotRef: 'VAN-LOT-4' },
+      ],
+    }).data.receipt
+    expect(receipt.status).toBe('QUARANTINE')
+    expect(service.lotsList().data.filter((lot) => receipt.lines.some((line) => line.lotId === lot.id)).every((lot) => lot.qualityStatus === 'QUARANTINE')).toBe(true)
+    expect(() => service.inspectProcurementReceipt(receipt.id, { action: 'ACCEPT' })).toThrow(/Post landed cost/)
+
+    const allocation = service.postProcurementLandedCost(receipt.id, {
+      freightCost: 3,
+      dutyCost: 1,
+      insuranceCost: 0,
+    }).data.allocation
+    expect(allocation.allocationMethod).toBe('EXTENDED_VALUE')
+    expect(allocation.allocations.reduce((total, item) => total + item.allocatedCost, 0)).toBeCloseTo(4, 6)
+
+    const accepted = service.inspectProcurementReceipt(receipt.id, { action: 'ACCEPT', note: 'CoA accepted' }).data.receipt
+    expect(accepted.status).toBe('ACCEPTED')
+    expect(accepted.lines.every((line) => line.acceptedGrams === line.receivedGrams && (line.landedUnitCost ?? 0) > line.unitCost)).toBe(true)
+    expect(service.lotsList().data.filter((lot) => accepted.lines.some((line) => line.lotId === lot.id)).every((lot) => lot.qualityStatus === 'APPROVED')).toBe(true)
+    expect(service.materialPriceHistory('mat-bergamot').data.some((record) => record.purchaseOrderId === draft.id && record.unitCost > 0.1)).toBe(true)
+  })
+
+  it('writes an immutable supplier-return trace for rejected procurement inspection', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({ supplierId: 'SUP-003', materialId: 'mat-bergamot', quantityGrams: 25, unitCost: 0.1 }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+    const receipt = service.createProcurementReceipt(draft.id, { lines: [{ materialId: 'mat-bergamot', receivedGrams: 25 }] }).data.receipt
+    const returned = service.inspectProcurementReceipt(receipt.id, {
+      action: 'RETURN',
+      discrepancies: [{ type: 'QUALITY', action: 'RETURN', note: 'Off-odor at inspection' }],
+    }).data
+
+    expect(returned.receipt.status).toBe('RETURNED')
+    expect(returned.movements).toHaveLength(1)
+    expect(returned.movements[0]?.type).toBe('RETURN_TO_SUPPLIER')
+    expect(service.lotsList().data.find((lot) => lot.id === receipt.lines[0]?.lotId)?.qualityStatus).toBe('REJECTED')
+  })
+
+  it('derives operational analytics from P1 receipt and quality records', () => {
+    const service = createAuthenticatedService()
+    const draft = service.createPurchaseOrder({ supplierId: 'SUP-003', materialId: 'mat-bergamot', quantityGrams: 25, unitCost: 0.1 }).data.purchaseOrder
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+    service.createProcurementReceipt(draft.id, { lines: [{ materialId: 'mat-bergamot', receivedGrams: 25 }] })
+    const report = service.operationalAnalytics().data
+
+    expect(report.quarantineLots).toBeGreaterThan(0)
+    expect(report.receiptsByStatus.find((row) => row.status === 'QUARANTINE')?.count).toBe(1)
+    expect(report.supplierPerformance[0]?.receipts).toBe(1)
+    expect(report.invariant).toContain('tenant-scoped')
+  })
+
+  it('keeps multi-line PO receipt and price history reconciled per material line', () => {
+    const service = createAuthenticatedService()
+    const supplier = service.createSupplier({
+      name: 'Multi-line Procurement Supplier',
+      country: 'US',
+      contactEmail: 'multi-line-supplier@example.test',
+      leadTimeDays: 12,
+    }).data.supplier
+    const draft = service.createPurchaseOrder({
+      supplierId: supplier.id,
+      currency: 'USD',
+      lines: [
+        { materialId: 'mat-bergamot', quantityGrams: 40, unitCost: 0.11 },
+        { materialId: 'mat-vanillin', quantityGrams: 30, unitCost: 0.16 },
+      ],
+    }).data.purchaseOrder
+
+    expect(draft.lines).toHaveLength(2)
+    expect(draft.quantityGrams).toBe(70)
+    service.updatePurchaseOrderStatus(draft.id, 'SENT')
+
+    const firstReceipt = service.receivePurchaseOrder(draft.id, {
+      lines: [{ materialId: 'mat-bergamot', receivedGrams: 40 }],
+    }).data
+    expect(firstReceipt.lots).toHaveLength(1)
+    expect(firstReceipt.purchaseOrder.status).toBe('PARTIAL')
+    expect(firstReceipt.purchaseOrder.lines?.find((line) => line.materialId === 'mat-bergamot')?.receivedGrams).toBe(40)
+    expect(firstReceipt.purchaseOrder.lines?.find((line) => line.materialId === 'mat-vanillin')?.receivedGrams).toBe(0)
+
+    const finalReceipt = service.receivePurchaseOrder(draft.id, {
+      lines: [{ materialId: 'mat-vanillin', receivedGrams: 30 }],
+    }).data
+    expect(finalReceipt.purchaseOrder.status).toBe('RECEIVED')
+    expect(finalReceipt.purchaseOrder.receivedGrams).toBe(70)
+    expect(service.materialPriceHistory('mat-bergamot').data.some((entry) => entry.purchaseOrderId === draft.id)).toBe(true)
+    expect(service.materialPriceHistory('mat-vanillin').data.some((entry) => entry.purchaseOrderId === draft.id)).toBe(true)
+  })
+
+  it('compares supplier evidence and awards an RFQ into a PO draft without inventory movement', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const comparison = service.compareSupplierRfq({
+      materialId: 'mat-bergamot',
+      quantityGrams: 125,
+    }).data
+
+    expect(comparison.options.length).toBeGreaterThan(0)
+    expect(comparison.options.filter((option) => option.isRecommended)).toHaveLength(1)
+    expect(comparison.invariant).toContain('without inventory movement')
+
+    const selected = comparison.options[0]!
+    const award = service.awardSupplierRfq({
+      materialId: comparison.materialId,
+      quantityGrams: comparison.quantityGrams,
+      supplierId: selected.supplierId,
+      unitCost: selected.unitCost,
+      currency: selected.currency,
+    }).data
+
+    expect(award.purchaseOrder.status).toBe('DRAFT')
+    expect(award.purchaseOrder.supplierId).toBe(selected.supplierId)
+    expect(service.inventoryMovements().data.length).toBe(beforeMovements)
+    expect(award.invariant).toContain('goods receipt')
   })
 
   it('runs commerce SKU, price list, quote, and sample workflow without stock movement', () => {
@@ -1693,7 +2599,130 @@ describe('NorthStarService', () => {
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
-  it('runs order lifecycle through reserve, pack, ship, and fulfillment trace', () => {
+  it('does not expose or quote catalog records from another tenant', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as { commercialSkuRecords: Array<Record<string, unknown>> }
+    internals.commercialSkuRecords = [
+      {
+        id: 'SKU-OTHER-001',
+        organizationId: 'org-other',
+        materialId: 'mat-iso',
+        name: 'External tenant formula pack',
+        description: 'Must remain tenant-scoped',
+        packSizeGrams: 10,
+        price: 10,
+        currency: 'USD',
+        tier: 'Studio',
+        status: 'ACTIVE',
+        moqPacks: 1,
+        labelTemplate: 'External',
+      },
+      ...internals.commercialSkuRecords,
+    ]
+
+    expect(service.catalogSkus().data.some((sku) => sku.id === 'SKU-OTHER-001')).toBe(false)
+    expect(() => service.createQuote({ customerId: 'CUS-DEMO', skuId: 'SKU-OTHER-001', quantityPacks: 1 })).toThrow(
+      /was not found/,
+    )
+  })
+
+  it('manages quote and sample lifecycles before converting accepted commercial intent to an order', () => {
+    const service = createAuthenticatedService()
+    const quote = service.createQuote({
+      customerId: 'CUS-DEMO',
+      skuId: 'SKU-ISO-050',
+      quantityPacks: 1,
+    }).data.quote
+    const accepted = service.updateQuoteStatus(quote.id, { status: 'ACCEPTED' }).data.quote
+    const converted = service.convertQuoteToOrder(quote.id).data
+
+    expect(accepted.status).toBe('ACCEPTED')
+    expect(converted.quote.status).toBe('CONVERTED')
+    expect(converted.order.total).toBe(quote.total)
+    expect(converted.order.reservedGrams).toBe(0)
+
+    const sample = service.requestSample({ skuId: 'SKU-ISO-050', customer: 'Maison Trial Studio', packs: 1 }).data.sample
+    expect(service.updateSampleStatus(sample.id, { status: 'APPROVED' }).data.sample.status).toBe('APPROVED')
+    expect(service.updateSampleStatus(sample.id, { status: 'CONVERTED' }).data.sample.status).toBe('CONVERTED')
+  })
+
+  it('prices and reserves each line of a multi-SKU quote and order', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+
+    const quote = service.createQuote({
+      customerId: 'CUS-DEMO',
+      lines: [
+        { skuId: 'SKU-ISO-050', quantityPacks: 1 },
+        { skuId: 'SKU-BER-025', quantityPacks: 1 },
+      ],
+    }).data.quote
+
+    expect(quote.lines).toEqual([
+      { skuId: 'SKU-ISO-050', quantityPacks: 1, unitPrice: 18, lineTotal: 18 },
+      { skuId: 'SKU-BER-025', quantityPacks: 1, unitPrice: 16, lineTotal: 16 },
+    ])
+    expect(quote.total).toBe(34)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+
+    const order = service.createOrder({
+      customerId: 'CUS-DEMO',
+      lines: [
+        { skuId: 'SKU-ISO-050', quantity: 1 },
+        { skuId: 'SKU-BER-025', quantity: 1 },
+      ],
+    }).data.order
+    const reservation = service.reserveOrder(order.id).data
+    const reservedOrder = service.orders().data.find((item) => item.id === order.id)
+
+    expect(order.lines).toHaveLength(2)
+    expect(order.total).toBe(34)
+    expect(reservedOrder?.reservedGrams).toBe(75)
+    expect(reservation.allocations.reduce((sum, allocation) => sum + allocation.allocatedGrams, 0)).toBe(75)
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('updates editable order details and reprices lines without touching inventory ledgers', () => {
+    const service = createAuthenticatedService()
+    const order = service.createOrder({
+      customerId: 'CUS-DEMO',
+      lines: [{ skuId: 'SKU-ISO-050', quantity: 1 }],
+    }).data.order
+    const beforeMovements = service.inventoryMovements().data
+
+    const updated = service.updateOrder(order.id, {
+      lines: [
+        { skuId: 'SKU-ISO-050', quantity: 2 },
+        { skuId: 'SKU-BER-025', quantity: 1 },
+      ],
+      discountPercent: 5,
+      taxPercent: 10,
+      shippingCost: 5,
+      contactEmail: 'buyer@maison.example',
+      customerReference: 'PO-MAISON-1042',
+      deliveryInstructions: 'Call before the domestic courier arrives.',
+      shippingAddress: {
+        line1: '12 Nguyen Hue',
+        city: 'Ho Chi Minh City',
+        country: 'Vietnam',
+      },
+    }).data
+
+    expect(updated.order.lines).toEqual([
+      expect.objectContaining({ skuId: 'SKU-ISO-050', quantity: 2, unitPrice: 18, lineTotal: 36 }),
+      expect.objectContaining({ skuId: 'SKU-BER-025', quantity: 1, unitPrice: 16, lineTotal: 16 }),
+    ])
+    expect(updated.order.total).toBe(59.34)
+    expect(updated.order.customerReference).toBe('PO-MAISON-1042')
+    expect(updated.order.shippingAddress).toMatchObject({ city: 'Ho Chi Minh City', country: 'Vietnam' })
+    expect(updated.invariant).toContain('preserves inventory, reservation, and fulfillment ledgers')
+    expect(service.inventoryMovements().data).toEqual(beforeMovements)
+
+    service.reserveOrder(order.id)
+    expect(() => service.updateOrder(order.id, { shippingCost: 10 })).toThrow(/cannot be edited after reservation/)
+  })
+
+  it('runs order lifecycle through reserve, pack, domestic shipping, and fulfillment trace', () => {
     const service = createAuthenticatedService()
     const beforeMovements = service.inventoryMovements().data.length
     const order = service.createOrder({
@@ -1710,13 +2739,14 @@ describe('NorthStarService', () => {
     expect(() => service.reserveOrder(order.id)).toThrow(/cannot be reserved/)
 
     const pack = service.packOrder(order.id).data
-    const ship = service.shipOrder(order.id, { carrier: 'DHL', trackingNumber: 'DHL-PHASE12' }).data
+    const ship = service.shipOrder(order.id, { carrier: 'GHN', trackingNumber: 'GHN-PHASE12' }).data
     const fulfillment = service.fulfillOrder(order.id).data
 
     expect(reservation.invariant).toContain('creates no InventoryMovement')
     expect(afterReserveMovements).toBe(beforeMovements)
     expect(pack.document.type).toBe('PACKING_SLIP')
-    expect(ship.shipment?.trackingNumber).toBe('DHL-PHASE12')
+    expect(ship.shipment?.carrier).toBe('GHN')
+    expect(ship.shipment?.trackingNumber).toBe('GHN-PHASE12')
     expect(fulfillment.movements.every((movement) => movement.direction === 'OUT')).toBe(true)
     expect(fulfillment.invariant).toContain('lot traceability')
     expect(service.orderDocuments().data.map((document) => document.type)).toEqual(
@@ -1735,19 +2765,55 @@ describe('NorthStarService', () => {
     const beforeMovements = service.inventoryMovements().data.length
 
     service.reserveOrder(order.id)
-    const cancellation = service.cancelOrder(order.id).data
+    const cancellation = service.cancelOrder(order.id, { reason: 'Customer cancelled before dispatch' }).data
 
     expect(cancellation.invariant).toContain('without creating InventoryMovement')
     expect(cancellation.releasedAllocations.length).toBeGreaterThan(0)
+    expect(cancellation.order).toMatchObject({
+      status: 'CANCELLED',
+      cancellationReason: 'Customer cancelled before dispatch',
+      reservedGrams: 0,
+    })
+    expect(cancellation.order?.cancelledAt).toBeTruthy()
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('reserves and fulfills available whole packs while retaining the remainder as a backorder', () => {
+    const service = createAuthenticatedService()
+    const order = service.createOrder({
+      skuId: 'SKU-ISO-050',
+      customerId: 'CUS-DEMO',
+      quantity: 6,
+    }).data.order
+
+    const reservation = service.reserveOrder(order.id, { allowPartial: true }).data
+    const reserved = service.orders().data.find((item) => item.id === order.id)
+    expect(reservation.invariant).toContain('backorder')
+    expect(reserved?.status).toBe('BACKORDER')
+    expect(reserved?.reservedGrams).toBeGreaterThan(0)
+    expect((reserved?.reservedGrams ?? 0) % 50).toBe(0)
+
+    service.packOrder(order.id)
+    const fulfillment = service.fulfillOrder(order.id).data
+    const backordered = service.orders().data.find((item) => item.id === order.id)
+    expect(fulfillment.invariant).toContain('remaining demand on backorder')
+    expect(backordered?.status).toBe('BACKORDER')
+    expect(backordered?.reservedGrams).toBe(0)
+    expect(backordered?.fulfilledGrams).toBeGreaterThan(0)
   })
 
   it('builds costing read models from formula, batch, SKU margin, valuation, and COGS', () => {
     const service = createAuthenticatedService()
-    const beforeMovements = service.inventoryMovements().data.length
+    const releasedBatch = service.createProductionBatch('frm-0421', 25).data
+    service.consumeProductionBatch(releasedBatch.id)
+    service.updateProductionBatchStatus(releasedBatch.id, 'FILTRATION')
+    service.updateProductionBatchStatus(releasedBatch.id, 'QC')
+    service.qcProductionBatch(releasedBatch.id, 'PASSED')
+    service.updateProductionBatchStatus(releasedBatch.id, 'RELEASED')
+    const beforeCostingMovements = service.inventoryMovements().data.length
     const overview = service.costingOverview().data
     const formula = service.costingFormula('frm-0421').data
-    const batch = service.costingBatch('BTH-2025-118').data
+    const batch = service.costingBatch(releasedBatch.id).data
     const sku = service.costingSku('SKU-ISO-050').data
     const valuation = service.costingValuation().data
 
@@ -1758,11 +2824,12 @@ describe('NorthStarService', () => {
     expect(formula.costPerGram).toBeGreaterThan(0)
     expect(formula.mostExpensiveMaterial).not.toBe('n/a')
     expect(batch.sourceFormulaCost.formulaId).toBe('frm-0421')
+    expect(batch.costingBasis).toBe('RELEASED_OUTPUT')
     expect(batch.totalCost).toBeGreaterThan(batch.materialCost)
     expect(sku.marginPercent).toBeGreaterThan(0)
     expect(valuation.totalValue).toBeGreaterThan(0)
     expect(valuation.invariant).toContain('reconciles')
-    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+    expect(service.inventoryMovements().data).toHaveLength(beforeCostingMovements)
   })
 
   it('serves analytics read models and report runs without mutating the movement ledger', () => {
@@ -1787,6 +2854,22 @@ describe('NorthStarService', () => {
     expect(reports.some((report) => report.id === 'RPT-FIN-WEEKLY')).toBe(true)
     expect(run.report.lastRunAt).toBeDefined()
     expect(run.audit.action).toBe('analytics.report.run')
+    expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
+  })
+
+  it('runs only due active analytics reports on the scheduler without mutating operational state', () => {
+    const service = createAuthenticatedService()
+    const beforeMovements = service.inventoryMovements().data.length
+    const firstRun = service.runDueAnalyticsReports('2026-07-10T08:00:00.000Z').data
+    const repeatRun = service.runDueAnalyticsReports('2026-07-10T08:01:00.000Z').data
+
+    expect(firstRun.reports.map((report) => report.id).sort()).toEqual([
+      'RPT-FIN-WEEKLY',
+      'RPT-INVENTORY-DAILY',
+    ])
+    expect(firstRun.audits.every((audit) => audit.action === 'analytics.report.scheduled-run')).toBe(true)
+    expect(firstRun.invariant).toContain('never mutate inventory, orders, or costing inputs')
+    expect(repeatRun.reports).toHaveLength(0)
     expect(service.inventoryMovements().data).toHaveLength(beforeMovements)
   })
 
@@ -1909,8 +2992,8 @@ describe('NorthStarService', () => {
     expect(selection.mode).toBe('plan_selected')
     expect(consoleState.subscription.organizationId).toBe(signup.organization.id)
     expect(consoleState.sso.organizationId).toBe(signup.organization.id)
-    expect(consoleState.sso.domain).toBe('billing-onboarding-lab.labofscents.org')
-    expect(consoleState.sso.status).toBe('verified')
+    expect(consoleState.sso.domain).toBe('')
+    expect(consoleState.sso.status).toBe('draft')
     expect(consoleState.apiKeys).toEqual([])
     expect(consoleState.webhooks).toEqual([])
     expect(consoleState.auditExports).toEqual([])
@@ -1936,6 +3019,176 @@ describe('NorthStarService', () => {
     expect(retry.delivery.status).toBe('delivered')
     expect(retry.delivery.idempotencyKey).toBe('whd_document_downloaded_DOC-121')
     expect(consoleState.webhookDeliveries.find((delivery) => delivery.id === 'WHD-0002')?.attempts).toBe(3)
+  })
+
+  it('supports tenant-scoped search and privacy requests', () => {
+    const service = createAuthenticatedService()
+
+    const search = service.globalSearch('Bergamot').data
+    expect(search.results.some((result) => result.kind === 'material' && result.title === 'Bergamot FCF')).toBe(true)
+
+    const legal = service.acceptLegal({ document: 'privacy', version: '2026-07-22' }).data
+    expect(legal.idempotent).toBe(false)
+    expect(service.acceptLegal({ document: 'privacy', version: '2026-07-22' }).data.idempotent).toBe(true)
+
+    const privacyRequest = service.requestPrivacyData({ type: 'EXPORT' }).data
+    expect(privacyRequest.request.type).toBe('EXPORT')
+    expect(service.notifications().data.notifications.some((notification) => notification.title.includes('Data export'))).toBe(true)
+    const privacyExport = service.exportPrivacyData(privacyRequest.request.id).data
+    expect(privacyExport.request.status).toBe('COMPLETED')
+    expect(privacyExport.export.subject.email).toBe(adminEmail)
+    expect(JSON.stringify(privacyExport.export)).not.toContain(adminPassword)
+
+  })
+
+  it('activates a custom hostname only after provider confirmation', () => {
+    const service = createAuthenticatedService()
+    const provisioned = service.completeCloudflareSaasProvisioning(
+      'app.example-perfume.test',
+      'cf-custom-hostname-1',
+      { type: 'TXT', name: '_cf-custom-hostname.app.example-perfume.test', value: 'verification-token' },
+    ).data
+    expect(provisioned.domain.status).toBe('pending_validation')
+    expect(provisioned.organization.customDomain).not.toBe('app.example-perfume.test')
+    expect(service.customDomains().data.domains).toHaveLength(1)
+    expect(service.cloudflareSaasProvisioningContext({ hostname: 'app.example-perfume.test' }).data.existingDomain?.id).toBe(provisioned.domain.id)
+
+    const activated = service.applyCloudflareSaasRefresh(provisioned.domain.id, {
+      providerStatus: 'active',
+      sslStatus: 'active',
+    }).data
+    expect(activated.domain.status).toBe('active')
+    expect(activated.organization.customDomain).toBe('app.example-perfume.test')
+  })
+
+  it('prepares Stripe checkout state and applies a verified-provider subscription event', () => {
+    const service = createAuthenticatedService()
+    const checkout = service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' }).data
+
+    expect(checkout.plan.id).toBe('PLAN-ARTISAN')
+    const webhook = service.applyStripeWebhook({
+      id: 'evt_test_subscription_active',
+      type: 'customer.subscription.updated',
+      data: {
+        object: {
+          id: 'sub_test_123',
+          customer: 'cus_test_123',
+          status: 'active',
+          current_period_start: 1_783_734_400,
+          current_period_end: 1_786_324_800,
+          metadata: { organizationId: checkout.organizationId, planId: 'PLAN-ARTISAN' },
+        },
+      },
+    }).data
+
+    expect(webhook.applied).toBe(true)
+    expect(service.billingSubscription().data.provider).toBe('stripe')
+    expect(service.billingSubscription().data.providerSubscriptionId).toBe('sub_test_123')
+    expect(service.billingSubscription().data.status).toBe('active')
+  })
+
+  it('keeps beta billing managed server-side and exposes credential-free integration readiness', () => {
+    const service = new NorthStarService({
+      authCredentials: [
+        {
+          email: adminEmail,
+          passwordHash: testPasswordHashForEmail(adminEmail, adminPassword),
+          passwordSetAt: fixedSessionFixtureNow.toISOString(),
+        },
+      ],
+      mfaEncryptionKey: testMfaEncryptionKey,
+    })
+    const login = service.login(adminEmail, adminPassword).data
+    service.authenticateSession(login.session.id)
+
+    const consoleState = service.billingConsole().data
+    expect(consoleState.billingMode).toBe('managed_beta')
+    expect(consoleState.plans).toEqual([])
+    expect(consoleState.invoices).toEqual([])
+    expect(consoleState.plan).toMatchObject({
+      id: 'BETA_ACCESS',
+      name: 'Beta access',
+      monthlyPrice: 0,
+    })
+    expect(consoleState.subscription).toMatchObject({
+      planId: 'BETA_ACCESS',
+      provider: 'manual',
+      status: 'active',
+    })
+    expect(consoleState.subscription).not.toHaveProperty('providerCustomerId')
+    expect(consoleState.subscription).not.toHaveProperty('providerSubscriptionId')
+    expect(consoleState.readiness.some((check) => check.key === 'invoice-lifecycle')).toBe(false)
+    expect(JSON.stringify(consoleState)).not.toContain('PLAN-APPRENTICE')
+    expect(service.billingSubscription().data.planId).toBe('BETA_ACCESS')
+    expect(() => service.billingPlan()).toThrow('Billing plans and payment controls are unavailable')
+    expect(() => service.billingPlans()).toThrow('Billing plans and payment controls are unavailable')
+    expect(() => service.billingInvoices()).toThrow('Billing plans and payment controls are unavailable')
+    expect(() => service.stripeCheckoutContext({ planId: 'PLAN-ARTISAN' })).toThrow(UnprocessableEntityException)
+    expect(() => service.selectBillingPlan({ planId: 'PLAN-ARTISAN' })).toThrow(UnprocessableEntityException)
+    expect(() => service.startBillingCheckout({ planId: 'PLAN-ARTISAN', mode: 'checkout' })).toThrow(UnprocessableEntityException)
+    expect(() => service.openBillingPortal()).toThrow(UnprocessableEntityException)
+    expect(() => service.freezeSubscription()).toThrow(UnprocessableEntityException)
+    expect(() => service.reactivateSubscription()).toThrow(UnprocessableEntityException)
+
+    const readiness = service.integrationReadiness({
+      documentsAvailable: false,
+      emailConfigured: false,
+      cloudflareSaasConfigured: false,
+      betaHostnameConfigured: true,
+      betaHostnameReachable: false,
+      workersAiConfigured: true,
+      vectorizeConfigured: true,
+    }).data
+    expect(readiness.checks.find((check) => check.key === 'beta_hostname')?.status).toBe('blocked')
+    expect(readiness.checks.find((check) => check.key === 'workers_ai')?.status).toBe('ready')
+    expect(readiness.checks.find((check) => check.key === 'vectorize_rag')?.status).toBe('ready')
+    expect(JSON.stringify(readiness)).not.toContain('STRIPE_SECRET_KEY')
+  })
+
+  it('projects beta signup access without exposing a membership package', () => {
+    const service = new NorthStarService({ mfaEncryptionKey: testMfaEncryptionKey })
+    const signup = service.signup({
+      organizationName: 'Beta Member Workspace',
+      workspaceSlug: 'beta-member-workspace',
+      email: 'owner@beta-member-workspace.test',
+      name: 'Beta Owner',
+      password: 'BetaMemberWorkspace2026!',
+    }).data
+
+    expect(signup.subscription).toMatchObject({
+      planId: 'BETA_ACCESS',
+      provider: 'manual',
+      status: 'active',
+    })
+    expect(JSON.stringify(signup.subscription)).not.toContain('PLAN-APPRENTICE')
+    expect(service.billingConsole().data.plan.name).toBe('Beta access')
+  })
+
+  it('keeps email delivery retry evidence durable and does not retry before the due time', () => {
+    const service = createAuthenticatedService()
+    const internals = service as unknown as {
+      queueNotification: (
+        organizationId: string,
+        recipientEmail: string,
+        category: 'security',
+        title: string,
+        body: string,
+        href?: string,
+        shouldEmail?: boolean,
+      ) => { id: string; createdAt: string }
+    }
+    const notification = internals.queueNotification('org-nxl', adminEmail, 'security', 'Device sign-in', 'A new device signed in.', '/security', true)
+
+    expect(service.notificationEmailOutbox(notification.createdAt)).toHaveLength(1)
+    const failed = service.recordNotificationEmailAttempt(notification.id, { delivered: false, error: 'provider timeout' }, notification.createdAt)
+    expect(failed?.emailStatus).toBe('queued')
+    expect(failed?.emailAttempts).toBe(1)
+    expect(failed?.emailNextAttemptAt).toBeDefined()
+    expect(service.notificationEmailOutbox(notification.createdAt)).toHaveLength(0)
+
+    const delivered = service.recordNotificationEmailAttempt(notification.id, { delivered: true }, failed?.emailNextAttemptAt)
+    expect(delivered?.emailStatus).toBe('sent')
+    expect(delivered?.emailSentAt).toBeDefined()
   })
 })
 

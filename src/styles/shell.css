@@ -1,0 +1,201 @@
+.app-shell,
+.app-shell.density-compact {
+  grid-template-columns: 236px minmax(0, 1fr);
+  background: var(--bg);
+}
+
+.app-shell.is-rail {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.sidebar {
+  padding: 16px 12px;
+  border-right-color: #242b24;
+  background: #0c0f0c;
+}
+
+.sidebar .brand-row {
+  min-height: 56px;
+  padding: 0 4px 16px;
+  border-bottom-color: #242b24;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-card);
+  background: var(--blue);
+  box-shadow: none;
+}
+
+.brand-image-lockup {
+  background: transparent;
+  box-shadow: none;
+}
+
+.wordmark {
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 680;
+}
+
+.sidebar .mono-small {
+  margin-top: 2px;
+  color: var(--sidebar-muted);
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.nav-stack {
+  gap: 17px;
+  margin-top: 18px;
+}
+
+.nav-title {
+  margin: 0 0 6px 10px;
+  color: #7f897f;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.nav-item {
+  min-height: var(--touch-target);
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-left-width: 2px;
+  border-radius: var(--radius-card);
+  color: #aeb8ae;
+}
+
+.nav-item:hover {
+  color: var(--text);
+  background: #151a15;
+}
+
+.nav-item.is-active {
+  color: var(--text);
+  border-color: #254432;
+  border-left-color: #6fbc8b;
+  background: #172219;
+  box-shadow: none;
+}
+
+.workspace {
+  min-width: 0;
+}
+
+.topbar {
+  min-height: 72px;
+  padding: 12px 28px;
+  border-bottom-color: #242b24;
+  background: rgb(10 12 10 / 0.96);
+}
+
+.topbar-title-block .mono-small {
+  color: #879187;
+  font-family: inherit;
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.topbar-title-block h1 {
+  font-size: var(--text-page-size);
+  font-weight: 650;
+  line-height: var(--text-page-line);
+}
+
+.command-button,
+.icon-button,
+.ghost-button {
+  border-color: #2c352d;
+  border-radius: var(--radius-card);
+  background: #111511;
+}
+
+.command-button {
+  min-height: var(--touch-target);
+  background: #111511;
+}
+
+.command-button:hover,
+.ghost-button:hover,
+.icon-button:hover {
+  border-color: #4c6756;
+  background: #161e17;
+}
+
+.topbar-actions .data-tag {
+  color: #b7d9bf;
+  border-color: #31553e;
+  background: #122417;
+}
+
+.user-chip {
+  border-radius: var(--radius-card);
+}
+
+.user-avatar {
+  border-radius: var(--radius-card);
+  background: var(--blue);
+}
+
+.dashboard-grid,
+.domain-page {
+  gap: 20px;
+  padding: 28px 32px 42px;
+}
+
+.workspace-grid {
+  gap: 20px;
+}
+
+/* A role-aware home is a task surface; operational evidence stays secondary. */
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr) 300px;
+  grid-template-areas:
+    'hero hero enterprise'
+    'workflow matrix enterprise'
+    'ledger ledger audit';
+}
+
+.dashboard-grid.has-owner-user-overview {
+  grid-template-areas:
+    'hero hero enterprise'
+    'owner-users owner-users enterprise'
+    'workflow matrix enterprise'
+    'ledger ledger audit';
+}
+
+@media (max-width: 1180px) {
+  .dashboard-grid,
+  .dashboard-grid.has-owner-user-overview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'hero'
+      'owner-users'
+      'workflow'
+      'matrix'
+      'enterprise'
+      'ledger'
+      'audit';
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar .mobile-menu,
+  .topbar-actions .icon-button,
+  .topbar-actions .user-chip {
+    width: var(--touch-target);
+    height: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+
+  .topbar {
+    min-height: 68px;
+  }
+}

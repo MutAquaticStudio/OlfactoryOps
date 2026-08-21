@@ -1,8 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
   Atom,
   BadgeDollarSign,
   BarChart3,
@@ -64,14 +62,30 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
+import { TrialsWorkspace } from './features/trials/TrialsWorkspace'
+import { TrialEvidenceSummary } from './features/trials/TrialEvidenceSummary'
+import { OperationalLineageSummary } from './features/trials/OperationalLineageSummary'
+import { PublicTrialFeedback } from './features/trials/PublicTrialFeedback'
+import { PublicLanding } from './features/marketing/PublicLanding'
+import { V2PlatformApp } from './features/v2-platform/V2PlatformApp'
+import { isProtectedApplicationPath, isRemovedV1Path, loginPathForProtectedPath, publicRouteForPath, resumePathForLocation, safeInternalNext, type PublicRoute } from './data/appRoutes'
+import { publicAuthUrlForWorkspaceOrigin } from './data/workspaceHostnames'
+import { WorkspaceDialog } from './ui/WorkspaceDialog'
+import { WorkspacePanel as Panel } from './ui/WorkspacePanel'
+import { MotionProvider } from './ui/motion/MotionProvider'
+import { AnimatedContent, AnimatedList, AnimatedListItem, CountUp, MotionCardButton, Stepper } from './ui/motion/MotionPrimitives'
 import {
   auditEvents,
   commercialSkus,
+  createDefaultFormulaWorkspacePreferences,
   domains,
   evaporationCurve,
   formatCurrency,
@@ -79,16 +93,16 @@ import {
   formatSequenceValue,
   formulaTotals,
   formulas,
-  formulaVersions,
   initialLots,
   isLotEligibleForInventory,
   materials,
   moleculeComponents,
+  normalizeFormulaWorkspacePreferences,
+  orderRequiredGrams,
   permissionCatalog,
   planLabUsage,
   priceLists,
   priceHistory,
-  productionBatches,
   purchaseOrders,
   quotes,
   readinessStats,
@@ -96,12 +110,15 @@ import {
   resolveFormulaWithCatalog,
   rolePolicies,
   sampleRequests,
+  shipmentCarrierLabel,
+  shipmentCarrierOptions,
   statusMeta,
   storageLocations,
   stockSummary,
   suppliers,
   type Allocation,
   type ApiKeyRecord,
+  type AppNotificationRecord,
   type AuditEvent,
   type AuditExportJobRecord,
   type AuthSession,
@@ -111,7 +128,6 @@ import {
   type BrandingConfig,
   type BillingActionResponse,
   type BillingConsoleResponse,
-  type BillingPlanRecord,
   type BillingSubscriptionRecord,
   type CommercialSkuRecord,
   type CostingOverview,
@@ -120,6 +136,7 @@ import {
   type DocumentRecord,
   type FormulaEvaluationRecord,
   type FormulaIfraEvaluation,
+  type FormulaCostReport,
   type FormulaScalePlan,
   type FormulaVersionDiff,
   type DocumentComplianceDashboard,
@@ -134,15 +151,24 @@ import {
   type FormulaPyramidNote,
   type FormulaType,
   type FormulaVersionRecord,
+  type FragranceTrialRecord,
+  type TrialComparableEvidence,
+  type FormulaWorkspacePreferences,
+  type GlobalSearchResult,
+  type InventoryAgingRecord,
   type InventoryReorderSuggestion,
   type InventoryLot,
   type InventoryMovement,
+  type IntegrationReadinessResponse,
   type LabWeighingSession,
+  type LegalAcceptanceRecord,
+  type PrivacyRequestRecord,
   type LabUsagePurpose,
   type LabUsageRecord,
   type LotLabelPayload,
   type LotQualityStatus,
   type Material,
+  type MaterialComplianceProfile,
   type MembershipRecord,
   type MoleculeComponent,
   type NumberingSequenceRecord,
@@ -151,10 +177,20 @@ import {
   type PriceHistoryRecord,
   type PriceListRecord,
   type ProductionBatchRecord,
+  type ProductionQcResultRecord,
+  type ProductionQcTemplateRecord,
+  type ProductionYieldRecord,
+  type ProcurementReceiptRecord,
+  type LandedCostAllocationRecord,
+  type OperationalAnalyticsReport,
+  type OperationalLineageProjection,
+  type PurchaseOrderLineItem,
   type PurchaseOrderRecord,
   type QuoteRecord,
+  type RfqComparison,
   type ResolvedLeaf,
   type RolePolicy,
+  type SaasCustomDomainRecord,
   type SampleRequestRecord,
   type SalesOrderRecord,
   type ScheduledReportRecord,
@@ -172,6 +208,12 @@ import {
 } from './data/northStar'
 
 type UsageRecord = LabUsageRecord
+
+type LabUsageReversalAllocation = {
+  materialId: string
+  lotId: string
+  grams: number
+}
 
 type ModalKind =
   | 'commit'
@@ -204,7 +246,7 @@ const clientFallbackOrganization: OrganizationRecord = {
   customDomain: 'api-backed-tenant.labofscents.org',
   plan: 'Enterprise',
   status: 'ACTIVE',
-  primaryContact: 'admin@labofscents.org',
+  primaryContact: 'm.thuanwork@gmail.com',
   createdAt: 'client-fallback',
 }
 
@@ -220,9 +262,12 @@ const clientFallbackSecurityPolicy: TenantSecurityPolicy = {
   passwordPolicy: 'server-managed',
 }
 
-const defaultAccentColor = '#4d9bff'
+const defaultAccentColor = '#0f766e'
+const showMoleculeSplitPanel = false
+const showInventoryLotComplianceReview = false
 
-const accentColorPresets = ['#4d9bff', '#37d6a0', '#c4a86a', '#f5b04c', '#f2585f', '#8b5cf6']
+const accentColorPresets = ['#0f766e', '#0b6b61', '#14705e', '#1a7253', '#1c6656']
+const controlledAccentColors = new Set(accentColorPresets)
 
 const clientFallbackUserSettings: UserSettingsRecord = {
   userId: 'client-fallback',
@@ -235,6 +280,7 @@ const clientFallbackUserSettings: UserSettingsRecord = {
   reduceMotion: false,
   emailDigest: 'weekly',
   accentColor: defaultAccentColor,
+  formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
   updatedAt: 'client-fallback',
 }
 
@@ -249,28 +295,6 @@ const clientFallbackDocumentDashboard: DocumentComplianceDashboard = {
   requirements: [],
   expiringDocuments: [],
   invariant: 'client fallback contains no document seed; API is source of truth',
-}
-
-const clientFallbackPlan: BillingPlanRecord = {
-  id: 'PLAN-CLIENT-FALLBACK',
-  name: 'API managed',
-  seats: 0,
-  storageGb: 0,
-  apiQuota: 0,
-  monthlyPrice: 0,
-  currency: 'USD',
-  limits: {
-    seats: 0,
-    materials: 0,
-    formulas: 0,
-    lots: 0,
-    documents: 0,
-    storageGb: 0,
-    apiCalls: 0,
-    webhooks: 0,
-    auditRetentionDays: 0,
-  },
-  features: [],
 }
 
 const clientFallbackSso: SsoConfigRecord = {
@@ -307,10 +331,17 @@ const clientFallbackTenantSettings: TenantSettingsRecord = {
 const clientFallbackBranding: BrandingConfig = {
   organizationId: clientFallbackOrganization.id,
   displayName: 'OlfactoryOps',
-  accentColor: '#4d9bff',
+  accentColor: '#0f766e',
   documentFooter: 'API managed branding',
   labelTemplate: 'OLF-{sequence}',
   logoMode: 'wordmark',
+}
+
+function workspaceBrandingFallback(organizationId?: string): BrandingConfig {
+  return {
+    ...clientFallbackBranding,
+    organizationId: organizationId ?? clientFallbackBranding.organizationId,
+  }
 }
 
 const clientFallbackCosting: CostingOverview = {
@@ -346,6 +377,10 @@ const clientFallbackBatchCost: BatchCostReport = {
   batchId: 'API',
   formulaId: '',
   targetGrams: 0,
+  outputGrams: 0,
+  yieldVariancePercent: 0,
+  costingBasis: 'TARGET_ESTIMATE',
+  materialCostBasis: 'FORMULA_ESTIMATE',
   materialCost: 0,
   laborCost: 0,
   overheadCost: 0,
@@ -432,7 +467,14 @@ type LoginResponse = {
   revokedForLimit: AuthSession[]
   newDeviceAlert: boolean
   securityPolicy: TenantSecurityPolicy
+  workspace: WorkspaceAccess
   invariant: string
+}
+
+type WorkspaceAccess = {
+  systemHostname: string
+  workspaceUrl: string
+  externalDomain?: string
 }
 
 type SignupResponse = {
@@ -445,7 +487,22 @@ type SignupResponse = {
   csrfToken: string
   permissions: string[]
   audit: AuditEvent
+  systemHostname: string
+  workspaceUrl: string
+  emailVerification: EmailVerificationStatus & { delivery?: 'sent' | 'failed' | 'not_configured' | 'not_requested' }
+  customDomain: {
+    status: 'NOT_REQUESTED'
+    nextAction: string
+  }
   invariant: string
+}
+
+type EmailVerificationStatus = {
+  status: 'UNVERIFIED' | 'PENDING' | 'VERIFIED' | 'EXPIRED'
+  email: string
+  expiresAt?: string
+  verifiedAt?: string
+  canResend: boolean
 }
 
 type MeResponse = {
@@ -454,6 +511,8 @@ type MeResponse = {
   permissions: string[]
   securityPolicy: TenantSecurityPolicy
   userSettings: UserSettingsRecord
+  workspace: WorkspaceAccess
+  emailVerification?: EmailVerificationStatus
 }
 type SaasConsoleResponse = BillingConsoleResponse
 type SaasHealthStatus = BillingConsoleResponse['readiness'][number]['status']
@@ -529,11 +588,78 @@ type PurchaseOrderCreateResponse = {
 
 type PurchaseOrderStatusResponse = PurchaseOrderCreateResponse
 
-type PurchaseOrderReceiptResponse = {
-  lot: InventoryLot
-  movement: InventoryMovement
+type RfqComparisonResponse = RfqComparison & {
+  audit: AuditEvent
+}
+
+type RfqAwardResponse = {
   purchaseOrder: PurchaseOrderRecord
-  priceHistory: PriceHistoryRecord
+  option: RfqComparison['options'][number]
+  audit: AuditEvent
+  invariant: string
+}
+
+type DocumentSearchResponse = {
+  documents: DocumentRecord[]
+  invariant: string
+}
+
+type DocumentVersionsResponse = {
+  current: DocumentRecord
+  versions: DocumentRecord[]
+  invariant: string
+}
+
+type MaterialComplianceResponse = {
+  profile: MaterialComplianceProfile
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementReceiptCreateResponse = {
+  receipt: ProcurementReceiptRecord
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
+  purchaseOrder: PurchaseOrderRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementLandedCostResponse = {
+  allocation: LandedCostAllocationRecord
+  receipt: ProcurementReceiptRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProcurementInspectionResponse = {
+  receipt: ProcurementReceiptRecord
+  lots: InventoryLot[]
+  movements: InventoryMovement[]
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcTemplateResponse = {
+  template: ProductionQcTemplateRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcResultResponse = {
+  result: ProductionQcResultRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionQcApprovalResponse = {
+  batch: ProductionBatchRecord
+  audit: AuditEvent
+  invariant: string
+}
+
+type ProductionYieldResponse = {
+  record: ProductionYieldRecord
   audit: AuditEvent
   invariant: string
 }
@@ -576,6 +702,8 @@ type SalesOrderCreateResponse = {
   invariant: string
 }
 
+type SalesOrderUpdateResponse = SalesOrderCreateResponse
+
 type OrderReservationResponse = {
   orderId: string
   allocations: Allocation[]
@@ -585,6 +713,7 @@ type OrderReservationResponse = {
 
 type OrderCancellationResponse = {
   orderId: string
+  order?: SalesOrderRecord
   releasedAllocations: Allocation[]
   audit: AuditEvent
   invariant: string
@@ -726,11 +855,46 @@ type MaterialMoleculesResponse = {
   invariant: string
 }
 
-type MaterialProvenanceResponse = {
-  materialId: string
-  provenance: Material['provenance']
-  documents: DocumentRecord[]
-  invariant: string
+type MaterialEvidenceCitation = {
+  citationId: string
+  sourceKind: 'material' | 'document'
+  materialId?: string
+  title: string
+  version: string
+  page?: number
+  section?: string
+  excerpt: string
+  score: number
+}
+
+type MaterialEvidenceResponse = {
+  state: 'READY' | 'NOT_INDEXED' | 'NOT_CONFIGURED' | 'NOT_EVALUATED'
+  citations: MaterialEvidenceCitation[]
+  indexedSourceCount: number
+}
+
+type MaterialEvidenceJobResponse = {
+  evidenceDocumentId: string
+  jobId: string
+  status: string
+  correlationId: string
+}
+
+type MaterialEvidenceSource = {
+  sourceKind: 'material' | 'document'
+  documentId?: string
+  title: string
+  version: string
+  state: 'QUEUED' | 'EXTRACTED' | 'REVIEW_REQUIRED' | 'READY' | 'NOT_INDEXED' | 'NOT_CONFIGURED' | 'FAILED' | 'INVALIDATED'
+  updatedAt: string
+}
+
+type MaterialEvidenceReviewSource = {
+  documentId: string
+  title: string
+  version: string
+  state: MaterialEvidenceSource['state']
+  extractedText: string
 }
 
 type PubChemFillResponse = MaterialMutationResponse & {
@@ -749,6 +913,16 @@ type FormulaMutationResponse = {
   totals?: ReturnType<typeof formulaTotals>
   movements?: InventoryMovement[]
   audit?: AuditEvent
+  invariant: string
+}
+
+type MemberSummaryResponse = {
+  totalMembers: number
+  activeMembers: number
+  invitedMembers: number
+  deactivatedMembers: number
+  activeSessions: number
+  roleCounts: Array<{ role: string; count: number }>
   invariant: string
 }
 
@@ -808,6 +982,33 @@ type InventoryReceiptResponse = {
 type InventoryAdjustmentResponse = InventoryReceiptResponse
 
 type InventoryTransferResponse = InventoryReceiptResponse
+
+type InventoryWriteOffResponse = InventoryReceiptResponse & {
+  audit: AuditEvent
+}
+
+type FormulaTrialEvidenceResponse = {
+  formulaId: string
+  formulaVersion: string
+  evidence: TrialComparableEvidence
+  invariant: string
+}
+type FormulaLineageResponse = { data: OperationalLineageProjection }
+
+type InventoryAgingResponse = {
+  records: InventoryAgingRecord[]
+  summary: {
+    deadStockGrams: number
+    expiringOrExpiredGrams: number
+  }
+  invariant: string
+}
+
+type InventoryExpiryResponse = {
+  expiredLotIds: string[]
+  audit: AuditEvent
+  invariant: string
+}
 
 type InventoryApprovalAction =
   | 'inventory.adjust'
@@ -960,6 +1161,7 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   customization: Settings,
   materials: Atom,
   formulas: FlaskConical,
+  trials: ClipboardCheck,
   inventory: Boxes,
   labUsage: Beaker,
   documents: FileLock2,
@@ -972,27 +1174,33 @@ const domainIcons: Record<DomainKey, LucideIcon> = {
   saas: ShieldCheck,
 }
 
-const navGroups: { title: string; keys: DomainKey[] }[] = [
-  { title: 'Command', keys: ['dashboard', 'platform', 'identity', 'customization'] },
-  { title: 'R&D Spine', keys: ['materials', 'formulas', 'inventory', 'labUsage', 'documents'] },
-  { title: 'Operations', keys: ['production', 'procurement', 'commerce', 'orders'] },
-  { title: 'Enterprise', keys: ['costing', 'analytics', 'saas'] },
+const navGroups: { title: string; keys: DomainKey[]; internalOnly?: boolean }[] = [
+  {
+    title: 'Workbench',
+    keys: ['dashboard', 'materials', 'formulas', 'trials', 'inventory', 'labUsage'],
+  },
+  { title: 'Operations', keys: ['production', 'procurement', 'orders'] },
+  { title: 'Commercial', keys: ['commerce', 'costing'] },
+  { title: 'Insights', keys: ['analytics'] },
+  { title: 'Workspace', keys: ['customization', 'identity', 'saas'] },
+  { title: 'Platform', keys: ['platform'], internalOnly: true },
 ]
 
-const customerNavGroupTitles: Record<string, string> = {
-  Command: 'Home',
-  'R&D Spine': 'Lab',
-  Enterprise: 'Account',
+const navigationLabels: Partial<Record<DomainKey, string>> = {
+  commerce: 'Catalog & quotes',
+  customization: 'Branding',
+  identity: 'Members & security',
+  saas: 'Workspace access',
 }
 
 const workflowNodes: { key: DomainKey; label: string; detail: string }[] = [
-  { key: 'materials', label: 'Material', detail: 'SDS, CoA, provenance' },
-  { key: 'formulas', label: 'Formula', detail: 'Accord resolve engine' },
-  { key: 'inventory', label: 'Inventory', detail: 'Lot and movement ledger' },
-  { key: 'labUsage', label: 'Lab Usage', detail: 'Commit and reverse' },
-  { key: 'production', label: 'Production', detail: 'Batch and QC' },
-  { key: 'orders', label: 'Orders', detail: 'Reserve then fulfill' },
-  { key: 'analytics', label: 'Analytics', detail: 'Read-only intelligence' },
+  { key: 'materials', label: 'Materials', detail: 'Review availability and compliance' },
+  { key: 'formulas', label: 'Formulas', detail: 'Create, refine, and submit work' },
+  { key: 'inventory', label: 'Inventory', detail: 'Check lots, stock, and documents' },
+  { key: 'labUsage', label: 'Lab usage', detail: 'Record a measured trial' },
+  { key: 'production', label: 'Production', detail: 'Plan batches and quality review' },
+  { key: 'orders', label: 'Orders', detail: 'Create, reserve, and fulfill' },
+  { key: 'analytics', label: 'Analytics', detail: 'Review operational decisions' },
 ]
 
 const generatedDocumentTypes: { value: DocumentType; label: string; targetScope: 'lot' | 'formula' | 'order' }[] = [
@@ -1022,8 +1230,9 @@ const apiBaseUrl =
 const authStorageKey = 'olfactoryops.auth.v1'
 const authSessionMarkerKey = 'olfactoryops.has_session.v1'
 const authExpiredEvent = 'olfactoryops.auth.expired'
+const sessionRestoreTimeoutMs = 8_000
 const operationApprovalRequestedEvent = 'olfactoryops.operation.approval.requested'
-const internalAdminEmails = new Set(['admin@labofscents.org', 'admin@labofscents.com'])
+const internalAdminEmails = new Set(['m.thuanwork@gmail.com', 'admin@labofscents.com'])
 const internalOnlyDomainKeys = new Set<DomainKey>(['platform', 'identity', 'customization'])
 const sensitiveApprovalFieldNames = new Set([
   'password',
@@ -1044,10 +1253,107 @@ const sensitiveApprovalFieldNames = new Set([
   'mfacode',
 ])
 
+function escapePrintHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+}
+
+function openPrintDocument(title: string, content: string) {
+  const printWindow = window.open('', '_blank', 'popup,width=860,height=760,noopener,noreferrer')
+  if (!printWindow) {
+    return false
+  }
+  printWindow.document.open()
+  printWindow.document.write(`<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapePrintHtml(title)}</title>
+<style>
+  @page { size: auto; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: #102033; background: #fff; font: 12px/1.45 Arial, sans-serif; }
+  .sheet { max-width: 760px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; gap: 18px; border-bottom: 2px solid #102033; padding-bottom: 12px; margin-bottom: 18px; }
+  .brand { font-size: 20px; font-weight: 700; letter-spacing: .4px; }
+  .muted { color: #566579; }
+  .tag { border: 1px solid #102033; border-radius: 4px; padding: 4px 8px; font-weight: 700; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { border: 1px solid #aab6c4; padding: 8px; text-align: left; vertical-align: top; }
+  th { background: #edf3f8; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+  .field { border-bottom: 1px solid #aab6c4; min-height: 32px; padding: 3px 0; }
+  .field strong { display: block; font-size: 10px; text-transform: uppercase; color: #566579; }
+  .signatures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 42px; }
+  .signature { border-top: 1px solid #102033; padding-top: 6px; min-height: 38px; }
+  .label { width: 100mm; min-height: 60mm; border: 1.5px solid #102033; padding: 8mm; display: grid; grid-template-columns: 1fr 38mm; gap: 6mm; }
+  .label h1 { font-size: 15px; margin: 0 0 4px; }
+  .label p { margin: 2px 0; }
+  .label code { display: block; margin-top: 8px; word-break: break-all; font-size: 8px; }
+  .qr svg { width: 34mm; height: 34mm; display: block; }
+  @media print { body { print-color-adjust: exact; } .sheet { max-width: none; } }
+</style></head><body>${content}</body></html>`)
+  printWindow.document.close()
+  printWindow.setTimeout(() => {
+    printWindow.focus()
+    printWindow.print()
+  }, 180)
+  return true
+}
+
+
 let csrfToken: string | null = null
+
+function workspaceRedirectUrl(workspaceUrl: string | undefined, localPath: string) {
+  // Isolated role E2E runs keep the app on the loopback origin while the
+  // fixture Worker remains on its own port. Production builds never set this
+  // test-only flag, so canonical tenant-host redirects stay enforced live.
+  if (import.meta.env.VITE_DISABLE_WORKSPACE_HOST_REDIRECT === 'true') return undefined
+  const localWorkspaceHostsEnabled = import.meta.env.DEV && import.meta.env.VITE_LOCAL_WORKSPACE_HOSTS === 'true'
+  if ((import.meta.env.DEV && !localWorkspaceHostsEnabled) || !workspaceUrl) return undefined
+  try {
+    const workspace = new URL(workspaceUrl)
+    const current = new URL(localPath, window.location.origin)
+    if (localWorkspaceHostsEnabled) {
+      const slug = workspace.hostname.split('.')[0]
+      if (!slug || window.location.hostname === `${slug}.localhost`) return undefined
+      const localWorkspace = new URL(window.location.origin)
+      localWorkspace.protocol = 'http:'
+      localWorkspace.hostname = `${slug}.localhost`
+      localWorkspace.pathname = current.pathname
+      localWorkspace.search = current.search
+      localWorkspace.hash = current.hash
+      return localWorkspace.toString()
+    }
+    if (
+      workspace.protocol !== 'https:' ||
+      workspace.port ||
+      !workspace.hostname.endsWith('.labofscents.org') ||
+      workspace.hostname === window.location.hostname
+    ) {
+      return undefined
+    }
+    workspace.pathname = current.pathname
+    workspace.search = current.search
+    workspace.hash = current.hash
+    return workspace.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function idempotencyHeaders(headers?: HeadersInit) {
+  const next = new Headers(headers)
+  next.set('Idempotency-Key', crypto.randomUUID())
+  return next
+}
 
 async function requestApi<T>(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers)
+  if (isMutatingRequest(init) && !headers.has('Idempotency-Key')) {
+    headers.set('Idempotency-Key', crypto.randomUUID())
+  }
   if (csrfToken && isMutatingRequest(init)) {
     headers.set('X-CSRF-Token', csrfToken)
   }
@@ -1061,9 +1367,18 @@ async function requestApi<T>(path: string, init?: RequestInit) {
     const retryAfterHeader = response.headers.get('Retry-After')
     let retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : Number.NaN
     try {
-      const payload = (await response.json()) as { message?: unknown; retryAfterSeconds?: unknown }
+      const payload = (await response.json()) as { message?: unknown; retryAfterSeconds?: unknown; code?: unknown; workspaceUrl?: unknown }
       if (typeof payload.message === 'string') {
         message = payload.message
+      }
+      if (response.status === 403 && payload.code === 'WORKSPACE_HOST_MISMATCH' && typeof payload.workspaceUrl === 'string') {
+        const redirect = workspaceRedirectUrl(
+          payload.workspaceUrl,
+          `${window.location.pathname}${window.location.search}${window.location.hash}`,
+        )
+        if (redirect) {
+          window.location.replace(redirect)
+        }
       }
       if (!Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
         retryAfterSeconds = Number(payload.retryAfterSeconds)
@@ -1101,6 +1416,7 @@ function shouldRequestOperationApproval(path: string) {
     !path.startsWith('/approval-requests') &&
     !path.startsWith('/inventory/approval-requests') &&
     !path.startsWith('/user/settings') &&
+    !path.startsWith('/user/account-credentials') &&
     !/^\/formulas\/[^/]+\/approve$/.test(path)
   )
 }
@@ -1112,6 +1428,7 @@ async function tryRequestOperationApproval(path: string, init: RequestInit | und
       return null
     }
     const headers = new Headers({ 'Content-Type': 'application/json' })
+    headers.set('Idempotency-Key', crypto.randomUUID())
     if (csrfToken) {
       headers.set('X-CSRF-Token', csrfToken)
     }
@@ -1238,10 +1555,10 @@ function sessionHasAnyPermission(session: AuthSession, permissions: string[]) {
 
 function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
   if (domain.key !== 'saas' || isInternalAdminSession(session)) {
-    return domain
+    return localizeDomainDisplay(domain)
   }
 
-  return {
+  return localizeDomainDisplay({
     ...domain,
     name: 'Billing & Trust',
     shortName: 'Billing',
@@ -1251,12 +1568,22 @@ function domainDisplayForSession(domain: DomainModule, session: AuthSession) {
     screens: ['Billing', 'Plan usage', 'API keys', 'Webhooks', 'Audit exports'],
     activity:
       'Billing console enforces plan limits, queues invoices/actions, rotates credentials, retries webhooks, and exports workspace-scoped evidence',
-  }
+  })
 }
 
 function domainVisibleForSession(key: DomainKey, session: AuthSession) {
   if (key === 'dashboard') {
     return true
+  }
+
+  // Deferred research surfaces remain archived; active routes stay task-focused.
+  // during the pre-V2 hand-off. Generic agent runtime records remain durable.
+  if (key === 'documents') {
+    return false
+  }
+
+  if (key === 'costing') {
+    return isInternalAdminSession(session) || session.role === 'Finance'
   }
 
   const domain = domains.find((item) => item.key === key)
@@ -1292,9 +1619,9 @@ function visibleNavGroupsForSession(session: AuthSession) {
   const internalAdminView = isInternalAdminSession(session)
 
   return navGroups
+    .filter((group) => !group.internalOnly || internalAdminView)
     .map((group) => ({
       ...group,
-      title: internalAdminView ? group.title : (customerNavGroupTitles[group.title] ?? group.title),
       keys: group.keys.filter((key) => domainVisibleForSession(key, session)),
     }))
     .filter((group) => group.keys.length > 0)
@@ -1302,6 +1629,21 @@ function visibleNavGroupsForSession(session: AuthSession) {
 
 function safeLandingForSession(key: DomainKey, session: AuthSession) {
   return domainVisibleForSession(key, session) ? key : 'dashboard'
+}
+
+function domainKeyForPath(pathname: string): DomainKey {
+  if (isRemovedV1Path(pathname)) return 'dashboard'
+  if (pathname === '/trials') return 'trials'
+  if (pathname === '/workspace') return 'dashboard'
+  const workspaceKey = pathname.startsWith('/workspace/') ? pathname.slice('/workspace/'.length) : ''
+  if (domains.some((domain) => domain.key === workspaceKey)) return workspaceKey as DomainKey
+  return 'dashboard'
+}
+
+function pathForDomainKey(key: DomainKey) {
+  if (key === 'trials') return '/trials'
+  if (key === 'dashboard') return '/workspace'
+  return `/workspace/${key}`
 }
 
 function visibleWorkflowNodesForSession(session: AuthSession) {
@@ -1390,6 +1732,26 @@ function normalizeHexColor(value: string | undefined | null) {
   return null
 }
 
+function controlledAccentColor(value: string | undefined | null) {
+  const normalized = normalizeHexColor(value)
+  return normalized && controlledAccentColors.has(normalized) ? normalized : defaultAccentColor
+}
+
+function normalizeBrandLogoImageUrl(value: string | undefined) {
+  if (!value || value.length > 2048) {
+    return undefined
+  }
+  try {
+    const url = new URL(value.trim())
+    if (url.protocol !== 'https:' || url.username || url.password) {
+      return undefined
+    }
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
 function hexToRgb(hexColor: string) {
   const normalized = normalizeHexColor(hexColor) ?? defaultAccentColor
   return {
@@ -1410,11 +1772,11 @@ function mixHexColor(hexColor: string, targetHexColor: string, weight: number) {
 }
 
 function accentStyleForColor(value: string | undefined | null): CSSProperties {
-  const accentColor = normalizeHexColor(value) ?? defaultAccentColor
+  const accentColor = controlledAccentColor(value)
   const { r, g, b } = hexToRgb(accentColor)
   return {
     '--blue': accentColor,
-    '--blue-bright': mixHexColor(accentColor, '#ffffff', 0.24),
+    '--blue-bright': mixHexColor(accentColor, '#ffffff', 0.08),
     '--blue-deep': mixHexColor(accentColor, '#000000', 0.24),
     '--accent-rgb': `${r} ${g} ${b}`,
   } as CSSProperties
@@ -1523,18 +1885,26 @@ function WeighingEvidence({ session, compact = false }: { session: LabWeighingSe
   )
 }
 
-function App() {
-  const [activeKey, setActiveKey] = useState<DomainKey>('dashboard')
+function LegacyApp() {
+  const [activeKey, setActiveKey] = useState<DomainKey>(() => domainKeyForPath(window.location.pathname))
+  const [publicRoute, setPublicRoute] = useState<PublicRoute | null>(() => publicRouteForPath(window.location.pathname))
   const [currentSession, setCurrentSession] = useState<AuthSession | null>(() => readStoredAuthSession())
+  const [workspaceAccess, setWorkspaceAccess] = useState<WorkspaceAccess | null>(null)
+  const [authRestoring, setAuthRestoring] = useState(() => hasStoredAuthMarker())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
   const [authNotice, setAuthNotice] = useState<string | null>(null)
-  const [resumeKey, setResumeKey] = useState<DomainKey | null>(null)
+  const [resumePath, setResumePath] = useState<string | null>(() =>
+    resumePathForLocation(window.location.pathname, window.location.search, window.location.hash),
+  )
   const [userSettingsRecord, setUserSettingsRecord] = useState<UserSettingsRecord | null>(null)
+  const [workspaceBranding, setWorkspaceBranding] = useState<BrandingConfig>(() => workspaceBrandingFallback())
   const [tenantDomains, setTenantDomains] = useState<Record<string, string>>({})
   const [billingOnboarding, setBillingOnboarding] = useState(false)
   const [approvalNotice, setApprovalNotice] = useState<string | null>(null)
   const [commandOpen, setCommandOpen] = useState(false)
+  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false)
+  const [, setLocaleVersion] = useState(0)
   const [modal, setModal] = useState<ModalKind>(null)
   const [auditExporting, setAuditExporting] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -1543,6 +1913,9 @@ function App() {
   const [materialRecords, setMaterialRecords] = useState<Material[]>(() => structuredClone(materials))
   const [formulaRecords, setFormulaRecords] = useState<Formula[]>([])
   const [activeFormulaId, setActiveFormulaId] = useState('')
+  const [labUsageFormulaId, setLabUsageFormulaId] = useState('')
+  const [labUsageTrialId, setLabUsageTrialId] = useState<string | null>(null)
+  const [trialFormulaPrefillId, setTrialFormulaPrefillId] = useState('')
   const [lots, setLots] = useState<InventoryLot[]>([])
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [storageLocationRecords, setStorageLocationRecords] = useState<StorageLocation[]>(storageLocations)
@@ -1554,7 +1927,7 @@ function App() {
   const [labUsagePurpose, setLabUsagePurpose] = useState<LabUsagePurpose>('trial')
   const [labUsageProjectCode, setLabUsageProjectCode] = useState('RND-PROJECT-001')
   const [labUsageSampleCode, setLabUsageSampleCode] = useState('SAMPLE-001')
-  const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Live API sync pending')
+  const [labUsageStatusMessage, setLabUsageStatusMessage] = useState('Preparing the weighing session')
   const [labUsageBusy, setLabUsageBusy] = useState(false)
   const [newFormulaType, setNewFormulaType] = useState<FormulaType>('ACCORD')
   const [newFormulaName, setNewFormulaName] = useState('Untitled Accord')
@@ -1565,12 +1938,36 @@ function App() {
   const [receiveLotNumber, setReceiveLotNumber] = useState('L-NEW-001')
   const [receiveQuantityGrams, setReceiveQuantityGrams] = useState(25)
   const [receiveExpiryDate, setReceiveExpiryDate] = useState('2028-12-31')
+  const [receiveSdsFile, setReceiveSdsFile] = useState<File | null>(null)
+  const [receiveCoaFile, setReceiveCoaFile] = useState<File | null>(null)
   const [adjustmentLotId, setAdjustmentLotId] = useState('')
   const [adjustmentDirection, setAdjustmentDirection] = useState<'IN' | 'OUT'>('OUT')
   const [adjustmentQuantityGrams, setAdjustmentQuantityGrams] = useState(5)
   const [adjustmentReason, setAdjustmentReason] = useState('Cycle count correction')
   const [transferLotId, setTransferLotId] = useState('')
   const [transferLocation, setTransferLocation] = useState(storageLocations[1]?.name ?? 'Amber Shelf 2')
+  const [transferViaTransit, setTransferViaTransit] = useState(false)
+
+  useEffect(() => {
+    const applyLocale = (candidate?: string) => {
+      const locale: UiLocale = candidate === 'vi-VN' ? 'vi-VN' : 'en-US'
+      window.localStorage.setItem(localeStorageKey, locale)
+      document.documentElement.lang = locale
+      setLocaleVersion((current) => current + 1)
+    }
+    applyLocale(window.localStorage.getItem(localeStorageKey) ?? undefined)
+    const handleLocaleChange = (event: Event) => applyLocale((event as CustomEvent<UiLocale>).detail)
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === localeStorageKey) applyLocale(event.newValue ?? undefined)
+    }
+    window.addEventListener(localeChangeEvent, handleLocaleChange)
+    window.addEventListener('storage', handleStorage)
+    return () => {
+      window.removeEventListener(localeChangeEvent, handleLocaleChange)
+      window.removeEventListener('storage', handleStorage)
+    }
+  }, [])
+
   const activeUserSettings = userSettingsRecord ?? userSettingsForSession(currentSession)
   const shellAccentStyle = useMemo(
     () => accentStyleForColor(activeUserSettings.accentColor),
@@ -1593,6 +1990,21 @@ function App() {
   const selectedFormula = useMemo(() => {
     return scopedFormulaRecords.find((formula) => formula.id === activeFormulaId) ?? scopedFormulaRecords[0] ?? emptyFormulaPlaceholder
   }, [activeFormulaId, scopedFormulaRecords])
+  const publishedLabUsageFormulas = useMemo(
+    () =>
+      scopedFormulaRecords.filter(
+        (formula) => formula.workflowStatus === 'APPROVED' && Boolean(formula.lockedVersion),
+      ),
+    [scopedFormulaRecords],
+  )
+  const selectedLabUsageFormula = useMemo(
+    () =>
+      publishedLabUsageFormulas.find((formula) => formula.id === labUsageFormulaId) ??
+      publishedLabUsageFormulas[0] ??
+      emptyFormulaPlaceholder,
+    [labUsageFormulaId, publishedLabUsageFormulas],
+  )
+  const hasPublishedLabUsageFormula = publishedLabUsageFormulas.length > 0
   const resolvedLeaves = useMemo(
     () =>
       resolveFormulaWithCatalog(
@@ -1604,14 +2016,21 @@ function App() {
   )
   const totals = useMemo(() => formulaTotals(resolvedLeaves), [resolvedLeaves])
   const curve = useMemo(() => evaporationCurve(resolvedLeaves), [resolvedLeaves])
+  const labUsageResolvedLeaves = useMemo(
+    () =>
+      hasPublishedLabUsageFormula
+        ? resolveFormulaWithCatalog(selectedLabUsageFormula.id, scopedFormulaRecords, materialRecords)
+        : [],
+    [hasPublishedLabUsageFormula, materialRecords, scopedFormulaRecords, selectedLabUsageFormula.id],
+  )
   const labPlan = useMemo(
-    () => planLabUsage(resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams),
-    [resolvedLeaves, lots, batchGrams, selectedFormula.targetGrams],
+    () => planLabUsage(labUsageResolvedLeaves, lots, batchGrams, selectedLabUsageFormula.targetGrams),
+    [labUsageResolvedLeaves, lots, batchGrams, selectedLabUsageFormula.targetGrams],
   )
   const weighingSessionPreview = useMemo(
     () =>
       buildWeighingSessionPreview({
-        formula: selectedFormula,
+        formula: selectedLabUsageFormula,
         plan: labPlan,
         lots,
         batchGrams,
@@ -1619,7 +2038,7 @@ function App() {
         tolerancePercent: weighingTolerancePercent,
         operator: weighingOperator,
       }),
-    [actualWeights, batchGrams, labPlan, lots, selectedFormula, weighingOperator, weighingTolerancePercent],
+    [actualWeights, batchGrams, labPlan, lots, selectedLabUsageFormula, weighingOperator, weighingTolerancePercent],
   )
   const weighingReady = weighingSessionPreview.status === 'READY'
   const stock = useMemo(() => stockSummary(lots, materialRecords), [lots, materialRecords])
@@ -1632,13 +2051,39 @@ function App() {
     selectedAdjustmentLot.quantityGrams - adjustmentQuantityGrams < selectedAdjustmentLot.reservedGrams
   const canReceiveInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.receive') : false
   const canAdjustInventory = currentSession ? sessionHasPermission(currentSession, 'inventory.adjust') : false
+
+  useEffect(() => {
+    setLabUsageFormulaId((current) =>
+      publishedLabUsageFormulas.some((formula) => formula.id === current)
+        ? current
+        : (publishedLabUsageFormulas[0]?.id ?? ''),
+    )
+  }, [publishedLabUsageFormulas])
+
+  useEffect(() => {
+    setActualWeights({})
+  }, [labUsageFormulaId])
   const navigateToDomain = useCallback(
     (key: DomainKey) => {
       setActiveKey(currentSession ? safeLandingForSession(key, currentSession) : key)
+      const path = pathForDomainKey(key)
+      if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
+      setPublicRoute(null)
       setMobileNavOpen(false)
     },
     [currentSession],
   )
+  const navigatePublic = useCallback((path: '/login' | '/signup', replace = false) => {
+    const publicAuthUrl = publicAuthUrlForWorkspaceOrigin(path, window.location.origin)
+    if (publicAuthUrl) {
+      window.location.assign(publicAuthUrl)
+      return
+    }
+    const nextRoute = publicRouteForPath(path)
+    if (replace) window.history.replaceState({}, document.title, path)
+    else if (window.location.pathname !== path) window.history.pushState({}, document.title, path)
+    setPublicRoute(nextRoute)
+  }, [])
   const applyUserSettings = useCallback((settings: UserSettingsRecord | null) => {
     setUserSettingsRecord(settings)
     if (settings) {
@@ -1664,17 +2109,18 @@ function App() {
     }
     setSidebarCollapsed((value) => !value)
   }, [mobileNavOpen])
-  const closeBillingGate = useCallback(() => {
+  const closeBillingGate = useCallback((preferredDestination?: DomainKey) => {
     if (!currentSession) {
       return
     }
     setBillingOnboarding(false)
-    setActiveKey(
-      safeLandingForSession(
-        (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding,
-        currentSession,
-      ),
+    const destination = safeLandingForSession(
+      preferredDestination ?? (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding,
+      currentSession,
     )
+    setActiveKey(destination)
+    const path = pathForDomainKey(destination)
+    if (window.location.pathname !== path) window.history.replaceState({}, document.title, path)
   }, [currentSession, userSettingsRecord])
 
   useEffect(() => {
@@ -1692,10 +2138,41 @@ function App() {
   }, [activeKey, currentSession])
 
   useEffect(() => {
+    const handlePopState = () => {
+      setActiveKey(domainKeyForPath(window.location.pathname))
+      setPublicRoute(publicRouteForPath(window.location.pathname))
+      setResumePath(resumePathForLocation(window.location.pathname, window.location.search, window.location.hash))
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  useEffect(() => {
+    if (authRestoring || currentSession || publicRoute !== null || !isProtectedApplicationPath(window.location.pathname)) return
+    const requestedPath = safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`)
+    if (requestedPath) setResumePath(requestedPath)
+    window.history.replaceState({}, document.title, loginPathForProtectedPath(window.location.pathname, window.location.search, window.location.hash))
+    setPublicRoute('login')
+  }, [authRestoring, currentSession, publicRoute])
+
+  useEffect(() => {
+    if (authRestoring || !currentSession || publicRoute === null || publicRoute === 'trialFeedback') return
+    const preferredLanding = (userSettingsRecord ?? userSettingsForSession(currentSession)).preferredLanding
+    const requestedLanding = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : preferredLanding
+    const target = safeLandingForSession(requestedLanding, currentSession)
+    setActiveKey(target)
+    const destination = resumePath ?? pathForDomainKey(target)
+    if (window.location.pathname !== destination) window.history.replaceState({}, document.title, destination)
+    setPublicRoute(null)
+    setResumePath(null)
+  }, [authRestoring, currentSession, publicRoute, resumePath, userSettingsRecord])
+
+  useEffect(() => {
     function handleAuthExpired() {
-      setResumeKey((current) => current ?? activeKey)
+      setResumePath((current) => current ?? safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`) ?? pathForDomainKey(activeKey))
       setAuthNotice('Your session expired or was revoked. Sign in again to continue where you left off.')
       setCurrentSession(null)
+      setWorkspaceAccess(null)
       applyUserSettings(null)
       setSidebarCollapsed(false)
     }
@@ -1719,29 +2196,54 @@ function App() {
 
   useEffect(() => {
     if (!hasStoredAuthMarker()) {
+      setAuthRestoring(false)
       return
     }
 
     let active = true
+    const restoreController = new AbortController()
+    const restoreTimeout = window.setTimeout(() => restoreController.abort(), sessionRestoreTimeoutMs)
 
     async function restoreSession() {
       try {
-        const payload = await requestApi<MeResponse>('/me')
+        const payload = await requestApi<MeResponse>('/me', { signal: restoreController.signal })
         if (active) {
-          acceptCsrfToken(payload.csrfToken)
           const session = withSessionPermissions(payload.session, payload.permissions)
-          setCurrentSession(session)
           const settings = payload.userSettings ?? userSettingsForSession(payload.session)
+          const requestedLanding = resumePath
+            ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname)
+            : settings.preferredLanding
+          const destination = resumePath ?? pathForDomainKey(safeLandingForSession(requestedLanding, session))
+          const redirect = workspaceRedirectUrl(
+            payload.workspace?.workspaceUrl,
+            destination,
+          )
+          if (redirect) {
+            window.location.replace(redirect)
+            return
+          }
+          acceptCsrfToken(payload.csrfToken)
+          setCurrentSession(session)
+          setWorkspaceAccess(payload.workspace)
           applyUserSettings(settings)
-          setActiveKey(safeLandingForSession(settings.preferredLanding, session))
+          setActiveKey(safeLandingForSession(requestedLanding, session))
         }
       } catch {
         if (active) {
+          const sessionWasAlreadyCleared = !hasStoredAuthMarker()
+          writeStoredAuthSession(null)
           acceptCsrfToken()
           setCurrentSession(null)
+          setWorkspaceAccess(null)
           applyUserSettings(null)
           setSidebarCollapsed(false)
+          if (!sessionWasAlreadyCleared) {
+            setAuthNotice('We could not restore your previous session. Sign in again to continue.')
+          }
         }
+      } finally {
+        window.clearTimeout(restoreTimeout)
+        if (active) setAuthRestoring(false)
       }
     }
 
@@ -1749,8 +2251,10 @@ function App() {
 
     return () => {
       active = false
+      window.clearTimeout(restoreTimeout)
+      restoreController.abort()
     }
-  }, [applyUserSettings])
+  }, [applyUserSettings, resumePath])
 
   useEffect(() => {
     if (!currentSessionId || !currentOrganizationId) {
@@ -1868,7 +2372,11 @@ function App() {
   }, [labPlan.allocations])
 
   const commitLabUsage = useCallback(async () => {
-    if (!weighingReady || resolvedLeaves.length === 0) {
+    if (!hasPublishedLabUsageFormula) {
+      setLabUsageStatusMessage('Publish a formula before recording lab inventory usage')
+      return
+    }
+    if (!weighingReady || labUsageResolvedLeaves.length === 0) {
       return
     }
 
@@ -1879,9 +2387,9 @@ function App() {
       )
       const payload = await requestApi<LabUsageCommitResponse>('/lab-usage/commit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
-          formulaId: selectedFormula.id,
+          formulaId: selectedLabUsageFormula.id,
           grams: batchGrams,
           ...(actualsDifferFromTargets
             ? {
@@ -1897,13 +2405,15 @@ function App() {
           purpose: labUsagePurpose,
           projectCode: labUsageProjectCode,
           sampleCode: labUsageSampleCode,
+          ...(labUsageTrialId ? { trialId: labUsageTrialId } : {}),
         }),
       })
 
       setLots(payload.lots)
       setMovements((current) => mergeMovements(payload.movements, current))
       setUsageHistory(payload.usageHistory)
-      setLabUsageStatusMessage(payload.message)
+      setLabUsageStatusMessage(labUsageTrialId ? `${payload.message} Linked to trial ${labUsageTrialId}.` : payload.message)
+      setLabUsageTrialId(null)
       setActiveKey('labUsage')
       setModal(null)
     } catch (error) {
@@ -1916,35 +2426,42 @@ function App() {
     labUsageProjectCode,
     labUsagePurpose,
     labUsageSampleCode,
-    resolvedLeaves.length,
-    selectedFormula.id,
+    labUsageTrialId,
+    hasPublishedLabUsageFormula,
+    labUsageResolvedLeaves.length,
+    selectedLabUsageFormula.id,
     weighingOperator,
     weighingSessionPreview.lines,
     weighingTolerancePercent,
     weighingReady,
   ])
 
-  const reverseLatestUsage = useCallback(async () => {
-    const latest = usageHistory.find((usage) => usage.status === 'COMMITTED')
-    if (!latest) {
+  const reverseLatestUsage = useCallback(async (usageId?: string, allocations?: LabUsageReversalAllocation[]) => {
+    const usage = usageHistory.find((item) => item.id === usageId) ?? usageHistory.find(
+      (item) => item.status === 'COMMITTED' || item.status === 'PARTIALLY_REVERSED',
+    )
+    if (!usage) {
       return
     }
 
     setLabUsageBusy(true)
     try {
-      const payload = await requestApi<LabUsageReverseResponse>(`/lab-usage/${encodeURIComponent(latest.id)}/reverse`, {
+      const payload = await requestApi<LabUsageReverseResponse>(`/lab-usage/${encodeURIComponent(usage.id)}/reverse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           actor: weighingOperator || 'Lab Manager',
           reason: 'Compensation reversal from Lab Usage workspace',
+          ...(allocations?.length ? { allocations } : {}),
         }),
       })
 
       setLots(payload.lots)
       setMovements((current) => mergeMovements(payload.movements, current))
       setUsageHistory(payload.usageHistory)
-      setLabUsageStatusMessage(`${payload.usageId} reversed by compensation`)
+      setLabUsageStatusMessage(
+        `${payload.usageId} ${payload.usage.status === 'REVERSED' ? 'fully' : 'partially'} reversed by compensation`,
+      )
     } catch (error) {
       setLabUsageStatusMessage(error instanceof Error ? error.message : 'Lab Usage reverse failed')
     } finally {
@@ -1975,6 +2492,7 @@ function App() {
           name: newFormulaName.trim() || 'Untitled Formula',
           formulaType: newFormulaType,
           targetGrams,
+          requiresFinalProductContext: newFormulaType === 'ACCORD',
         }),
       })
       setFormulaRecords((current) => [
@@ -2080,12 +2598,37 @@ function App() {
         body: JSON.stringify(receiptPayload),
       })
 
+      const uploads = [
+        receiveSdsFile ? { file: receiveSdsFile, type: 'SDS' as const, linkedTo: material.id } : null,
+        receiveCoaFile ? { file: receiveCoaFile, type: 'CoA' as const, linkedTo: response.lot.id } : null,
+      ].filter((upload): upload is { file: File; type: 'SDS' | 'CoA'; linkedTo: string } => upload !== null)
+      const uploadFailures: string[] = []
+      for (const upload of uploads) {
+        const formData = new FormData()
+        formData.set('file', upload.file)
+        formData.set('type', upload.type)
+        formData.set('linkedTo', upload.linkedTo)
+        formData.set('title', `${material.name} ${upload.type} / ${response.lot.lotNumber}`)
+        formData.set('tags', `inventory-receipt,${upload.type.toLowerCase()}`)
+        formData.set('sensitivity', 'Internal')
+        try {
+          await requestApi<DocumentGenerationResponse>('/documents/upload', { method: 'POST', body: formData })
+        } catch (error) {
+          uploadFailures.push(`${upload.type}: ${error instanceof Error ? error.message : 'upload failed'}`)
+        }
+      }
+
       setLots((current) => [response.lot, ...current.filter((lot) => lot.id !== response.lot.id)])
       setMovements((current) => [response.movement, ...current.filter((movement) => movement.id !== response.movement.id)])
       setReceiveLotNumber(`L-NEW-${String(lots.length + 2).padStart(3, '0')}`)
       setReceiveQuantityGrams(25)
+      setReceiveSdsFile(null)
+      setReceiveCoaFile(null)
       setActiveKey('inventory')
       setModal(null)
+      if (uploadFailures.length > 0) {
+        setApprovalNotice(`Lot ${response.lot.lotNumber} was received. ${uploadFailures.join(' ')}`)
+      }
     } catch (error) {
       if (isPermissionError(error, 'inventory.receive')) {
         await submitInventoryApprovalRequest(
@@ -2100,13 +2643,14 @@ function App() {
     }
   }, [
     canReceiveInventory,
-    formatGrams,
     isPermissionError,
     materialRecords,
     receiveExpiryDate,
     receiveLotNumber,
     receiveMaterialId,
     receiveQuantityGrams,
+    receiveCoaFile,
+    receiveSdsFile,
     lots.length,
     submitInventoryApprovalRequest,
   ])
@@ -2171,7 +2715,6 @@ function App() {
     adjustmentQuantityGrams,
     adjustmentReason,
     canAdjustInventory,
-    formatGrams,
     isPermissionError,
     lots,
     submitInventoryApprovalRequest,
@@ -2185,7 +2728,7 @@ function App() {
       return
     }
 
-    const transferPayload = { lotId: lot.id, toLocation }
+    const transferPayload = { lotId: lot.id, toLocation, viaTransit: transferViaTransit }
 
     try {
       if (!canAdjustInventory) {
@@ -2226,6 +2769,7 @@ function App() {
     submitInventoryApprovalRequest,
     transferLotId,
     transferLocation,
+    transferViaTransit,
   ])
 
   async function queueTenantAuditExport() {
@@ -2283,6 +2827,29 @@ function App() {
     void syncTenantDomain(currentOrganizationId)
   }, [currentOrganizationId])
 
+  useEffect(() => {
+    if (!currentSession || !currentOrganizationId) {
+      setWorkspaceBranding(workspaceBrandingFallback())
+      return
+    }
+
+    let cancelled = false
+    setWorkspaceBranding(workspaceBrandingFallback(currentOrganizationId))
+    void requestApi<BrandingConfig>('/branding')
+      .then((branding) => {
+        if (!cancelled) {
+          setWorkspaceBranding(branding)
+        }
+      })
+      .catch(() => {
+        // Keep the system default when a workspace does not have a saved brand yet.
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentOrganizationId, currentSession, currentSessionId])
+
   async function syncUserSettings(session: AuthSession) {
     try {
       const settings = await requestApi<UserSettingsRecord>('/user/settings')
@@ -2304,10 +2871,21 @@ function App() {
     const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
     const settings = await syncUserSettings(session)
     void syncTenantDomain(session.organizationId)
-    setActiveKey(safeLandingForSession(resumeKey ?? settings.preferredLanding, session))
-    setResumeKey(null)
+    const resumeTarget = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
+    const target = safeLandingForSession(resumeTarget, session)
+    const destination = resumePath ?? pathForDomainKey(target)
+    const redirect = workspaceRedirectUrl(payload.workspace?.workspaceUrl, destination)
+    if (redirect) {
+      window.location.assign(redirect)
+      return payload
+    }
+    setActiveKey(target)
+    window.history.replaceState({}, document.title, destination)
+    setPublicRoute(publicRouteForPath(new URL(destination, window.location.origin).pathname))
+    setResumePath(null)
     setAuthNotice(null)
     setCurrentSession(session)
+    setWorkspaceAccess(payload.workspace)
     return payload
   }
 
@@ -2317,7 +2895,6 @@ function App() {
     email: string
     name: string
     password: string
-    customDomain: string
   }) {
     const payload = await requestApi<SignupResponse>('/auth/signup', {
       method: 'POST',
@@ -2325,20 +2902,49 @@ function App() {
       body: JSON.stringify({
         organizationName: input.organizationName.trim(),
         workspaceSlug: toWorkspaceSlug(input.workspaceSlug),
-        customDomain: input.customDomain,
         email: input.email.trim().toLowerCase(),
         name: input.name.trim(),
         password: input.password,
       }),
     })
     const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
+    const redirect = workspaceRedirectUrl(payload.workspaceUrl, '/')
+    if (redirect) {
+      window.location.assign(redirect)
+      return payload
+    }
     setCurrentSession(session)
-    setResumeKey(null)
+    setWorkspaceAccess({ systemHostname: payload.systemHostname, workspaceUrl: payload.workspaceUrl })
+    setResumePath(null)
     setAuthNotice(null)
-    rememberTenantDomain(payload.session.organizationId, payload.organization.customDomain ?? payload.sso.domain)
+    rememberTenantDomain(payload.session.organizationId, payload.systemHostname)
     void syncUserSettings(session)
     setBillingOnboarding(true)
     return payload
+  }
+
+  async function requestPasswordReset(email: string) {
+    await requestApi<{ accepted: boolean }>('/auth/password-reset/request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    })
+  }
+
+  async function completePasswordReset(token: string, password: string) {
+    await requestApi<{ accepted: boolean }>('/auth/password-reset/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password }),
+    })
+  }
+
+  async function completeEmailVerification(token: string) {
+    await requestApi<{ accepted: boolean; alreadyVerified: boolean }>('/auth/email-verification/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
   }
 
   async function logoutWorkspace() {
@@ -2348,39 +2954,75 @@ function App() {
       // The local session must still be cleared if the demo API is unavailable.
     } finally {
       setCurrentSession(null)
+      setWorkspaceAccess(null)
       applyUserSettings(null)
       setSidebarCollapsed(false)
       setBillingOnboarding(false)
       setAuthNotice(null)
-      setResumeKey(null)
+      setResumePath(null)
       acceptCsrfToken()
       writeStoredAuthSession(null)
       setCommandOpen(false)
       setModal(null)
       setActiveKey('dashboard')
+      window.history.replaceState({}, document.title, '/')
+      setPublicRoute('landing')
     }
   }
 
+  if (publicRoute === 'trialFeedback') {
+    const token = window.location.pathname.split('/').filter(Boolean).at(-1) ?? ''
+    return <PublicTrialFeedback token={token} requestApi={requestApi} />
+  }
+
+  if (authRestoring) {
+    return <main className="auth-restore-screen" aria-live="polite"><div><span className="section-eyebrow">OlfactoryOps</span><strong>Restoring your workspace</strong><small>Checking the active session and requested page.</small></div></main>
+  }
+
   if (!currentSession) {
+    if (publicRoute === 'landing') {
+      return (
+        <MotionProvider>
+          <PublicLanding
+            locale={activeUiLocale()}
+            onNavigate={(path) => navigatePublic(path)}
+            onLocaleChange={(locale) => {
+              window.localStorage.setItem(localeStorageKey, locale)
+              document.documentElement.lang = locale
+              window.dispatchEvent(new CustomEvent<UiLocale>(localeChangeEvent, { detail: locale }))
+              setLocaleVersion((current) => current + 1)
+            }}
+          />
+        </MotionProvider>
+      )
+    }
     return (
-        <AuthGateway
-          notice={authNotice}
-          onLogin={loginToWorkspace}
-          onSignup={signupWorkspace}
-        />
+      <AuthGateway
+        initialMode={publicRoute === 'signup' ? 'signup' : 'login'}
+        notice={authNotice}
+        onLogin={loginToWorkspace}
+        onSignup={signupWorkspace}
+        onRequestPasswordReset={requestPasswordReset}
+        onCompletePasswordReset={completePasswordReset}
+        onCompleteEmailVerification={completeEmailVerification}
+        onNavigate={navigatePublic}
+      />
     )
   }
 
   if (billingOnboarding) {
     return (
-      <PostSignupBillingGate
+      <PostSignupWorkspaceReady
         session={currentSession}
+        workspaceAccess={workspaceAccess}
         onComplete={closeBillingGate}
+        onConnectDomain={() => closeBillingGate('saas')}
       />
     )
   }
 
   return (
+    <MotionProvider reduceMotion={activeUserSettings.reduceMotion}>
     <div className="min-h-screen bg-lab-bg text-[var(--text)]" style={shellAccentStyle}>
       <LabBackdrop />
       <div
@@ -2388,8 +3030,17 @@ function App() {
           sidebarCollapsed ? 'is-rail' : ''
         } ${mobileNavOpen ? 'is-mobile-nav-open' : ''}`}
       >
+        {mobileNavOpen ? (
+          <button
+            className="mobile-nav-scrim"
+            type="button"
+            aria-label="Close navigation"
+            onClick={() => setMobileNavOpen(false)}
+          />
+        ) : null}
         <Sidebar
           activeKey={activeKey}
+          branding={workspaceBranding}
           collapsed={sidebarCollapsed && !mobileNavOpen}
           mobileOpen={mobileNavOpen}
           session={currentSession}
@@ -2402,10 +3053,12 @@ function App() {
             session={currentSession}
             tenantDomain={tenantDomains[currentSession.organizationId]}
             userSettings={activeUserSettings}
+            mobileNavOpen={mobileNavOpen}
             onCommand={openCommandPalette}
             onLogout={() => void logoutWorkspace()}
             onMenu={() => setMobileNavOpen((value) => !value)}
             onOpenUserSettings={openUserSettingsModal}
+            onToggleNotifications={() => setNotificationCenterOpen((value) => !value)}
           />
           {approvalNotice ? (
             <div className="approval-notice glass">
@@ -2428,11 +3081,34 @@ function App() {
                   onOpenModal={setModal}
                 />
               </motion.div>
+            ) : activeKey === 'trials' ? (
+              <motion.div key="trials" {...shellMotionPreset}>
+                <div className="domain-page">
+                  <TrialsWorkspace
+                    requestApi={requestApi}
+                    formulaRecords={scopedFormulaRecords}
+                    initialFormulaId={trialFormulaPrefillId}
+                    canCreate={sessionHasPermission(currentSession, 'trials.create')}
+                    canRelease={sessionHasPermission(currentSession, 'trials.release') && sessionHasPermission(currentSession, 'formulas.approve')}
+                    canEvaluate={currentSession.role === 'SENSORY_PANELIST' && sessionHasPermission(currentSession, 'trials.evaluate')}
+                    canManagePublic={sessionHasPermission(currentSession, 'trials.managePublic')}
+                    onStartWeighing={(trial: FragranceTrialRecord) => {
+                      setLabUsageFormulaId(trial.formulaSnapshot.formulaId)
+                      setLabUsageTrialId(trial.id)
+                      setLabUsagePurpose('trial')
+                      setLabUsageSampleCode(trial.sampleCode)
+                      setLabUsageStatusMessage(`Trial ${trial.sampleCode} is ready for actual weighing.`)
+                      navigateToDomain('labUsage')
+                    }}
+                  />
+                </div>
+              </motion.div>
             ) : selectedDomain ? (
               <motion.div key={activeKey} {...shellMotionPreset}>
         <DomainWorkspace
           domain={selectedDomain}
           session={currentSession}
+          workspaceAccess={workspaceAccess}
           lots={lots}
                   movements={movements}
                   storageLocations={storageLocationRecords}
@@ -2446,6 +3122,11 @@ function App() {
                   setFormulaRecords={setFormulaRecords}
                   activeFormulaId={activeFormulaId}
                   setActiveFormulaId={setActiveFormulaId}
+                  labUsageFormulaRecords={publishedLabUsageFormulas}
+                  labUsageFormulaId={labUsageFormulaId}
+                  setLabUsageFormulaId={setLabUsageFormulaId}
+                  selectedLabUsageFormula={selectedLabUsageFormula}
+                  hasPublishedLabUsageFormula={hasPublishedLabUsageFormula}
                   resolvedLeaves={resolvedLeaves}
                   totals={totals}
                   curve={curve}
@@ -2469,6 +3150,7 @@ function App() {
                   setWeighingOperator={setWeighingOperator}
                   labUsagePurpose={labUsagePurpose}
                   setLabUsagePurpose={setLabUsagePurpose}
+                  labUsageTrialId={labUsageTrialId}
                   labUsageProjectCode={labUsageProjectCode}
                   setLabUsageProjectCode={setLabUsageProjectCode}
                   labUsageSampleCode={labUsageSampleCode}
@@ -2480,6 +3162,10 @@ function App() {
                   onCommit={() => setModal('commit')}
                   onReverse={reverseLatestUsage}
                   onOpenModal={setModal}
+                  onOpenTrials={(formula) => {
+                    setTrialFormulaPrefillId(formula.id)
+                    navigateToDomain('trials')
+                  }}
                   onNewFormula={(type = 'ACCORD') => {
                     selectNewFormulaType(type)
                     setModal('newFormula')
@@ -2489,6 +3175,9 @@ function App() {
                   onAdjustStock={() => setModal('inventoryAdjustment')}
                   onTransferStock={() => setModal('inventoryTransfer')}
                   onRequestInventoryApproval={submitInventoryApprovalRequest}
+                  userSettings={activeUserSettings}
+                  onUserSettingsChange={applyUserSettings}
+                  onWorkspaceBrandingChange={setWorkspaceBranding}
                 />
               </motion.div>
             ) : null}
@@ -2504,10 +3193,19 @@ function App() {
           onCommit={() => setModal('commit')}
         />
 
+        <NotificationCenter
+          open={notificationCenterOpen}
+          onClose={() => setNotificationCenterOpen(false)}
+          onNavigate={(key) => {
+            navigateToDomain(key)
+            setNotificationCenterOpen(false)
+          }}
+        />
+
         <BlackPopup
           open={modal === 'userSettings'}
           title="User Settings"
-          description="Personal preferences for this signed-in user. Company branding, roles, and workspace policy stay separate."
+          description="Personal preferences for this signed-in user. Workspace admins can also manage the shared navigation brand."
           actionLabel="Close"
           onClose={closeCurrentModal}
           onAction={closeCurrentModal}
@@ -2530,7 +3228,7 @@ function App() {
         actionLabel="Create movements"
         onClose={() => setModal(null)}
         onAction={commitLabUsage}
-        actionDisabled={!weighingReady || labUsageBusy}
+        actionDisabled={!hasPublishedLabUsageFormula || !weighingReady || labUsageBusy}
       >
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} compact />
         <WeighingEvidence session={weighingSessionPreview} compact />
@@ -2682,6 +3380,26 @@ function App() {
               onChange={(event) => setReceiveExpiryDate(event.target.value)}
             />
           </label>
+          <label className="field-row">
+            <span>SDS file</span>
+            <input
+              aria-label="Receipt SDS file"
+              accept="application/pdf,image/png,image/jpeg"
+              type="file"
+              onChange={(event) => setReceiveSdsFile(event.target.files?.[0] ?? null)}
+            />
+            <small>{receiveSdsFile ? `${receiveSdsFile.name} attached for review` : 'Optional PDF or image'}</small>
+          </label>
+          <label className="field-row">
+            <span>CoA file</span>
+            <input
+              aria-label="Receipt CoA file"
+              accept="application/pdf,image/png,image/jpeg"
+              type="file"
+              onChange={(event) => setReceiveCoaFile(event.target.files?.[0] ?? null)}
+            />
+            <small>{receiveCoaFile ? `${receiveCoaFile.name} attached for review` : 'Optional PDF or image'}</small>
+          </label>
         </div>
       </BlackPopup>
 
@@ -2800,9 +3518,18 @@ function App() {
               ))}
             </select>
           </label>
+          <label className="checkbox-row">
+            <input
+              aria-label="Transfer via transit"
+              checked={transferViaTransit}
+              type="checkbox"
+              onChange={(event) => setTransferViaTransit(event.target.checked)}
+            />
+            <span>Route through Transit and complete receipt at the destination later</span>
+          </label>
           <div className="popup-grid">
             <Metric label="Movement type" value="TRANSFER" />
-            <Metric label="Quantity effect" value="No stock delta" />
+            <Metric label="Quantity effect" value={transferViaTransit ? 'Two MOVE events / no stock delta' : 'No stock delta'} />
           </div>
         </div>
       </BlackPopup>
@@ -2838,11 +3565,13 @@ function App() {
         </ul>
       </BlackPopup>
     </div>
+    </MotionProvider>
   )
 }
 
 function Sidebar({
   activeKey,
+  branding,
   collapsed,
   mobileOpen,
   session,
@@ -2850,38 +3579,80 @@ function Sidebar({
   onToggle,
 }: {
   activeKey: DomainKey
+  branding: BrandingConfig
   collapsed: boolean
   mobileOpen: boolean
   session: AuthSession
   onNavigate: (key: DomainKey) => void
   onToggle: () => void
 }) {
+  const brandName = branding.displayName.trim() || 'OlfactoryOps'
+  const brandInitials = brandName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.slice(0, 1).toUpperCase())
+    .join('')
+  const isSystemBrand = brandName === 'OlfactoryOps'
+  const logoImageUrl = branding.logoMode === 'image' ? normalizeBrandLogoImageUrl(branding.logoImageUrl) : undefined
+  const showImageLockup = Boolean(logoImageUrl && !collapsed)
+  const safeBrandAccentColor = controlledAccentColor(branding.accentColor)
+
   return (
-    <aside className="sidebar glass" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
+    <aside className="sidebar glass" data-testid="app-sidebar" style={mobileOpen ? { left: 10, transform: 'none' } : undefined}>
       <div className="brand-row">
-        <div className="brand-mark">
-          <Sparkles size={18} />
-        </div>
-        {!collapsed && (
-          <div>
-            <div className="wordmark">OlfactoryOps</div>
-            <div className="mono-small">OlfactoryOps OS</div>
+        {showImageLockup ? (
+          <div className="brand-image-lockup" style={{ borderColor: `${safeBrandAccentColor}66` }} title={`${brandName} workspace brand`}>
+            <span aria-hidden="true">{brandName}</span>
+            <img alt={`${brandName} logo`} src={logoImageUrl} onError={(event) => { event.currentTarget.hidden = true }} />
           </div>
+        ) : (
+          <>
+            <div
+              className={`brand-mark ${branding.logoMode === 'monogram' ? 'is-monogram' : ''} ${logoImageUrl ? 'is-image' : ''}`}
+              style={{ background: safeBrandAccentColor }}
+              title={`${brandName} workspace brand`}
+            >
+              {logoImageUrl ? (
+                <>
+                  <span aria-hidden="true">{brandInitials || 'O'}</span>
+                  <img alt="" src={logoImageUrl} onError={(event) => { event.currentTarget.hidden = true }} />
+                </>
+              ) : branding.logoMode === 'monogram' ? (
+                brandInitials || 'O'
+              ) : (
+                <Sparkles size={18} />
+              )}
+            </div>
+            {!collapsed && (
+              <div>
+                <div className="wordmark">{brandName}</div>
+                <div className="mono-small">{isSystemBrand ? uiText('Fragrance operations') : uiText('Powered by OlfactoryOps')}</div>
+              </div>
+            )}
+          </>
         )}
-        <button className="icon-button sidebar-toggle" type="button" onClick={onToggle} aria-label="Toggle sidebar">
+        <button
+          className="icon-button sidebar-toggle"
+          type="button"
+          onClick={onToggle}
+          aria-label={collapsed ? uiText('Expand sidebar') : uiText('Collapse sidebar')}
+          aria-pressed={!collapsed}
+          title={collapsed ? uiText('Expand sidebar') : uiText('Collapse sidebar')}
+        >
           <Menu size={18} />
         </button>
       </div>
 
-      <nav className="nav-stack" aria-label="Main modules">
+      <nav className="nav-stack" id="primary-navigation" data-testid="primary-navigation" aria-label={uiText('Main modules')}>
         {visibleNavGroupsForSession(session).map((group) => (
           <div className="nav-group" key={group.title}>
-            {!collapsed && <div className="nav-title">{group.title}</div>}
+            {!collapsed && <div className="nav-title">{uiText(group.title)}</div>}
             {group.keys.map((key) => {
               const domain = key === 'dashboard' ? undefined : domains.find((item) => item.key === key)
               const displayDomain = domain ? domainDisplayForSession(domain, session) : undefined
               const Icon = domainIcons[key]
-              const label = key === 'dashboard' ? 'OlfactoryOps Console' : displayDomain?.shortName ?? key
+              const label = key === 'dashboard' ? uiText('Home') : uiText(navigationLabels[key] ?? displayDomain?.shortName ?? key)
               const isActive = activeKey === key
               return (
                 <button
@@ -2893,9 +3664,6 @@ function Sidebar({
                 >
                   <Icon size={18} />
                   {!collapsed && <span>{label}</span>}
-                  {!collapsed && displayDomain && isInternalAdminSession(session) && (
-                    <StatusDot status={displayDomain.status} />
-                  )}
                 </button>
               )
             })}
@@ -2911,42 +3679,53 @@ function Topbar({
   session,
   tenantDomain,
   userSettings,
+  mobileNavOpen,
   onCommand,
   onLogout,
   onMenu,
   onOpenUserSettings,
+  onToggleNotifications,
 }: {
   activeDomain?: DomainModule
   session: AuthSession
   tenantDomain?: string
   userSettings: UserSettingsRecord
+  mobileNavOpen: boolean
   onCommand: () => void
   onLogout: () => void
   onMenu: () => void
   onOpenUserSettings: () => void
+  onToggleNotifications: () => void
 }) {
   const tenantDisplay = tenantDisplayForSession(session, tenantDomain)
   const displayDomain = activeDomain ? domainDisplayForSession(activeDomain, session) : undefined
 
   return (
-    <header className="topbar glass">
-      <button className="icon-button mobile-menu" type="button" onClick={onMenu} aria-label="Open navigation">
+    <header className="topbar glass" data-testid="app-topbar">
+      <button
+        className="icon-button mobile-menu"
+        type="button"
+        onClick={onMenu}
+        aria-label={mobileNavOpen ? uiText('Close navigation') : uiText('Open navigation')}
+        aria-controls="primary-navigation"
+        aria-expanded={mobileNavOpen}
+      >
         <Menu size={18} />
       </button>
       <div className="topbar-title-block">
         <div className="mono-small">{tenantDisplay.label}</div>
-        <h1>{displayDomain ? displayDomain.name : 'OlfactoryOps Console'}</h1>
+        <h1>{displayDomain ? displayDomain.name : uiText('Workspace overview')}</h1>
       </div>
-      <button className="command-button" type="button" onClick={onCommand}>
+      <button className="command-button" data-testid="command-search" type="button" onClick={onCommand}>
         <Search size={17} />
-        <span>Search modules, records, actions</span>
+        <span>{uiText('Search modules, records, actions')}</span>
         <kbd>Ctrl K</kbd>
       </button>
       <div className="topbar-actions">
         {isInternalAdminSession(session) ? (
-          <DataTag icon={ShieldCheck} label="Workspace guard" value="On" tone="green" />
+          <DataTag icon={ShieldCheck} label={uiText('Secure workspace')} value={uiText('Protected')} tone="green" />
         ) : null}
-        <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label="Open user settings">
+        <button className="user-chip" type="button" onClick={onOpenUserSettings} aria-label={uiText('Open user settings')}>
           <span className="user-avatar">{userSettings.displayName.slice(0, 1).toUpperCase()}</span>
           <span>
             <strong>{userSettings.displayName}</strong>
@@ -2955,17 +3734,126 @@ function Topbar({
             </small>
           </span>
         </button>
-        <button className="icon-button" type="button" aria-label="User settings" onClick={onOpenUserSettings}>
+        <button className="icon-button" type="button" aria-label={uiText('User settings')} onClick={onOpenUserSettings}>
           <Settings size={18} />
         </button>
-        <button className="icon-button" type="button" aria-label="Notifications">
+        <button className="icon-button" type="button" aria-label={uiText('Notifications')} onClick={onToggleNotifications}>
           <Bell size={18} />
         </button>
         <button className="ghost-button small" type="button" onClick={onLogout}>
-          Logout
+          {uiText('Logout')}
         </button>
       </div>
     </header>
+  )
+}
+
+function LegalPrivacyControls() {
+  const [acceptances, setAcceptances] = useState<LegalAcceptanceRecord[]>([])
+  const [requests, setRequests] = useState<PrivacyRequestRecord[]>([])
+  const [status, setStatus] = useState('Loading legal status...')
+
+  const load = useCallback(async () => {
+    try {
+      const [legal, privacy] = await Promise.all([
+        requestApi<{ acceptances: LegalAcceptanceRecord[] }>('/legal/status'),
+        requestApi<{ requests: PrivacyRequestRecord[] }>('/privacy/requests'),
+      ])
+      setAcceptances(legal.acceptances)
+      setRequests(privacy.requests)
+      setStatus('')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Legal status could not be loaded')
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  async function accept(document: 'terms' | 'privacy' | 'cookies') {
+    try {
+      const payload = await requestApi<{ acceptance: LegalAcceptanceRecord }>('/legal/accept', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ document, version: '2026-07-22' }),
+      })
+      setAcceptances((current) => [payload.acceptance, ...current.filter((item) => item.id !== payload.acceptance.id)])
+      setStatus(`${document} acceptance recorded.`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Acceptance could not be recorded')
+    }
+  }
+
+  async function requestData(type: 'EXPORT' | 'ERASURE') {
+    try {
+      const payload = await requestApi<{ request: PrivacyRequestRecord }>('/privacy/requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      })
+      setRequests((current) => [payload.request, ...current.filter((item) => item.id !== payload.request.id)])
+      setStatus(`${type === 'EXPORT' ? 'Data export' : 'Erasure'} request submitted for review.`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Privacy request could not be submitted')
+    }
+  }
+
+  async function downloadPrivacyExport(request: PrivacyRequestRecord) {
+    try {
+      const payload = await requestApi<{ request: PrivacyRequestRecord; export: Record<string, unknown> }>(
+        `/privacy/requests/${encodeURIComponent(request.id)}/export`,
+        { method: 'POST' },
+      )
+      const blob = new Blob([JSON.stringify(payload.export, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `olfactoryops-data-export-${request.id}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      setRequests((current) => current.map((item) => item.id === payload.request.id ? payload.request : item))
+      setStatus('Personal data export downloaded.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Data export could not be generated')
+    }
+  }
+
+  const accepted = (document: LegalAcceptanceRecord['document']) =>
+    acceptances.some((item) => item.document === document && item.version === '2026-07-22')
+  const latestExportRequest = requests.find((item) => item.type === 'EXPORT')
+
+  return (
+    <section className="settings-section">
+      <div className="settings-section-heading">
+        <strong>Legal & Privacy</strong>
+        <span>Versioned consent and data-subject requests for this account.</span>
+      </div>
+      <div className="legal-actions">
+        {(['terms', 'privacy', 'cookies'] as const).map((document) => (
+          <button
+            className="ghost-button small"
+            key={document}
+            type="button"
+            onClick={() => void accept(document)}
+            disabled={accepted(document)}
+          >
+            {accepted(document) ? `${document} accepted` : `Accept ${document}`}
+          </button>
+        ))}
+      </div>
+      <div className="legal-actions">
+        <button className="ghost-button small" type="button" onClick={() => void requestData('EXPORT')}>Request data export</button>
+        <button className="ghost-button small" type="button" onClick={() => void requestData('ERASURE')}>Request erasure review</button>
+        {latestExportRequest ? (
+          <button className="ghost-button small" type="button" onClick={() => void downloadPrivacyExport(latestExportRequest)}>
+            Download data export
+          </button>
+        ) : null}
+      </div>
+      {requests.length > 0 ? <span className="mono-small">Latest request: {requests[0]?.type} / {requests[0]?.status}</span> : null}
+      {status ? <span className="mono-small">{status}</span> : null}
+    </section>
   )
 }
 
@@ -2981,8 +3869,17 @@ function UserSettingsForm({
   const [draft, setDraft] = useState<UserSettingsRecord>(settings)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('Changes apply to your account only.')
+  const [accountEmail, setAccountEmail] = useState(session.email)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountStatus, setAccountStatus] = useState('Changing sign-in details signs out every active session.')
+  const [emailVerification, setEmailVerification] = useState<EmailVerificationStatus | null>(null)
+  const [verificationBusy, setVerificationBusy] = useState(false)
+  const [verificationStatus, setVerificationStatus] = useState('Checking email verification status...')
   const normalizedDraftAccentColor = normalizeHexColor(draft.accentColor ?? defaultAccentColor)
-  const safeDraftAccentColor = normalizedDraftAccentColor ?? defaultAccentColor
+  const hasApprovedDraftAccentColor = normalizedDraftAccentColor !== null && controlledAccentColors.has(normalizedDraftAccentColor)
+  const safeDraftAccentColor = controlledAccentColor(draft.accentColor)
   const accentPreviewStyle = useMemo(() => accentStyleForColor(safeDraftAccentColor), [safeDraftAccentColor])
   const landingDomains = useMemo(() => visibleDomainsForSession(session), [session])
   const draftPreferredLanding = safeLandingForSession(draft.preferredLanding, session)
@@ -2990,6 +3887,22 @@ function UserSettingsForm({
   useEffect(() => {
     setDraft({ ...settings, preferredLanding: safeLandingForSession(settings.preferredLanding, session) })
     setStatus('Changes apply to your account only.')
+    setAccountEmail(session.email)
+    setCurrentPassword('')
+    setNewPassword('')
+    setAccountStatus('Changing sign-in details signs out every active session.')
+    setEmailVerification(null)
+    setVerificationStatus('Checking email verification status...')
+    void requestApi<EmailVerificationStatus>('/auth/email-verification/status')
+      .then((payload) => {
+        setEmailVerification(payload)
+        setVerificationStatus(
+          payload.status === 'VERIFIED'
+            ? 'This email address is verified.'
+            : 'Verify this email address to complete workspace account setup.',
+        )
+      })
+      .catch(() => setVerificationStatus('Email verification status is temporarily unavailable.'))
   }, [settings, session])
 
   async function saveSettings() {
@@ -3007,6 +3920,7 @@ function UserSettingsForm({
           reduceMotion: draft.reduceMotion,
           emailDigest: draft.emailDigest,
           accentColor: safeDraftAccentColor,
+          formulaWorkspace: draft.formulaWorkspace,
         }),
       })
       setStatus('Preferences saved.')
@@ -3015,6 +3929,44 @@ function UserSettingsForm({
       setStatus(error instanceof Error ? error.message : 'Could not save user settings')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function saveAccountCredentials() {
+    setAccountBusy(true)
+    setAccountStatus('Verifying current password...')
+    try {
+      const payload = await requestApi<{ email: string; requiresReauthentication: boolean }>('/user/account-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, email: accountEmail, newPassword }),
+      })
+      setAccountStatus(`Sign-in details updated for ${payload.email}. Redirecting to sign in...`)
+      window.setTimeout(() => window.location.assign('/login'), 700)
+    } catch (error) {
+      setAccountStatus(error instanceof Error ? error.message : 'Could not update sign-in details')
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
+  async function resendEmailVerification() {
+    setVerificationBusy(true)
+    setVerificationStatus('Preparing a new verification link...')
+    try {
+      const payload = await requestApi<{ emailVerification: EmailVerificationStatus & { delivery?: string } }>('/auth/email-verification/resend', {
+        method: 'POST',
+      })
+      setEmailVerification(payload.emailVerification)
+      setVerificationStatus(
+        payload.emailVerification.delivery === 'not_configured'
+          ? 'Email delivery is not configured for this environment yet.'
+          : 'A new verification link was sent. Check your inbox.',
+      )
+    } catch (error) {
+      setVerificationStatus(error instanceof Error ? error.message : 'Could not send a verification link')
+    } finally {
+      setVerificationBusy(false)
     }
   }
 
@@ -3046,8 +3998,77 @@ function UserSettingsForm({
           </label>
           <label className="field-row">
             <span>Email</span>
-            <input aria-label="User email" readOnly value={session.email} />
+            <input aria-label="Current user email" readOnly value={session.email} />
           </label>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Profile & sign-in</strong>
+          <span>Change your email address or password after confirming your current password.</span>
+        </div>
+        <div className="settings-form-grid">
+          <label className="field-row">
+            <span>New email address</span>
+            <input
+              aria-label="New email address"
+              autoComplete="email"
+              inputMode="email"
+              value={accountEmail}
+              onChange={(event) => setAccountEmail(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Current password</span>
+            <input
+              aria-label="Current password"
+              autoComplete="current-password"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+            />
+          </label>
+          <label className="field-row">
+            <span>New password</span>
+            <input
+              aria-label="New password"
+              autoComplete="new-password"
+              minLength={12}
+              placeholder="Leave empty to keep your password"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="settings-save-row">
+          <span aria-live="polite" className="mono-small">{accountStatus}</span>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void saveAccountCredentials()}
+            disabled={accountBusy || !currentPassword || (accountEmail.trim().toLowerCase() === session.email.toLowerCase() && !newPassword)}
+          >
+            {accountBusy ? 'Updating sign-in...' : 'Update sign-in details'}
+          </button>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <strong>Email verification</strong>
+          <span>Use a verified address for account recovery and workspace security notices.</span>
+        </div>
+        <div className="settings-save-row">
+          <span aria-live="polite" className="mono-small">
+            {emailVerification?.status === 'VERIFIED' ? 'Verified' : emailVerification?.status === 'EXPIRED' ? 'Link expired' : 'Verification pending'} - {verificationStatus}
+          </span>
+          {emailVerification?.canResend !== false ? (
+            <button className="secondary-button" type="button" onClick={() => void resendEmailVerification()} disabled={verificationBusy}>
+              {verificationBusy ? 'Sending...' : 'Resend verification'}
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -3064,7 +4085,7 @@ function UserSettingsForm({
                 aria-label="Interface color picker"
                 type="color"
                 value={safeDraftAccentColor}
-                onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
+                onChange={(event) => setDraft((current) => ({ ...current, accentColor: controlledAccentColor(event.target.value) }))}
               />
               <input
                 aria-label="Interface color hex"
@@ -3072,7 +4093,7 @@ function UserSettingsForm({
                 onBlur={() =>
                   setDraft((current) => ({
                     ...current,
-                    accentColor: normalizeHexColor(current.accentColor) ?? current.accentColor,
+                  accentColor: controlledAccentColor(current.accentColor),
                   }))
                 }
                 onChange={(event) => setDraft((current) => ({ ...current, accentColor: event.target.value }))}
@@ -3091,7 +4112,7 @@ function UserSettingsForm({
                 />
               ))}
             </div>
-            {!normalizedDraftAccentColor ? <small className="field-hint is-danger">Use #RRGGBB or #RGB.</small> : null}
+            {!hasApprovedDraftAccentColor ? <small className="field-hint is-danger">Choose one of the approved interface colors.</small> : null}
           </div>
           <label className="field-row">
             <span>Layout density</span>
@@ -3154,7 +4175,7 @@ function UserSettingsForm({
                 setDraft((current) => ({ ...current, preferredLanding: event.target.value as DomainKey }))
               }
             >
-              <option value="dashboard">OlfactoryOps Console</option>
+              <option value="dashboard">Workspace overview</option>
               {landingDomains.map((domain) => {
                 const displayDomain = domainDisplayForSession(domain, session)
                 return (
@@ -3186,13 +4207,15 @@ function UserSettingsForm({
         </div>
       </section>
 
+      <LegalPrivacyControls />
+
       <div className="settings-save-row">
         <span className="mono-small">{status}</span>
         <button
           className="primary-button"
           type="button"
           onClick={() => void saveSettings()}
-          disabled={busy || !draft.displayName.trim() || !normalizedDraftAccentColor}
+          disabled={busy || !draft.displayName.trim() || !hasApprovedDraftAccentColor}
         >
           {busy ? 'Saving...' : 'Save Settings'}
         </button>
@@ -3203,23 +4226,6 @@ function UserSettingsForm({
 
 function toWorkspaceSlug(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
-}
-
-function toWorkspaceDomain(slug: string) {
-  return `${toWorkspaceSlug(slug) || 'workspace'}.labofscents.org`
-}
-
-function billingPlanCta(plan: BillingPlanRecord) {
-  if (plan.monthlyPrice === 0) return 'Continue Free'
-  if (plan.id === 'PLAN-MAISON') return 'Start enterprise trial'
-  return 'Start 14-day trial'
-}
-
-function billingPlanAudience(plan: BillingPlanRecord) {
-  if (plan.id === 'PLAN-APPRENTICE') return 'Personal testing'
-  if (plan.id === 'PLAN-ARTISAN') return 'Solo founder'
-  if (plan.id === 'PLAN-MAISON') return 'Large lab'
-  return 'Small brand or lab'
 }
 
 function saasHealthTone(status: SaasHealthStatus): DomainStatus {
@@ -3235,6 +4241,7 @@ function worstSaasHealthStatus(statuses: SaasHealthStatus[], fallback: SaasHealt
 }
 
 function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
+  const managedBeta = data.billingMode === 'managed_beta'
   const activeApiKeys = data.apiKeys.filter((key) => key.status === 'active').length
   const activeWebhooks = data.webhooks.filter((webhook) => webhook.status === 'active').length
   const failedDeliveries = data.webhookDeliveries.filter((delivery) => delivery.status === 'failed').length
@@ -3248,25 +4255,29 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
   const factors: SaasHealthFactor[] = [
     {
       key: 'subscription-write-gate',
-      label: 'Subscription write gate',
+      label: managedBeta ? 'Workspace write gate' : 'Subscription write gate',
       status: data.subscription.canWrite ? 'pass' : 'blocked',
-      detail: `${data.subscription.status} subscription; write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'}.`,
+      detail: managedBeta
+        ? `Workspace write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'} by server-side policy.`
+        : `${data.subscription.status} subscription; write access is ${data.subscription.canWrite ? 'enabled' : 'blocked'}.`,
     },
     {
       key: 'plan-limits',
-      label: 'Plan limit enforcement',
+      label: managedBeta ? 'Beta capacity protection' : 'Plan limit enforcement',
       status: limitStatus,
       detail:
         data.limitChecks.length > 0
           ? `${data.limitChecks.filter((check) => check.status === 'pass').length}/${data.limitChecks.length} usage checks are inside limits.`
           : 'Usage limits are waiting for live API data.',
     },
-    {
-      key: 'invoice-lifecycle',
-      label: 'Invoice lifecycle',
-      status: openInvoices > 0 || data.subscription.status === 'trialing' ? 'pass' : 'warning',
-      detail: `${data.invoices.length} invoice record(s); ${openInvoices} payable or paid invoice(s).`,
-    },
+    ...(managedBeta
+      ? []
+      : [{
+          key: 'invoice-lifecycle',
+          label: 'Invoice lifecycle',
+          status: openInvoices > 0 || data.subscription.status === 'trialing' ? 'pass' as const : 'warning' as const,
+          detail: `${data.invoices.length} invoice record(s); ${openInvoices} payable or paid invoice(s).`,
+        }]),
     {
       key: 'sso-scim',
       label: 'SSO / SCIM readiness',
@@ -3299,7 +4310,7 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
     },
     {
       key: 'readiness-gate',
-      label: 'Commercial readiness gate',
+      label: managedBeta ? 'Workspace readiness gate' : 'Commercial readiness gate',
       status: readinessStatus,
       detail:
         data.readiness.length > 0
@@ -3325,99 +4336,17 @@ function buildSaasHealthSummary(data: SaasConsoleResponse): SaasHealthSummary {
   }
 }
 
-function PostSignupBillingGate({
+function PostSignupWorkspaceReady({
   session,
+  workspaceAccess,
   onComplete,
+  onConnectDomain,
 }: {
   session: AuthSession
+  workspaceAccess: WorkspaceAccess | null
   onComplete: () => void
+  onConnectDomain: () => void
 }) {
-  const fallback = useMemo<SaasConsoleResponse>(() => ({
-    plans: [clientFallbackPlan],
-    plan: clientFallbackPlan,
-    subscription: {
-      id: 'SUB-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      planId: clientFallbackPlan.id,
-      provider: 'manual',
-      collectionMode: 'manual_invoice',
-      status: 'trialing',
-      currentPeriodStart: 'client-fallback',
-      currentPeriodEnd: 'client-fallback',
-      canWrite: false,
-      canExport: true,
-      nextInvoiceAt: 'client-fallback',
-      updatedAt: 'client-fallback',
-    },
-    usage: {
-      id: 'USG-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      periodStart: 'client-fallback',
-      periodEnd: 'client-fallback',
-      activeSeats: 0,
-      materials: 0,
-      formulas: 0,
-      lots: 0,
-      documents: 0,
-      storageGb: 0,
-      apiCalls: 0,
-      webhooks: 0,
-      auditEvents: 0,
-      lastCalculatedAt: 'client-fallback',
-    },
-    limitChecks: [],
-    invoices: [],
-    sso: clientFallbackSso,
-    apiKeys: [],
-    webhooks: [],
-    webhookDeliveries: [],
-    auditExports: [],
-    readiness: [],
-    invariant: 'client fallback contains no commercial state; API is source of truth',
-  }), [session.organizationId])
-  const [billingData, setBillingData] = useState<SaasConsoleResponse>(fallback)
-  const [busyPlanId, setBusyPlanId] = useState<string | null>(null)
-  const [status, setStatus] = useState('Choose the billing plan for this new workspace.')
-
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadBilling() {
-      try {
-        const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
-        setBillingData(payload)
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          setStatus(error instanceof Error ? error.message : 'Billing plans are temporarily unavailable')
-        }
-      }
-    }
-
-    void loadBilling()
-
-    return () => controller.abort()
-  }, [])
-
-  async function selectPlan(plan: BillingPlanRecord) {
-    setBusyPlanId(plan.id)
-    setStatus(`Selecting ${plan.name}`)
-    try {
-      await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId: plan.id, billingCycle: 'monthly' }),
-      })
-      const payload = await requestApi<SaasConsoleResponse>('/billing/console')
-      setBillingData(payload)
-      setStatus(`${payload.plan.name} is ready for ${session.email}`)
-      onComplete()
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Plan selection failed')
-    } finally {
-      setBusyPlanId(null)
-    }
-  }
-
   return (
     <div className="min-h-screen bg-lab-bg text-[var(--text)]">
       <LabBackdrop />
@@ -3426,61 +4355,31 @@ function PostSignupBillingGate({
           <div className="billing-onboarding-copy">
             <div className="brand-row">
               <div className="brand-mark">
-                <BadgeDollarSign size={18} />
+                <CheckCircle2 size={18} />
               </div>
               <div>
-                <div className="wordmark">Choose your plan</div>
+                <div className="wordmark">Workspace ready</div>
                 <div className="mono-small">{session.organizationId}</div>
               </div>
             </div>
-            <h1>Start on Free, or unlock a trial now.</h1>
+            <h1>Your workspace is ready.</h1>
             <p className="lead">
-              Your workspace is ready. Pick the plan that matches this lab; paid plans begin with a no-card trial and can later connect to Stripe Checkout.
+              Your tenant, owner account, and workspace policies are active. Your system address is ready now; connect a customer-owned domain only when you are ready to complete DNS validation.
             </p>
             <div className="tag-row">
               <DataTag icon={ShieldCheck} label="Workspace" value="Ready" tone="green" />
               <DataTag icon={UsersRound} label="Owner" value={session.email} tone="blue" />
-              <DataTag icon={CheckCircle2} label="Current" value={billingData.plan.name} tone="amber" />
+              <DataTag icon={Globe2} label="Custom domain" value="Not connected" tone="amber" />
+              {workspaceAccess ? <DataTag icon={Globe2} label="System address" value={workspaceAccess.systemHostname} tone="green" /> : null}
             </div>
           </div>
-
-          <div className="plan-card-grid">
-            {billingData.plans.map((plan) => {
-              const isCurrent = billingData.subscription.planId === plan.id
-              return (
-                <article className={`plan-card ${isCurrent ? 'is-current' : ''}`} key={plan.id}>
-                  <div>
-                    <span className="mono-small">{billingPlanAudience(plan)}</span>
-                    <h2>{plan.name}</h2>
-                    <div className="price-line">
-                      <strong>{plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
-                      <span>/ month</span>
-                    </div>
-                  </div>
-                  <div className="plan-limits">
-                    <DataTag label="Seats" value={`${plan.seats}`} tone="blue" />
-                    <DataTag label="Storage" value={`${plan.storageGb}GB`} tone="green" />
-                  </div>
-                  <ul className="policy-list compact-policy-list">
-                    {plan.features.slice(0, 4).map((feature) => (
-                      <li key={feature}>{feature}</li>
-                    ))}
-                  </ul>
-                  <button
-                    className={isCurrent ? 'ghost-button full' : 'primary-button full'}
-                    type="button"
-                    onClick={() => void selectPlan(plan)}
-                    disabled={busyPlanId !== null}
-                  >
-                    {busyPlanId === plan.id ? 'Selecting' : billingPlanCta(plan)}
-                  </button>
-                </article>
-              )
-            })}
-          </div>
-          <div className="auth-status">
-            <ShieldCheck size={16} />
-            <span>{status}</span>
+          <div className="action-row">
+            <button className="ghost-button" type="button" onClick={onConnectDomain}>
+              Connect a domain
+            </button>
+            <button className="primary-button" type="button" onClick={onComplete}>
+              Open workspace
+            </button>
           </div>
         </section>
       </main>
@@ -3489,10 +4388,16 @@ function PostSignupBillingGate({
 }
 
 function AuthGateway({
+  initialMode,
   notice,
   onLogin,
   onSignup,
+  onRequestPasswordReset,
+  onCompletePasswordReset,
+  onCompleteEmailVerification,
+  onNavigate,
 }: {
+  initialMode: 'login' | 'signup'
   notice?: string | null
   onLogin: (email: string, password?: string) => Promise<LoginResponse>
   onSignup: (input: {
@@ -3501,14 +4406,21 @@ function AuthGateway({
     email: string
     name: string
     password: string
-    customDomain: string
   }) => Promise<SignupResponse>
+  onRequestPasswordReset: (email: string) => Promise<void>
+  onCompletePasswordReset: (token: string, password: string) => Promise<void>
+  onCompleteEmailVerification: (token: string) => Promise<void>
+  onNavigate: (path: '/login' | '/signup', replace?: boolean) => void
 }) {
-  const [mode, setMode] = useState<'login' | 'signup'>('login')
-  const [email, setEmail] = useState('admin@labofscents.org')
-  const [name, setName] = useState('Thuan Le Minh')
-  const [organizationName, setOrganizationName] = useState('NOXELIS Lab')
-  const [workspaceSlug, setWorkspaceSlug] = useState('noxelis-live')
+  const resetToken = new URLSearchParams(window.location.search).get('reset')?.trim() ?? ''
+  const verificationToken = new URLSearchParams(window.location.search).get('verify')?.trim() ?? ''
+  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm' | 'verify-confirm'>(
+    verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode,
+  )
+  const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
+  const [organizationName, setOrganizationName] = useState('')
+  const [workspaceSlug, setWorkspaceSlug] = useState('')
   const [workspaceSlugTouched, setWorkspaceSlugTouched] = useState(false)
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -3516,7 +4428,6 @@ function AuthGateway({
   const [status, setStatus] = useState(
     notice ?? 'Login with an active workspace account, or sign up a new workspace.',
   )
-  const workspaceDomain = toWorkspaceDomain(workspaceSlug)
   const signupPasswordReady = password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password)
   const signupReady = Boolean(
     organizationName.trim() &&
@@ -3527,14 +4438,28 @@ function AuthGateway({
       password === confirmPassword,
   )
 
+  useEffect(() => {
+    setMode(verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode)
+  }, [initialMode, resetToken, verificationToken])
+
   async function submitAuth() {
     setBusy(true)
-    setStatus(mode === 'login' ? 'Checking workspace account' : 'Creating your lab workspace')
+    setStatus(
+      mode === 'login'
+        ? 'Checking workspace account'
+        : mode === 'signup'
+          ? 'Creating your lab workspace'
+          : mode === 'reset-request'
+            ? 'Requesting password reset'
+            : mode === 'reset-confirm'
+              ? 'Resetting password'
+              : 'Verifying email address',
+    )
     try {
       if (mode === 'login') {
         const result = await onLogin(email, password)
         setStatus(`${result.session.email} signed in with ${result.session.role} role`)
-      } else {
+      } else if (mode === 'signup') {
         if (!signupPasswordReady) {
           setStatus('Password must be at least 12 characters and include letters and numbers.')
           return
@@ -3543,8 +4468,32 @@ function AuthGateway({
           setStatus('Passwords must match before creating the workspace.')
           return
         }
-        const result = await onSignup({ organizationName, workspaceSlug, email, name, password, customDomain: workspaceDomain })
-        setStatus(`${result.organization.name} provisioned at ${result.organization.customDomain ?? result.sso.domain}`)
+        const result = await onSignup({ organizationName, workspaceSlug, email, name, password })
+        setStatus(
+          result.emailVerification.delivery === 'not_configured'
+            ? `${result.organization.name} is ready. Email delivery is not configured yet; ask your workspace administrator to enable verification delivery.`
+            : `${result.organization.name} is ready. Check ${result.emailVerification.email} to verify your email address.`,
+        )
+      } else if (mode === 'reset-request') {
+        await onRequestPasswordReset(email)
+        setStatus('If the account exists, a one-time reset link has been sent. Check your inbox.')
+        setMode('login')
+      } else if (mode === 'reset-confirm') {
+        if (!signupPasswordReady || password !== confirmPassword) {
+          setStatus('Use a matching password with at least 12 characters, letters, and numbers.')
+          return
+        }
+        await onCompletePasswordReset(resetToken, password)
+        onNavigate('/login', true)
+        setPassword('')
+        setConfirmPassword('')
+        setMode('login')
+        setStatus('Password reset complete. Sign in with your new password.')
+      } else {
+        await onCompleteEmailVerification(verificationToken)
+        onNavigate('/login', true)
+        setMode('login')
+        setStatus('Email verified. Sign in to continue.')
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Authentication failed')
@@ -3555,21 +4504,21 @@ function AuthGateway({
 
   function switchMode(nextMode: 'login' | 'signup') {
     setMode(nextMode)
-    setStatus(nextMode === 'login' ? 'Use admin@labofscents.org with the admin test password.' : 'Create a new lab workspace and owner account.')
+    onNavigate(nextMode === 'signup' ? '/signup' : '/login')
+    setStatus(nextMode === 'login' ? 'Sign in with your active workspace account.' : 'Create a new lab workspace and owner account.')
     setWorkspaceSlugTouched(false)
     if (nextMode === 'signup') {
-      const defaultOrganizationName = 'New Fragrance Lab'
-      setEmail('owner@newlab.test')
-      setName('Workspace Owner')
-      setOrganizationName(defaultOrganizationName)
-      setWorkspaceSlug(toWorkspaceSlug(defaultOrganizationName))
+      setEmail('')
+      setName('')
+      setOrganizationName('')
+      setWorkspaceSlug('')
       setPassword('')
       setConfirmPassword('')
     } else {
-      setEmail('admin@labofscents.org')
-      setName('Thuan Le Minh')
-      setOrganizationName('NOXELIS Lab')
-      setWorkspaceSlug('noxelis-live')
+      setEmail('')
+      setName('')
+      setOrganizationName('')
+      setWorkspaceSlug('')
       setPassword('')
       setConfirmPassword('')
     }
@@ -3599,24 +4548,46 @@ function AuthGateway({
               </div>
               <div>
                 <div className="wordmark">OlfactoryOps</div>
-                <div className="mono-small">OlfactoryOps OS</div>
+                <div className="mono-small">Fragrance operations</div>
               </div>
             </div>
-            <h1>{mode === 'login' ? 'Sign in to your lab workspace' : 'Create your lab workspace'}</h1>
+            <h1>
+              {uiText(mode === 'login'
+                ? 'Sign in to your lab workspace'
+                : mode === 'signup'
+                  ? 'Create your lab workspace'
+                  : mode === 'reset-request'
+                    ? 'Reset your password'
+                    : mode === 'reset-confirm'
+                      ? 'Choose a new password'
+                      : 'Verify your email')}
+            </h1>
             <p className="lead">
-              Secure access starts here. We confirm your account, role, and workspace settings before opening OlfactoryOps.
+              Secure access for your workspace. We confirm your account, role, and workspace settings before you begin.
             </p>
-            <div className="auth-mode-switch" role="tablist" aria-label="Authentication mode">
-              <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
-                Login
+            {mode === 'login' || mode === 'signup' ? (
+              <div className="auth-mode-switch" role="group" aria-label="Authentication mode">
+                <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
+                  {uiText('Login')}
+                </button>
+                <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
+                  {uiText('Sign up')}
+                </button>
+              </div>
+            ) : (
+              <button className="ghost-button small" type="button" onClick={() => switchMode('login')}>
+                {uiText('Back to login')}
               </button>
-              <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
-                Sign up
-              </button>
-            </div>
+            )}
           </div>
 
           <div className="auth-form">
+            {mode === 'verify-confirm' ? (
+              <div className="auth-status" aria-live="polite">
+                <ShieldCheck size={16} />
+                <span>Confirm this secure, single-use link to verify your email address. It expires after 24 hours.</span>
+              </div>
+            ) : null}
             {mode === 'signup' && (
               <>
                 <label className="field-row">
@@ -3635,11 +4606,9 @@ function AuthGateway({
                     onChange={(event) => updateWorkspaceSlug(event.target.value)}
                   />
                 </label>
-                <label className="field-row">
-                  <span>Workspace domain</span>
-                  <input aria-label="Signup workspace domain" value={workspaceDomain} readOnly />
-                  <small className="field-hint">Auto-created for this workspace; map a customer-owned domain in Cloudflare later.</small>
-                </label>
+                <div className="field-hint auth-signup-domain-note">
+                  Your workspace is isolated immediately. Connect a customer-owned domain after signup; Cloudflare will provide the DNS validation record before it goes live.
+                </div>
                 <label className="field-row">
                   <span>Owner name</span>
                   <input
@@ -3650,32 +4619,36 @@ function AuthGateway({
                 </label>
               </>
             )}
-            <label className="field-row">
-              <span>Email</span>
+            {mode === 'login' || mode === 'signup' || mode === 'reset-request' ? (
+              <label className="field-row">
+                <span>Email</span>
+                <input
+                  aria-label={mode === 'login' ? 'Login email' : mode === 'signup' ? 'Signup email' : 'Password reset email'}
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </label>
+            ) : null}
+            {mode === 'login' || mode === 'signup' || mode === 'reset-confirm' ? (
+              <label className="field-row">
+              <span>{mode === 'reset-confirm' ? 'New password' : 'Password'}</span>
               <input
-                aria-label={mode === 'login' ? 'Login email' : 'Signup email'}
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </label>
-            <label className="field-row">
-              <span>{mode === 'login' ? 'Password' : 'Password'}</span>
-              <input
-                aria-label={mode === 'login' ? 'Login password' : 'Signup password'}
+                aria-label={mode === 'login' ? 'Login password' : mode === 'signup' ? 'Signup password' : 'New password'}
                 type="password"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 value={password}
-                placeholder={mode === 'login' ? 'Required for admin and workspace accounts' : 'At least 12 chars, letters and numbers'}
+                placeholder={mode === 'login' ? 'Enter your password' : 'At least 12 chars, letters and numbers'}
                 onChange={(event) => setPassword(event.target.value)}
               />
               {mode === 'login' ? <small className="field-hint">Admin and workspace accounts require a password.</small> : null}
-            </label>
-            {mode === 'signup' && (
+              </label>
+            ) : null}
+            {(mode === 'signup' || mode === 'reset-confirm') && (
               <label className="field-row">
-                <span>Confirm password</span>
+                <span>Confirm new password</span>
                 <input
-                  aria-label="Confirm signup password"
+                  aria-label="Confirm password"
                   type="password"
                   autoComplete="new-password"
                   value={confirmPassword}
@@ -3691,10 +4664,32 @@ function AuthGateway({
               className="primary-button full"
               type="button"
               onClick={() => void submitAuth()}
-              disabled={busy || !email.trim() || (mode === 'signup' && !signupReady)}
+              disabled={
+                busy ||
+                (mode === 'verify-confirm'
+                  ? !verificationToken
+                  : mode === 'reset-confirm'
+                  ? !resetToken || !signupPasswordReady || password !== confirmPassword
+                  : !email.trim() || (mode === 'signup' && !signupReady))
+              }
             >
-              {busy ? 'Working' : mode === 'login' ? 'Login' : 'Create workspace'}
+              {busy
+                ? 'Working'
+                : mode === 'login'
+                  ? 'Login'
+                  : mode === 'signup'
+                    ? 'Create workspace'
+                    : mode === 'reset-request'
+                      ? uiText('Send reset link')
+                      : mode === 'reset-confirm'
+                        ? uiText('Reset password')
+                        : uiText('Verify email')}
             </button>
+            {mode === 'login' ? (
+              <button className="ghost-button small" type="button" onClick={() => setMode('reset-request')}>
+                {uiText('Forgot password?')}
+              </button>
+            ) : null}
             <div className="auth-status">
               <ShieldCheck size={16} />
               <span>{status}</span>
@@ -3729,65 +4724,69 @@ const Dashboard = memo(function Dashboard({
   const canViewAudit = internalAdminView && sessionHasAnyPermission(session, ['audit.view', 'security.viewAuditLog', 'audit.export'])
   const canViewMovementLedger = domainVisibleForSession('inventory', session)
   const canViewEnterpriseReadiness = internalAdminView && domainVisibleForSession('saas', session)
+  const canViewUserOverview =
+    (internalAdminView || session.role === 'Owner') &&
+    sessionHasAnyPermission(session, ['security.viewMembers', 'security.manageUsers'])
   const visibleWorkflowNodes = visibleWorkflowNodesForSession(session)
 
   return (
-    <div className="dashboard-grid">
+    <div className={`dashboard-grid${canViewUserOverview ? ' has-owner-user-overview' : ''}`}>
       <Panel
         className="hero-panel"
-        title="OlfactoryOps Console"
+        title="Today in your workspace"
         icon={Gauge}
-        right={internalAdminView ? <StatusBadge status="active" /> : undefined}
       >
-        <div className="hero-content">
-          <div>
-            <p className="lead">
-              {internalAdminView
-                ? 'Full SaaS operating layer across the operating domains, with the core R&D value stream live inside the broader enterprise product surface.'
-                : 'Full OlfactoryOps operating layer across the operating domains, with the core R&D value stream live inside the broader business product surface.'}
-            </p>
-            <div className="hero-actions">
-              {primaryDomain ? (
-                <button className="primary-button" type="button" onClick={() => onNavigate(primaryDomain.key)}>
-                  Open {primaryDomainDisplay?.shortName ?? primaryDomain.name}
-                  <ChevronRight size={16} />
-                </button>
-              ) : null}
-              {canExportAudit ? (
-                <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
-                  Audit export
-                </button>
-              ) : null}
+        <AnimatedContent>
+          <div className="hero-content">
+            <div>
+              <p className="lead">
+                {internalAdminView
+                  ? 'Start with the work that needs a decision. Workspace administration stays available in the background, without taking over day-to-day lab work.'
+                  : 'Pick up the next dependable step, from a formula brief through material readiness, lab use, and production.'}
+              </p>
+              <div className="hero-actions">
+                {primaryDomain ? (
+                  <button
+                    className="primary-button"
+                    data-testid="home-primary-action"
+                    type="button"
+                    onClick={() => onNavigate(primaryDomain.key)}
+                  >
+                    Continue in {primaryDomainDisplay?.shortName ?? primaryDomain.name}
+                    <ChevronRight size={16} />
+                  </button>
+                ) : null}
+                {canExportAudit ? (
+                  <button className="ghost-button" type="button" onClick={() => onOpenModal('auditExport')}>
+                    Audit export
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="hero-metrics">
+              <Metric label="Available work areas" value={String(visibleModuleCount)} countUpValue={visibleModuleCount} />
+              {stats.risks > 0 ? <Metric label="Items needing review" value={String(stats.risks)} countUpValue={stats.risks} /> : null}
             </div>
           </div>
-          <div className="hero-metrics">
-            {internalAdminView ? (
-              <>
-                <Metric label="Modules live" value={`${stats.done}/16`} />
-                <Metric label="Avg coverage" value={`${stats.avgCoverage}%`} />
-                <Metric label="Risk flags" value={String(stats.risks)} />
-              </>
-            ) : (
-              <Metric label="Modules" value={String(visibleModuleCount)} />
-            )}
-          </div>
-        </div>
+        </AnimatedContent>
       </Panel>
 
+      {canViewUserOverview ? <OwnerUserOverview session={session} onNavigate={onNavigate} /> : null}
+
       {visibleWorkflowNodes.length > 0 ? (
-        <Panel className="workflow-panel" title="Operating Value Stream" icon={Activity}>
-          <WorkflowGraph nodes={visibleWorkflowNodes} onNavigate={onNavigate} />
+        <Panel className="workflow-panel" title="Next steps" icon={Activity}>
+          <AnimatedContent delay={0.05}><TaskShortcuts nodes={visibleWorkflowNodes} onNavigate={onNavigate} /></AnimatedContent>
         </Panel>
       ) : null}
 
-      <Panel className="matrix-panel" title={internalAdminView ? 'Domain Health Matrix' : 'Workspace Modules'} icon={Database}>
-        <DomainMatrix session={session} onNavigate={onNavigate} />
+      <Panel className="matrix-panel" title="Your workspace" icon={Database}>
+        <AnimatedContent delay={0.08}><DomainMatrix session={session} onNavigate={onNavigate} /></AnimatedContent>
       </Panel>
 
       {canViewEnterpriseReadiness ? <EnterpriseReadiness session={session} onOpenModal={onOpenModal} /> : null}
 
       {canViewMovementLedger ? (
-        <Panel className="ledger-panel" title="Movement Ledger" icon={Boxes}>
+        <Panel className="ledger-panel" title="Recent material activity" icon={Boxes}>
           <MovementTable movements={movements.slice(0, 6)} />
         </Panel>
       ) : null}
@@ -3801,9 +4800,127 @@ const Dashboard = memo(function Dashboard({
   )
 })
 
+function TaskShortcuts({
+  nodes,
+  onNavigate,
+}: {
+  nodes: { key: DomainKey; label: string; detail: string }[]
+  onNavigate: (key: DomainKey) => void
+}) {
+  return (
+    <AnimatedList className="task-shortcut-list" aria-label="Suggested work areas">
+      {nodes.map((node) => {
+        const Icon = domainIcons[node.key]
+        return (
+          <AnimatedListItem key={node.key}>
+            <MotionCardButton className="task-shortcut" type="button" onClick={() => onNavigate(node.key)}>
+              <span className="task-shortcut-icon" aria-hidden="true"><Icon size={17} strokeWidth={1.8} /></span>
+              <span>
+                <strong>{node.label}</strong>
+                <small>{node.detail}</small>
+              </span>
+              <ChevronRight size={16} aria-hidden="true" />
+            </MotionCardButton>
+          </AnimatedListItem>
+        )
+      })}
+    </AnimatedList>
+  )
+}
+
+function compactIntegrationDetail(check: IntegrationReadinessResponse['checks'][number]) {
+  const detail: Record<IntegrationReadinessResponse['checks'][number]['key'], string> = {
+    billing: check.status === 'ready' ? 'Available' : 'Managed during beta',
+    documents: check.status === 'ready' ? 'Storage connected' : 'Connect storage to enable uploads',
+    email: check.status === 'ready' ? 'Email delivery connected' : 'Connect Resend when ready',
+    cloudflare_saas: check.status === 'ready' ? 'Provisioning available' : 'Add Cloudflare credentials',
+    beta_hostname: check.status === 'ready' ? 'DNS and HTTPS active' : 'Finish DNS and HTTPS setup',
+    workers_ai: check.status === 'ready' ? 'Available' : 'Not available',
+    vectorize_rag: check.status === 'ready' ? 'Evidence index available' : 'Index requires setup',
+  }
+  return detail[check.key]
+}
+
+function OwnerUserOverview({
+  session,
+  onNavigate,
+}: {
+  session: AuthSession
+  onNavigate: (key: DomainKey) => void
+}) {
+  const [memberSummary, setMemberSummary] = useState<MemberSummaryResponse | null>(null)
+  const [status, setStatus] = useState('Syncing workspace members')
+  const canManageUsers = sessionHasPermission(session, 'security.manageUsers')
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    void requestApi<MemberSummaryResponse>('/security/member-summary', {
+      signal: controller.signal,
+    })
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setMemberSummary(payload)
+          setStatus('Live workspace data')
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setStatus(error instanceof Error ? error.message : 'Member data is temporarily unavailable')
+        }
+      })
+
+    return () => controller.abort()
+  }, [session.id, session.organizationId])
+
+  const roleCounts = memberSummary?.roleCounts ?? []
+
+  return (
+    <Panel
+      className="owner-users-panel"
+      title="User Overview"
+      icon={UsersRound}
+      right={<StatusBadge status={memberSummary ? 'active' : 'review'} label={canManageUsers ? 'Admin' : 'Owner'} />}
+    >
+      <div className="owner-user-summary">
+        <div className="owner-user-metrics">
+          <Metric label="Total users" value={String(memberSummary?.totalMembers ?? 0)} countUpValue={memberSummary?.totalMembers ?? 0} />
+          <Metric label="Active" value={String(memberSummary?.activeMembers ?? 0)} countUpValue={memberSummary?.activeMembers ?? 0} />
+          <Metric label="Pending invites" value={String(memberSummary?.invitedMembers ?? 0)} countUpValue={memberSummary?.invitedMembers ?? 0} />
+          <Metric label="Active sessions" value={String(memberSummary?.activeSessions ?? 0)} countUpValue={memberSummary?.activeSessions ?? 0} />
+        </div>
+        <div className="owner-user-roles">
+          <span className="mono-small">Role distribution</span>
+          {roleCounts.length > 0 ? (
+            <div className="tag-row">
+              {roleCounts.map(({ role, count }) => (
+                <DataTag key={role} label={role} value={String(count)} tone="blue" />
+              ))}
+              {(memberSummary?.deactivatedMembers ?? 0) > 0 ? (
+                <DataTag label="Deactivated" value={String(memberSummary?.deactivatedMembers)} tone="amber" />
+              ) : null}
+            </div>
+          ) : (
+            <span className="muted-copy">No member records available yet.</span>
+          )}
+        </div>
+      </div>
+      <div className="action-row owner-user-actions">
+        <span className="mono-small">{status}</span>
+        {canManageUsers ? (
+          <button className="ghost-button small" type="button" onClick={() => onNavigate('identity')}>
+            Manage users
+          </button>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
 const DomainWorkspace = memo(function DomainWorkspace({
   domain,
   session,
+  workspaceAccess,
   lots,
   movements,
   storageLocations,
@@ -3817,6 +4934,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setFormulaRecords,
   activeFormulaId,
   setActiveFormulaId,
+  labUsageFormulaRecords,
+  labUsageFormulaId,
+  setLabUsageFormulaId,
+  selectedLabUsageFormula,
+  hasPublishedLabUsageFormula,
   resolvedLeaves,
   totals,
   curve,
@@ -3835,6 +4957,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setWeighingOperator,
   labUsagePurpose,
   setLabUsagePurpose,
+  labUsageTrialId,
   labUsageProjectCode,
   setLabUsageProjectCode,
   labUsageSampleCode,
@@ -3846,15 +4969,20 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onCommit,
   onReverse,
   onOpenModal,
+  onOpenTrials,
   onNewFormula,
   onAddFormulaLine,
   onReceiveStock,
   onAdjustStock,
   onTransferStock,
   onRequestInventoryApproval,
+  userSettings,
+  onUserSettingsChange,
+  onWorkspaceBrandingChange,
 }: {
   domain: DomainModule
   session: AuthSession
+  workspaceAccess: WorkspaceAccess | null
   lots: InventoryLot[]
   movements: InventoryMovement[]
   storageLocations: StorageLocation[]
@@ -3868,6 +4996,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setFormulaRecords: Dispatch<SetStateAction<Formula[]>>
   activeFormulaId: string
   setActiveFormulaId: (id: string) => void
+  labUsageFormulaRecords: Formula[]
+  labUsageFormulaId: string
+  setLabUsageFormulaId: (id: string) => void
+  selectedLabUsageFormula: Formula
+  hasPublishedLabUsageFormula: boolean
   resolvedLeaves: ResolvedLeaf[]
   totals: ReturnType<typeof formulaTotals>
   curve: ReturnType<typeof evaporationCurve>
@@ -3886,6 +5019,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   setWeighingOperator: (value: string) => void
   labUsagePurpose: LabUsagePurpose
   setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageTrialId: string | null
   labUsageProjectCode: string
   setLabUsageProjectCode: (value: string) => void
   labUsageSampleCode: string
@@ -3897,6 +5031,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
   onCommit: () => void
   onReverse: () => void
   onOpenModal: (modal: ModalKind) => void
+  onOpenTrials: (formula: Formula) => void
   onNewFormula: (type?: FormulaType) => void
   onAddFormulaLine: () => void
   onReceiveStock: () => void
@@ -3907,12 +5042,15 @@ const DomainWorkspace = memo(function DomainWorkspace({
     payload: Record<string, unknown>,
     reason: string,
   ) => Promise<InventoryApprovalRequestResponse>
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
+  onWorkspaceBrandingChange: (branding: BrandingConfig) => void
 }) {
   const displayDomain = domainDisplayForSession(domain, session)
 
   return (
     <div className="domain-page">
-      <DomainHeader domain={displayDomain} session={session} onOpenModal={onOpenModal} />
+      <DomainHeader domain={displayDomain} />
 
       {domain.key === 'materials' && (
         <MaterialWorkspace
@@ -3940,6 +5078,9 @@ const DomainWorkspace = memo(function DomainWorkspace({
           onSelectMaterial={setSelectedMaterialId}
           onNewFormula={onNewFormula}
           onAddLine={onAddFormulaLine}
+          onCreateTrial={onOpenTrials}
+          userSettings={userSettings}
+          onUserSettingsChange={onUserSettingsChange}
         />
       )}
       {domain.key === 'inventory' && (
@@ -3961,6 +5102,11 @@ const DomainWorkspace = memo(function DomainWorkspace({
       )}
       {domain.key === 'labUsage' && (
         <LabUsageWorkspace
+          publishedFormulas={labUsageFormulaRecords}
+          selectedFormulaId={labUsageFormulaId}
+          setSelectedFormulaId={setLabUsageFormulaId}
+          selectedFormula={selectedLabUsageFormula}
+          hasPublishedFormula={hasPublishedLabUsageFormula}
           labPlan={labPlan}
           batchGrams={batchGrams}
           setBatchGrams={setBatchGrams}
@@ -3974,6 +5120,7 @@ const DomainWorkspace = memo(function DomainWorkspace({
           setWeighingOperator={setWeighingOperator}
           labUsagePurpose={labUsagePurpose}
           setLabUsagePurpose={setLabUsagePurpose}
+          labUsageTrialId={labUsageTrialId}
           labUsageProjectCode={labUsageProjectCode}
           setLabUsageProjectCode={setLabUsageProjectCode}
           labUsageSampleCode={labUsageSampleCode}
@@ -3987,22 +5134,25 @@ const DomainWorkspace = memo(function DomainWorkspace({
         />
       )}
       {domain.key === 'documents' && <DocumentsWorkspace />}
-      {domain.key === 'production' && <ProductionWorkspace />}
+      {domain.key === 'production' && (
+        <ProductionWorkspace formulaRecords={formulaRecords} materialRecords={materialRecords} session={session} />
+      )}
       {domain.key === 'procurement' && (
         <ProcurementWorkspace
           stock={stock}
           materialRecords={materialRecords}
+          session={session}
           onLotsChange={onLotsChange}
           onMovementsChange={onMovementsChange}
         />
       )}
-      {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} />}
+      {domain.key === 'commerce' && <CommerceWorkspace stock={stock} materialRecords={materialRecords} session={session} />}
       {domain.key === 'orders' && <OrdersWorkspace stock={stock} />}
       {domain.key === 'costing' && <CostingWorkspace />}
       {domain.key === 'analytics' && <AnalyticsWorkspace />}
-      {domain.key === 'saas' && <SaasWorkspace session={session} />}
+      {domain.key === 'saas' && <SaasWorkspace session={session} workspaceAccess={workspaceAccess} />}
       {domain.key === 'identity' && <IdentityWorkspace />}
-      {domain.key === 'customization' && <CustomizationWorkspace />}
+      {domain.key === 'customization' && <CustomizationWorkspace onBrandingSaved={onWorkspaceBrandingChange} />}
       {![
         'identity',
         'customization',
@@ -4025,47 +5175,12 @@ const DomainWorkspace = memo(function DomainWorkspace({
   )
 })
 
-function DomainHeader({
-  domain,
-  session,
-  onOpenModal,
-}: {
-  domain: DomainModule
-  session: AuthSession
-  onOpenModal: (modal: ModalKind) => void
-}) {
+function DomainHeader({ domain }: { domain: DomainModule }) {
   const Icon = domainIcons[domain.key]
-  const internalAdminView = isInternalAdminSession(session)
   return (
-    <Panel
-      className="domain-header"
-      title={domain.name}
-      icon={Icon}
-      right={internalAdminView ? <StatusBadge status={domain.status} /> : undefined}
-    >
-      <div className="domain-header-grid">
-        <div>
-          <p className="lead">{domain.responsibility}</p>
-          {internalAdminView ? (
-            <div className="tag-row">
-              <DataTag icon={UsersRound} label="Owner" value={domain.owner} />
-              <DataTag icon={Gauge} label="Health" value={`${domain.health}%`} tone={domain.health > 70 ? 'green' : 'amber'} />
-            </div>
-          ) : null}
-        </div>
-        {internalAdminView ? (
-          <div className="risk-card">
-            <div className="mono-small">Current gate</div>
-            <strong>{domain.risk}</strong>
-            <button
-              className="ghost-button small"
-              type="button"
-              onClick={() => onOpenModal(domain.key === 'saas' || domain.key === 'identity' ? 'ssoPolicy' : 'auditExport')}
-            >
-              Review controls
-            </button>
-          </div>
-        ) : null}
+    <Panel className="domain-header" title={domain.name} icon={Icon}>
+      <div className="domain-header-summary">
+        <p>{domain.responsibility}</p>
       </div>
     </Panel>
   )
@@ -4089,15 +5204,44 @@ function MaterialWorkspace({
   const selected = materialRecords.find((material) => material.id === selectedMaterialId) ?? materialRecords[0] ?? materials[0]!
   const stockByMaterialId = useMemo(() => buildStockByMaterialId(stock), [stock])
   const selectedStock = stockByMaterialId.get(selected.id)
+  const selectedIsShared = (selected.libraryScope ?? (selected.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL'
   const [materialStatus, setMaterialStatus] = useState('Loading material intelligence')
   const [materialSaving, setMaterialSaving] = useState(false)
   const [pubChemSaving, setPubChemSaving] = useState(false)
+  const [compliance, setCompliance] = useState<MaterialComplianceProfile | null>(null)
+  const [complianceSaving, setComplianceSaving] = useState(false)
+  const [materialEvidence, setMaterialEvidence] = useState<MaterialEvidenceResponse | null>(null)
+  const [materialEvidenceSources, setMaterialEvidenceSources] = useState<MaterialEvidenceSource[]>([])
+  const [evidenceQuery, setEvidenceQuery] = useState('')
+  const [evidenceBusy, setEvidenceBusy] = useState(false)
+  const [materialQuery, setMaterialQuery] = useState('')
+  const [materialListLimit, setMaterialListLimit] = useState(80)
+  const [evidenceReview, setEvidenceReview] = useState<MaterialEvidenceReviewSource | null>(null)
+  const [evidenceReviewDraft, setEvidenceReviewDraft] = useState('')
+  const [evidenceReviewBusy, setEvidenceReviewBusy] = useState(false)
+  const [complianceDraft, setComplianceDraft] = useState({
+    status: 'REVIEW_REQUIRED' as MaterialComplianceProfile['status'],
+    category: 'IFRA Category 4',
+    limitPercent: 100,
+    allergens: '',
+    euUkFlags: '',
+    source: '',
+    sourceVersion: 'v1',
+    note: '',
+  })
   const canCreateMaterials = sessionHasPermission(session, 'materials.create')
   const canUpdateMaterials = sessionHasPermission(session, 'materials.update')
+  const canCurateSharedMaterials = session.organizationId === 'org-nxl'
+    && ['Owner', 'Admin', 'Manager', 'Lab Manager'].includes(session.role)
+  const canEditSelectedMaterial = canUpdateMaterials && (!selectedIsShared || canCurateSharedMaterials)
+  const canManageCompliance = session.role === 'Owner' || session.role === 'Admin'
+  const canViewMaterialEvidence = sessionHasPermission(session, 'materials.view') && sessionHasPermission(session, 'documents.view')
+  const canManageMaterialEvidence = sessionHasPermission(session, 'documents.manage')
   const [createName, setCreateName] = useState('Vetiveryl Acetate')
   const [createCas, setCreateCas] = useState('68917-34-0')
   const [createFamily, setCreateFamily] = useState('Woody vetiver')
   const [createTier, setCreateTier] = useState<Material['tier']>('Base')
+  const createNameInputRef = useRef<HTMLInputElement>(null)
   const [editDraft, setEditDraft] = useState({
     family: selected.family,
     tier: selected.tier,
@@ -4110,8 +5254,21 @@ function MaterialWorkspace({
   const [moleculeRows, setMoleculeRows] = useState<MoleculeComponent[]>(() =>
     moleculeComponents.filter((molecule) => molecule.materialId === selected.id),
   )
-  const [provenanceRows, setProvenanceRows] = useState<Material['provenance']>(selected.provenance)
-  const [linkedDocuments, setLinkedDocuments] = useState<DocumentRecord[]>([])
+
+  const filteredMaterialRecords = useMemo(() => {
+    const query = materialQuery.trim().toLowerCase()
+    if (!query) return materialRecords
+    return materialRecords.filter((material) => [
+      material.name,
+      material.cas,
+      material.family,
+    ].some((value) => value?.toLowerCase().includes(query)))
+  }, [materialQuery, materialRecords])
+
+  const visibleMaterialRecords = useMemo(
+    () => filteredMaterialRecords.slice(0, materialListLimit),
+    [filteredMaterialRecords, materialListLimit],
+  )
 
   useEffect(() => {
     async function loadMaterials() {
@@ -4121,9 +5278,9 @@ function MaterialWorkspace({
         if (!payload.some((material) => material.id === selectedMaterialId) && payload[0]) {
           onSelectMaterial(payload[0].id)
         }
-        setMaterialStatus('Material catalog synced from API')
+        setMaterialStatus('Material directory is ready')
       } catch {
-        setMaterialStatus('Using local material seed until API is reachable')
+        setMaterialStatus('Material directory is temporarily unavailable. Try again shortly.')
       }
     }
     void loadMaterials()
@@ -4141,24 +5298,19 @@ function MaterialWorkspace({
       odor: selected.odor.join(', '),
     })
     setMoleculeRows(moleculeComponents.filter((molecule) => molecule.materialId === selected.id))
-    setProvenanceRows(selected.provenance)
-    setLinkedDocuments([])
 
     async function loadIntelligence() {
       try {
-        const [moleculePayload, provenancePayload] = await Promise.all([
-          requestApi<MaterialMoleculesResponse>(`/materials/${encodeURIComponent(selected.id)}/molecules`),
-          requestApi<MaterialProvenanceResponse>(`/materials/${encodeURIComponent(selected.id)}/provenance`),
-        ])
+        const moleculePayload = await requestApi<MaterialMoleculesResponse>(
+          `/materials/${encodeURIComponent(selected.id)}/molecules`,
+        )
         if (!active) {
           return
         }
         setMoleculeRows(moleculePayload.molecules)
-        setProvenanceRows(provenancePayload.provenance)
-        setLinkedDocuments(provenancePayload.documents)
       } catch {
         if (active) {
-          setMaterialStatus('Using local molecule/provenance seed until API is reachable')
+          setMaterialStatus('Using local molecule seed until API is reachable')
         }
       }
     }
@@ -4169,6 +5321,67 @@ function MaterialWorkspace({
     }
   }, [selected])
 
+  useEffect(() => {
+    let active = true
+    async function loadCompliance() {
+      try {
+        const profile = await requestApi<MaterialComplianceProfile | undefined>(
+          `/materials/${encodeURIComponent(selected.id)}/compliance`,
+        )
+        if (!active) return
+        setCompliance(profile ?? null)
+        setComplianceDraft({
+          status: profile?.status ?? 'REVIEW_REQUIRED',
+          category: profile?.ifraCategoryLimits[0]?.category ?? 'IFRA Category 4',
+          limitPercent: profile?.ifraCategoryLimits[0]?.limitPercent ?? selected.ifraLimit,
+          allergens: (profile?.allergens ?? []).map((allergen) => allergen.name).join(', '),
+          euUkFlags: (profile?.euUkFlags ?? []).join(', '),
+          source: profile?.source ?? '',
+          sourceVersion: profile?.sourceVersion ?? 'v1',
+          note: profile?.note ?? '',
+        })
+      } catch {
+        if (active) {
+          setCompliance(null)
+        }
+      }
+    }
+    void loadCompliance()
+    return () => {
+      active = false
+    }
+  }, [selected.id, selected.ifraLimit])
+
+  useEffect(() => {
+    let active = true
+    if (!canViewMaterialEvidence) {
+      setMaterialEvidence(null)
+      setMaterialEvidenceSources([])
+      return () => { active = false }
+    }
+    setMaterialEvidence(null)
+    setMaterialEvidenceSources([])
+    async function loadEvidence() {
+      try {
+        const [payload, sources] = await Promise.all([
+          requestApi<MaterialEvidenceResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence`),
+          requestApi<MaterialEvidenceSource[]>(`/materials/${encodeURIComponent(selected.id)}/evidence/sources`),
+        ])
+        if (active) {
+          setMaterialEvidence(payload)
+          setMaterialEvidenceSources(sources)
+        }
+      } catch {
+        if (active) {
+          setMaterialEvidence({ state: 'NOT_CONFIGURED', citations: [], indexedSourceCount: 0 })
+          setMaterialEvidenceSources([])
+        }
+      }
+    }
+    void loadEvidence()
+    return () => { active = false }
+  }, [canViewMaterialEvidence, selected.id])
+
   function upsertMaterial(nextMaterial: Material) {
     const exists = materialRecords.some((material) => material.id === nextMaterial.id)
     onMaterialsChange(
@@ -4177,7 +5390,84 @@ function MaterialWorkspace({
         : [nextMaterial, ...materialRecords],
     )
     onSelectMaterial(nextMaterial.id)
-    setProvenanceRows(nextMaterial.provenance)
+  }
+
+  async function refreshMaterialEvidence(query?: string) {
+    if (!canViewMaterialEvidence) return
+    const suffix = query?.trim() ? `?q=${encodeURIComponent(query.trim())}` : ''
+    const [payload, sources] = await Promise.all([
+      requestApi<MaterialEvidenceResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence${suffix}`),
+      requestApi<MaterialEvidenceSource[]>(`/materials/${encodeURIComponent(selected.id)}/evidence/sources`),
+    ])
+    setMaterialEvidence(payload)
+    setMaterialEvidenceSources(sources)
+  }
+
+  async function openMaterialEvidenceReview(documentId: string) {
+    if (!canManageMaterialEvidence) return
+    setEvidenceReviewBusy(true)
+    try {
+      const payload = await requestApi<MaterialEvidenceReviewSource>(`/documents/${encodeURIComponent(documentId)}/evidence/extracted`)
+      setEvidenceReview(payload)
+      setEvidenceReviewDraft(payload.extractedText)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence review is unavailable')
+    } finally {
+      setEvidenceReviewBusy(false)
+    }
+  }
+
+  async function submitMaterialEvidenceReview() {
+    if (!evidenceReview || !evidenceReviewDraft.trim()) return
+    setEvidenceReviewBusy(true)
+    try {
+      const result = await requestApi<MaterialEvidenceJobResponse>(`/documents/${encodeURIComponent(evidenceReview.documentId)}/evidence/review`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ reviewedText: evidenceReviewDraft }),
+      })
+      setMaterialStatus(`Evidence review submitted. Indexing reference ${result.correlationId.slice(0, 8)}.`)
+      setEvidenceReview(null)
+      setEvidenceReviewDraft('')
+      await refreshMaterialEvidence()
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence review could not be submitted')
+    } finally {
+      setEvidenceReviewBusy(false)
+    }
+  }
+
+  async function searchMaterialEvidence() {
+    if (!evidenceQuery.trim()) {
+      await refreshMaterialEvidence()
+      return
+    }
+    setEvidenceBusy(true)
+    try {
+      await refreshMaterialEvidence(evidenceQuery)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence search is unavailable')
+    } finally {
+      setEvidenceBusy(false)
+    }
+  }
+
+  async function indexSelectedMaterialEvidence() {
+    if (!canManageMaterialEvidence) return
+    setEvidenceBusy(true)
+    try {
+      const result = await requestApi<MaterialEvidenceJobResponse>(`/materials/${encodeURIComponent(selected.id)}/evidence/index`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: '{}',
+      })
+      setMaterialStatus(`Evidence indexing queued for ${selected.name}. Reference ${result.correlationId.slice(0, 8)}.`)
+      await refreshMaterialEvidence()
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Evidence indexing could not be queued')
+    } finally {
+      setEvidenceBusy(false)
+    }
   }
 
   async function checkCasDuplicate() {
@@ -4221,7 +5511,9 @@ function MaterialWorkspace({
       })
       upsertMaterial(payload.material)
       setCreateName('')
-      setMaterialStatus(`${payload.material.name} created without stock movement`)
+      setMaterialStatus(payload.material.libraryScope === 'GLOBAL'
+        ? `${payload.material.name} published to the shared library without stock movement`
+        : `${payload.material.name} created privately for this workspace without stock movement`)
     } catch (error) {
       setMaterialStatus(
         error instanceof Error ? error.message : 'Material create blocked; check required fields or duplicate CAS',
@@ -4229,9 +5521,12 @@ function MaterialWorkspace({
     }
   }
 
+
   async function saveMaterialUpdate() {
-    if (!canUpdateMaterials) {
-      setMaterialStatus('Current role is not authorized to edit materials.')
+    if (!canEditSelectedMaterial) {
+      setMaterialStatus(selectedIsShared
+        ? 'Shared library records are read-only in this workspace. Create a workspace material for private data.'
+        : 'Current role is not authorized to edit materials.')
       return
     }
     const materialId = selected.id?.trim()
@@ -4304,8 +5599,10 @@ function MaterialWorkspace({
   }
 
   async function fillFromPubChem() {
-    if (!canUpdateMaterials) {
-      setMaterialStatus('Current role is not authorized to enrich data from PubChem.')
+    if (!canEditSelectedMaterial) {
+      setMaterialStatus(selectedIsShared
+        ? 'Shared library enrichment is restricted to OlfactoryOps library curators.'
+        : 'Current role is not authorized to enrich data from PubChem.')
       return
     }
     setPubChemSaving(true)
@@ -4323,13 +5620,47 @@ function MaterialWorkspace({
     }
   }
 
+  async function saveComplianceProfile() {
+    if (!canManageCompliance) {
+      setMaterialStatus('Only an Owner or Admin can save material compliance policy.')
+      return
+    }
+    const limitPercent = Number(complianceDraft.limitPercent)
+    if (!complianceDraft.category.trim() || !Number.isFinite(limitPercent) || limitPercent < 0 || limitPercent > 100) {
+      setMaterialStatus('Compliance needs an IFRA category and a limit between 0 and 100.')
+      return
+    }
+    setComplianceSaving(true)
+    try {
+      const payload = await requestApi<MaterialComplianceResponse>(`/materials/${encodeURIComponent(selected.id)}/compliance`, {
+        method: 'PUT',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          status: complianceDraft.status,
+          ifraCategoryLimits: [{ category: complianceDraft.category.trim(), limitPercent }],
+          allergens: complianceDraft.allergens.split(',').map((name) => name.trim()).filter(Boolean).map((name) => ({ name })),
+          euUkFlags: complianceDraft.euUkFlags.split(',').map((flag) => flag.trim()).filter(Boolean),
+          source: complianceDraft.source.trim() || 'Manual compliance review',
+          sourceVersion: complianceDraft.sourceVersion.trim() || 'v1',
+          note: complianceDraft.note.trim() || undefined,
+        }),
+      })
+      setCompliance(payload.profile)
+      setMaterialStatus(`${selected.name} compliance is ${payload.profile.status}`)
+    } catch (error) {
+      setMaterialStatus(error instanceof Error ? error.message : 'Compliance policy update failed')
+    } finally {
+      setComplianceSaving(false)
+    }
+  }
+
   return (
     <div className="workspace-grid material-intelligence-grid">
-      <Panel title="Material Library" icon={Atom}>
+      <Panel className="material-directory-panel" title="Materials" icon={Atom}>
         <div className="material-form-grid">
           <label className="field-row">
             <span>Name</span>
-            <input aria-label="New material name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
+            <input ref={createNameInputRef} aria-label="New material name" value={createName} onChange={(event) => setCreateName(event.target.value)} />
           </label>
           <label className="field-row">
             <span>CAS</span>
@@ -4360,20 +5691,42 @@ function MaterialWorkspace({
           </button>
           <button
             className="primary-button"
+            data-testid="material-save-metadata"
             type="button"
             onClick={() => void createMaterialRecord()}
             disabled={!canCreateMaterials || !createName.trim() || !createCas.trim()}
           >
             <Plus size={16} />
-            Create material
+            {canCurateSharedMaterials ? 'Publish material' : 'Create material'}
           </button>
         </div>
-        <ul className="policy-list">
-          <li>{materialStatus}</li>
-          <li>Material master changes do not create stock. Lots and movements stay in Inventory.</li>
-        </ul>
+        <p className="helper-copy">
+          {canCurateSharedMaterials
+            ? 'You are publishing as an OlfactoryOps curator. New materials and material imports become part of the shared library for every workspace.'
+            : 'New materials and material imports belong only to this workspace. Other tenants cannot search, edit, or use them.'}
+        </p>
+        <p className="muted-copy" role="status">{materialStatus}</p>
+        <section className="material-directory-controls" aria-label="Material directory controls">
+          <label className="field-row wide-field">
+            <span>Search materials</span>
+            <input
+              aria-label="Search materials by name, CAS, EINECS, FEMA, or source"
+              placeholder="Name, CAS, EINECS, FEMA, or source"
+              value={materialQuery}
+              onChange={(event) => {
+                setMaterialQuery(event.target.value)
+                setMaterialListLimit(80)
+              }}
+            />
+          </label>
+          <div className="tag-row">
+            <DataTag label="Materials" value={materialRecords.length.toLocaleString()} tone="blue" />
+            <DataTag label="Showing" value={`${visibleMaterialRecords.length} / ${filteredMaterialRecords.length.toLocaleString()}`} />
+          </div>
+          <p className="helper-copy">Materials are workspace-scoped. Technical and compliance evidence is reviewed here before a material can enter procurement or inventory operations.</p>
+        </section>
         <div className="material-list">
-          {materialRecords.map((material) => {
+          {visibleMaterialRecords.map((material) => {
             const summary = stockByMaterialId.get(material.id)
             return (
               <button
@@ -4386,38 +5739,135 @@ function MaterialWorkspace({
                   <strong>{material.name}</strong>
                   <span>{material.family}</span>
                 </div>
-                <DataTag label={material.tier} value={material.cas} tone="blue" />
+                <DataTag
+                  label={(material.libraryScope ?? (material.organizationId ? 'TENANT' : 'GLOBAL')) === 'GLOBAL' ? 'Shared' : 'Workspace'}
+                  value={material.cas}
+                  tone="blue"
+                />
                 <div className="mono-value">{summary ? formatGrams(summary.available) : '0g'}</div>
               </button>
             )
           })}
         </div>
+        {filteredMaterialRecords.length > visibleMaterialRecords.length ? (
+          <button className="ghost-button small material-list-more" type="button" onClick={() => setMaterialListLimit((current) => current + 80)}>
+            Show 80 more materials
+          </button>
+        ) : null}
       </Panel>
 
-      <Panel title="Material Inspector" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
+      <Panel className="material-inspector-panel" title="Details" icon={PackageSearch} right={<DataTag label="CAS" value={selected.cas} />}>
         <div className="tag-row">
+          <DataTag label="Library" value={selectedIsShared ? 'Shared' : 'Workspace private'} tone={selectedIsShared ? 'blue' : 'green'} />
           <DataTag label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} tone="green" />
           <DataTag label="Provenance" value={String(selected.provenance.length)} tone="blue" />
           <DataTag label="Molecules" value={String(moleculeRows.length)} />
         </div>
-        <div className="inspector-grid">
-          <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
-          <Metric label="Density" value={`${selected.density} g/ml`} />
-          <Metric label="MW" value={String(selected.mw)} />
-          <Metric label="LogP" value={String(selected.logP)} />
-          <Metric label="IFRA ref" value={`${selected.ifraLimit}%`} />
-          <Metric label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} />
-        </div>
-        <div className="odor-row">
-          {selected.odor.map((tag) => (
-            <span key={tag}>{tag}</span>
-          ))}
-        </div>
+        <>
+            <div className="inspector-grid">
+              <Metric label="Vapor pressure" value={`${selected.vaporPressure}`} />
+              <Metric label="Density" value={`${selected.density} g/ml`} />
+              <Metric label="MW" value={String(selected.mw)} />
+              <Metric label="LogP" value={String(selected.logP)} />
+              <Metric label="IFRA ref" value={`${selected.ifraLimit}%`} />
+              <Metric label="Available" value={selectedStock ? formatGrams(selectedStock.available) : '0g'} />
+            </div>
+            <div className="odor-row">
+              {selected.odor.map((tag) => (
+                <span key={tag}>{tag}</span>
+              ))}
+            </div>
+        </>
+        {selected.olfactiveProfile ? (
+          <section className="olfactive-profile" aria-label="Olfactive profile">
+            <div className="section-heading compact-heading">
+              <div>
+                <span className="eyebrow">Olfactive profile</span>
+                <strong>{selected.olfactiveProfile.primaryFamily}</strong>
+              </div>
+              <StatusBadge
+                status={selected.olfactiveProfile.status === 'CURATED' ? 'stable' : 'review'}
+                label={selected.olfactiveProfile.status === 'CURATED' ? 'Curated' : 'Review required'}
+              />
+            </div>
+            <p>{selected.olfactiveProfile.description}</p>
+            <dl className="olfactive-profile-signals" aria-label="Olfactive performance profile">
+              <div><dt>Strength</dt><dd>{selected.olfactiveProfile.strength ?? 'Not evaluated'}</dd></div>
+              <div><dt>Diffusion</dt><dd>{selected.olfactiveProfile.diffusion ?? 'Not evaluated'}</dd></div>
+              <div><dt>Tenacity</dt><dd>{selected.olfactiveProfile.tenacity ?? 'Not evaluated'}</dd></div>
+              <div><dt>Volatility</dt><dd>{selected.olfactiveProfile.volatility ?? 'Not evaluated'}</dd></div>
+              <div className="olfactive-profile-role"><dt>Formula role</dt><dd>{selected.olfactiveProfile.formulaRole ?? 'Not evaluated'}</dd></div>
+            </dl>
+            <div className="tag-row">
+              {selected.olfactiveProfile.facets.map((facet) => <DataTag key={facet} label="Facet" value={facet} />)}
+            </div>
+            <small>{selected.olfactiveProfile.source} / {selected.olfactiveProfile.version}</small>
+          </section>
+        ) : null}
+        {canViewMaterialEvidence ? (
+          <section className="material-evidence" aria-label="Material evidence">
+            <div className="section-heading compact-heading">
+              <div>
+                <span className="eyebrow">Evidence</span>
+                <strong>Approved material references</strong>
+              </div>
+              <DataTag label="Indexed" value={String(materialEvidence?.indexedSourceCount ?? 0)} tone={materialEvidence?.state === 'READY' ? 'green' : 'blue'} />
+            </div>
+            <p className="muted-copy">
+              {materialEvidence?.state === 'NOT_CONFIGURED'
+                ? 'Evidence indexing is not configured for this workspace.'
+                : materialEvidence?.state === 'NOT_INDEXED'
+                  ? 'No approved material evidence has been indexed yet.'
+                  : 'Search approved material metadata and reviewed supplier documents.'}
+            </p>
+            <div className="material-evidence-actions">
+              <input aria-label="Search approved material evidence" value={evidenceQuery} onChange={(event) => setEvidenceQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void searchMaterialEvidence() }} placeholder="Search evidence" />
+              <button className="ghost-button small" type="button" disabled={evidenceBusy || !evidenceQuery.trim()} onClick={() => void searchMaterialEvidence()}>
+                {evidenceBusy ? 'Searching...' : 'Search'}
+              </button>
+              {canManageMaterialEvidence ? <button className="secondary-button small" type="button" disabled={evidenceBusy} onClick={() => void indexSelectedMaterialEvidence()}>{evidenceBusy ? 'Queueing...' : 'Index evidence'}</button> : null}
+            </div>
+            {materialEvidence?.citations.length ? (
+              <div className="material-evidence-list">
+                {materialEvidence.citations.map((citation) => (
+                  <article key={citation.citationId}>
+                    <div><strong>{citation.title}</strong><span>{citation.sourceKind === 'document' ? 'Reviewed document' : 'Material profile'} / {citation.version}{citation.page ? ` / p. ${citation.page}` : ''}{citation.section ? ` / ${citation.section}` : ''}</span></div>
+                    <p>{citation.excerpt}</p>
+                  </article>
+                ))}
+              </div>
+            ) : null}
+            {materialEvidenceSources.length ? (
+              <div className="material-evidence-sources" aria-label="Evidence indexing status">
+                {materialEvidenceSources.map((source) => (
+                  <div className="material-evidence-source" key={`${source.sourceKind}-${source.documentId ?? source.title}-${source.version}`}>
+                    <div>
+                      <strong>{source.title}</strong>
+                      <span>{source.sourceKind === 'document' ? 'Approved document' : 'Material profile'} / {source.version}</span>
+                    </div>
+                    <div className="material-evidence-source-actions">
+                      <DataTag label="Status" value={source.state.replace(/_/g, ' ')} tone={source.state === 'READY' ? 'green' : source.state === 'FAILED' || source.state === 'NOT_INDEXED' ? 'amber' : 'blue'} />
+                      {canManageMaterialEvidence && source.documentId && source.state === 'REVIEW_REQUIRED' ? (
+                        <button className="ghost-button tiny" type="button" disabled={evidenceReviewBusy} onClick={() => void openMaterialEvidenceReview(source.documentId!)}>
+                          Review extract
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+        {selectedIsShared && !canCurateSharedMaterials ? (
+          <p className="helper-copy">This material is maintained in the shared OlfactoryOps library. Its metadata is read-only here; compliance evidence and inventory remain scoped to your workspace.</p>
+        ) : null}
         <div className="material-form-grid">
           <label className="field-row">
             <span>Family</span>
             <input
               aria-label="Material family"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.family}
               onChange={(event) => setEditDraft((current) => ({ ...current, family: event.target.value }))}
             />
@@ -4426,6 +5876,7 @@ function MaterialWorkspace({
             <span>Tier</span>
             <select
               aria-label="Material tier"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.tier}
               onChange={(event) => setEditDraft((current) => ({ ...current, tier: event.target.value as Material['tier'] }))}
             >
@@ -4438,6 +5889,7 @@ function MaterialWorkspace({
             <span>Density</span>
             <input
               aria-label="Material density"
+              disabled={!canEditSelectedMaterial}
               step={0.001}
               type="number"
               value={editDraft.density}
@@ -4448,6 +5900,7 @@ function MaterialWorkspace({
             <span>Vapor pressure</span>
             <input
               aria-label="Material vapor pressure"
+              disabled={!canEditSelectedMaterial}
               step={0.0001}
               type="number"
               value={editDraft.vaporPressure}
@@ -4458,6 +5911,7 @@ function MaterialWorkspace({
             <span>Cost / gram</span>
             <input
               aria-label="Material cost per gram"
+              disabled={!canEditSelectedMaterial}
               step={0.001}
               type="number"
               value={editDraft.costPerGram}
@@ -4468,6 +5922,7 @@ function MaterialWorkspace({
             <span>IFRA limit %</span>
             <input
               aria-label="Material IFRA limit"
+              disabled={!canEditSelectedMaterial}
               step={0.1}
               type="number"
               value={editDraft.ifraLimit}
@@ -4478,15 +5933,17 @@ function MaterialWorkspace({
             <span>Odor tags</span>
             <input
               aria-label="Material odor tags"
+              disabled={!canEditSelectedMaterial}
               value={editDraft.odor}
               onChange={(event) => setEditDraft((current) => ({ ...current, odor: event.target.value }))}
             />
           </label>
           <button
             className="primary-button"
+            data-testid="production-create-batch"
             type="button"
             onClick={() => void saveMaterialUpdate()}
-            disabled={!canUpdateMaterials || materialSaving}
+            disabled={!canEditSelectedMaterial || materialSaving}
             aria-label="Save material metadata"
           >
             {materialSaving ? 'Saving...' : 'Save metadata'}
@@ -4495,63 +5952,124 @@ function MaterialWorkspace({
             className="ghost-button"
             type="button"
             onClick={() => void fillFromPubChem()}
-            disabled={!canUpdateMaterials || pubChemSaving}
+            disabled={!canEditSelectedMaterial || pubChemSaving}
           >
             {pubChemSaving ? 'Filling...' : 'PubChem fill'}
           </button>
         </div>
       </Panel>
 
-      <Panel title="Molecule Split" icon={Layers3}>
-        <div className="tag-row">
-          <DataTag label="Components" value={String(moleculeRows.length)} />
-          <DataTag label="Total" value={`${moleculeRows.reduce((sum, molecule) => sum + molecule.percent, 0).toFixed(1)}%`} tone="blue" />
+      <Panel
+        title="Compliance Profile"
+        icon={ShieldCheck}
+        right={<StatusBadge status={compliance?.status === 'APPROVED' ? 'stable' : compliance?.status === 'BLOCKED' ? 'alert' : 'review'} label={compliance?.status ?? 'NOT CONFIGURED'} />}
+      >
+        <p className="muted-copy">
+          IFRA and EU/UK evidence is scoped to this material. This is an operational control, not a legal determination.
+        </p>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Disposition</span>
+            <select
+              value={complianceDraft.status}
+              disabled={!canManageCompliance}
+              onChange={(event) => setComplianceDraft((current) => ({ ...current, status: event.target.value as MaterialComplianceProfile['status'] }))}
+            >
+              <option value="APPROVED">Approved</option>
+              <option value="REVIEW_REQUIRED">Review required</option>
+              <option value="BLOCKED">Blocked</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>IFRA category</span>
+            <input value={complianceDraft.category} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, category: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>IFRA limit %</span>
+            <input min={0} max={100} step={0.01} type="number" value={complianceDraft.limitPercent} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, limitPercent: Number(event.target.value) }))} />
+          </label>
+          <label className="field-row">
+            <span>Evidence source</span>
+            <input value={complianceDraft.source} placeholder="Supplier SDS / IFRA certificate" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, source: event.target.value }))} />
+          </label>
+          <label className="field-row">
+            <span>Source version</span>
+            <input value={complianceDraft.sourceVersion} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, sourceVersion: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>EU / UK flags</span>
+            <input value={complianceDraft.euUkFlags} placeholder="EU allergen disclosure, UK retained law" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, euUkFlags: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>Declared allergens</span>
+            <input value={complianceDraft.allergens} placeholder="Limonene, Linalool" disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, allergens: event.target.value }))} />
+          </label>
+          <label className="field-row wide-field">
+            <span>Review note</span>
+            <input value={complianceDraft.note} disabled={!canManageCompliance} onChange={(event) => setComplianceDraft((current) => ({ ...current, note: event.target.value }))} />
+          </label>
         </div>
-        <div className="provenance-list">
-          {moleculeRows.length > 0 ? (
-            moleculeRows.map((molecule) => (
-              <div className="provenance-item" key={molecule.id}>
-                <div>
-                  <strong>{molecule.name}</strong>
-                  <span>{molecule.cas} / {molecule.source}</span>
-                </div>
-                <DataTag label="Pct" value={`${molecule.percent}%`} tone="green" />
-                <StatusBadge status={molecule.status === 'VERIFIED' ? 'stable' : 'review'} label={molecule.status} />
-              </div>
-            ))
-          ) : (
-            <div className="empty-state">
-              <strong>No molecule split yet.</strong>
-              <span>Run PubChem fill or approve SDS section 3 extraction to seed components.</span>
-            </div>
-          )}
+        <div className="action-row">
+          <button className="primary-button small" type="button" onClick={() => void saveComplianceProfile()} disabled={!canManageCompliance || complianceSaving}>
+            {complianceSaving ? 'Saving...' : 'Save compliance'}
+          </button>
+          {compliance ? <DataTag label="Reviewed" value={new Date(compliance.reviewedAt).toLocaleDateString()} tone="blue" /> : <span className="muted-copy">No compliance profile configured.</span>}
         </div>
       </Panel>
 
-      <Panel className="wide" title="Field Provenance" icon={ClipboardCheck}>
-        <div className="provenance-list">
-          {provenanceRows.map((source, index) => (
-            <div className="provenance-item" key={`${source.field}-${source.version}-${index}`}>
-              <div>
-                <strong>{source.field}</strong>
-                <span>{source.source}</span>
+      {showMoleculeSplitPanel ? (
+        <Panel title="Molecule Split" icon={Layers3}>
+          <div className="tag-row">
+            <DataTag label="Components" value={String(moleculeRows.length)} />
+            <DataTag label="Total" value={`${moleculeRows.reduce((sum, molecule) => sum + molecule.percent, 0).toFixed(1)}%`} tone="blue" />
+          </div>
+          <div className="provenance-list">
+            {moleculeRows.length > 0 ? (
+              moleculeRows.map((molecule) => (
+                <div className="provenance-item" key={molecule.id}>
+                  <div>
+                    <strong>{molecule.name}</strong>
+                    <span>{molecule.cas} / {molecule.source}</span>
+                  </div>
+                  <DataTag label="Pct" value={`${molecule.percent}%`} tone="green" />
+                  <StatusBadge status={molecule.status === 'VERIFIED' ? 'stable' : 'review'} label={molecule.status} />
+                </div>
+              ))
+            ) : (
+              <div className="empty-state">
+                <strong>No molecule split yet.</strong>
+                <span>Run PubChem fill or approve SDS section 3 extraction to seed components.</span>
               </div>
-              <span className="mono-value">{source.version}</span>
-              <span className="mono-small">{index === 0 ? 'latest' : source.date}</span>
-            </div>
-          ))}
-          {linkedDocuments.map((document) => (
-            <div className="provenance-item" key={document.id}>
-              <div>
-                <strong>{document.type} document</strong>
-                <span>{document.title} / {document.sensitivity}</span>
-              </div>
-              <span className="mono-value">{document.version}</span>
-              <StatusBadge status="stable" label="private" />
-            </div>
-          ))}
-        </div>
-      </Panel>
+            )}
+          </div>
+        </Panel>
+      ) : null}
+
+      <WorkspaceDialog
+        open={Boolean(evidenceReview)}
+        title={evidenceReview ? `Review extraction: ${evidenceReview.title}` : 'Review extraction'}
+        description="Confirm the extracted text before it is indexed as searchable evidence."
+        onClose={() => {
+          if (!evidenceReviewBusy) {
+            setEvidenceReview(null)
+            setEvidenceReviewDraft('')
+          }
+        }}
+        footer={(
+          <>
+            <button className="ghost-button" type="button" onClick={() => { setEvidenceReview(null); setEvidenceReviewDraft('') }} disabled={evidenceReviewBusy}>Cancel</button>
+            <button className="primary-button" type="button" onClick={() => void submitMaterialEvidenceReview()} disabled={evidenceReviewBusy || !evidenceReviewDraft.trim()}>
+              {evidenceReviewBusy ? 'Submitting...' : 'Approve and index'}
+            </button>
+          </>
+        )}
+      >
+        <label className="field-row">
+          <span>Reviewed text</span>
+          <textarea data-autofocus rows={14} value={evidenceReviewDraft} maxLength={100000} onChange={(event) => setEvidenceReviewDraft(event.target.value)} />
+        </label>
+      </WorkspaceDialog>
+
     </div>
   )
 }
@@ -4571,6 +6089,9 @@ type FormulaWorkspaceProps = {
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  onCreateTrial: (formula: Formula) => void
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
 }
 
 type FormulaLabTab = 'sketch' | 'material' | 'details'
@@ -4621,6 +6142,7 @@ type FormulaMetadataDraft = {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  finalProductContextConfirmed: boolean
   assignedReviewer: string
 }
 
@@ -4821,6 +6343,7 @@ function formulaMetadataDraftFromRecord(formula: Formula): FormulaMetadataDraft 
     bottleVolumeMl: formula.bottleVolumeMl,
     bottleCount: formula.bottleCount,
     ifraCategory: formula.ifraCategory,
+    finalProductContextConfirmed: !formula.requiresFinalProductContext,
     assignedReviewer: formula.assignedReviewer ?? '',
   }
 }
@@ -4841,21 +6364,33 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  onCreateTrial,
+  userSettings,
+  onUserSettingsChange,
 }: FormulaWorkspaceProps) {
   const formula = formulaRecords.find((item) => item.id === activeFormulaId) ?? formulaRecords[0]!
   const canEditFormula = sessionHasPermission(session, 'formulas.edit')
   const canApproveFormula =
     isFormulaApproverRole(session.role) && sessionHasPermission(session, 'formulas.approve')
   const canExportFormula = sessionHasPermission(session, 'formulas.export')
+  const canCreateTrial = sessionHasPermission(session, 'trials.create')
+  const canViewTrialEvidence = sessionHasPermission(session, 'formulas.viewSensitive') && sessionHasPermission(session, 'materials.view') && sessionHasPermission(session, 'trials.view')
   const formulaEditable = formula.workflowStatus === 'DRAFT' || formula.workflowStatus === 'CHANGES_REQUESTED'
   const activeFormulaType = formulaTypeForFormula(formula)
   const activeFormulaTypeMeta = formulaTypeMeta[activeFormulaType]
+  const productConcentrationLabel = `${formula.finalProductConcentrationPercent.toFixed(1)}% concentrate`
   const selectableChildFormulas = useMemo(
     () => formulaRecords.filter((item) => item.id !== formula.id),
     [formula.id, formulaRecords],
   )
   const [formulaStatus, setFormulaStatus] = useState('Formula Labspace ready')
   const [versions, setVersions] = useState<FormulaVersionRecord[]>([])
+  const [trialEvidence, setTrialEvidence] = useState<TrialComparableEvidence | null>(null)
+  const [trialEvidenceLoading, setTrialEvidenceLoading] = useState(false)
+  const [trialEvidenceUnavailable, setTrialEvidenceUnavailable] = useState<string>()
+  const [operationalLineage, setOperationalLineage] = useState<OperationalLineageProjection | null>(null)
+  const [operationalLineageLoading, setOperationalLineageLoading] = useState(false)
+  const [operationalLineageUnavailable, setOperationalLineageUnavailable] = useState<string>()
   const [versionNote, setVersionNote] = useState(`Snapshot ${formula.code} ${formula.version}`)
   const [activeLabTab, setActiveLabTab] = useState<FormulaLabTab>('details')
   const [createSheetOpen, setCreateSheetOpen] = useState(false)
@@ -4889,8 +6424,19 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   const [evaluationStability, setEvaluationStability] = useState<FormulaEvaluationRecord['stability']>('PASS')
   const [evaluationRating, setEvaluationRating] = useState(4)
   const [metadataSaving, setMetadataSaving] = useState(false)
+  const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false)
+  const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState<FormulaWorkspacePreferences>(() =>
+    normalizeFormulaWorkspacePreferences(userSettings.formulaWorkspace, createDefaultFormulaWorkspacePreferences()),
+  )
+  const [workspaceSettingsSaving, setWorkspaceSettingsSaving] = useState(false)
+  const [workspaceSettingsStatus, setWorkspaceSettingsStatus] = useState('These views are saved for your account.')
   const metadataSaveInFlightRef = useRef(false)
   const metadataChangeCounterRef = useRef(0)
+  const formulaDetailDockRef = useRef<HTMLElement | null>(null)
+  const formulaWorkspaceViews = useMemo(
+    () => normalizeFormulaWorkspacePreferences(userSettings.formulaWorkspace, createDefaultFormulaWorkspacePreferences()),
+    [userSettings.formulaWorkspace],
+  )
   const materialById = useMemo(
     () => new Map(materialRecords.map((material) => [material.id, material])),
     [materialRecords],
@@ -4932,6 +6478,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
       ? 'Add at least one material before submitting for review.'
       : !formulaFinalReady
         ? `Formula is ${formulaPercent.toFixed(2)}%. Normalize it to 100% before submitting for review.`
+        : formula.requiresFinalProductContext
+          ? 'Add final-product concentration and IFRA category in Details before submitting this accord for review.'
         : formula.targetMarkets.length === 0
           ? 'Choose at least one target market in Details before submitting for review.'
           : formula.finalProductConcentrationPercent <= 0
@@ -5063,6 +6611,40 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     setFocusedMaterialId(null)
   }, [formula.code, formula.id, formula.version])
 
+  const evidenceVersion = versions[0]?.version
+  useEffect(() => {
+    if (!canViewTrialEvidence || !evidenceVersion) {
+      setTrialEvidence(null)
+      setTrialEvidenceUnavailable(undefined)
+      setTrialEvidenceLoading(false)
+      return
+    }
+    let active = true
+    setTrialEvidenceLoading(true)
+    setTrialEvidenceUnavailable(undefined)
+    void requestApi<FormulaTrialEvidenceResponse>(`/formulas/${encodeURIComponent(formula.id)}/trial-evidence?version=${encodeURIComponent(evidenceVersion)}`)
+      .then((payload) => { if (active) setTrialEvidence(payload.evidence) })
+      .catch(() => { if (active) setTrialEvidenceUnavailable('Completed trial evidence is temporarily unavailable.') })
+      .finally(() => { if (active) setTrialEvidenceLoading(false) })
+    return () => { active = false }
+  }, [canViewTrialEvidence, evidenceVersion, formula.id])
+  useEffect(() => {
+    if (!canViewTrialEvidence) {
+      setOperationalLineage(null)
+      setOperationalLineageUnavailable(undefined)
+      setOperationalLineageLoading(false)
+      return
+    }
+    let active = true
+    setOperationalLineageLoading(true)
+    setOperationalLineageUnavailable(undefined)
+    void requestApi<FormulaLineageResponse>(`/lineage/FORMULA/${encodeURIComponent(formula.id)}`)
+      .then((payload) => { if (active) setOperationalLineage(payload.data) })
+      .catch(() => { if (active) setOperationalLineageUnavailable('Operational trace is temporarily unavailable.') })
+      .finally(() => { if (active) setOperationalLineageLoading(false) })
+    return () => { active = false }
+  }, [canViewTrialEvidence, formula.id])
+
   useEffect(() => {
     let active = true
     async function loadVersions() {
@@ -5148,6 +6730,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
       bottleVolumeMl: snapshot.bottleVolumeMl,
       bottleCount: snapshot.bottleCount,
       ifraCategory: snapshot.ifraCategory,
+      requiresFinalProductContext: Boolean(snapshot.requiresFinalProductContext),
       assignedReviewer: snapshot.assignedReviewer,
       lines: snapshot.lines,
     }
@@ -5181,6 +6764,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           bottleVolumeMl: metadataDraft.bottleVolumeMl,
           bottleCount: metadataDraft.bottleCount,
           ifraCategory: metadataDraft.ifraCategory,
+          ...(formula.formulaType === 'ACCORD' ? { requiresFinalProductContext: !metadataDraft.finalProductContextConfirmed } : {}),
           assignedReviewer: metadataDraft.assignedReviewer,
         }),
       })
@@ -5431,6 +7015,38 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     void loadScalePlan({ targetGrams: formula.targetGrams, incrementGrams: 0.01 })
   }
 
+  function showFormulaDetailTab(tab: FormulaLabTab) {
+    setActiveLabTab(tab)
+    window.requestAnimationFrame(() => {
+      formulaDetailDockRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }
+
+  function openWorkspaceSettings() {
+    setWorkspaceSettingsDraft(formulaWorkspaceViews)
+    setWorkspaceSettingsStatus('These views are saved for your account.')
+    setWorkspaceSettingsOpen(true)
+  }
+
+  async function saveWorkspaceSettings() {
+    setWorkspaceSettingsSaving(true)
+    setWorkspaceSettingsStatus('Saving workspace…')
+    try {
+      const payload = await requestApi<UserSettingsUpdateResponse>('/user/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ formulaWorkspace: workspaceSettingsDraft }),
+      })
+      onUserSettingsChange(payload.settings)
+      setWorkspaceSettingsStatus('Workspace saved.')
+      setWorkspaceSettingsOpen(false)
+    } catch (error) {
+      setWorkspaceSettingsStatus(error instanceof Error ? error.message : 'Could not save workspace settings')
+    } finally {
+      setWorkspaceSettingsSaving(false)
+    }
+  }
+
   async function loadVersionDiff() {
     if (!diffFromVersion || !diffToVersion || diffFromVersion === diffToVersion) {
       setFormulaStatus('Select two different versions to compare')
@@ -5576,23 +7192,6 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
     }
   }
 
-  async function moveLine(line: FormulaLine, direction: 'up' | 'down') {
-    try {
-      const payload = await requestApi<FormulaMutationResponse>(
-        `/formulas/${encodeURIComponent(formula.id)}/lines/${encodeURIComponent(line.id)}/move`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ direction }),
-        },
-      )
-      acceptFormulaMutation(payload.formula)
-      setFormulaStatus(`${line.label} reordered`)
-    } catch (error) {
-      setFormulaStatus(error instanceof Error ? error.message : 'Formula line reorder failed')
-    }
-  }
-
   async function addMaterialToFormula(material: Material, sourceLot?: InventoryLot) {
     const grams = clampPositiveNumber(Number(pickerGrams), 1)
     const availableGrams = sourceLot ? availableLotGrams(sourceLot) : undefined
@@ -5706,7 +7305,12 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
   }
 
   return (
-    <div className="formula-labspace">
+    <div
+      className={`formula-labspace ${formulaWorkspaceViews.library ? '' : 'is-library-hidden'} ${
+        formulaWorkspaceViews.summary ? '' : 'is-summary-hidden'
+      }`}
+    >
+      {formulaWorkspaceViews.library ? (
       <aside className="formula-lab-library glass">
         <div className="formula-rail-head">
           <div>
@@ -5750,16 +7354,21 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           })}
         </div>
       </aside>
+      ) : null}
 
       <main className="formula-lab-editor glass">
         <div className="formula-lab-topbar">
-          <button className="ghost-button icon-only" type="button" aria-label="Open formula details" onClick={() => setActiveLabTab('details')}>
+          <button className="ghost-button icon-only" type="button" aria-label="Open formula details" onClick={() => showFormulaDetailTab('details')}>
             <Menu size={18} />
           </button>
           <h2>{formula.name}</h2>
           <div className="formula-topbar-actions">
+            <button className="ghost-button small" type="button" onClick={openWorkspaceSettings}>
+              <SlidersHorizontal size={14} />
+              Workspace
+            </button>
             {formulaEditable && canEditFormula && (
-              <button className="ghost-button small" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
+              <button className="ghost-button small" data-testid="formula-save-draft" type="button" onClick={() => void saveFormulaDraft(false)} disabled={!metadataDirty || metadataSaving}>
                 <Save size={14} />
                 {metadataSaving ? 'Saving...' : metadataDirty ? 'Save draft' : 'Draft saved'}
               </button>
@@ -5773,6 +7382,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             {formulaEditable && canEditFormula && (
               <button
                 className="primary-button small"
+                data-testid="formula-submit-review"
                 type="button"
                 onClick={beginFormulaReview}
                 disabled={metadataSaving}
@@ -5797,6 +7407,12 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 Fork working copy
               </button>
             )}
+            {formula.workflowStatus === 'APPROVED' && canCreateTrial && (
+              <button className="ghost-button small" type="button" onClick={() => onCreateTrial(formula)}>
+                <FlaskConical size={14} />
+                Create trial
+              </button>
+            )}
           </div>
         </div>
 
@@ -5816,9 +7432,21 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
           </div>
           <div>
             <h1>{formula.name}</h1>
-            <p>{activeFormulaTypeMeta.label} / {formula.brief || 'Add the creative brief in Details.'}</p>
+            <p>
+              {activeFormulaTypeMeta.label}
+              {formula.formulaType === 'FINE_FRAGRANCE' ? ` / ${formula.concentrationType}` : ''}
+              {' / '}
+              {productConcentrationLabel}
+              {' / '}
+              {formula.brief || 'Add the creative brief in Details.'}
+            </p>
           </div>
         </section>
+        {formula.requiresFinalProductContext && (
+          <div className="formula-context-warning" role="status">
+            This is an accord concentrate. Add its final-product concentration and IFRA category in Details before submitting it for review.
+          </div>
+        )}
 
         <div className="formula-lab-tools">
           <button className="ghost-button icon-only" type="button" aria-label="Undo last action" title="Undo" onClick={() => void undoFormulaChange()} disabled={!formulaEditable || undoStack.length === 0}>
@@ -5840,7 +7468,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <span>r{formula.draftRevision}</span>
             <SlidersHorizontal size={14} aria-hidden="true" />
           </button>
-          <button className="ghost-button icon-only" type="button" aria-label="Edit formula tags" title="Metadata and tags" onClick={() => setActiveLabTab('details')}>
+          <button className="ghost-button icon-only" type="button" aria-label="Edit formula tags" title="Metadata and tags" onClick={() => showFormulaDetailTab('details')}>
             <Tag size={15} />
           </button>
           <button className="ghost-button icon-only" type="button" aria-label="Export formula" title="Export with audit" onClick={() => void exportFormulaRecord()} disabled={!canExportFormula || formula.lines.length === 0}>
@@ -5862,9 +7490,9 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 </div>
                 {section.lines.length > 0 ? (
                   section.lines.map(({ line, material, childFormula, sourceLot, sourceAvailableGrams, odorType, tags }) => {
-                    const lineIndex = formula.lines.findIndex((item) => item.id === line.id)
                     const sourceLotNumber = sourceLot?.lotNumber ?? line.sourceLotNumber
                     const sourceLocation = sourceLot?.location ?? line.sourceLocation
+                    const lineConcentrationPercent = formulaLineConcentrationFraction(line) * 100
                     return (
                       <div
                         className="formula-ledger-line"
@@ -5903,29 +7531,10 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                         </div>
                         <div className="formula-ledger-amount">
                           <strong>{formatGrams(line.grams)}</strong>
-                          <span>{formatFormulaPercent(line.grams, formula.targetGrams)}</span>
-                        </div>
-                        <div className="formula-row-actions" onClick={(event) => event.stopPropagation()}>
-                          <button
-                            className="ghost-button tiny"
-                            type="button"
-                            aria-label={`Move ${line.label} up`}
-                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex <= 0 ? 'Already first in the formula' : `Move ${line.label} up`}
-                            onClick={() => void moveLine(line, 'up')}
-                            disabled={!formulaEditable || !canEditFormula || lineIndex <= 0}
-                          >
-                            <ArrowUp size={12} />
-                          </button>
-                          <button
-                            className="ghost-button tiny"
-                            type="button"
-                            aria-label={`Move ${line.label} down`}
-                            title={!formulaEditable || !canEditFormula ? 'This formula is locked. Fork a working copy to edit it.' : lineIndex >= formula.lines.length - 1 ? 'Already last in the formula' : `Move ${line.label} down`}
-                            onClick={() => void moveLine(line, 'down')}
-                            disabled={!formulaEditable || !canEditFormula || lineIndex >= formula.lines.length - 1}
-                          >
-                            <ArrowDown size={12} />
-                          </button>
+                          <span>{formatFormulaPercent(line.grams, formula.targetGrams)} of formula</span>
+                          <span className="formula-ledger-concentration" title="Raw-material concentration used for this formula line">
+                            Conc. {lineConcentrationPercent.toFixed(1)}%
+                          </span>
                         </div>
                       </div>
                     )
@@ -5968,7 +7577,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
               className={activeLabTab === tab ? 'is-active' : ''}
               key={tab}
               type="button"
-              onClick={() => setActiveLabTab(tab)}
+              onClick={() => showFormulaDetailTab(tab)}
             >
               {tab === 'sketch' && <NotebookTabs size={16} />}
               {tab === 'material' && <Beaker size={16} />}
@@ -5979,7 +7588,8 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
         </div>
       </main>
 
-      <aside className="formula-lab-inspector glass">
+      {formulaWorkspaceViews.summary ? (
+      <aside className="formula-lab-inspector formula-lab-summary glass">
         <div className="formula-inspector-status">
           <span>{formulaStatus}</span>
         </div>
@@ -6014,8 +7624,13 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 : `${Math.abs(finalPercentGap).toFixed(2)}% over target; rebalance before approval.`}
           </p>
         </section>
+        {canViewTrialEvidence ? <TrialEvidenceSummary evidence={trialEvidence} formulaVersion={evidenceVersion} loading={trialEvidenceLoading} unavailableMessage={trialEvidenceUnavailable} /> : null}
+        {canViewTrialEvidence ? <OperationalLineageSummary lineage={operationalLineage} loading={operationalLineageLoading} unavailableMessage={operationalLineageUnavailable} /> : null}
+      </aside>
+      ) : null}
 
-        <section className={`formula-inspector-card formula-ifra-panel ${!formulaFinalReady ? 'is-pending' : ifraFailCount > 0 ? 'is-fail' : 'is-pass'}`}>
+      {formulaWorkspaceViews.ifra ? (
+        <section className={`formula-lab-analysis-card formula-inspector-card formula-ifra-panel glass ${!formulaFinalReady ? 'is-pending' : ifraFailCount > 0 ? 'is-fail' : 'is-pass'}`}>
           <div className="formula-card-head">
             <div>
               <span>IFRA final product</span>
@@ -6043,7 +7658,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                   type="button"
                   onClick={() => {
                     setFocusedMaterialId(row.material.id)
-                    setActiveLabTab('material')
+                    showFormulaDetailTab('material')
                     onSelectMaterial(row.material.id)
                   }}
                 >
@@ -6064,14 +7679,16 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             </div>
           )}
         </section>
+      ) : null}
 
+      <section className="formula-lab-details-dock glass" ref={formulaDetailDockRef} aria-label="Formula details">
         <div className="formula-inspector-tabs">
           {(['details', 'material', 'sketch'] as FormulaLabTab[]).map((tab) => (
             <button
               className={activeLabTab === tab ? 'is-active' : ''}
               key={`inspector-${tab}`}
               type="button"
-              onClick={() => setActiveLabTab(tab)}
+              onClick={() => showFormulaDetailTab(tab)}
             >
               {tab === 'details' ? 'Details' : tab === 'material' ? 'Material' : 'Create'}
             </button>
@@ -6187,6 +7804,17 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                     <input value={metadataDraft.ifraCategory} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ ifraCategory: event.target.value })} />
                   </label>
                 </div>
+                {formula.formulaType === 'ACCORD' && (
+                  <label className="checkbox-row formula-final-use-confirmation">
+                    <input
+                      type="checkbox"
+                      checked={metadataDraft.finalProductContextConfirmed}
+                      disabled={!formulaEditable || !canEditFormula}
+                      onChange={(event) => updateMetadataDraft({ finalProductContextConfirmed: event.target.checked })}
+                    />
+                    <span>I confirmed the final-product concentration and IFRA category for this accord.</span>
+                  </label>
+                )}
                 <label className="field-row">
                   <span>Creative brief</span>
                   <textarea rows={3} value={metadataDraft.brief} disabled={!formulaEditable || !canEditFormula} onChange={(event) => updateMetadataDraft({ brief: event.target.value })} />
@@ -6365,8 +7993,10 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <span className="mono-small">{currentVersionRecord ? `Current version captured ${currentVersionRecord.status}` : 'Current draft has no matching snapshot'}</span>
           </div>
         )}
+      </section>
 
-        <section className="formula-inspector-card">
+      {formulaWorkspaceViews.evaporation ? (
+        <section className="formula-lab-analysis-card formula-inspector-card glass">
           <div className="formula-card-head">
             <div>
               <span>Evaporation simulation</span>
@@ -6386,11 +8016,56 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             </div>
           )}
         </section>
-      </aside>
+      ) : null}
+
+      {workspaceSettingsOpen && (
+        <FormulaSheetDialog title="Customize Formula Workspace" className="workspace-settings-sheet" onClose={() => setWorkspaceSettingsOpen(false)}>
+            <div className="formula-sheet-grip" />
+            <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkspaceSettingsOpen(false)}>
+              <X size={18} />
+            </button>
+            <h3>Customize Formula Workspace</h3>
+            <p>Keep the panels that support your work. The formula editor always remains available.</p>
+            <div className="formula-workspace-view-list">
+              {([
+                { key: 'library', label: 'Formula Library', detail: 'Browse, search, and create formulas.' },
+                { key: 'summary', label: 'Formula Snapshot', detail: 'Scale, workflow, and finished-product summary.' },
+                { key: 'ifra', label: 'IFRA Final Product', detail: 'Finished-product limits after the formula reaches 100%.' },
+                { key: 'evaporation', label: 'Evaporation Simulation', detail: 'Directional volatility curve for the resolved formula.' },
+              ] as const).map((view) => (
+                <label className="formula-workspace-view-option" key={view.key}>
+                  <input
+                    checked={workspaceSettingsDraft[view.key]}
+                    type="checkbox"
+                    onChange={(event) =>
+                      setWorkspaceSettingsDraft((current) => ({ ...current, [view.key]: event.target.checked }))
+                    }
+                  />
+                  <span>
+                    <strong>{view.label}</strong>
+                    <small>{view.detail}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="settings-save-row">
+              <span className="mono-small">{workspaceSettingsStatus}</span>
+              <div className="action-row">
+                <button className="ghost-button" type="button" onClick={() => setWorkspaceSettingsOpen(false)} disabled={workspaceSettingsSaving}>Cancel</button>
+                <button className="primary-button" type="button" onClick={() => void saveWorkspaceSettings()} disabled={workspaceSettingsSaving}>
+                  {workspaceSettingsSaving ? 'Saving...' : 'Save workspace'}
+                </button>
+              </div>
+            </div>
+        </FormulaSheetDialog>
+      )}
 
       {workflowDialog && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet workflow-sheet glass" role="dialog" aria-modal="true" aria-label="Formula workflow">
+        <FormulaSheetDialog
+          title={workflowDialog === 'review' ? 'Submit for review' : workflowDialog === 'approve' ? 'Approve formula' : 'Request changes'}
+          className="workflow-sheet"
+          onClose={() => setWorkflowDialog(null)}
+        >
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setWorkflowDialog(null)}><X size={18} /></button>
             <h3>{workflowDialog === 'review' ? 'Submit for review' : workflowDialog === 'approve' ? 'Approve formula' : 'Request changes'}</h3>
@@ -6425,7 +8100,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <div className="action-row formula-dialog-actions">
               <button className="ghost-button" type="button" onClick={() => setWorkflowDialog(null)}>Cancel</button>
               {workflowDialog === 'review' && (
-                <button className="primary-button" type="button" onClick={() => void submitFormulaReview()} disabled={!workflowReviewer.trim() || metadataSaving}>Submit review</button>
+                <button className="primary-button" data-testid="formula-submit-review-confirm" type="button" onClick={() => void submitFormulaReview()} disabled={!workflowReviewer.trim() || metadataSaving}>Submit review</button>
               )}
               {workflowDialog === 'approve' && (
                 <button className="primary-button" type="button" onClick={() => void approveFormulaReview()} disabled={!formulaFinalReady || ifraFailCount > 0}>Approve & lock</button>
@@ -6434,13 +8109,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 <button className="primary-button" type="button" onClick={() => void rejectFormulaReview()} disabled={!workflowComment.trim()}>Request changes</button>
               )}
             </div>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {scaleOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet scale-sheet glass" role="dialog" aria-modal="true" aria-label="Scale and print formula">
+        <FormulaSheetDialog title="Scale and print formula" className="scale-sheet" onClose={() => setScaleOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setScaleOpen(false)}><X size={18} /></button>
             <h3>Scale & weighing sheet</h3>
@@ -6513,13 +8186,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 </button>
               </div>
             )}
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {createSheetOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet create-sheet glass" role="dialog" aria-modal="true" aria-label="Create New Formula">
+        <FormulaSheetDialog title="Create New Formula" className="create-sheet" onClose={() => setCreateSheetOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setCreateSheetOpen(false)}>
               <X size={18} />
@@ -6545,13 +8216,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
             <button className="ghost-button" type="button" onClick={() => setCreateSheetOpen(false)}>
               Maybe later
             </button>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {pickerOpen && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet picker-sheet glass" role="dialog" aria-modal="true" aria-label="Add to formula">
+        <FormulaSheetDialog title="Add to formula" className="picker-sheet" onClose={() => setPickerOpen(false)}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={() => setPickerOpen(false)}>
               <X size={18} />
@@ -6683,13 +8352,11 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 ))}
               </div>
             )}
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
 
       {editingLine && editDraft && (
-        <div className="formula-sheet-backdrop" role="presentation">
-          <section className="formula-sheet line-sheet glass" role="dialog" aria-modal="true" aria-label={`Edit ${editingLine.label}`}>
+        <FormulaSheetDialog title={`Edit ${editingLine.label}`} className="line-sheet" onClose={closeLineEditor}>
             <div className="formula-sheet-grip" />
             <button className="sheet-close-button" type="button" aria-label="Close" onClick={closeLineEditor}>
               <X size={18} />
@@ -6799,8 +8466,7 @@ const FormulaLabspaceWorkspace = memo(function FormulaLabspaceWorkspace({
                 Remove Material
               </button>
             </div>
-          </section>
-        </div>
+        </FormulaSheetDialog>
       )}
     </div>
   )
@@ -6821,6 +8487,9 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial,
   onNewFormula,
   onAddLine,
+  onCreateTrial,
+  userSettings,
+  onUserSettingsChange,
 }: {
   session: AuthSession
   formulaRecords: Formula[]
@@ -6836,6 +8505,9 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
   onSelectMaterial: (id: string) => void
   onNewFormula: (type?: FormulaType) => void
   onAddLine: () => void
+  onCreateTrial: (formula: Formula) => void
+  userSettings: UserSettingsRecord
+  onUserSettingsChange: (settings: UserSettingsRecord) => void
 }) {
   if (formulaRecords.length === 0) {
     return (
@@ -6874,6 +8546,9 @@ const FormulaWorkspace = memo(function FormulaWorkspace({
       onSelectMaterial={onSelectMaterial}
       onNewFormula={onNewFormula}
       onAddLine={onAddLine}
+      onCreateTrial={onCreateTrial}
+      userSettings={userSettings}
+      onUserSettingsChange={onUserSettingsChange}
     />
   )
   /*
@@ -7338,11 +9013,18 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   const [stockTakeReason, setStockTakeReason] = useState('Cycle count reconciliation')
   const [stockTakeRecords, setStockTakeRecords] = useState<StockTakeRecord[]>([])
   const [labelPayload, setLabelPayload] = useState<LotLabelPayload | null>(null)
+  const [scannerOpen, setScannerOpen] = useState(false)
   const [genealogy, setGenealogy] = useState<LotGenealogyResponse | null>(null)
   const [reorderSuggestions, setReorderSuggestions] = useState<InventoryReorderSuggestion[]>([])
   const [newLocationName, setNewLocationName] = useState('Retest Bin 1')
   const [newLocationZone, setNewLocationZone] = useState('Quality')
   const [newLocationCapacity, setNewLocationCapacity] = useState(600)
+  const [newLocationKind, setNewLocationKind] = useState<NonNullable<StorageLocation['kind']>>('Bin')
+  const [newLocationParentId, setNewLocationParentId] = useState('')
+  const [agingRecords, setAgingRecords] = useState<InventoryAgingRecord[]>([])
+  const [agingSummary, setAgingSummary] = useState<InventoryAgingResponse['summary'] | null>(null)
+  const [writeOffGrams, setWriteOffGrams] = useState(0)
+  const [writeOffReason, setWriteOffReason] = useState('')
   const [inventoryStatus, setInventoryStatus] = useState('Inventory console ready')
   const [lotComplianceDocuments, setLotComplianceDocuments] = useState<DocumentRecord[]>([])
   const [lotDocumentStatus, setLotDocumentStatus] = useState('Document review queue ready')
@@ -7398,7 +9080,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         onStorageLocationsChange(payload.locations)
         setStockTakeRecords(payload.stockTakes)
         setReorderSuggestions(payload.reorderSuggestions)
-        setInventoryStatus('Inventory console synced with API')
+        setInventoryStatus('Inventory is up to date')
       })
       .catch(() => {
         if (active) {
@@ -7411,6 +9093,11 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   }, [onLotsChange, onMovementsChange, onStorageLocationsChange, session.organizationId])
 
   useEffect(() => {
+    if (!showInventoryLotComplianceReview) {
+      setLotComplianceDocuments([])
+      return
+    }
+
     const controller = new AbortController()
     async function loadComplianceDocuments() {
       try {
@@ -7456,6 +9143,28 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
       setLotDocumentStatus(error instanceof Error ? error.message : 'Document approval failed')
     } finally {
       setApprovingLotDocumentId(null)
+    }
+  }
+
+  async function openLotComplianceDocument(documentId: string) {
+    const documentWindow = window.open('', '_blank', 'noopener,noreferrer')
+    setLotDocumentStatus('Checking permission before opening document')
+    try {
+      const payload = await requestApi<DocumentDownloadResponse>(`/documents/${encodeURIComponent(documentId)}/signed-url`, {
+        method: 'POST',
+      })
+      setLotComplianceDocuments((current) =>
+        current.map((document) => (document.id === documentId ? payload.document : document)),
+      )
+      if (!documentWindow) {
+        setLotDocumentStatus('Document link prepared; allow pop-ups to open the signed document')
+        return
+      }
+      documentWindow.location.assign(payload.signedUrl.url)
+      setLotDocumentStatus(`${payload.document.title} opened with a time-limited link`)
+    } catch (error) {
+      documentWindow?.close()
+      setLotDocumentStatus(error instanceof Error ? error.message : 'Document could not be opened')
     }
   }
 
@@ -7569,7 +9278,8 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
           zone: newLocationZone,
           condition: 'Retest hold / controlled ambient',
           capacityGrams: newLocationCapacity,
-          kind: 'Bin',
+          kind: newLocationKind,
+          parentId: newLocationParentId || undefined,
           light: 'Amber',
           temperatureRange: '18-22C',
         }),
@@ -7583,7 +9293,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
   }
 
   async function printLotLabel() {
-    if (!selectedLot) {
+    if (!selectedLot || !selectedMaterial) {
       return
     }
     try {
@@ -7591,10 +9301,69 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         method: 'POST',
       })
       setLabelPayload(payload.label)
+      const { default: QRCode } = await import('qrcode')
+      const qrSvg = await QRCode.toString(payload.label.qrValue, {
+        type: 'svg',
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 220,
+      })
+      const printed = openPrintDocument(
+        `QR label ${selectedLot.lotNumber}`,
+        `<main class="sheet"><section class="label">
+          <div><div class="brand">OlfactoryOps</div><h1>${escapePrintHtml(selectedMaterial.name)}</h1>
+          <p><strong>Lot:</strong> ${escapePrintHtml(selectedLot.lotNumber)}</p>
+          <p><strong>CAS:</strong> ${escapePrintHtml(selectedMaterial.cas)}</p>
+          <p><strong>Quantity:</strong> ${escapePrintHtml(formatGrams(selectedLot.quantityGrams))}</p>
+          <p><strong>Expiry:</strong> ${escapePrintHtml(selectedLot.expiryDate)}</p>
+          <p><strong>Storage:</strong> ${escapePrintHtml(payload.label.storageText)}</p>
+          <code>${escapePrintHtml(payload.label.qrValue)}</code></div><div class="qr">${qrSvg}</div>
+        </section></main>`,
+      )
+      if (!printed) {
+        setInventoryStatus('Label generated; allow pop-ups to print the QR label')
+        return
+      }
       setInventoryStatus(payload.invariant)
     } catch (error) {
       setInventoryStatus(error instanceof Error ? error.message : 'Label generation failed')
     }
+  }
+
+  const selectScannedLot = useCallback((value: string) => {
+    const parts = value.split('|')
+    const lotId = parts[0] === 'OLFOPS' && parts[1] === 'LOT' ? parts[2] : value.trim()
+    const lot = lots.find((candidate) => candidate.id === lotId || candidate.lotNumber === lotId)
+    if (!lot) {
+      setInventoryStatus('This QR value does not match a lot in the current workspace')
+      return
+    }
+    setSelectedLotId(lot.id)
+    setInventoryStatus(`Scanned ${lot.lotNumber}`)
+    setScannerOpen(false)
+  }, [lots])
+
+  function printWeightSheet() {
+    if (!selectedLot || !selectedMaterial) {
+      return
+    }
+    const printed = openPrintDocument(
+      `Weight sheet ${selectedLot.lotNumber}`,
+      `<main class="sheet"><header class="header"><div><div class="brand">OlfactoryOps</div>
+        <div class="muted">Controlled material weighing record</div></div><div class="tag">WEIGHT SHEET</div></header>
+        <section class="grid"><div class="field"><strong>Material</strong>${escapePrintHtml(selectedMaterial.name)}</div>
+        <div class="field"><strong>CAS</strong>${escapePrintHtml(selectedMaterial.cas)}</div>
+        <div class="field"><strong>Lot number</strong>${escapePrintHtml(selectedLot.lotNumber)}</div>
+        <div class="field"><strong>Available at print</strong>${escapePrintHtml(formatGrams(selectedLot.quantityGrams - selectedLot.reservedGrams))}</div>
+        <div class="field"><strong>Expiry</strong>${escapePrintHtml(selectedLot.expiryDate)}</div>
+        <div class="field"><strong>Storage location</strong>${escapePrintHtml(selectedLot.location)}</div></section>
+        <table><thead><tr><th>Line</th><th>Target g</th><th>Tare g</th><th>Actual g</th><th>Net g</th><th>Deviation</th></tr></thead>
+        <tbody>${[1, 2, 3, 4].map((line) => `<tr><td>${line}</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('')}</tbody></table>
+        <section class="grid"><div class="field"><strong>Batch / formula</strong></div><div class="field"><strong>Equipment ID</strong></div>
+        <div class="field"><strong>Weighed by</strong></div><div class="field"><strong>Timestamp</strong></div></section>
+        <section class="signatures"><div class="signature">Prepared by</div><div class="signature">Checked by</div><div class="signature">QA release</div></section></main>`,
+    )
+    setInventoryStatus(printed ? `Weight sheet opened for ${selectedLot.lotNumber}` : 'Allow pop-ups to print the weight sheet')
   }
 
   async function loadLotGenealogy() {
@@ -7617,6 +9386,79 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
       setInventoryStatus(payload.invariant)
     } catch (error) {
       setInventoryStatus(error instanceof Error ? error.message : 'Shopping list generation failed')
+    }
+  }
+
+  async function loadAgingReport() {
+    try {
+      const payload = await requestApi<InventoryAgingResponse>('/inventory/aging-report')
+      setAgingRecords(payload.records)
+      setAgingSummary(payload.summary)
+      setInventoryStatus(payload.invariant)
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Inventory aging report failed')
+    }
+  }
+
+  async function refreshExpiry() {
+    try {
+      const payload = await requestApi<InventoryExpiryResponse>('/inventory/expiry/refresh', { method: 'POST' })
+      if (payload.expiredLotIds.length > 0) {
+        const expiredIds = new Set(payload.expiredLotIds)
+        onLotsChange((current) => current.map((lot) => expiredIds.has(lot.id) ? { ...lot, qualityStatus: 'EXPIRED' } : lot))
+      }
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Expiry refresh failed')
+    }
+  }
+
+  async function completeTransitTransfer() {
+    if (!selectedLot?.inTransitToLocation) {
+      return
+    }
+    try {
+      const payload = await requestApi<InventoryTransferResponse>(`/inventory/transfers/${encodeURIComponent(selectedLot.id)}/complete`, {
+        method: 'POST',
+      })
+      upsertLot(payload.lot)
+      prependMovement(payload.movement)
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Transfer completion failed')
+    }
+  }
+
+  async function writeOffSelectedLot() {
+    if (!selectedLot || writeOffGrams <= 0 || !writeOffReason.trim()) {
+      return
+    }
+    const payloadBody = { lotId: selectedLot.id, quantityGrams: writeOffGrams, reason: writeOffReason.trim() }
+    try {
+      if (!canAdjustInventory) {
+        await onRequestInventoryApproval(
+          'inventory.adjust',
+          payloadBody,
+          `Write off ${formatGrams(writeOffGrams)} from ${selectedLot.lotNumber}: ${writeOffReason.trim()}`,
+        )
+        setInventoryStatus(`${selectedLot.lotNumber} write-off is pending admin approval`)
+        return
+      }
+      const payload = await requestApi<InventoryWriteOffResponse>('/inventory/write-offs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadBody),
+      })
+      upsertLot(payload.lot)
+      prependMovement(payload.movement)
+      setWriteOffGrams(0)
+      setWriteOffReason('')
+      setInventoryStatus(payload.invariant)
+      await loadAgingReport()
+    } catch (error) {
+      setInventoryStatus(error instanceof Error ? error.message : 'Write-off failed')
     }
   }
 
@@ -7675,16 +9517,21 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               </select>
             </label>
             <div className="lot-detail-card">
-              <div>
+              <div className="lot-detail-identity">
                 <strong>{selectedLot.lotNumber}</strong>
                 <span>{selectedMaterial?.name ?? selectedLot.materialId}</span>
               </div>
-              <DataTag label="Qty" value={formatGrams(selectedLot.quantityGrams)} />
-              <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
-              <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
-              <DataTag label="Location" value={selectedLot.location} tone="blue" />
-              <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
-              <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
+              <div className="lot-detail-tags">
+                <DataTag label="Qty" value={formatGrams(selectedLot.quantityGrams)} />
+                <DataTag label="Reserved" value={formatGrams(selectedLot.reservedGrams)} />
+                <DataTag label="Expiry" value={selectedLot.expiryDate} tone="amber" />
+                <DataTag label="Location" value={selectedLot.location} tone="blue" />
+                {selectedLot.inTransitToLocation ? (
+                  <DataTag label="Transit to" value={selectedLot.inTransitToLocation} tone="amber" />
+                ) : null}
+                <DataTag label="Supplier" value={selectedLot.supplierLotRef ?? 'Not set'} />
+                <DataTag label="Retest" value={selectedLot.retestDate ?? 'Not set'} />
+              </div>
             </div>
 
             <div className="inventory-form-grid">
@@ -7744,8 +9591,51 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               <button className="ghost-button small" type="button" onClick={() => void printLotLabel()}>
                 Print QR Label
               </button>
+              <button className="ghost-button small" type="button" onClick={() => setScannerOpen(true)}>
+                Scan QR
+              </button>
+              <button className="ghost-button small" type="button" onClick={printWeightSheet}>
+                Print Weight Sheet
+              </button>
               <button className="ghost-button small" type="button" onClick={() => void loadLotGenealogy()}>
                 View Genealogy
+              </button>
+              {selectedLot.inTransitToLocation ? (
+                <button className="primary-button small" type="button" onClick={() => void completeTransitTransfer()}>
+                  Complete Transit
+                </button>
+              ) : null}
+            </div>
+
+            <div className="inventory-form-grid">
+              <label className="field-row">
+                <span>Write-off grams</span>
+                <input
+                  aria-label="Inventory write-off grams"
+                  min={0.001}
+                  max={Math.max(0, selectedLot.quantityGrams - selectedLot.reservedGrams)}
+                  step={0.001}
+                  type="number"
+                  value={writeOffGrams || ''}
+                  onChange={(event) => setWriteOffGrams(Number(event.target.value))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Disposal reason</span>
+                <input
+                  aria-label="Inventory write-off reason"
+                  value={writeOffReason}
+                  onChange={(event) => setWriteOffReason(event.target.value)}
+                  placeholder="Leak, damage, sample disposal..."
+                />
+              </label>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => void writeOffSelectedLot()}
+                disabled={writeOffGrams <= 0 || !writeOffReason.trim() || writeOffGrams > selectedLot.quantityGrams - selectedLot.reservedGrams}
+              >
+                {canAdjustInventory ? 'Record Write-off' : 'Request Write-off Approval'}
               </button>
             </div>
           </div>
@@ -7782,6 +9672,31 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               onChange={(event) => setNewLocationCapacity(Number(event.target.value))}
             />
           </label>
+          <label className="field-row">
+            <span>Location type</span>
+            <select
+              aria-label="New storage location type"
+              value={newLocationKind}
+              onChange={(event) => setNewLocationKind(event.target.value as NonNullable<StorageLocation['kind']>)}
+            >
+              {(['Warehouse', 'Room', 'Shelf', 'Bin', 'Transit'] as const).map((kind) => (
+                <option key={kind} value={kind}>{kind}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Parent location</span>
+            <select
+              aria-label="New storage location parent"
+              value={newLocationParentId}
+              onChange={(event) => setNewLocationParentId(event.target.value)}
+            >
+              <option value="">No parent</option>
+              {storageLocations.map((location) => (
+                <option key={location.id} value={location.id}>{location.name}</option>
+              ))}
+            </select>
+          </label>
           <button className="primary-button" type="button" onClick={() => void createLocation()} disabled={!newLocationName.trim() || newLocationCapacity <= 0}>
             New Location
           </button>
@@ -7791,13 +9706,15 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
             const storedGrams = lots
               .filter((lot) => lot.location === location.name)
               .reduce((sum, lot) => sum + lot.quantityGrams, 0)
+            const capacityPercent = location.capacityGrams > 0 ? Math.min(100, Math.round((storedGrams / location.capacityGrams) * 100)) : 0
+            const parent = location.parentId ? storageLocations.find((candidate) => candidate.id === location.parentId) : undefined
             return (
               <div className="material-row static" key={location.id}>
                 <div>
                   <strong>{location.name}</strong>
-                  <span>{location.zone} / {location.kind ?? 'Location'} / {location.condition}</span>
+                  <span>{location.zone} / {location.kind ?? 'Location'} / {parent ? `within ${parent.name}` : 'root'}</span>
                 </div>
-                <div className="mono-value">{formatGrams(storedGrams)}</div>
+                <div className="mono-value">{formatGrams(storedGrams)} / {capacityPercent}%</div>
                 <StatusBadge status={location.status === 'IN_TRANSIT' ? 'review' : 'stable'} label={location.status ?? 'ACTIVE'} />
               </div>
             )
@@ -7805,6 +9722,48 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
         </div>
       </Panel>
 
+      <Panel
+        title="Aging, Expiry & Dead Stock"
+        icon={Activity}
+        right={
+          <div className="action-row">
+            <button className="ghost-button small" type="button" onClick={() => void loadAgingReport()}>Refresh report</button>
+            <button className="ghost-button small" type="button" onClick={() => void refreshExpiry()} disabled={!canReceiveInventory}>Refresh expiry</button>
+          </div>
+        }
+      >
+        <div className="tag-row">
+          <DataTag label="Dead stock" value={agingSummary ? formatGrams(agingSummary.deadStockGrams) : 'Not loaded'} tone="amber" />
+          <DataTag label="Expired / retest" value={agingSummary ? formatGrams(agingSummary.expiringOrExpiredGrams) : 'Not loaded'} tone="blue" />
+        </div>
+        <div className="material-list">
+          {agingRecords.length === 0 ? (
+            <div className="empty-state compact">Run the report to review aging, retest, expiry, and in-transit exposure without changing stock.</div>
+          ) : (
+            agingRecords.slice(0, 8).map((record) => (
+              <div className="material-row static" key={record.lotId}>
+                <div>
+                  <strong>{record.materialName} / {record.lotNumber}</strong>
+                  <span>{record.reason}</span>
+                </div>
+                <div className="mono-value">{formatGrams(record.quantityGrams)} / {record.agingDays}d</div>
+                <StatusBadge
+                  status={record.status === 'EXPIRED' ? 'alert' : record.status === 'DEAD_STOCK' || record.status === 'RETEST_DUE' ? 'review' : 'stable'}
+                  label={record.status.replace('_', ' ')}
+                />
+              </div>
+            ))
+          )}
+        </div>
+      </Panel>
+
+      <QrLotScanner
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onScan={selectScannedLot}
+      />
+
+      {showInventoryLotComplianceReview ? (
       <Panel className="wide" title="SDS / CoA Review" icon={FileLock2}>
         {selectedLot ? (
           <>
@@ -7818,7 +9777,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
               {inventoryLotComplianceDocuments.length === 0 ? (
                 <div className="empty-state compact">
                   <strong>No SDS / CoA documents available for this lot yet.</strong>
-                  <span>Upload SDS for material and CoA for lot in Documents module when needed.</span>
+                  <span>Attach SDS and CoA while receiving stock; this review queue is the document entry point for inventory.</span>
                 </div>
               ) : (
                 inventoryLotComplianceDocuments.map((document) => (
@@ -7848,6 +9807,13 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
                         label={document.status}
                       />
                     <button
+                      className="ghost-button small"
+                      type="button"
+                      onClick={() => void openLotComplianceDocument(document.id)}
+                    >
+                      View
+                    </button>
+                    <button
                       className="primary-button small"
                       type="button"
                       onClick={() => void approveLotComplianceDocument(document.id)}
@@ -7870,6 +9836,7 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
           <div className="empty-state compact">Select a lot to review SDS / CoA documents.</div>
         )}
       </Panel>
+      ) : null}
 
       <Panel title="Labels, Genealogy & Shopping List" icon={ShoppingCart}>
         <div className="action-row">
@@ -7989,6 +9956,11 @@ const InventoryWorkspace = memo(function InventoryWorkspace({
 })
 
 const LabUsageWorkspace = memo(function LabUsageWorkspace({
+  publishedFormulas,
+  selectedFormulaId,
+  setSelectedFormulaId,
+  selectedFormula,
+  hasPublishedFormula,
   labPlan,
   batchGrams,
   setBatchGrams,
@@ -8002,6 +9974,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   setWeighingOperator,
   labUsagePurpose,
   setLabUsagePurpose,
+  labUsageTrialId,
   labUsageProjectCode,
   setLabUsageProjectCode,
   labUsageSampleCode,
@@ -8013,6 +9986,11 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   onCommit,
   onReverse,
 }: {
+  publishedFormulas: Formula[]
+  selectedFormulaId: string
+  setSelectedFormulaId: (id: string) => void
+  selectedFormula: Formula
+  hasPublishedFormula: boolean
   labPlan: ReturnType<typeof planLabUsage>
   batchGrams: number
   setBatchGrams: (value: number) => void
@@ -8026,6 +10004,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   setWeighingOperator: (value: string) => void
   labUsagePurpose: LabUsagePurpose
   setLabUsagePurpose: (value: LabUsagePurpose) => void
+  labUsageTrialId: string | null
   labUsageProjectCode: string
   setLabUsageProjectCode: (value: string) => void
   labUsageSampleCode: string
@@ -8035,20 +10014,102 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
   weighingReady: boolean
   onUseTargetWeights: () => void
   onCommit: () => void
-  onReverse: () => void
+  onReverse: (usageId?: string, allocations?: LabUsageReversalAllocation[]) => void
 }) {
-  const latestCommitted = usageHistory.find((usage) => usage.status === 'COMMITTED')
+  const latestCommitted = usageHistory.find(
+    (usage) => usage.status === 'COMMITTED' || usage.status === 'PARTIALLY_REVERSED',
+  )
+  const reversalIdentity = `${latestCommitted?.id ?? 'none'}:${latestCommitted?.reversalMovements?.length ?? 0}`
+  const [reversalDraft, setReversalDraft] = useState<Record<string, string>>({})
+  const remainingReversalLines = useMemo(() => {
+    if (!latestCommitted) {
+      return []
+    }
+    const reversedByAllocation = new Map<string, number>()
+    latestCommitted.reversalMovements?.forEach((movement) => {
+      const key = `${movement.materialId}:${movement.lotId}`
+      reversedByAllocation.set(key, (reversedByAllocation.get(key) ?? 0) + movement.quantityGrams)
+    })
+    return latestCommitted.allocations
+      .map((allocation) => ({
+        ...allocation,
+        remainingGrams: Math.max(
+          0,
+          allocation.allocatedGrams - (reversedByAllocation.get(`${allocation.materialId}:${allocation.lotId}`) ?? 0),
+        ),
+      }))
+      .filter((allocation) => allocation.remainingGrams > 0.0001)
+  }, [latestCommitted])
+  useEffect(() => {
+    setReversalDraft(
+      Object.fromEntries(
+        remainingReversalLines.map((allocation) => [
+          allocationKey(allocation),
+          Number(allocation.remainingGrams.toFixed(3)).toString(),
+        ]),
+      ),
+    )
+  }, [reversalIdentity, remainingReversalLines])
+  const selectedReversalAllocations = remainingReversalLines.flatMap((allocation) => {
+    const grams = Number(reversalDraft[allocationKey(allocation)] ?? 0)
+    if (!Number.isFinite(grams) || grams <= 0) {
+      return []
+    }
+    return [{ materialId: allocation.materialId, lotId: allocation.lotId, grams }]
+  })
   const actualTotal = weighingSession.lines.reduce((sum, line) => sum + line.actualGrams, 0)
   const maxDeviation = weighingSession.lines.reduce((max, line) => Math.max(max, line.deviationPercent), 0)
+  const printWeighingSheet = () => {
+    const rows = weighingSession.lines
+      .map(
+        (line) => `<tr><td>${escapePrintHtml(line.materialName)}</td><td>${escapePrintHtml(line.lotNumber)}</td><td>${formatGrams(line.targetGrams)}</td><td>${formatGrams(line.actualGrams)}</td><td>${line.deviationPercent.toFixed(2)}%</td><td></td></tr>`,
+      )
+      .join('')
+    openPrintDocument(
+      `Weighing sheet ${weighingSession.formulaCode}`,
+      `<div class="sheet"><div class="header"><div><div class="brand">OlfactoryOps</div><div class="muted">Controlled lab weighing sheet</div></div><div class="tag">${escapePrintHtml(weighingSession.status)}</div></div><div class="grid"><div class="field"><strong>Formula</strong>${escapePrintHtml(selectedFormula.name)} (${escapePrintHtml(weighingSession.formulaCode)})</div><div class="field"><strong>Target batch</strong>${formatGrams(weighingSession.targetBatchGrams)}</div><div class="field"><strong>Operator</strong>${escapePrintHtml(weighingSession.operator)}</div><div class="field"><strong>Tolerance</strong>${weighingSession.tolerancePercent.toFixed(2)}%</div></div><table><thead><tr><th>Material</th><th>Lot</th><th>Target</th><th>Actual</th><th>Deviation</th><th>Initials</th></tr></thead><tbody>${rows}</tbody></table><div class="signatures"><div class="signature">Weighed by</div><div class="signature">Reviewed by</div><div class="signature">Date / time</div></div></div>`,
+    )
+  }
+
   return (
     <div className="workspace-grid lab-grid">
       <Panel
-        title="Commit Preview"
+        title="Inventory Usage Preview"
         icon={ClipboardCheck}
         right={<DataTag label="Formula" value={weighingSession.formulaCode} />}
       >
+        <div className="lab-usage-formula-picker">
+          {labUsageTrialId ? <div className="agent-notice" role="status">Linked trial {labUsageTrialId}. This commit will append actual lots, weights, movements, and cost evidence to its timeline.</div> : null}
+          <label className="field-row">
+            <span>Published formula</span>
+            <select
+              aria-label="Published formula for lab usage"
+              value={selectedFormulaId}
+              onChange={(event) => setSelectedFormulaId(event.target.value)}
+              disabled={!hasPublishedFormula}
+            >
+              {!hasPublishedFormula ? <option value="">No published formulas available</option> : null}
+              {publishedFormulas.map((formula) => (
+                <option key={formula.id} value={formula.id}>
+                  {formula.code} / {formula.name} / {formula.version}
+                </option>
+              ))}
+            </select>
+          </label>
+          {hasPublishedFormula ? (
+            <div className="lab-usage-formula-summary">
+              <strong>{selectedFormula.name}</strong>
+              <span>
+                {selectedFormula.formulaType === 'ACCORD' ? 'Accord' : 'Fine fragrance'} / published{' '}
+                {selectedFormula.lockedVersion ?? selectedFormula.version}
+              </span>
+            </div>
+          ) : (
+            <div className="empty-state compact">Publish and approve a formula before recording material usage.</div>
+          )}
+        </div>
         <label className="slider-row">
-          <span>Trial batch grams</span>
+          <span>Batch grams</span>
           <input
             min={5}
             max={40}
@@ -8060,13 +10121,25 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
           <strong className="mono-value">{formatGrams(batchGrams)}</strong>
         </label>
         <UsagePreview allocations={labPlan.allocations} shortfalls={labPlan.shortfalls} />
-        <div className="empty-state compact">{statusMessage}</div>
+        <div className="empty-state compact">
+          <strong>Usage is ready to record</strong>
+          <span>
+            Check actual weights, then record this trial against the allocated lots.
+          </span>
+          <span>{statusMessage}</span>
+        </div>
         <div className="action-row">
-          <button className="primary-button" type="button" onClick={onCommit} disabled={!weighingReady || busy}>
+          <button
+            className="primary-button"
+            data-testid="lab-usage-commit"
+            type="button"
+            onClick={onCommit}
+            disabled={!hasPublishedFormula || !weighingReady || busy}
+          >
             <Play size={16} />
-            {busy ? 'Working' : 'Commit Actual Usage'}
+            {busy ? 'Working' : 'Record material usage'}
           </button>
-          <button className="ghost-button" type="button" onClick={onReverse} disabled={!latestCommitted || busy}>
+          <button className="ghost-button" type="button" onClick={() => onReverse(latestCommitted?.id)} disabled={!latestCommitted || busy}>
             <RotateCcw size={16} />
             Reverse latest
           </button>
@@ -8105,6 +10178,9 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
           </label>
           <button className="ghost-button small" type="button" onClick={onUseTargetWeights}>
             Use target weights
+          </button>
+          <button className="ghost-button small" type="button" onClick={printWeighingSheet} disabled={!hasPublishedFormula}>
+            Print weighing sheet
           </button>
         </div>
         <div className="form-grid">
@@ -8177,10 +10253,59 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Usage History" icon={Activity}>
+      <Panel title="Controlled Reversal" icon={RotateCcw}>
+        {!latestCommitted ? (
+          <div className="empty-state compact">No committed lab usage has remaining grams to reverse.</div>
+        ) : (
+          <>
+            <div className="empty-state compact">
+              <strong>{latestCommitted.id}</strong>
+              <span>Return only the actual grams selected below. The original consumption remains immutable.</span>
+            </div>
+            <div className="weighing-table">
+              {remainingReversalLines.map((allocation) => {
+                const key = allocationKey(allocation)
+                return (
+                  <label className="weighing-row" key={key}>
+                    <div>
+                      <strong>{allocation.materialName}</strong>
+                      <span>{allocation.lotNumber} / remaining {formatGrams(allocation.remainingGrams)}</span>
+                    </div>
+                    <input
+                      aria-label={`Reverse grams for ${allocation.materialName} ${allocation.lotNumber}`}
+                      min={0}
+                      max={allocation.remainingGrams}
+                      step={0.001}
+                      type="number"
+                      value={reversalDraft[key] ?? ''}
+                      onChange={(event) => setReversalDraft((current) => ({ ...current, [key]: event.target.value }))}
+                    />
+                    <span className="deviation-pill">{formatGrams(allocation.remainingGrams)}</span>
+                  </label>
+                )
+              })}
+            </div>
+            <div className="action-row">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => onReverse(latestCommitted.id, selectedReversalAllocations)}
+                disabled={busy || selectedReversalAllocations.length === 0}
+              >
+                Reverse selected
+              </button>
+              <button className="ghost-button" type="button" onClick={() => onReverse(latestCommitted.id)} disabled={busy}>
+                Reverse all remaining
+              </button>
+            </div>
+          </>
+        )}
+      </Panel>
+
+      <Panel title="Inventory Movement History" icon={Activity}>
         <div className="history-list">
           {usageHistory.length === 0 ? (
-            <div className="empty-state">No lab usage committed in this session.</div>
+            <div className="empty-state">No lab inventory movements recorded in this workspace.</div>
           ) : (
             usageHistory.map((usage) => (
               <div className="history-row" key={usage.id}>
@@ -8188,6 +10313,7 @@ const LabUsageWorkspace = memo(function LabUsageWorkspace({
                   <strong>{usage.id}</strong>
                   <span>
                     {usage.formulaCode} / {formatGrams(usage.batchGrams)}
+                    {' / LAB_CONSUMPTION'}
                     {usage.purpose ? ` / ${usage.purpose}` : ''}
                     {usage.sampleCode ? ` / ${usage.sampleCode}` : ''}
                     {usage.weighingSession
@@ -8217,10 +10343,22 @@ function DocumentsWorkspace() {
   const [approvingDocumentId, setApprovingDocumentId] = useState<string | null>(null)
   const [sharingDocumentId, setSharingDocumentId] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [documentSearch, setDocumentSearch] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploadType, setUploadType] = useState<DocumentType>('SDS')
+  const [uploadTarget, setUploadTarget] = useState(materials[0]?.id ?? '')
+  const [uploadTitle, setUploadTitle] = useState('')
+  const [uploadTags, setUploadTags] = useState('')
+  const [uploadSensitivity, setUploadSensitivity] = useState<DocumentRecord['sensitivity']>('Confidential')
+  const [versions, setVersions] = useState<DocumentRecord[]>([])
+  const [versionsTitle, setVersionsTitle] = useState('')
+  const [scanningDocumentId, setScanningDocumentId] = useState<string | null>(null)
+  const [archivingDocumentId, setArchivingDocumentId] = useState<string | null>(null)
   const [generationType, setGenerationType] = useState<DocumentType>('CoA')
   const [generationTarget, setGenerationTarget] = useState(initialLots[0]?.id ?? '')
   const [shareRecipient, setShareRecipient] = useState('client@example.com')
-  const [statusMessage, setStatusMessage] = useState('Live API sync pending')
+  const [statusMessage, setStatusMessage] = useState('Preparing document operations')
   const selectedGenerationOption = generatedDocumentTypes.find((option) => option.value === generationType)
   const generationTargets = useMemo(() => {
     if (selectedGenerationOption?.targetScope === 'formula') {
@@ -8231,6 +10369,14 @@ function DocumentsWorkspace() {
     }
     return initialLots.map((lot) => ({ id: lot.id, label: `${lot.lotNumber} ${lot.qualityStatus}` }))
   }, [selectedGenerationOption?.targetScope])
+  const uploadTargets = useMemo(
+    () => [
+      ...materials.map((material) => ({ id: material.id, label: `Material / ${material.name}` })),
+      ...initialLots.map((lot) => ({ id: lot.id, label: `Lot / ${lot.lotNumber}` })),
+      ...formulas.map((formula) => ({ id: formula.id, label: `Formula / ${formula.code} ${formula.name}` })),
+    ],
+    [],
+  )
 
   useEffect(() => {
     if (!generationTargets.some((target) => target.id === generationTarget)) {
@@ -8278,11 +10424,102 @@ function DocumentsWorkspace() {
       )
       setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
       setDownloadResult(payload)
-      setStatusMessage('Signed URL issued and download audit recorded')
+      const opened = window.open(payload.signedUrl.url, '_blank', 'noopener,noreferrer')
+      setStatusMessage(opened ? 'Signed URL opened and download audit recorded' : 'Signed URL issued; allow pop-ups or use the access card below')
     } catch {
       setStatusMessage('Could not sign URL from API; permission gate or server unavailable')
     } finally {
       setLoadingDocumentId(null)
+    }
+  }
+
+  async function searchDocuments() {
+    setStatusMessage('Searching tenant document metadata')
+    try {
+      const payload = await requestApi<DocumentSearchResponse>(`/documents/search?q=${encodeURIComponent(documentSearch)}`)
+      setDocumentRows(payload.documents)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document search failed')
+    }
+  }
+
+  async function uploadDocument() {
+    if (!uploadFile || !uploadTarget) {
+      return
+    }
+    setUploading(true)
+    setStatusMessage('Uploading to private document storage and queuing review')
+    try {
+      const formData = new FormData()
+      formData.set('file', uploadFile)
+      formData.set('type', uploadType)
+      formData.set('linkedTo', uploadTarget)
+      formData.set('title', uploadTitle.trim() || uploadFile.name)
+      formData.set('tags', uploadTags)
+      formData.set('sensitivity', uploadSensitivity)
+      const payload = await requestApi<DocumentGenerationResponse>('/documents/upload', { method: 'POST', body: formData })
+      setDocumentRows((current) => [payload.document, ...current.filter((document) => document.id !== payload.document.id)])
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setUploadFile(null)
+      setUploadTitle('')
+      setUploadTags('')
+      setStatusMessage(`${payload.document.title} is quarantined until a scan result is recorded`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function recordCleanScan(documentId: string) {
+    setScanningDocumentId(documentId)
+    setStatusMessage('Recording the external scan receipt')
+    try {
+      const payload = await requestApi<DocumentGenerationResponse>(`/documents/${encodeURIComponent(documentId)}/scan-result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'CLEAN', provider: 'Manual compliance scan receipt' }),
+      })
+      setDocumentRows((current) => current.map((document) => document.id === documentId ? payload.document : document))
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} is ready for approval`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Scan result could not be recorded')
+    } finally {
+      setScanningDocumentId(null)
+    }
+  }
+
+  async function archiveDocument(documentId: string) {
+    setArchivingDocumentId(documentId)
+    try {
+      const payload = await requestApi<DocumentGenerationResponse>(`/documents/${encodeURIComponent(documentId)}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Archived from Documents workspace' }),
+      })
+      setDocumentRows((current) => current.map((document) => document.id === documentId ? payload.document : document))
+      setDashboard(payload.dashboard)
+      setDownloadAudits((current) => [payload.audit, ...current.filter((event) => event.id !== payload.audit.id)])
+      setStatusMessage(`${payload.document.title} archived with its object retained privately`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document archive failed')
+    } finally {
+      setArchivingDocumentId(null)
+    }
+  }
+
+  async function loadVersions(documentId: string) {
+    try {
+      const payload = await requestApi<DocumentVersionsResponse>(`/documents/${encodeURIComponent(documentId)}/versions`)
+      setVersions(payload.versions)
+      setVersionsTitle(`${payload.current.title} version history`)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Document versions could not be loaded')
     }
   }
 
@@ -8371,13 +10608,24 @@ function DocumentsWorkspace() {
               <div className="document-main">
                 <strong>{document.title}</strong>
                 <span>
-                  {document.type} / {document.linkedTo} / {document.sizeKb}KB
+                  {document.type} / {document.linkedTo} / {document.sizeKb}KB / {document.version}
                   {document.expiresAt ? ` / expires ${document.expiresAt}` : ''}
                 </span>
               </div>
               <DataTag label={document.sensitivity} value={document.status} />
+              <DataTag label="Scan" value={document.scanStatus ?? 'NOT_REQUIRED'} tone={document.scanStatus === 'CLEAN' ? 'green' : document.scanStatus === 'PENDING' ? 'amber' : 'blue'} />
               <span className="mono-value">{document.downloads} downloads</span>
               <div className="document-actions">
+                {document.status === 'QUARANTINED' && (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void recordCleanScan(document.id)}
+                    disabled={scanningDocumentId === document.id}
+                  >
+                    {scanningDocumentId === document.id ? 'Recording' : 'Record clean scan'}
+                  </button>
+                )}
                 {document.status === 'REVIEW_REQUIRED' && (
                   <button
                     className="primary-button small"
@@ -8406,10 +10654,79 @@ function DocumentsWorkspace() {
                   <Globe2 size={14} />
                   {sharingDocumentId === document.id ? 'Sharing' : 'Share'}
                 </button>
+                <button className="ghost-button small" type="button" onClick={() => void loadVersions(document.id)}>
+                  Versions
+                </button>
+                <button
+                  className="ghost-button small"
+                  type="button"
+                  onClick={() => void archiveDocument(document.id)}
+                  disabled={archivingDocumentId === document.id || document.status === 'ARCHIVED'}
+                >
+                  {archivingDocumentId === document.id ? 'Archiving' : document.status === 'ARCHIVED' ? 'Archived' : 'Archive'}
+                </button>
               </div>
             </div>
           ))}
         </div>
+      </Panel>
+      <Panel title="Search & Upload" icon={Search}>
+        <div className="document-generate-form">
+          <label className="field-row">
+            <span>Search metadata</span>
+            <input
+              aria-label="Search documents"
+              value={documentSearch}
+              onChange={(event) => setDocumentSearch(event.target.value)}
+              onKeyDown={(event) => { if (event.key === 'Enter') void searchDocuments() }}
+              placeholder="Title, tag, record, or extracted text"
+            />
+          </label>
+          <button className="ghost-button small" type="button" onClick={() => void searchDocuments()}>Search</button>
+          <label className="field-row">
+            <span>Private file</span>
+            <input
+              aria-label="Upload private document"
+              accept="application/pdf,image/png,image/jpeg,text/plain"
+              type="file"
+              onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+            />
+          </label>
+          <label className="field-row">
+            <span>Document type</span>
+            <select aria-label="Uploaded document type" value={uploadType} onChange={(event) => setUploadType(event.target.value as DocumentType)}>
+              {(['SDS', 'CoA', 'IFRA', 'Invoice', 'Formula Export', 'Batch Record', 'Allergen Declaration', 'GHS Label', 'Formula Spec Sheet', 'Finished Product SDS'] as const).map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Linked record</span>
+            <select aria-label="Uploaded document linked record" value={uploadTarget} onChange={(event) => setUploadTarget(event.target.value)}>
+              {uploadTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Title</span>
+            <input aria-label="Uploaded document title" value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} placeholder={uploadFile?.name ?? 'Controlled document title'} />
+          </label>
+          <label className="field-row">
+            <span>Tags</span>
+            <input aria-label="Uploaded document tags" value={uploadTags} onChange={(event) => setUploadTags(event.target.value)} placeholder="supplier, revision, incoming" />
+          </label>
+          <label className="field-row">
+            <span>Sensitivity</span>
+            <select aria-label="Uploaded document sensitivity" value={uploadSensitivity} onChange={(event) => setUploadSensitivity(event.target.value as DocumentRecord['sensitivity'])}>
+              <option value="Internal">Internal</option>
+              <option value="Confidential">Confidential</option>
+              <option value="Highly Confidential">Highly Confidential</option>
+            </select>
+          </label>
+          <button className="primary-button" type="button" onClick={() => void uploadDocument()} disabled={!uploadFile || !uploadTarget || uploading}>
+            {uploading ? 'Uploading' : 'Upload for scan'}
+          </button>
+        </div>
+        <div className="empty-state compact">Uploads stay in private R2 storage, begin in quarantine, then require a recorded scan result and approval.</div>
       </Panel>
       <Panel title="Compliance Dashboard" icon={ShieldCheck}>
         <div className="stock-grid">
@@ -8489,6 +10806,27 @@ function DocumentsWorkspace() {
           </div>
         )}
       </Panel>
+      <Panel title="Version History" icon={Library}>
+        {versions.length > 0 ? (
+          <div className="document-list compact-list">
+            <div className="panel-subtitle">{versionsTitle}</div>
+            {versions.map((document) => (
+              <div className="document-row" key={document.id}>
+                <div>
+                  <strong>{document.version} / {document.title}</strong>
+                  <span>{document.fileName ?? document.storageKey} / {document.checksum}</span>
+                </div>
+                <StatusBadge
+                  status={document.status === 'APPROVED' || document.status === 'SHARED' ? 'stable' : document.status === 'ARCHIVED' ? 'draft' : 'review'}
+                  label={document.status}
+                />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Choose Versions on a document to inspect its immutable version group.</div>
+        )}
+      </Panel>
       <Panel title="External Share" icon={Globe2}>
         <label className="field-row">
           <span>Recipient email</span>
@@ -8557,193 +10895,209 @@ const productionLifecycle: ProductionBatchRecord['status'][] = [
   'RELEASED',
 ]
 
+type UiLocale = 'en-US' | 'vi-VN'
+
+const localeChangeEvent = 'olfactoryops.locale.change'
+const localeStorageKey = 'olfactoryops.locale'
+
+const vietnameseUiText: Record<string, string> = {
+  Home: 'Trang chủ',
+  Workbench: 'Bàn làm việc',
+  Commercial: 'Thương mại',
+  Insights: 'Phân tích',
+  Workspace: 'Không gian làm việc',
+  Platform: 'Nền tảng',
+  'Catalog & quotes': 'Danh mục & báo giá',
+  Branding: 'Thương hiệu',
+  'Members & security': 'Thành viên & bảo mật',
+  'Workspace access': 'Quyền truy cập workspace',
+  'Workspace overview': 'Tổng quan workspace',
+  'Fragrance operations': 'Vận hành nước hoa',
+  'Secure workspace': 'Workspace an toàn',
+  Protected: 'Đã bảo vệ',
+  Command: 'Điều hành',
+  'R&D Spine': 'Nghiên cứu',
+  Operations: 'Vận hành',
+  Enterprise: 'Doanh nghiệp',
+  'OlfactoryOps Console': 'Bảng điều hành OlfactoryOps',
+  'Search modules, records, actions': 'Tìm module, dữ liệu, thao tác',
+  Logout: 'Đăng xuất',
+  'Open user settings': 'Mở cài đặt người dùng',
+  'User settings': 'Cài đặt người dùng',
+  Notifications: 'Thông báo',
+  'Workspace inbox': 'Hộp thư workspace',
+  'Mark all read': 'Đánh dấu đã đọc',
+  'Close notifications': 'Đóng thông báo',
+  'No notifications yet.': 'Chưa có thông báo.',
+  'Loading notifications...': 'Đang tải thông báo...',
+  Login: 'Đăng nhập',
+  'Sign up': 'Đăng ký',
+  'Forgot password?': 'Quên mật khẩu?',
+  'Back to login': 'Quay lại đăng nhập',
+  'Send reset link': 'Gửi liên kết đặt lại',
+  'Reset password': 'Đặt lại mật khẩu',
+  'Reset your password': 'Đặt lại mật khẩu của bạn',
+  'Choose a new password': 'Chọn mật khẩu mới',
+  'Create workspace': 'Tạo workspace',
+  'Create your lab workspace': 'Tạo workspace phòng thí nghiệm',
+  'Sign in to your lab workspace': 'Đăng nhập vào workspace phòng thí nghiệm',
+  'Powered by OlfactoryOps': 'Được vận hành bởi OlfactoryOps',
+  'Expand sidebar': 'Mở thanh điều hướng',
+  'Collapse sidebar': 'Thu gọn thanh điều hướng',
+  'Main modules': 'Các module chính',
+  'Open navigation': 'Mở điều hướng',
+  'Close navigation': 'Đóng điều hướng',
+}
+
+const vietnameseDomainNames: Partial<Record<DomainKey, { name: string; shortName: string }>> = {
+  dashboard: { name: 'Bảng điều hành OlfactoryOps', shortName: 'Điều hành' },
+  platform: { name: 'Nền tảng', shortName: 'Nền tảng' },
+  identity: { name: 'Định danh & Bảo mật', shortName: 'Bảo mật' },
+  customization: { name: 'Tùy chỉnh', shortName: 'Tùy chỉnh' },
+  materials: { name: 'Nguyên liệu', shortName: 'Nguyên liệu' },
+  formulas: { name: 'Công thức R&D', shortName: 'Công thức' },
+  inventory: { name: 'Kho phòng thí nghiệm', shortName: 'Kho' },
+  labUsage: { name: 'Sử dụng phòng lab', shortName: 'Sử dụng lab' },
+  production: { name: 'Sản xuất', shortName: 'Sản xuất' },
+  procurement: { name: 'Thu mua', shortName: 'Thu mua' },
+  commerce: { name: 'Thương mại', shortName: 'Thương mại' },
+  orders: { name: 'Đơn hàng & Fulfillment', shortName: 'Đơn hàng' },
+  costing: { name: 'Giá thành & Tài chính', shortName: 'Giá thành' },
+  analytics: { name: 'Phân tích', shortName: 'Phân tích' },
+  saas: { name: 'Thanh toán & Tin cậy', shortName: 'Thanh toán' },
+}
+
+function activeUiLocale(): UiLocale {
+  if (typeof document !== 'undefined' && document.documentElement.lang.toLowerCase().startsWith('vi')) {
+    return 'vi-VN'
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage.getItem(localeStorageKey) === 'vi-VN') {
+    return 'vi-VN'
+  }
+  return 'en-US'
+}
+
+function decodeVietnameseMojibake(value: string) {
+  if (!/[\u00c3\u00c4\u00c6]/.test(value)) {
+    return value
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(value, (character) => character.charCodeAt(0)))
+  } catch {
+    return value
+  }
+}
+
+function uiText(value: string) {
+  return activeUiLocale() === 'vi-VN' ? decodeVietnameseMojibake(vietnameseUiText[value] ?? value) : value
+}
+
+function localizeDomainDisplay(domain: DomainModule) {
+  const localized = activeUiLocale() === 'vi-VN' ? vietnameseDomainNames[domain.key] : undefined
+  return localized
+    ? { ...domain, name: decodeVietnameseMojibake(localized.name), shortName: decodeVietnameseMojibake(localized.shortName) }
+    : domain
+}
+
+const productionLifecycleLabels: Record<ProductionBatchRecord['status'], string> = {
+  PLANNED: 'Planned',
+  WEIGHING: 'Weighing',
+  MACERATION: 'Maceration',
+  FILTRATION: 'Filtration',
+  QC: 'Quality control',
+  BOTTLING: 'Bottling',
+  RELEASED: 'Released',
+  HOLD: 'On hold',
+}
+
 const productionConsumptionRequiredStatuses = new Set<ProductionBatchRecord['status']>([
+  'MACERATION',
   'FILTRATION',
   'QC',
   'BOTTLING',
   'RELEASED',
 ])
 
-type ProductionLifecycleFallback = {
-  batch: ProductionBatchRecord
-  message: string
-  changed: boolean
-}
-
-type ProductionConsumeFallback = ProductionLifecycleFallback & {
-  movement?: InventoryMovement
-}
-
-function isApprovalPendingMessage(message: string) {
-  return message.toLowerCase().includes('pending approval')
-}
-
-function updateProductionWorkOrderStep(
-  workOrder: ProductionBatchRecord['workOrder'],
-  label: string,
-  status: ProductionBatchRecord['workOrder']['steps'][number]['status'],
-  evidence: string,
-): ProductionBatchRecord['workOrder'] {
-  return {
-    ...workOrder,
-    steps: workOrder.steps.map((step) => (step.label === label ? { ...step, status, evidence } : step)),
+function canMoveProductionBatch(batch: ProductionBatchRecord, status: ProductionBatchRecord['status']) {
+  if (status === batch.status || batch.status === 'RELEASED') {
+    return false
   }
-}
-
-function releaseProductionBatchLocal(batch: ProductionBatchRecord): ProductionBatchRecord {
-  if (batch.outputLot) {
-    return batch
+  if (status === 'HOLD') {
+    return true
   }
-
-  const releasedAt = new Date().toISOString()
-  const yieldGrams = Number((batch.consumedGrams * 0.985).toFixed(3))
-  const yieldVariancePercent = Number((((yieldGrams - batch.targetGrams) / batch.targetGrams) * 100).toFixed(2))
-  const outputLot = {
-    id: `FG-${batch.id}`,
-    lotNumber: `FG-${batch.id}`,
-    formulaId: batch.formulaId,
-    quantityGrams: yieldGrams,
-    qualityStatus: 'RELEASED' as const,
-    releasedAt,
+  const nextByStatus: Partial<Record<ProductionBatchRecord['status'], ProductionBatchRecord['status']>> = {
+    PLANNED: 'WEIGHING',
+    WEIGHING: 'MACERATION',
+    MACERATION: 'FILTRATION',
+    FILTRATION: 'QC',
+    QC: 'BOTTLING',
+    BOTTLING: 'RELEASED',
+    HOLD: batch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING',
   }
-
-  return {
-    ...batch,
-    yieldGrams,
-    yieldVariancePercent,
-    outputLot,
-    genealogy: {
-      ...batch.genealogy,
-      outputLotId: outputLot.id,
-    },
-    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'DONE', outputLot.id),
-  }
-}
-
-function applyProductionLifecycleLocal(
-  batch: ProductionBatchRecord,
-  status: ProductionBatchRecord['status'],
-): ProductionLifecycleFallback {
-  if (!productionLifecycle.includes(status)) {
-    return { batch, changed: false, message: `${status} is not a supported lifecycle gate` }
-  }
-  if (status === 'WEIGHING' && batch.consumedGrams > 0) {
-    return { batch, changed: false, message: `${batch.id} cannot return to weighing after consumption` }
+  if (nextByStatus[batch.status] !== status) {
+    return false
   }
   if (productionConsumptionRequiredStatuses.has(status) && batch.consumedGrams <= 0) {
-    return { batch, changed: false, message: `${batch.id} must consume inventory before ${status}` }
+    return false
   }
-  if (status === 'RELEASED' && batch.qcStatus !== 'PASSED') {
-    return { batch, changed: false, message: `${batch.id} must pass QC before release` }
-  }
-
-  let next: ProductionBatchRecord = { ...batch, status }
-  if (status === 'MACERATION') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(
-        next.workOrder,
-        'Weigh raw materials',
-        batch.consumedGrams > 0 ? 'DONE' : 'READY',
-        batch.consumedGrams > 0 ? 'Input weighed' : 'Maceration gate selected',
-      ),
-    }
-  }
-  if (status === 'FILTRATION') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Maceration hold', 'DONE', 'Filtration gate selected'),
-    }
-  }
-  if (status === 'QC' || status === 'BOTTLING') {
-    next = {
-      ...next,
-      workOrder: updateProductionWorkOrderStep(next.workOrder, 'Filter and bottle', 'READY', `${status} gate selected`),
-    }
-  }
-  if (status === 'RELEASED') {
-    next = releaseProductionBatchLocal(next)
-  }
-
-  return { batch: next, changed: true, message: `${batch.id} moved to ${next.status}` }
+  return !(status === 'BOTTLING' || status === 'RELEASED') || batch.qcStatus === 'PASSED'
 }
 
-function applyProductionQcLocal(batch: ProductionBatchRecord, result: 'PASSED' | 'FAILED'): ProductionLifecycleFallback {
-  const timestamp = new Date().toISOString()
-  const status = result === 'PASSED' ? 'QC' : 'HOLD'
-  const updated: ProductionBatchRecord = {
-    ...batch,
-    status,
-    qcStatus: result,
-    qcChecks: batch.qcChecks.map((check) => ({
-      ...check,
-      result,
-      recordedAt: timestamp,
-      note: result === 'PASSED' ? 'Within production release tolerance' : 'Deviation review required',
-    })),
-    workOrder:
-      result === 'PASSED'
-        ? updateProductionWorkOrderStep(batch.workOrder, 'Filter and bottle', 'READY', 'QC passed')
-        : batch.workOrder,
-  }
-  return { batch: updated, changed: true, message: `${batch.id} QC ${result}; status is now ${updated.status}` }
-}
-
-function applyProductionConsumeLocal(batch: ProductionBatchRecord): ProductionConsumeFallback {
-  if (batch.consumedGrams > 0) {
-    return { batch, changed: false, message: `${batch.id} has already consumed inventory` }
-  }
-
-  const timestamp = new Date().toISOString()
-  const movement: InventoryMovement = {
-    id: `MOV-PROD-${batch.id}-LOCAL`,
-    at: timestamp,
-    type: 'PRODUCTION_CONSUMPTION',
-    direction: 'OUT',
-    materialId: batch.formulaId,
-    lotId: `LOCAL-${batch.id}`,
-    quantityGrams: batch.targetGrams,
-    balanceAfter: 0,
-    ref: batch.id,
-    actor: 'local-production-fallback',
-  }
-  const updated: ProductionBatchRecord = {
-    ...batch,
-    consumedGrams: batch.targetGrams,
-    status: 'MACERATION',
-    workOrder: updateProductionWorkOrderStep(batch.workOrder, 'Weigh raw materials', 'DONE', movement.id),
-    genealogy: {
-      ...batch.genealogy,
-      inputLotIds: [movement.lotId],
-      inputMovementIds: [movement.id],
-    },
-  }
-
-  return { batch: updated, changed: true, movement, message: `${batch.id} consumed in local production preview` }
-}
-
-function ProductionWorkspace() {
-  const approvedFormulaIds = useMemo(
-    () => new Set(formulaVersions.filter((version) => version.status === 'APPROVED').map((version) => version.formulaId)),
-    [],
-  )
+function ProductionWorkspace({
+  formulaRecords,
+  materialRecords,
+  session,
+}: {
+  formulaRecords: Formula[]
+  materialRecords: Material[]
+  session: AuthSession
+}) {
   const approvedFormulas = useMemo(
-    () => formulas.filter((formula) => approvedFormulaIds.has(formula.id)),
-    [approvedFormulaIds],
+    () => formulaRecords.filter((formula) => formula.workflowStatus === 'APPROVED'),
+    [formulaRecords],
   )
-  const [batches, setBatches] = useState<ProductionBatchRecord[]>(productionBatches)
-  const [selectedFormulaId, setSelectedFormulaId] = useState(approvedFormulas[0]?.id ?? 'frm-0421')
+  const [batches, setBatches] = useState<ProductionBatchRecord[]>([])
+  const [selectedFormulaId, setSelectedFormulaId] = useState('')
   const [targetGrams, setTargetGrams] = useState(25)
   const [statusMessage, setStatusMessage] = useState('Loading production batches')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [lastMovements, setLastMovements] = useState<InventoryMovement[]>([])
-  const activeBatch = batches[0]
+  const [activeBatchId, setActiveBatchId] = useState('')
+  const [qcTemplates, setQcTemplates] = useState<ProductionQcTemplateRecord[]>([])
+  const [qcResults, setQcResults] = useState<ProductionQcResultRecord[]>([])
+  const [qcObserved, setQcObserved] = useState<Record<string, string>>({})
+  const [scheduleDraft, setScheduleDraft] = useState({ scheduledStartAt: '', dueAt: '', equipment: '' })
+  const [yieldDraft, setYieldDraft] = useState({ yieldGrams: 0, wasteGrams: 0, laborCost: 0, overheadCost: 0 })
+  const activeBatch = batches.find((batch) => batch.id === activeBatchId) ?? batches[0]
+  const canManageProduction = sessionHasPermission(session, 'production.consume')
+  const canRecordProductionQc = sessionHasPermission(session, 'production.qc')
+  const canApproveProductionQc = session.role === 'Owner' || session.role === 'Admin' || session.role === 'Lab Manager' || session.role === 'Manager'
+  const activeQcTemplate = qcTemplates.find((template) => template.id === activeBatch?.qcTemplateId)
+  const activeQcReadyForApproval = Boolean(
+    activeQcTemplate &&
+      activeBatch?.status === 'QC' &&
+      !qcResults.some((result) => result.status === 'FAILED') &&
+      activeQcTemplate.checks.every(
+        (check) =>
+          !check.required ||
+          qcResults.some(
+            (result) => result.templateCheckId === check.id && (result.status === 'PASSED' || result.status === 'NOT_APPLICABLE'),
+          ),
+      ),
+  )
+  const qcApprovalHint = !canApproveProductionQc
+    ? 'An Admin or Manager must approve structured QC'
+    : !activeQcReadyForApproval
+      ? 'Record passing results for every required QC check before approval'
+      : 'Approve completed QC checks and move the batch to bottling'
+  const selectedFormulaHasQcTemplate = qcTemplates.some((template) => template.status === 'ACTIVE' && template.formulaId === selectedFormulaId)
 
   const batchCostBasis = useCallback((batch: ProductionBatchRecord) => {
-    const leaves = resolveFormulaWithCatalog(batch.formulaId, formulas, materials)
+    const leaves = resolveFormulaWithCatalog(batch.formulaId, formulaRecords, materialRecords)
     return formulaTotals(leaves).costPerGram * batch.targetGrams
-  }, [])
+  }, [formulaRecords, materialRecords])
 
   const updateBatch = useCallback((updated: ProductionBatchRecord) => {
     setBatches((current) => current.map((batch) => (batch.id === updated.id ? updated : batch)))
@@ -8753,9 +11107,10 @@ function ProductionWorkspace() {
     try {
       const payload = await requestApi<ProductionBatchRecord[]>('/production/batches')
       setBatches(payload)
-      setStatusMessage('Production batches synced from live API')
+      setStatusMessage('Production batches are up to date')
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Using local production batch seed')
+      setBatches([])
+      setStatusMessage(error instanceof Error ? error.message : 'Production batches are unavailable')
     }
   }, [])
 
@@ -8763,7 +11118,69 @@ function ProductionWorkspace() {
     void loadBatches()
   }, [loadBatches])
 
+  useEffect(() => {
+    let active = true
+    void requestApi<ProductionQcTemplateRecord[]>('/production/qc-templates')
+      .then((templates) => {
+        if (active) setQcTemplates(templates)
+      })
+      .catch(() => {
+        if (active) setQcTemplates([])
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    setSelectedFormulaId((current) =>
+      approvedFormulas.some((formula) => formula.id === current) ? current : (approvedFormulas[0]?.id ?? ''),
+    )
+  }, [approvedFormulas])
+
+  useEffect(() => {
+    setActiveBatchId((current) =>
+      current && batches.some((batch) => batch.id === current) ? current : (batches[0]?.id ?? ''),
+    )
+  }, [batches])
+
+  useEffect(() => {
+    if (!activeBatch) {
+      setQcResults([])
+      return
+    }
+    let active = true
+    setScheduleDraft({
+      scheduledStartAt: activeBatch.workOrder.scheduledStartAt.slice(0, 16),
+      dueAt: activeBatch.workOrder.dueAt.slice(0, 16),
+      equipment: activeBatch.workOrder.equipment,
+    })
+    setYieldDraft({
+      yieldGrams: activeBatch.yieldGrams || activeBatch.consumedGrams,
+      wasteGrams: Math.max(activeBatch.consumedGrams - (activeBatch.yieldGrams || activeBatch.consumedGrams), 0),
+      laborCost: 0,
+      overheadCost: 0,
+    })
+    void requestApi<ProductionQcResultRecord[]>(`/production/batches/${encodeURIComponent(activeBatch.id)}/qc/results`)
+      .then((results) => {
+        if (active) {
+          setQcResults(results)
+          setQcObserved(Object.fromEntries(results.map((result) => [result.templateCheckId, result.observedValue ?? ''])))
+        }
+      })
+      .catch(() => {
+        if (active) setQcResults([])
+      })
+    return () => {
+      active = false
+    }
+  }, [activeBatch])
+
   async function createBatch() {
+    if (!selectedFormulaId) {
+      setStatusMessage('Approve a formula in this workspace before creating a production batch')
+      return
+    }
     setCreating(true)
     setStatusMessage('Creating production batch from approved formula')
     try {
@@ -8773,11 +11190,113 @@ function ProductionWorkspace() {
         body: JSON.stringify({ formulaId: selectedFormulaId, targetGrams }),
       })
       setBatches((current) => [batch, ...current])
+      setActiveBatchId(batch.id)
       setStatusMessage(`${batch.id} created from ${batch.formulaCode}`)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Production batch creation failed')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function createDefaultQcTemplate() {
+    if (!selectedFormulaId) {
+      setStatusMessage('Select an approved formula before creating its QC template')
+      return
+    }
+    setBusyId('qc-template')
+    try {
+      const formula = approvedFormulas.find((item) => item.id === selectedFormulaId)
+      const payload = await requestApi<ProductionQcTemplateResponse>('/production/qc-templates', {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          formulaId: selectedFormulaId,
+          name: `${formula?.name ?? selectedFormulaId} release specification`,
+          checks: [
+            { id: 'appearance', label: 'Appearance', kind: 'TEXT', expectedText: 'Clear', required: true },
+            { id: 'odor-match', label: 'Odor match', kind: 'TEXT', expectedText: 'Pass', required: true },
+            { id: 'fill-weight', label: 'Fill weight', kind: 'NUMERIC', min: 0, required: true, unit: 'g' },
+          ],
+        }),
+      })
+      setQcTemplates((current) => [payload.template, ...current.filter((template) => template.id !== payload.template.id)])
+      setStatusMessage(`${payload.template.name} created; new batches will use structured QC.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC template creation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function planBatch(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionStatusResponse & { conflict?: boolean }>(`/production/batches/${encodeURIComponent(batchId)}/plan`, {
+        method: 'PATCH',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          scheduledStartAt: new Date(scheduleDraft.scheduledStartAt).toISOString(),
+          dueAt: new Date(scheduleDraft.dueAt).toISOString(),
+          equipment: scheduleDraft.equipment,
+        }),
+      })
+      updateBatch(payload.batch)
+      setStatusMessage(payload.conflict ? 'Schedule saved with an equipment overlap warning.' : 'Batch schedule saved without equipment conflicts.')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Batch schedule update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function recordStructuredQcResult(batchId: string, templateCheckId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionQcResultResponse>(`/production/batches/${encodeURIComponent(batchId)}/qc/results`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ templateCheckId, observedValue: qcObserved[templateCheckId] ?? '' }),
+      })
+      setQcResults((current) => [payload.result, ...current.filter((result) => result.id !== payload.result.id)])
+      setStatusMessage(`${payload.result.label}: ${payload.result.status}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC result could not be recorded')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function approveStructuredQc(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionQcApprovalResponse>(`/production/batches/${encodeURIComponent(batchId)}/qc/approve`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+      })
+      updateBatch(payload.batch)
+      setStatusMessage('Structured QC approved. Batch advanced to bottling.')
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'QC approval blocked')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function recordYield(batchId: string) {
+    setBusyId(batchId)
+    try {
+      const payload = await requestApi<ProductionYieldResponse>(`/production/batches/${encodeURIComponent(batchId)}/yield`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(yieldDraft),
+      })
+      await loadBatches()
+      setStatusMessage(`Yield reconciled: ${formatGrams(payload.record.yieldGrams)} output and ${formatGrams(payload.record.wasteGrams)} waste.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Yield reconciliation failed')
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -8793,15 +11312,7 @@ function ProductionWorkspace() {
       setStatusMessage(`${batchId} consumed through ${payload.movements.length} production movement(s)`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Production consumption failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionConsumeLocal(batch) : null
-      if (fallback?.changed && fallback.movement) {
-        setBatches((current) => current.map((batch) => (batch.id === batchId ? fallback.batch : batch)))
-        setLastMovements([fallback.movement])
-        setStatusMessage(`${message}; local preview: ${fallback.message}`)
-      } else {
-        setStatusMessage(fallback?.message ?? message)
-      }
+      setStatusMessage(message)
     } finally {
       setBusyId(null)
     }
@@ -8819,13 +11330,7 @@ function ProductionWorkspace() {
       updateBatch(batch)
       setStatusMessage(`${batch.id} QC ${result}; status is now ${batch.status}`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'QC update failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionQcLocal(batch, result) : null
-      if (fallback?.changed) {
-        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
-      }
-      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
+      setStatusMessage(error instanceof Error ? error.message : 'QC update failed')
     } finally {
       setBusyId(null)
     }
@@ -8843,16 +11348,18 @@ function ProductionWorkspace() {
       updateBatch(payload.batch)
       setStatusMessage(`${payload.batch.id} moved to ${payload.batch.status}`)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Lifecycle update failed'
-      const batch = batches.find((item) => item.id === batchId)
-      const fallback = !isApprovalPendingMessage(message) && batch ? applyProductionLifecycleLocal(batch, status) : null
-      if (fallback?.changed) {
-        setBatches((current) => current.map((item) => (item.id === batchId ? fallback.batch : item)))
-      }
-      setStatusMessage(fallback?.changed ? `${message}; local preview: ${fallback.message}` : fallback?.message ?? message)
+      setStatusMessage(error instanceof Error ? error.message : 'Lifecycle update failed')
     } finally {
       setBusyId(null)
     }
+  }
+
+  function openBatchLifecycle(batchId: string) {
+    setActiveBatchId(batchId)
+    setStatusMessage(`${batchId} is selected. Continue from its next lifecycle action.`)
+    window.requestAnimationFrame(() => {
+      document.getElementById('production-lifecycle-gate')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   }
 
   return (
@@ -8861,7 +11368,12 @@ function ProductionWorkspace() {
         <div className="material-form-grid">
           <label className="field-row">
             <span>Approved formula</span>
-            <select value={selectedFormulaId} onChange={(event) => setSelectedFormulaId(event.target.value)}>
+            <select
+              value={selectedFormulaId}
+              onChange={(event) => setSelectedFormulaId(event.target.value)}
+              disabled={approvedFormulas.length === 0}
+            >
+              {approvedFormulas.length === 0 ? <option value="">No approved formulas in this workspace</option> : null}
               {approvedFormulas.map((formula) => (
                 <option value={formula.id} key={formula.id}>
                   {formula.code} / {formula.name}
@@ -8879,52 +11391,342 @@ function ProductionWorkspace() {
               onChange={(event) => setTargetGrams(Number(event.target.value))}
             />
           </label>
-          <button className="primary-button" type="button" onClick={() => void createBatch()} disabled={creating || targetGrams <= 0}>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => void createBatch()}
+            disabled={creating || targetGrams <= 0 || !selectedFormulaId || !canManageProduction || !selectedFormulaHasQcTemplate}
+            title={!canManageProduction ? 'Your role cannot create production batches' : !selectedFormulaHasQcTemplate ? 'Create a release QC template before creating a P1 batch' : undefined}
+          >
             {creating ? 'Creating' : 'Create batch'}
           </button>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void createDefaultQcTemplate()}
+            disabled={busyId === 'qc-template' || !selectedFormulaId || !canApproveProductionQc || selectedFormulaHasQcTemplate}
+          >
+            {selectedFormulaHasQcTemplate ? 'QC template ready' : busyId === 'qc-template' ? 'Creating QC template' : 'Create release QC template'}
+          </button>
         </div>
-        <ul className="policy-list">
-          <li>Only formulas with an approved version snapshot can enter production.</li>
-          <li>Batch consumption writes PRODUCTION_CONSUMPTION, never LAB_CONSUMPTION.</li>
+        <ul className="policy-list production-prerequisites">
+          <li>An approved formula is required before a production batch can start.</li>
+          <li>Materials are issued to the batch during weighing, separately from lab trials.</li>
+          <li>A release quality checklist is required before the batch can move through QC.</li>
           <li>{statusMessage}</li>
         </ul>
       </Panel>
 
-      <Panel title="Lifecycle Gate" icon={ClipboardCheck}>
+      <Panel id="production-lifecycle-gate" title="Lifecycle Gate" icon={ClipboardCheck}>
         {activeBatch ? (
-          <div className="production-timeline">
-            {productionLifecycle.map((status) => (
-              <button
-                className={`timeline-step ${activeBatch.status === status ? 'is-current' : ''} ${productionLifecycle.indexOf(activeBatch.status) > productionLifecycle.indexOf(status) ? 'is-done' : ''}`}
-                key={status}
-                type="button"
-                onClick={() => void moveBatch(activeBatch.id, status)}
-                disabled={busyId === activeBatch.id || status === 'WEIGHING'}
-              >
-                <span>{status}</span>
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="production-gate-picker">
+              <label className="field-row">
+                <span>Active batch</span>
+                <select value={activeBatch.id} onChange={(event) => setActiveBatchId(event.target.value)}>
+                  {batches.map((batch) => (
+                    <option value={batch.id} key={batch.id}>
+                      {batch.id} / {batch.formulaCode} / {productionLifecycleLabels[batch.status]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <StatusBadge status={productionStatusTone[activeBatch.status]} label={productionLifecycleLabels[activeBatch.status]} />
+            </div>
+            <div className="production-timeline">
+              <Stepper
+                label="Production lifecycle"
+                steps={productionLifecycle.map((status, index) => {
+                  const currentIndex = productionLifecycle.indexOf(activeBatch.status)
+                  const statusForStep = activeBatch.status === 'HOLD'
+                    ? (index === 0 ? 'blocked' : 'upcoming')
+                    : activeBatch.status === 'PLANNED'
+                      ? (index === 0 ? 'active' : 'upcoming')
+                      : index < currentIndex
+                        ? 'complete'
+                        : index === currentIndex
+                          ? 'active'
+                          : 'upcoming'
+                  return { id: status, label: productionLifecycleLabels[status], status: statusForStep }
+                })}
+              />
+            </div>
+            <div className="production-gate-action">
+              <div>
+                <span className="production-gate-kicker">Next required action</span>
+                {activeBatch.status === 'WEIGHING' ? (
+                  <>
+                    <strong>Issue raw materials</strong>
+                    <p>Confirm the weighing plan. Inventory is issued to this batch, then maceration begins.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'MACERATION' ? (
+                  <>
+                    <strong>Complete maceration</strong>
+                    <p>Record the completed hold before moving the batch to filtration.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'FILTRATION' ? (
+                  <>
+                    <strong>Send batch to quality control</strong>
+                    <p>Filtration must be completed before QC can record a pass or place the batch on hold.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'QC' ? (
+                  <>
+                    <strong>Record QC outcome</strong>
+                    <p>A passed QC result unlocks bottling. A failed result places the batch on hold for review.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'BOTTLING' ? (
+                  <>
+                    <strong>Release finished batch</strong>
+                    <p>Release creates the output lot and keeps its genealogy linked to the issued materials.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'HOLD' ? (
+                  <>
+                    <strong>Resume batch</strong>
+                    <p>Resume returns the batch to the appropriate operational step while retaining its QC history.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'RELEASED' ? (
+                  <>
+                    <strong>Batch released</strong>
+                    <p>The finished output lot is available with its production genealogy and QC evidence.</p>
+                  </>
+                ) : null}
+                {activeBatch.status === 'PLANNED' ? (
+                  <>
+                    <strong>Start weighing</strong>
+                    <p>Open the work order and prepare the approved formula for material issue.</p>
+                  </>
+                ) : null}
+              </div>
+              <div className="document-actions production-gate-actions">
+                {activeBatch.status === 'PLANNED' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'WEIGHING')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'WEIGHING')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Start weighing
+                  </button>
+                ) : null}
+                {activeBatch.status === 'WEIGHING' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void consumeBatch(activeBatch.id)}
+                    disabled={busyId === activeBatch.id || !canManageProduction || activeBatch.consumedGrams > 0}
+                    title={canManageProduction ? undefined : 'Your role cannot issue production inventory'}
+                  >
+                    Issue inventory
+                  </button>
+                ) : null}
+                {activeBatch.status === 'MACERATION' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'FILTRATION')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'FILTRATION')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Complete maceration
+                  </button>
+                ) : null}
+                {activeBatch.status === 'FILTRATION' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'QC')}
+                    disabled={busyId === activeBatch.id || !canManageProduction || !canMoveProductionBatch(activeBatch, 'QC')}
+                    title={canManageProduction ? undefined : 'Your role cannot progress production batches'}
+                  >
+                    Send to QC
+                  </button>
+                ) : null}
+                {activeBatch.status === 'QC' ? (
+                  activeQcTemplate ? (
+                    <button
+                      className="primary-button small"
+                      type="button"
+                      onClick={() => void approveStructuredQc(activeBatch.id)}
+                      disabled={busyId === activeBatch.id || !canApproveProductionQc || !activeQcReadyForApproval}
+                      title={qcApprovalHint}
+                    >
+                      Approve structured QC
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className="primary-button small"
+                        type="button"
+                        onClick={() => void recordQc(activeBatch.id, 'PASSED')}
+                        disabled={busyId === activeBatch.id || !canRecordProductionQc || activeBatch.qcStatus === 'PASSED'}
+                        title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                      >
+                        Pass legacy QC
+                      </button>
+                      <button
+                        className="ghost-button small"
+                        type="button"
+                        onClick={() => void recordQc(activeBatch.id, 'FAILED')}
+                        disabled={busyId === activeBatch.id || !canRecordProductionQc}
+                        title={canRecordProductionQc ? undefined : 'Your role cannot record production QC'}
+                      >
+                        Place on hold
+                      </button>
+                    </>
+                  )
+                ) : null}
+                {activeBatch.status === 'BOTTLING' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, 'RELEASED')}
+                    disabled={busyId === activeBatch.id || !canRecordProductionQc || !canMoveProductionBatch(activeBatch, 'RELEASED')}
+                    title={canRecordProductionQc ? undefined : 'Your role cannot release production batches'}
+                  >
+                    Release batch
+                  </button>
+                ) : null}
+                {activeBatch.status === 'HOLD' ? (
+                  <button
+                    className="primary-button small"
+                    type="button"
+                    onClick={() => void moveBatch(activeBatch.id, activeBatch.consumedGrams > 0 ? 'MACERATION' : 'WEIGHING')}
+                    disabled={busyId === activeBatch.id || !canManageProduction}
+                    title={canManageProduction ? undefined : 'Your role cannot resume production batches'}
+                  >
+                    Resume batch
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </>
         ) : (
           <div className="empty-state compact">No batch created yet.</div>
         )}
         {activeBatch && <div className="status-strip">{statusMessage}</div>}
         {activeBatch && (
-          <div className="metric-grid">
-            <Metric label="Active batch" value={activeBatch.id} />
-            <Metric label="Status" value={activeBatch.status} />
+          <div className="metric-grid production-gate-metrics">
+            <Metric label="Formula" value={activeBatch.formulaCode} />
+            <Metric label="Target" value={formatGrams(activeBatch.targetGrams)} />
+            <Metric label="Inventory issued" value={activeBatch.consumedGrams > 0 ? formatGrams(activeBatch.consumedGrams) : 'Not issued'} />
             <Metric label="QC" value={activeBatch.qcStatus} />
             <Metric label="Cost basis" value={formatCurrency(batchCostBasis(activeBatch))} />
             <Metric label="Output lot" value={activeBatch.outputLot?.lotNumber ?? 'Pending release'} />
-            <Metric
-              label="Yield"
-              value={activeBatch.yieldGrams ? `${formatGrams(activeBatch.yieldGrams)} / ${activeBatch.yieldVariancePercent}%` : 'Pending'}
-            />
           </div>
         )}
       </Panel>
 
-      <Panel title="Work Order & QC Protocol" icon={ClipboardCheck}>
+      <Panel title="Batch Plan" icon={Activity}>
+        {activeBatch ? (
+          <>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Start</span>
+                <input type="datetime-local" value={scheduleDraft.scheduledStartAt} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, scheduledStartAt: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>Due</span>
+                <input type="datetime-local" value={scheduleDraft.dueAt} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, dueAt: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>Equipment</span>
+                <input value={scheduleDraft.equipment} disabled={!canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status)} onChange={(event) => setScheduleDraft((current) => ({ ...current, equipment: event.target.value }))} />
+              </label>
+            </div>
+            <button className="ghost-button small" type="button" onClick={() => void planBatch(activeBatch.id)} disabled={busyId === activeBatch.id || !canManageProduction || !['PLANNED', 'WEIGHING'].includes(activeBatch.status) || !scheduleDraft.scheduledStartAt || !scheduleDraft.dueAt}>
+              Save schedule
+            </button>
+            <p className="caveat">Equipment overlaps are shown as warnings; they never bypass lifecycle gates.</p>
+          </>
+        ) : <div className="empty-state compact">Create a batch to schedule its equipment and work window.</div>}
+      </Panel>
+
+      <Panel title="Structured QC & Yield" icon={ClipboardCheck}>
+        {activeBatch ? (
+          <>
+            {activeQcTemplate ? (
+              <div className="document-list compact-list">
+                <div className="section-heading compact-heading">
+                  <div>
+                    <span className="eyebrow">Release specification</span>
+                    <strong>{activeQcTemplate.name}</strong>
+                  </div>
+                  <StatusBadge status={activeBatch.qcApprovedAt ? 'stable' : 'review'} label={activeBatch.qcApprovedAt ? 'APPROVED' : 'IN REVIEW'} />
+                </div>
+                {activeQcTemplate.checks.map((check) => {
+                  const result = qcResults.find((item) => item.templateCheckId === check.id)
+                  return (
+                    <div className="document-row" key={check.id}>
+                      <div>
+                        <strong>{check.label}</strong>
+                        <span>{check.kind}{check.unit ? ` / ${check.unit}` : ''}{check.min !== undefined || check.max !== undefined ? ` / ${check.min ?? '-'} to ${check.max ?? '-'}` : ''}</span>
+                      </div>
+                      <input
+                        aria-label={`Observed ${check.label}`}
+                        value={qcObserved[check.id] ?? ''}
+                        disabled={activeBatch.status !== 'QC' || !canRecordProductionQc || Boolean(activeBatch.qcApprovedAt)}
+                        onChange={(event) => setQcObserved((current) => ({ ...current, [check.id]: event.target.value }))}
+                      />
+                      <StatusBadge status={result?.status === 'PASSED' ? 'stable' : result?.status === 'FAILED' ? 'alert' : 'review'} label={result?.status ?? 'PENDING'} />
+                      <button className="ghost-button small" type="button" onClick={() => void recordStructuredQcResult(activeBatch.id, check.id)} disabled={busyId === activeBatch.id || activeBatch.status !== 'QC' || !canRecordProductionQc || Boolean(activeBatch.qcApprovedAt)}>
+                        Record
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : <div className="empty-state compact">This legacy batch has no structured QC template. New P1 batches require a release specification.</div>}
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Yield grams</span>
+                <input min={0} step={0.001} type="number" value={yieldDraft.yieldGrams} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, yieldGrams: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Waste grams</span>
+                <input min={0} step={0.001} type="number" value={yieldDraft.wasteGrams} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, wasteGrams: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Labor cost</span>
+                <input min={0} step={0.01} type="number" value={yieldDraft.laborCost} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, laborCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Overhead cost</span>
+                <input min={0} step={0.01} type="number" value={yieldDraft.overheadCost} disabled={activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'} onChange={(event) => setYieldDraft((current) => ({ ...current, overheadCost: Number(event.target.value) }))} />
+              </label>
+            </div>
+            <button className="ghost-button small" type="button" onClick={() => void recordYield(activeBatch.id)} disabled={busyId === activeBatch.id || activeBatch.consumedGrams <= 0 || !canManageProduction || activeBatch.status === 'RELEASED'}>
+              Reconcile yield and cost
+            </button>
+          </>
+        ) : <div className="empty-state compact">Yield, loss, labor, and overhead become available after raw materials are issued.</div>}
+      </Panel>
+
+      <Panel
+        title="Work Order & QC Protocol"
+        icon={ClipboardCheck}
+        right={
+          activeBatch?.status === 'QC' && activeQcTemplate ? (
+            <button
+              className="primary-button small"
+              type="button"
+              onClick={() => void approveStructuredQc(activeBatch.id)}
+              disabled={busyId === activeBatch.id || !canApproveProductionQc || !activeQcReadyForApproval}
+              title={qcApprovalHint}
+            >
+              Approve QC
+            </button>
+          ) : activeBatch?.qcApprovedAt ? (
+            <StatusBadge status="stable" label="QA APPROVED" />
+          ) : null
+        }
+      >
         {activeBatch ? (
           <div className="document-list compact-list">
             <div className="document-row">
@@ -8970,7 +11772,7 @@ function ProductionWorkspace() {
       <Panel className="wide" title="Batch Board" icon={Activity}>
         <div className="document-list compact-list production-list">
           {batches.map((batch) => (
-            <div className="document-row production-row" key={batch.id}>
+            <div className={`document-row production-row ${activeBatch?.id === batch.id ? 'is-selected' : ''}`} key={batch.id}>
               <div>
                 <strong>{batch.id} / {batch.formulaCode}</strong>
                 <span>{formatGrams(batch.targetGrams)} target / {formatGrams(batch.consumedGrams)} consumed / {batch.owner}</span>
@@ -8984,50 +11786,10 @@ function ProductionWorkspace() {
                 <button
                   className="primary-button small"
                   type="button"
-                  onClick={() => void consumeBatch(batch.id)}
-                  disabled={busyId === batch.id || batch.consumedGrams > 0}
+                  onClick={() => openBatchLifecycle(batch.id)}
+                  aria-pressed={activeBatch?.id === batch.id}
                 >
-                  Consume
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'FILTRATION')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
-                >
-                  Filtration
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'QC')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
-                >
-                  QC ready
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void recordQc(batch.id, 'PASSED')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.qcStatus === 'PASSED'}
-                >
-                  QC pass
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void recordQc(batch.id, 'FAILED')}
-                  disabled={busyId === batch.id || batch.consumedGrams <= 0 || batch.status === 'RELEASED'}
-                >
-                  Hold
-                </button>
-                <button
-                  className="ghost-button small"
-                  type="button"
-                  onClick={() => void moveBatch(batch.id, 'RELEASED')}
-                  disabled={busyId === batch.id || batch.qcStatus !== 'PASSED' || batch.status === 'RELEASED'}
-                >
-                  Release
+                  {activeBatch?.id === batch.id ? 'Lifecycle open' : 'Open lifecycle'}
                 </button>
               </div>
             </div>
@@ -9084,11 +11846,13 @@ const reorderPointByTier: Record<Material['tier'], number> = {
 function ProcurementWorkspace({
   stock,
   materialRecords,
+  session,
   onLotsChange,
   onMovementsChange,
 }: {
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  session: AuthSession
   onLotsChange: Dispatch<SetStateAction<InventoryLot[]>>
   onMovementsChange: Dispatch<SetStateAction<InventoryMovement[]>>
 }) {
@@ -9099,7 +11863,9 @@ function ProcurementWorkspace({
   const [selectedMaterialId, setSelectedMaterialId] = useState(materialOptions[0]?.id ?? 'mat-bergamot')
   const [statusMessage, setStatusMessage] = useState('Loading procurement workspace')
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [lastReceipt, setLastReceipt] = useState<PurchaseOrderReceiptResponse | null>(null)
+  const [lastReceipt, setLastReceipt] = useState<ProcurementReceiptRecord | null>(null)
+  const [receiptRows, setReceiptRows] = useState<ProcurementReceiptRecord[]>([])
+  const [landedCostDraft, setLandedCostDraft] = useState({ freightCost: 0, dutyCost: 0, insuranceCost: 0 })
   const [supplierDraft, setSupplierDraft] = useState({
     name: 'North Aroma Cooperative',
     country: 'TH',
@@ -9114,7 +11880,20 @@ function ProcurementWorkspace({
     unitCost: materialOptions[0]?.costPerGram ?? 0.1,
     currency: 'USD',
   })
+  const [purchaseOrderLines, setPurchaseOrderLines] = useState<PurchaseOrderLineItem[]>([
+    {
+      id: 'draft-po-line-1',
+      materialId: materialOptions[0]?.id ?? '',
+      quantityGrams: 100,
+      receivedGrams: 0,
+      unitCost: materialOptions[0]?.costPerGram ?? 0.1,
+    },
+  ])
   const [receiveDraft, setReceiveDraft] = useState<Record<string, number>>({})
+  const [rfqQuantityGrams, setRfqQuantityGrams] = useState(100)
+  const [rfqComparison, setRfqComparison] = useState<RfqComparison | null>(null)
+  const canManageProcurement = sessionHasPermission(session, 'procurement.manage')
+  const canInspectReceipt = session.role === 'Owner' || session.role === 'Admin' || session.role === 'Lab Manager' || session.role === 'Manager'
 
   const materialById = useMemo(
     () => new Map(materialOptions.map((material) => [material.id, material])),
@@ -9145,6 +11924,18 @@ function ProcurementWorkspace({
     [orderRows],
   )
 
+  const linesForPurchaseOrder = useCallback((order: PurchaseOrderRecord): PurchaseOrderLineItem[] => (
+    order.lines?.length
+      ? order.lines
+      : [{
+          id: `${order.id}-legacy-line`,
+          materialId: order.materialId,
+          quantityGrams: order.quantityGrams,
+          receivedGrams: order.receivedGrams,
+          unitCost: order.unitCost,
+        }]
+  ), [])
+
   const updateOrder = useCallback((updated: PurchaseOrderRecord) => {
     setOrderRows((current) => {
       if (current.some((order) => order.id === updated.id)) {
@@ -9158,16 +11949,18 @@ function ProcurementWorkspace({
     let active = true
     async function loadProcurement() {
       try {
-        const [supplierPayload, orderPayload] = await Promise.all([
+        const [supplierPayload, orderPayload, receiptPayload] = await Promise.all([
           requestApi<SupplierRecord[]>('/suppliers'),
           requestApi<PurchaseOrderRecord[]>('/purchase-orders'),
+          requestApi<ProcurementReceiptRecord[]>('/procurement/receipts'),
         ])
         if (!active) {
           return
         }
         setSupplierRows(supplierPayload)
         setOrderRows(orderPayload)
-        setStatusMessage('Procurement API synced: suppliers, PO board, and receipt controls are live')
+        setReceiptRows(receiptPayload)
+        setStatusMessage('Procurement API synced: supplier, PO, quarantine, and landed-cost records are live')
       } catch (error) {
         if (active) {
           setStatusMessage(error instanceof Error ? error.message : 'Using local procurement seed until API is reachable')
@@ -9198,6 +11991,16 @@ function ProcurementWorkspace({
       unitCost: materialById.get(current.materialId)?.costPerGram ?? current.unitCost,
     }))
   }, [materialById, materialOptions, supplierRows])
+
+  useEffect(() => {
+    setPurchaseOrderLines((current) => current.map((line) => {
+      const fallbackMaterial = materialOptions[0]
+      const material = materialById.get(line.materialId) ?? fallbackMaterial
+      return material
+        ? { ...line, materialId: material.id, unitCost: materialById.has(line.materialId) ? line.unitCost : material.costPerGram }
+        : line
+    }))
+  }, [materialById, materialOptions])
 
   useEffect(() => {
     let active = true
@@ -9246,6 +12049,13 @@ function ProcurementWorkspace({
   }
 
   async function createPurchaseOrder() {
+    const validLines = purchaseOrderLines.filter((line) =>
+      line.materialId && Number(line.quantityGrams) > 0 && Number(line.unitCost) > 0,
+    )
+    if (validLines.length !== purchaseOrderLines.length || validLines.length === 0) {
+      setStatusMessage('Each purchase-order line needs a material, quantity, and unit cost')
+      return
+    }
     setBusyId('po-create')
     setStatusMessage('Creating purchase order draft')
     try {
@@ -9254,14 +12064,16 @@ function ProcurementWorkspace({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           supplierId: orderDraft.supplierId,
-          materialId: orderDraft.materialId,
-          quantityGrams: Number(orderDraft.quantityGrams),
-          unitCost: Number(orderDraft.unitCost),
           currency: orderDraft.currency,
+          lines: validLines.map((line) => ({
+            materialId: line.materialId,
+            quantityGrams: Number(line.quantityGrams),
+            unitCost: Number(line.unitCost),
+          })),
         }),
       })
       updateOrder(payload.purchaseOrder)
-      setSelectedMaterialId(payload.purchaseOrder.materialId)
+      setSelectedMaterialId(payload.purchaseOrder.lines?.[0]?.materialId ?? payload.purchaseOrder.materialId)
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Purchase order create failed')
@@ -9288,28 +12100,35 @@ function ProcurementWorkspace({
     }
   }
 
-  async function receivePurchaseOrder(order: PurchaseOrderRecord, receiveAll = false) {
-    const remainingGrams = order.quantityGrams - order.receivedGrams
-    const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[order.id] ?? remainingGrams)
+  async function receivePurchaseOrder(order: PurchaseOrderRecord, line: PurchaseOrderLineItem, receiveAll = false) {
+    const remainingGrams = line.quantityGrams - line.receivedGrams
+    const receiptKey = `${order.id}:${line.id}`
+    const receivedGrams = receiveAll ? remainingGrams : Number(receiveDraft[receiptKey] ?? remainingGrams)
     setBusyId(order.id)
-    setStatusMessage(`Receiving ${formatGrams(receivedGrams)} for ${order.id}`)
+    setStatusMessage(`Creating quarantined receipt for ${formatGrams(receivedGrams)} on ${order.id}`)
     try {
-      const payload = await requestApi<PurchaseOrderReceiptResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receive`, {
+      const payload = await requestApi<ProcurementReceiptCreateResponse>(`/purchase-orders/${encodeURIComponent(order.id)}/receipts`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receivedGrams }),
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ lines: [{ materialId: line.materialId, receivedGrams }] }),
       })
       updateOrder(payload.purchaseOrder)
-      onLotsChange((current) => (current.some((lot) => lot.id === payload.lot.id) ? current : [payload.lot, ...current]))
-      onMovementsChange((current) =>
-        current.some((movement) => movement.id === payload.movement.id) ? current : [payload.movement, ...current],
-      )
-      setHistoryRows((current) =>
-        current.some((record) => record.id === payload.priceHistory.id) ? current : [payload.priceHistory, ...current],
-      )
-      setReceiveDraft((current) => ({ ...current, [order.id]: Math.max(payload.purchaseOrder.quantityGrams - payload.purchaseOrder.receivedGrams, 0) }))
-      setSelectedMaterialId(order.materialId)
-      setLastReceipt(payload)
+      onLotsChange((current) => [
+        ...payload.lots.filter((lot) => !current.some((candidate) => candidate.id === lot.id)),
+        ...current,
+      ])
+      onMovementsChange((current) => [
+        ...payload.movements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
+        ...current,
+      ])
+      const receivedLine = linesForPurchaseOrder(payload.purchaseOrder).find((candidate) => candidate.materialId === line.materialId)
+      setReceiveDraft((current) => ({
+        ...current,
+        [receiptKey]: Math.max((receivedLine?.quantityGrams ?? 0) - (receivedLine?.receivedGrams ?? 0), 0),
+      }))
+      setSelectedMaterialId(line.materialId)
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => [payload.receipt, ...current.filter((receipt) => receipt.id !== payload.receipt.id)])
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Purchase order receipt failed')
@@ -9318,14 +12137,91 @@ function ProcurementWorkspace({
     }
   }
 
-  function fillOrderFromMaterial(materialId: string) {
-    const material = materialById.get(materialId)
-    setOrderDraft((current) => ({
-      ...current,
-      materialId,
-      unitCost: material?.costPerGram ?? current.unitCost,
+  async function postLandedCost(receiptId: string) {
+    setBusyId(receiptId)
+    setStatusMessage(`Posting landed cost for ${receiptId}`)
+    try {
+      const payload = await requestApi<ProcurementLandedCostResponse>(`/procurement/receipts/${encodeURIComponent(receiptId)}/landed-cost`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(landedCostDraft),
+      })
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => current.map((receipt) => receipt.id === payload.receipt.id ? payload.receipt : receipt))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Landed cost posting failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function inspectReceipt(receiptId: string, action: 'ACCEPT' | 'RETURN') {
+    setBusyId(receiptId)
+    setStatusMessage(`${action === 'ACCEPT' ? 'Accepting' : 'Returning'} quarantined receipt ${receiptId}`)
+    try {
+      const payload = await requestApi<ProcurementInspectionResponse>(`/procurement/receipts/${encodeURIComponent(receiptId)}/inspect`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ action }),
+      })
+      setLastReceipt(payload.receipt)
+      setReceiptRows((current) => current.map((receipt) => receipt.id === payload.receipt.id ? payload.receipt : receipt))
+      onLotsChange((current) => current.map((lot) => payload.lots.find((candidate) => candidate.id === lot.id) ?? lot))
+      if (payload.movements.length > 0) {
+        onMovementsChange((current) => [
+          ...payload.movements.filter((movement) => !current.some((candidate) => candidate.id === movement.id)),
+          ...current,
+        ])
+      }
+      setStatusMessage(payload.invariant)
+      if (action === 'ACCEPT') {
+        const materialId = payload.receipt.lines[0]?.materialId
+        if (materialId) {
+          const history = await requestApi<PriceHistoryRecord[]>(`/materials/${encodeURIComponent(materialId)}/price-history`)
+          setHistoryRows(history)
+        }
+      }
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Receipt inspection failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function updatePurchaseOrderLine(lineId: string, patch: Partial<PurchaseOrderLineItem>) {
+    setPurchaseOrderLines((current) => current.map((line) => {
+      if (line.id !== lineId) {
+        return line
+      }
+      const material = patch.materialId ? materialById.get(patch.materialId) : undefined
+      return {
+        ...line,
+        ...patch,
+        unitCost: material ? material.costPerGram : patch.unitCost ?? line.unitCost,
+      }
     }))
-    setSelectedMaterialId(materialId)
+  }
+
+  function addPurchaseOrderLine() {
+    const material = materialOptions.find((candidate) => !purchaseOrderLines.some((line) => line.materialId === candidate.id)) ?? materialOptions[0]
+    if (!material) {
+      return
+    }
+    setPurchaseOrderLines((current) => [
+      ...current,
+      {
+        id: `draft-po-line-${Date.now()}`,
+        materialId: material.id,
+        quantityGrams: 100,
+        receivedGrams: 0,
+        unitCost: material.costPerGram,
+      },
+    ])
+  }
+
+  function removePurchaseOrderLine(lineId: string) {
+    setPurchaseOrderLines((current) => current.length > 1 ? current.filter((line) => line.id !== lineId) : current)
   }
 
   function prepareLowStockOrder(suggestion: InventoryReorderSuggestion) {
@@ -9338,8 +12234,78 @@ function ProcurementWorkspace({
       unitCost: material?.costPerGram ?? 0.1,
       currency: 'USD',
     })
+    setPurchaseOrderLines([{
+      id: `draft-po-line-${Date.now()}`,
+      materialId: suggestion.materialId,
+      quantityGrams: suggestion.suggestedOrderGrams,
+      receivedGrams: 0,
+      unitCost: material?.costPerGram ?? 0.1,
+    }])
     setSelectedMaterialId(suggestion.materialId)
     setStatusMessage(`${suggestion.materialName} loaded into PO draft from low-stock suggestion`)
+  }
+
+  async function compareRfq() {
+    if (!selectedMaterial || rfqQuantityGrams <= 0) {
+      return
+    }
+    setBusyId('rfq-compare')
+    setStatusMessage(`Comparing supplier quotes for ${selectedMaterial.name}`)
+    try {
+      const payload = await requestApi<RfqComparisonResponse>('/procurement/rfq/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ materialId: selectedMaterial.id, quantityGrams: rfqQuantityGrams }),
+      })
+      setRfqComparison(payload)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'RFQ comparison failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function awardRfq(option: RfqComparison['options'][number]) {
+    if (!rfqComparison) {
+      return
+    }
+    setBusyId(`rfq-award-${option.supplierId}`)
+    setStatusMessage(`Awarding ${option.supplierName} and creating a PO draft`)
+    try {
+      const payload = await requestApi<RfqAwardResponse>('/procurement/rfq/award', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          materialId: rfqComparison.materialId,
+          quantityGrams: rfqComparison.quantityGrams,
+          supplierId: option.supplierId,
+          unitCost: option.unitCost,
+          currency: option.currency,
+        }),
+      })
+      updateOrder(payload.purchaseOrder)
+      setOrderDraft((current) => ({
+        ...current,
+        supplierId: option.supplierId,
+        materialId: rfqComparison.materialId,
+        quantityGrams: rfqComparison.quantityGrams,
+        unitCost: option.unitCost,
+        currency: option.currency,
+      }))
+      setPurchaseOrderLines([{
+        id: `draft-po-line-${Date.now()}`,
+        materialId: rfqComparison.materialId,
+        quantityGrams: rfqComparison.quantityGrams,
+        receivedGrams: 0,
+        unitCost: option.unitCost,
+      }])
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'RFQ award failed')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   return (
@@ -9436,6 +12402,67 @@ function ProcurementWorkspace({
         </div>
       </Panel>
 
+      <Panel title="RFQ Comparison" icon={BadgeDollarSign}>
+        <div className="material-form-grid">
+          <label className="field-row">
+            <span>Material</span>
+            <select
+              aria-label="RFQ material"
+              value={selectedMaterialId}
+              onChange={(event) => {
+                setSelectedMaterialId(event.target.value)
+                setRfqComparison(null)
+              }}
+            >
+              {materialOptions.map((material) => (
+                <option key={material.id} value={material.id}>{material.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Quantity grams</span>
+            <input
+              aria-label="RFQ quantity grams"
+              min={1}
+              step={1}
+              type="number"
+              value={rfqQuantityGrams}
+              onChange={(event) => setRfqQuantityGrams(Number(event.target.value))}
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={() => void compareRfq()} disabled={busyId === 'rfq-compare' || !selectedMaterial || rfqQuantityGrams <= 0}>
+            <BadgeDollarSign size={16} />
+            {busyId === 'rfq-compare' ? 'Comparing' : 'Compare suppliers'}
+          </button>
+        </div>
+        {rfqComparison ? (
+          <div className="document-list compact-list">
+            {rfqComparison.options.map((option) => (
+              <div className="document-row purchase-order-row" key={option.supplierId}>
+                <div>
+                  <strong>{option.supplierName}</strong>
+                  <span>{option.country} / {option.leadTimeDays}d lead / {option.source === 'PRICE_HISTORY' ? 'historical price' : 'material reference'}</span>
+                  <span>{formatCurrency(option.totalCost)} total / {formatCurrency(option.unitCost)} per gram</span>
+                </div>
+                <div className="document-actions">
+                  {option.isRecommended ? <DataTag label="Recommended" value="Lowest total" tone="green" /> : null}
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={() => void awardRfq(option)}
+                    disabled={busyId === `rfq-award-${option.supplierId}`}
+                  >
+                    {busyId === `rfq-award-${option.supplierId}` ? 'Awarding' : 'Award to PO'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">Compare current supplier cost evidence before creating a purchase order.</div>
+        )}
+      </Panel>
+
       <Panel title="Create Purchase Order" icon={ClipboardCheck}>
         <div className="material-form-grid">
           <label className="field-row">
@@ -9453,42 +12480,6 @@ function ProcurementWorkspace({
             </select>
           </label>
           <label className="field-row">
-            <span>Material</span>
-            <select
-              aria-label="Purchase order material"
-              value={orderDraft.materialId}
-              onChange={(event) => fillOrderFromMaterial(event.target.value)}
-            >
-              {materialOptions.map((material) => (
-                <option key={material.id} value={material.id}>
-                  {material.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field-row">
-            <span>Quantity grams</span>
-            <input
-              aria-label="Purchase order quantity grams"
-              min={1}
-              step={1}
-              type="number"
-              value={orderDraft.quantityGrams}
-              onChange={(event) => setOrderDraft((current) => ({ ...current, quantityGrams: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="field-row">
-            <span>Unit cost</span>
-            <input
-              aria-label="Purchase order unit cost"
-              min={0.01}
-              step={0.01}
-              type="number"
-              value={orderDraft.unitCost}
-              onChange={(event) => setOrderDraft((current) => ({ ...current, unitCost: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="field-row">
             <span>Currency</span>
             <input
               aria-label="Purchase order currency"
@@ -9497,18 +12488,73 @@ function ProcurementWorkspace({
               onChange={(event) => setOrderDraft((current) => ({ ...current, currency: event.target.value.toUpperCase() }))}
             />
           </label>
+        </div>
+        <div className="po-line-builder">
+          {purchaseOrderLines.map((line, index) => (
+            <div className="po-line-builder-row" key={line.id}>
+              <strong>Line {index + 1}</strong>
+              <label className="field-row">
+                <span>Material</span>
+                <select
+                  aria-label={`Purchase order material ${index + 1}`}
+                  value={line.materialId}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { materialId: event.target.value })}
+                >
+                  {materialOptions.map((material) => (
+                    <option key={material.id} value={material.id}>{material.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-row">
+                <span>Quantity (g)</span>
+                <input
+                  aria-label={`Purchase order quantity grams ${index + 1}`}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={line.quantityGrams}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { quantityGrams: Number(event.target.value) })}
+                />
+              </label>
+              <label className="field-row">
+                <span>Unit cost</span>
+                <input
+                  aria-label={`Purchase order unit cost ${index + 1}`}
+                  min={0.01}
+                  step={0.01}
+                  type="number"
+                  value={line.unitCost}
+                  onChange={(event) => updatePurchaseOrderLine(line.id, { unitCost: Number(event.target.value) })}
+                />
+              </label>
+              <button
+                className="ghost-button small"
+                type="button"
+                onClick={() => removePurchaseOrderLine(line.id)}
+                disabled={purchaseOrderLines.length === 1}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="document-actions">
+          <button className="ghost-button small" type="button" onClick={addPurchaseOrderLine}>
+            <Plus size={14} />
+            Add material
+          </button>
           <button
             className="primary-button"
             type="button"
             onClick={() => void createPurchaseOrder()}
-            disabled={busyId === 'po-create' || !orderDraft.supplierId || !orderDraft.materialId || orderDraft.quantityGrams <= 0}
+            disabled={busyId === 'po-create' || !orderDraft.supplierId || purchaseOrderLines.length === 0}
           >
             Create PO
           </button>
         </div>
         <ul className="policy-list">
           <li>Draft PO creation does not reserve or move inventory.</li>
-          <li>Goods receipt is the only action that creates lots and RECEIPT movements.</li>
+          <li>Each goods receipt line creates its own lot, RECEIPT movement, and price history evidence.</li>
         </ul>
       </Panel>
 
@@ -9518,30 +12564,56 @@ function ProcurementWorkspace({
             <div className="empty-state compact">No active purchase orders.</div>
           ) : (
             activeOrders.map((order) => {
-              const material = materialById.get(order.materialId)
               const supplier = supplierById.get(order.supplierId)
-              const remainingGrams = order.quantityGrams - order.receivedGrams
+              const orderLines = linesForPurchaseOrder(order)
               return (
                 <div className="document-row purchase-order-row" key={order.id}>
                   <div>
-                    <strong>{order.id} / {material?.name ?? order.materialId}</strong>
+                    <strong>{order.id} / {orderLines.length} material {orderLines.length === 1 ? 'line' : 'lines'}</strong>
                     <span>{supplier?.name ?? order.supplierId} / expected {order.expectedDate}</span>
-                    <span>
-                      {formatGrams(order.receivedGrams)} received of {formatGrams(order.quantityGrams)} / {formatCurrency(order.unitCost)} per g
-                    </span>
+                    <span>{formatGrams(order.receivedGrams)} received of {formatGrams(order.quantityGrams)}</span>
+                    <div className="po-receipt-lines">
+                      {orderLines.map((line) => {
+                        const material = materialById.get(line.materialId)
+                        const remainingGrams = line.quantityGrams - line.receivedGrams
+                        const receiptKey = `${order.id}:${line.id}`
+                        return (
+                          <div className="po-receipt-line" key={line.id}>
+                            <div>
+                              <strong>{material?.name ?? line.materialId}</strong>
+                              <span>{formatGrams(line.receivedGrams)} of {formatGrams(line.quantityGrams)} / {formatCurrency(line.unitCost)} per g</span>
+                            </div>
+                            <input
+                              aria-label={`Receive grams for ${order.id} ${line.materialId}`}
+                              min={0}
+                              max={remainingGrams}
+                              step={1}
+                              type="number"
+                              value={receiveDraft[receiptKey] ?? remainingGrams}
+                              onChange={(event) => setReceiveDraft((current) => ({ ...current, [receiptKey]: Number(event.target.value) }))}
+                            />
+                            <button
+                              className="primary-button small"
+                              type="button"
+                              onClick={() => void receivePurchaseOrder(order, line)}
+                              disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                            >
+                              Receive
+                            </button>
+                            <button
+                              className="ghost-button small"
+                              type="button"
+                              onClick={() => void receivePurchaseOrder(order, line, true)}
+                              disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
+                            >
+                              Remaining
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                   <StatusBadge status={purchaseOrderStatusTone[order.status]} label={order.status} />
-                  <input
-                    aria-label={`Receive grams for ${order.id}`}
-                    min={0}
-                    max={remainingGrams}
-                    step={1}
-                    type="number"
-                    value={receiveDraft[order.id] ?? remainingGrams}
-                    onChange={(event) =>
-                      setReceiveDraft((current) => ({ ...current, [order.id]: Number(event.target.value) }))
-                    }
-                  />
                   <div className="document-actions">
                     <button
                       className="ghost-button small"
@@ -9551,22 +12623,6 @@ function ProcurementWorkspace({
                     >
                       Send
                     </button>
-                    <button
-                      className="primary-button small"
-                      type="button"
-                      onClick={() => void receivePurchaseOrder(order)}
-                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
-                    >
-                      Receive
-                    </button>
-                    <button
-                      className="ghost-button small"
-                      type="button"
-                      onClick={() => void receivePurchaseOrder(order, true)}
-                      disabled={busyId === order.id || order.status === 'DRAFT' || remainingGrams <= 0}
-                    >
-                      Receive Remaining
-                    </button>
                   </div>
                 </div>
               )
@@ -9575,17 +12631,60 @@ function ProcurementWorkspace({
         </div>
       </Panel>
 
-      <Panel title="Goods Receipt Evidence" icon={Database}>
+      <Panel title="Receipt, Inspection & Landed Cost" icon={Database}>
         {lastReceipt ? (
-          <div className="metric-grid">
-            <Metric label="Lot created" value={lastReceipt.lot.lotNumber} />
-            <Metric label="Movement" value={lastReceipt.movement.id} />
-            <Metric label="Received" value={formatGrams(lastReceipt.movement.quantityGrams)} />
-            <Metric label="Price snapshot" value={lastReceipt.priceHistory.id} />
-          </div>
+          <>
+            <div className="metric-grid">
+              <Metric label="Receipt" value={lastReceipt.id} />
+              <Metric label="Status" value={lastReceipt.status} />
+              <Metric label="Lines" value={String(lastReceipt.lines.length)} />
+              <Metric label="Received" value={formatGrams(lastReceipt.lines.reduce((total, line) => total + line.receivedGrams, 0))} />
+            </div>
+            <div className="material-form-grid">
+              <label className="field-row">
+                <span>Freight</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.freightCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, freightCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Duty</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.dutyCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, dutyCost: Number(event.target.value) }))} />
+              </label>
+              <label className="field-row">
+                <span>Insurance</span>
+                <input min={0} step={0.01} type="number" value={landedCostDraft.insuranceCost} disabled={lastReceipt.status !== 'QUARANTINE' || !canManageProcurement} onChange={(event) => setLandedCostDraft((current) => ({ ...current, insuranceCost: Number(event.target.value) }))} />
+              </label>
+            </div>
+            <div className="action-row">
+              <button className="ghost-button small" type="button" onClick={() => void postLandedCost(lastReceipt.id)} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canManageProcurement}>
+                Post landed cost
+              </button>
+              <button className="primary-button small" type="button" onClick={() => void inspectReceipt(lastReceipt.id, 'ACCEPT')} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canInspectReceipt}>
+                Accept to inventory
+              </button>
+              <button className="ghost-button small" type="button" onClick={() => void inspectReceipt(lastReceipt.id, 'RETURN')} disabled={busyId === lastReceipt.id || lastReceipt.status !== 'QUARANTINE' || !canInspectReceipt}>
+                Return to supplier
+              </button>
+            </div>
+            <p className="caveat">Accept is unavailable until landed cost is posted, including an explicit zero-cost allocation.</p>
+          </>
         ) : (
-          <div className="empty-state compact">Receive a sent PO to create lot, movement, and price history evidence.</div>
+          <div className="empty-state compact">Receive a sent PO to create quarantined lots; post landed cost and inspect before inventory is available.</div>
         )}
+      </Panel>
+
+      <Panel title="Quarantine Queue" icon={ShieldCheck}>
+        <div className="document-list compact-list">
+          {receiptRows.filter((receipt) => receipt.status === 'QUARANTINE' || receipt.status === 'INSPECTED').slice(0, 6).map((receipt) => (
+            <button className="document-row purchase-order-row" type="button" key={receipt.id} onClick={() => setLastReceipt(receipt)}>
+              <div>
+                <strong>{receipt.id}</strong>
+                <span>{receipt.lines.length} line(s) / {formatGrams(receipt.lines.reduce((total, line) => total + line.receivedGrams, 0))}</span>
+              </div>
+              <StatusBadge status={receipt.status === 'QUARANTINE' ? 'review' : 'active'} label={receipt.status} />
+            </button>
+          ))}
+          {receiptRows.every((receipt) => receipt.status !== 'QUARANTINE' && receipt.status !== 'INSPECTED') ? <div className="empty-state compact">No receipt awaits inspection.</div> : null}
+        </div>
       </Panel>
 
       <Panel title="Price History" icon={BadgeDollarSign}>
@@ -9639,11 +12738,16 @@ const quoteStatusTone: Record<QuoteRecord['status'], DomainStatus> = {
   DRAFT: 'draft',
   REVIEW: 'review',
   SENT: 'stable',
+  ACCEPTED: 'active',
+  DECLINED: 'draft',
+  EXPIRED: 'review',
+  CONVERTED: 'stable',
 }
 
 const sampleStatusTone: Record<SampleRequestRecord['status'], DomainStatus> = {
   REQUESTED: 'active',
   APPROVED: 'stable',
+  DECLINED: 'draft',
   CONVERTED: 'review',
 }
 
@@ -9670,12 +12774,46 @@ const shipmentStatusTone: Record<ShipmentRecord['status'], DomainStatus> = {
   DELIVERED: 'stable',
 }
 
+type OrderEditDraft = {
+  customerReference: string
+  contactEmail: string
+  shippingLine1: string
+  shippingCity: string
+  shippingCountry: string
+  deliveryInstructions: string
+  discountPercent: number
+  taxPercent: number
+  shippingCost: number
+  lines: Array<{ id: string; skuId: string; quantity: number }>
+}
+
+function orderEditDraftFrom(order: SalesOrderRecord, customer?: CustomerRecord): OrderEditDraft {
+  const address = order.shippingAddress ?? customer?.shippingAddress
+  const lines = order.lines?.length
+    ? order.lines
+    : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+  return {
+    customerReference: order.customerReference ?? '',
+    contactEmail: order.contactEmail ?? customer?.contactEmail ?? '',
+    shippingLine1: address?.line1 ?? '',
+    shippingCity: address?.city ?? '',
+    shippingCountry: address?.country ?? '',
+    deliveryInstructions: order.deliveryInstructions ?? '',
+    discountPercent: order.discountPercent,
+    taxPercent: order.taxPercent,
+    shippingCost: order.shippingCost,
+    lines: lines.map((line, index) => ({ id: `${order.id}-line-${index + 1}`, skuId: line.skuId, quantity: line.quantity })),
+  }
+}
+
 function CommerceWorkspace({
   stock,
   materialRecords,
+  session,
 }: {
   stock: ReturnType<typeof stockSummary>
   materialRecords: Material[]
+  session: AuthSession
 }) {
   const materialOptions = materialRecords.length > 0 ? materialRecords : materials
   const seedSkuAvailability = useMemo<CatalogSkuAvailability[]>(
@@ -9686,6 +12824,7 @@ function CommerceWorkspace({
   const [priceListRows, setPriceListRows] = useState<PriceListRecord[]>(priceLists)
   const [quoteRows, setQuoteRows] = useState<QuoteRecord[]>(quotes)
   const [sampleRows, setSampleRows] = useState<SampleRequestRecord[]>(sampleRequests)
+  const [customerRows, setCustomerRows] = useState<CustomerRecord[]>([])
   const [selectedSkuId, setSelectedSkuId] = useState(commercialSkus[0]?.id ?? '')
   const [statusMessage, setStatusMessage] = useState('Loading commerce workspace')
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -9708,10 +12847,14 @@ function CommerceWorkspace({
     sampleEligible: true,
   })
   const [quoteDraft, setQuoteDraft] = useState({
-    customer: 'Maison Trial Studio',
+    customerId: '',
+    newCustomerName: '',
+    newCustomerEmail: '',
     customerGroup: 'Studio' as PriceListRecord['customerGroup'],
-    quantityPacks: 2,
   })
+  const [quoteLines, setQuoteLines] = useState(() => [
+    { id: 'quote-line-1', skuId: commercialSkus[0]?.id ?? '', quantityPacks: 1 },
+  ])
   const [sampleDraft, setSampleDraft] = useState({
     customer: 'Atelier Preview',
     packs: 1,
@@ -9722,6 +12865,9 @@ function CommerceWorkspace({
     [materialOptions],
   )
   const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
+  const customerById = useMemo(() => new Map(customerRows.map((customer) => [customer.id, customer])), [customerRows])
+  const selectedQuoteCustomer = customerById.get(quoteDraft.customerId)
+  const quoteCustomerGroup = selectedQuoteCustomer?.group ?? quoteDraft.customerGroup
   const activePriceListByGroup = useMemo(() => {
     const map = new Map<PriceListRecord['customerGroup'], PriceListRecord>()
     priceListRows.forEach((priceList) => {
@@ -9735,13 +12881,24 @@ function CommerceWorkspace({
   const selectedMaterial = selectedSku ? materialById.get(selectedSku.materialId) : undefined
   const activePriceList = useMemo(
     () =>
-      activePriceListByGroup.get(quoteDraft.customerGroup) ??
+      activePriceListByGroup.get(quoteCustomerGroup) ??
       (selectedSku ? activePriceListByGroup.get(selectedSku.tier) : undefined) ??
       priceListRows[0],
-    [activePriceListByGroup, priceListRows, quoteDraft.customerGroup, selectedSku],
+    [activePriceListByGroup, priceListRows, quoteCustomerGroup, selectedSku],
   )
-  const quoteUnitPrice = selectedSku && activePriceList ? selectedSku.price * activePriceList.multiplier : 0
-  const quoteTotal = quoteUnitPrice * quoteDraft.quantityPacks
+  const quoteLineRows = useMemo(
+    () =>
+      quoteLines.flatMap((line) => {
+        const sku = skuById.get(line.skuId)
+        if (!sku) {
+          return []
+        }
+        const unitPrice = sku.price * (activePriceList?.multiplier ?? 1)
+        return [{ ...line, sku, unitPrice, lineTotal: unitPrice * line.quantityPacks }]
+      }),
+    [activePriceList?.multiplier, quoteLines, skuById],
+  )
+  const quoteTotal = quoteLineRows.reduce((sum, line) => sum + line.lineTotal, 0)
 
   useEffect(() => {
     setSkuRows((current) => syncSkuAvailabilityRows(current, stock))
@@ -9751,11 +12908,12 @@ function CommerceWorkspace({
     let active = true
     async function loadCommerce() {
       try {
-        const [skuPayload, priceListPayload, quotePayload, samplePayload] = await Promise.all([
+        const [skuPayload, priceListPayload, quotePayload, samplePayload, customerPayload] = await Promise.all([
           requestApi<CatalogSkuAvailability[]>('/catalog/skus'),
           requestApi<PriceListRecord[]>('/price-lists'),
           requestApi<QuoteRecord[]>('/quotes'),
           requestApi<SampleRequestRecord[]>('/samples'),
+          requestApi<CustomerRecord[]>('/customers'),
         ])
         if (!active) {
           return
@@ -9764,7 +12922,19 @@ function CommerceWorkspace({
         setPriceListRows(priceListPayload)
         setQuoteRows(quotePayload)
         setSampleRows(samplePayload)
+        setCustomerRows(customerPayload)
         setSelectedSkuId((current) => (skuPayload.some((sku) => sku.id === current) ? current : skuPayload[0]?.id ?? ''))
+        setQuoteDraft((current) => ({
+          ...current,
+          customerId: customerPayload.some((customer) => customer.id === current.customerId)
+            ? current.customerId
+            : customerPayload[0]?.id ?? '',
+        }))
+        setQuoteLines((current) =>
+          current.length > 0
+            ? current.map((line) => ({ ...line, skuId: skuPayload.some((sku) => sku.id === line.skuId) ? line.skuId : skuPayload[0]?.id ?? '' }))
+            : [{ id: 'quote-line-1', skuId: skuPayload[0]?.id ?? '', quantityPacks: 1 }],
+        )
         setStatusMessage('Commerce API synced: catalog, price lists, quotes, and sample queue are live')
       } catch (error) {
         if (active) {
@@ -9834,7 +13004,7 @@ function CommerceWorkspace({
   }
 
   async function createQuote() {
-    if (!selectedSku) {
+    if (!selectedQuoteCustomer || quoteLineRows.length === 0) {
       return
     }
     setBusyId('quote-create')
@@ -9844,10 +13014,10 @@ function CommerceWorkspace({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          skuId: selectedSku.id,
-          customer: quoteDraft.customer,
-          customerGroup: quoteDraft.customerGroup,
-          quantityPacks: Number(quoteDraft.quantityPacks),
+          customerId: selectedQuoteCustomer.id,
+          customer: selectedQuoteCustomer.name,
+          customerGroup: selectedQuoteCustomer.group,
+          lines: quoteLineRows.map((line) => ({ skuId: line.sku.id, quantityPacks: Number(line.quantityPacks) })),
         }),
       })
       setQuoteRows((current) => [payload.quote, ...current])
@@ -9857,6 +13027,76 @@ function CommerceWorkspace({
     } finally {
       setBusyId(null)
     }
+  }
+  async function createQuoteCustomer() {
+    if (!quoteDraft.newCustomerName.trim()) {
+      return
+    }
+    setBusyId('quote-customer-create')
+    try {
+      const payload = await requestApi<CustomerCreateResponse>('/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: quoteDraft.newCustomerName.trim(),
+          group: quoteDraft.customerGroup,
+          contactEmail: quoteDraft.newCustomerEmail.trim() || undefined,
+          creditLimit: 250,
+          paymentTerms: 'NET_15',
+        }),
+      })
+      setCustomerRows((current) => [payload.customer, ...current])
+      setQuoteDraft((current) => ({
+        ...current,
+        customerId: payload.customer.id,
+        newCustomerName: '',
+        newCustomerEmail: '',
+      }))
+      setStatusMessage(`Customer ${payload.customer.name} created and selected for quote`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Customer create failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function addQuoteLine() {
+    const skuId = selectedSku?.id ?? skuRows[0]?.id ?? ''
+    if (!skuId || quoteLines.some((line) => line.skuId === skuId)) {
+      setStatusMessage('Choose a different SKU from the catalog before adding another quote line')
+      return
+    }
+    setQuoteLines((current) => [
+      ...current,
+      { id: `quote-line-${Date.now()}`, skuId, quantityPacks: 1 },
+    ])
+  }
+
+  function updateQuoteLine(id: string, patch: Partial<{ skuId: string; quantityPacks: number }>) {
+    setQuoteLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)))
+  }
+
+  function removeQuoteLine(id: string) {
+    setQuoteLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
+  }
+
+  function printQuote(quote: QuoteRecord) {
+    const customer = customerRows.find((item) => item.name === quote.customer)
+    const lines = quote.lines?.length
+      ? quote.lines
+      : [{ skuId: quote.skuId, quantityPacks: quote.quantityPacks, unitPrice: quote.unitPrice, lineTotal: quote.total }]
+    const printableLines = lines
+      .map((line) => `<tr><td>${escapePrintHtml(skuById.get(line.skuId)?.name ?? line.skuId)}</td><td>${line.quantityPacks}</td><td>${escapePrintHtml(formatCurrency(line.unitPrice))}</td><td>${escapePrintHtml(formatCurrency(line.lineTotal))}</td></tr>`)
+      .join('')
+    const printed = openPrintDocument(
+      `Quote ${quote.id}`,
+      `<main class="sheet"><header class="header"><div><div class="brand">OlfactoryOps</div><div class="muted">Fragrance materials quotation</div></div><div class="tag">${escapePrintHtml(quote.id)}</div></header>
+      <section class="grid"><div class="field"><strong>Customer</strong>${escapePrintHtml(quote.customer)}</div><div class="field"><strong>Customer group</strong>${escapePrintHtml(quote.customerGroup)}</div><div class="field"><strong>Contact</strong>${escapePrintHtml(customer?.contactEmail ?? 'To be confirmed')}</div><div class="field"><strong>Issued</strong>${escapePrintHtml(new Date(quote.createdAt).toLocaleDateString())}</div></section>
+      <table><thead><tr><th>SKU</th><th>Packs</th><th>Unit price</th><th>Line total</th></tr></thead><tbody>${printableLines}</tbody></table>
+      <section class="grid"><div class="field"><strong>Quote status</strong>${escapePrintHtml(quote.status)}</div><div class="field"><strong>Total</strong>${escapePrintHtml(formatCurrency(quote.total))} ${escapePrintHtml(quote.currency)}</div></section>
+      <section class="signatures"><div class="signature">Prepared by</div><div class="signature">Accepted by client</div><div class="signature">Date</div></section></main>`,
+    )
+    setStatusMessage(printed ? `${quote.id} opened for print or Save as PDF` : 'Allow pop-ups to print or save the quote as PDF')
   }
 
   async function requestSample() {
@@ -9879,6 +13119,59 @@ function CommerceWorkspace({
       setStatusMessage(payload.invariant)
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'Sample request failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function updateQuoteStatus(quoteId: string, status: 'ACCEPTED' | 'DECLINED' | 'EXPIRED') {
+    setBusyId(`quote-status:${quoteId}`)
+    try {
+      const payload = await requestApi<{ quote: QuoteRecord; invariant: string }>(`/quotes/${encodeURIComponent(quoteId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      setQuoteRows((current) => current.map((quote) => (quote.id === quoteId ? payload.quote : quote)))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Quote lifecycle update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function convertQuoteToOrder(quoteId: string) {
+    setBusyId(`quote-convert:${quoteId}`)
+    try {
+      const payload = await requestApi<{ quote: QuoteRecord; order: SalesOrderRecord; customer: CustomerRecord; invariant: string }>(
+        `/quotes/${encodeURIComponent(quoteId)}/convert`,
+        { method: 'POST' },
+      )
+      setQuoteRows((current) => current.map((quote) => (quote.id === quoteId ? payload.quote : quote)))
+      setCustomerRows((current) =>
+        current.some((customer) => customer.id === payload.customer.id) ? current : [payload.customer, ...current],
+      )
+      setStatusMessage(`${payload.invariant} Created ${payload.order.id}.`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Quote conversion failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function updateSampleStatus(sampleId: string, status: 'APPROVED' | 'DECLINED' | 'CONVERTED') {
+    setBusyId(`sample-status:${sampleId}`)
+    try {
+      const payload = await requestApi<{ sample: SampleRequestRecord; invariant: string }>(`/samples/${encodeURIComponent(sampleId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      setSampleRows((current) => current.map((sample) => (sample.id === sampleId ? payload.sample : sample)))
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Sample lifecycle update failed')
     } finally {
       setBusyId(null)
     }
@@ -10049,49 +13342,66 @@ function CommerceWorkspace({
           <>
             <div className="material-form-grid">
               <label className="field-row">
-                <span>Customer</span>
-                <input
-                  aria-label="Quote customer"
-                  value={quoteDraft.customer}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customer: event.target.value }))}
-                />
-              </label>
-              <label className="field-row">
-                <span>Customer group</span>
+                <span>Customer list</span>
                 <select
-                  aria-label="Quote customer group"
-                  value={quoteDraft.customerGroup}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))}
+                  aria-label="Quote customer"
+                  value={quoteDraft.customerId}
+                  onChange={(event) => setQuoteDraft((current) => ({ ...current, customerId: event.target.value }))}
                 >
-                  <option value="Studio">Studio</option>
-                  <option value="Lab">Lab</option>
-                  <option value="Bulk">Bulk</option>
-                  <option value="Contract">Contract</option>
+                  {customerRows.map((customer) => (
+                    <option key={customer.id} value={customer.id}>{customer.name} / {customer.group}</option>
+                  ))}
                 </select>
               </label>
               <label className="field-row">
-                <span>Quantity packs</span>
-                <input
-                  aria-label="Quote quantity packs"
-                  min={1}
-                  type="number"
-                  value={quoteDraft.quantityPacks}
-                  onChange={(event) => setQuoteDraft((current) => ({ ...current, quantityPacks: Number(event.target.value) }))}
-                />
+                <span>New customer name</span>
+                <input aria-label="New quote customer name" value={quoteDraft.newCustomerName} onChange={(event) => setQuoteDraft((current) => ({ ...current, newCustomerName: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>New customer email</span>
+                <input aria-label="New quote customer email" type="email" value={quoteDraft.newCustomerEmail} onChange={(event) => setQuoteDraft((current) => ({ ...current, newCustomerEmail: event.target.value }))} />
+              </label>
+              <label className="field-row">
+                <span>New customer group</span>
+                <select aria-label="New quote customer group" value={quoteDraft.customerGroup} onChange={(event) => setQuoteDraft((current) => ({ ...current, customerGroup: event.target.value as PriceListRecord['customerGroup'] }))}>
+                  <option value="Studio">Studio</option><option value="Lab">Lab</option><option value="Bulk">Bulk</option><option value="Contract">Contract</option>
+                </select>
               </label>
               <button
-                className="primary-button"
+                className="ghost-button"
                 type="button"
-                onClick={() => void createQuote()}
-                disabled={busyId === 'quote-create' || !quoteDraft.customer.trim() || quoteDraft.quantityPacks <= 0}
+                onClick={() => void createQuoteCustomer()}
+                disabled={busyId === 'quote-customer-create' || !quoteDraft.newCustomerName.trim()}
               >
+                Create customer
+              </button>
+            </div>
+            <div className="document-list compact-list">
+              {quoteLineRows.map((line) => (
+                <div className="document-row quote-row" key={line.id}>
+                  <div>
+                    <strong>{line.sku.name}</strong>
+                    <span>{formatGrams(line.sku.packSizeGrams)} / {line.sku.canSellPacks} packs available</span>
+                  </div>
+                  <label className="field-row compact-field">
+                    <span>Packs</span>
+                    <input aria-label={`Quote packs ${line.sku.id}`} min={1} type="number" value={line.quantityPacks} onChange={(event) => updateQuoteLine(line.id, { quantityPacks: Number(event.target.value) })} />
+                  </label>
+                  <div className="mono-value">{formatCurrency(line.lineTotal)}</div>
+                  <button className="ghost-button tiny" type="button" onClick={() => removeQuoteLine(line.id)} disabled={quoteLines.length === 1}>Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="action-row">
+              <button className="ghost-button small" type="button" onClick={addQuoteLine}>Add selected SKU</button>
+              <button className="primary-button" type="button" onClick={() => void createQuote()} disabled={busyId === 'quote-create' || !selectedQuoteCustomer || quoteLineRows.length === 0 || quoteLineRows.some((line) => line.quantityPacks <= 0)}>
                 Create Quote
               </button>
             </div>
             <div className="metric-grid">
-              <Metric label="Selected SKU" value={selectedSku.name} />
-              <Metric label="Available" value={`${selectedSku.canSellPacks} packs`} />
-              <Metric label="Unit quote" value={formatCurrency(quoteUnitPrice)} />
+              <Metric label="Customer" value={selectedQuoteCustomer?.name ?? 'Create or select customer'} />
+              <Metric label="Quote lines" value={String(quoteLineRows.length)} />
+              <Metric label="Price list" value={activePriceList?.name ?? 'Not available'} />
               <Metric label="Quote total" value={formatCurrency(quoteTotal)} />
             </div>
           </>
@@ -10149,11 +13459,18 @@ function CommerceWorkspace({
             {quoteRows.slice(0, 5).map((quote) => (
               <div className="document-row quote-row" key={quote.id}>
                 <div>
-                  <strong>{quote.id} / {skuById.get(quote.skuId)?.name ?? quote.skuId}</strong>
-                  <span>{quote.customer} / {quote.customerGroup} / {quote.quantityPacks} packs</span>
+                  <strong>{quote.id} / {quote.customer}</strong>
+                  <span>{quote.customerGroup} / {quote.lines?.length ?? 1} SKU line(s) / {quote.lines?.reduce((sum, line) => sum + line.quantityPacks, 0) ?? quote.quantityPacks} packs</span>
                 </div>
                 <StatusBadge status={quoteStatusTone[quote.status]} label={quote.status} />
                 <div className="mono-value">{formatCurrency(quote.total)}</div>
+                <div className="document-actions">
+                  <button className="ghost-button tiny" type="button" onClick={() => printQuote(quote)}>Print / PDF</button>
+                  <a className="ghost-button tiny" href={`mailto:${encodeURIComponent(customerRows.find((customer) => customer.name === quote.customer)?.contactEmail ?? '')}?subject=${encodeURIComponent(`Quotation ${quote.id}`)}&body=${encodeURIComponent(`Hello ${quote.customer},\n\nPlease find quotation ${quote.id} totaling ${formatCurrency(quote.total)} ${quote.currency}.\n\nRegards,\nOlfactoryOps`)}`}>Email</a>
+                  {quote.status === 'SENT' ? <button className="ghost-button tiny" type="button" onClick={() => void updateQuoteStatus(quote.id, 'ACCEPTED')} disabled={busyId === `quote-status:${quote.id}`}>Accept</button> : null}
+                  {quote.status === 'SENT' ? <button className="ghost-button tiny danger" type="button" onClick={() => void updateQuoteStatus(quote.id, 'DECLINED')} disabled={busyId === `quote-status:${quote.id}`}>Decline</button> : null}
+                  {quote.status === 'ACCEPTED' ? <button className="primary-button tiny" type="button" onClick={() => void convertQuoteToOrder(quote.id)} disabled={busyId === `quote-convert:${quote.id}`}>Create Order</button> : null}
+                </div>
               </div>
             ))}
           </div>
@@ -10165,20 +13482,25 @@ function CommerceWorkspace({
                   <span>{sample.customer} / {sample.packs} pack(s)</span>
                 </div>
                 <StatusBadge status={sampleStatusTone[sample.status]} label={sample.status} />
+                <div className="document-actions">
+                  {sample.status === 'REQUESTED' ? <button className="ghost-button tiny" type="button" onClick={() => void updateSampleStatus(sample.id, 'APPROVED')} disabled={busyId === `sample-status:${sample.id}`}>Approve</button> : null}
+                  {sample.status === 'REQUESTED' ? <button className="ghost-button tiny danger" type="button" onClick={() => void updateSampleStatus(sample.id, 'DECLINED')} disabled={busyId === `sample-status:${sample.id}`}>Decline</button> : null}
+                  {sample.status === 'APPROVED' ? <button className="ghost-button tiny" type="button" onClick={() => void updateSampleStatus(sample.id, 'CONVERTED')} disabled={busyId === `sample-status:${sample.id}`}>Mark converted</button> : null}
+                </div>
               </div>
             ))}
           </div>
         </div>
       </Panel>
 
-      <Panel title="Commerce Guardrails" icon={ShieldCheck}>
+      {isInternalAdminSession(session) ? <Panel title="Commerce Guardrails" icon={ShieldCheck}>
         <ul className="policy-list">
           <li>SKU records store pack, price, label, and material mapping only.</li>
           <li>Available packs are derived from approved inventory lots at read time.</li>
           <li>Quotes and samples do not create reservations or InventoryMovement rows.</li>
           <li>Public storefront, customer portal, and document-per-SKU surfacing remain next gates.</li>
         </ul>
-      </Panel>
+      </Panel> : null}
     </div>
   )
 }
@@ -10194,6 +13516,10 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const [documentRows, setDocumentRows] = useState<OrderDocumentRecord[]>([])
   const [skuRows, setSkuRows] = useState<CatalogSkuAvailability[]>(() => seedSkuAvailability)
   const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [detailOrderId, setDetailOrderId] = useState<string | null>(null)
+  const [detailMode, setDetailMode] = useState<'view' | 'edit' | 'cancel'>('view')
+  const [orderEditDraft, setOrderEditDraft] = useState<OrderEditDraft | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading orders workspace')
   const [customerDraft, setCustomerDraft] = useState({
@@ -10207,12 +13533,13 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   })
   const [orderDraft, setOrderDraft] = useState({
     customerId: '',
-    skuId: commercialSkus[0]?.id ?? '',
-    quantity: 1,
     discountPercent: 0,
     taxPercent: 8,
     shippingCost: 12,
   })
+  const [orderLines, setOrderLines] = useState(() => [
+    { id: 'order-line-1', skuId: commercialSkus[0]?.id ?? '', quantity: 1 },
+  ])
   const [shipDraft, setShipDraft] = useState({
     carrier: 'DHL' as ShipmentRecord['carrier'],
     trackingNumber: 'DHL-PHASE12',
@@ -10222,6 +13549,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   const skuById = useMemo(() => new Map(skuRows.map((sku) => [sku.id, sku])), [skuRows])
   const orderById = useMemo(() => new Map(orderRows.map((order) => [order.id, order])), [orderRows])
   const selectedOrder = useMemo(() => orderById.get(selectedOrderId) ?? orderRows[0], [orderById, orderRows, selectedOrderId])
+  const detailOrder = detailOrderId ? orderById.get(detailOrderId) : undefined
   const selectedSku = selectedOrder ? skuById.get(selectedOrder.skuId) : undefined
   const selectedCustomer = selectedOrder ? customerById.get(selectedOrder.customerId) : undefined
   const selectedOrderKey = selectedOrder?.id ?? ''
@@ -10233,13 +13561,40 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     () => documentRows.filter((document) => document.orderId === selectedOrderKey),
     [documentRows, selectedOrderKey],
   )
-  const draftSku = skuById.get(orderDraft.skuId)
   const draftCustomer = customerById.get(orderDraft.customerId)
   const draftPriceList = priceLists.find((priceList) => priceList.customerGroup === draftCustomer?.group && priceList.status === 'ACTIVE')
-  const draftUnitPrice = draftSku ? draftSku.price * (draftPriceList?.multiplier ?? 1) : 0
-  const draftSubtotal = draftUnitPrice * orderDraft.quantity
+  const draftLineRows = useMemo(
+    () =>
+      orderLines.flatMap((line) => {
+        const sku = skuById.get(line.skuId)
+        if (!sku) {
+          return []
+        }
+        const unitPrice = sku.price * (draftPriceList?.multiplier ?? 1)
+        return [{ ...line, sku, unitPrice, lineTotal: unitPrice * line.quantity }]
+      }),
+    [draftPriceList?.multiplier, orderLines, skuById],
+  )
+  const draftSubtotal = draftLineRows.reduce((sum, line) => sum + line.lineTotal, 0)
   const draftTotal = draftSubtotal * (1 - orderDraft.discountPercent / 100) * (1 + orderDraft.taxPercent / 100) + orderDraft.shippingCost
   const creditAvailable = draftCustomer ? draftCustomer.creditLimit - draftTotal : 0
+  const detailCustomer = detailOrder ? customerById.get(detailOrder.customerId) : undefined
+  const detailCanEdit = Boolean(
+    detailOrder && ['DRAFT', 'CONFIRMED', 'HOLD'].includes(detailOrder.status) && detailOrder.reservedGrams <= 0 && detailOrder.fulfilledGrams <= 0 && !detailOrder.shipmentId,
+  )
+  const detailCanCancel = Boolean(
+    detailOrder && detailOrder.fulfilledGrams <= 0 && !['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(detailOrder.status),
+  )
+  const pristineOrderEditDraft = detailOrder ? orderEditDraftFrom(detailOrder, detailCustomer) : null
+  const orderEditDirty = detailMode === 'edit' && orderEditDraft !== null && JSON.stringify(orderEditDraft) !== JSON.stringify(pristineOrderEditDraft)
+  const detailPriceList = priceLists.find((priceList) => priceList.customerGroup === detailCustomer?.group && priceList.status === 'ACTIVE')
+  const detailDraftSubtotal = orderEditDraft?.lines.reduce((sum, line) => {
+    const sku = skuById.get(line.skuId)
+    return sum + (sku?.price ?? 0) * (detailPriceList?.multiplier ?? 1) * Number(line.quantity || 0)
+  }, 0) ?? 0
+  const detailDraftTotal = orderEditDraft
+    ? detailDraftSubtotal * (1 - Number(orderEditDraft.discountPercent) / 100) * (1 + Number(orderEditDraft.taxPercent) / 100) + Number(orderEditDraft.shippingCost)
+    : 0
 
   const refreshOrders = useCallback(async () => {
     const [customerPayload, orderPayload, shipmentPayload, documentPayload, skuPayload] = await Promise.all([
@@ -10284,11 +13639,24 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
   }, [stock])
 
   useEffect(() => {
+    if (!selectedOrder) return
+    const currentShipment = shipmentRows.find((shipment) => shipment.orderId === selectedOrder.id)
+    setShipDraft({
+      carrier: selectedOrder.carrier ?? currentShipment?.carrier ?? 'DHL',
+      trackingNumber: selectedOrder.trackingNumber ?? currentShipment?.trackingNumber ?? '',
+    })
+  }, [selectedOrder, shipmentRows])
+
+  useEffect(() => {
     setOrderDraft((current) => ({
       ...current,
       customerId: customerById.has(current.customerId) ? current.customerId : customerRows[0]?.id ?? '',
-      skuId: skuById.has(current.skuId) ? current.skuId : skuRows[0]?.id ?? '',
     }))
+    setOrderLines((current) =>
+      current.length > 0
+        ? current.map((line) => ({ ...line, skuId: skuById.has(line.skuId) ? line.skuId : skuRows[0]?.id ?? '' }))
+        : [{ id: 'order-line-1', skuId: skuRows[0]?.id ?? '', quantity: 1 }],
+    )
   }, [customerById, customerRows, skuById, skuRows])
 
   async function createCustomer() {
@@ -10335,7 +13703,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...orderDraft,
-          quantity: Number(orderDraft.quantity),
+          lines: draftLineRows.map((line) => ({ skuId: line.sku.id, quantity: Number(line.quantity) })),
           discountPercent: Number(orderDraft.discountPercent),
           taxPercent: Number(orderDraft.taxPercent),
           shippingCost: Number(orderDraft.shippingCost),
@@ -10351,7 +13719,126 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     }
   }
 
-  async function runOrderAction(orderId: string, action: 'reserve' | 'cancel' | 'pack' | 'ship' | 'fulfill') {
+  function addOrderLine() {
+    const skuId = skuRows.find((sku) => !orderLines.some((line) => line.skuId === sku.id))?.id ?? ''
+    if (!skuId) {
+      setStatusMessage('Each available SKU is already in this order')
+      return
+    }
+    setOrderLines((current) => [...current, { id: `order-line-${Date.now()}`, skuId, quantity: 1 }])
+  }
+
+  function updateOrderLine(id: string, patch: Partial<{ skuId: string; quantity: number }>) {
+    setOrderLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)))
+  }
+
+  function removeOrderLine(id: string) {
+    setOrderLines((current) => (current.length > 1 ? current.filter((line) => line.id !== id) : current))
+  }
+
+  function openOrderDetails(order: SalesOrderRecord) {
+    setSelectedOrderId(order.id)
+    setDetailOrderId(order.id)
+    setDetailMode('view')
+    setOrderEditDraft(orderEditDraftFrom(order, customerById.get(order.customerId)))
+    setCancelReason('')
+  }
+
+  function startOrderEdit() {
+    if (!detailOrder || !detailCanEdit) return
+    setOrderEditDraft(orderEditDraftFrom(detailOrder, detailCustomer))
+    setDetailMode('edit')
+  }
+
+  function updateDetailLine(id: string, patch: Partial<{ skuId: string; quantity: number }>) {
+    setOrderEditDraft((current) => current ? {
+      ...current,
+      lines: current.lines.map((line) => (line.id === id ? { ...line, ...patch } : line)),
+    } : current)
+  }
+
+  function addDetailLine() {
+    setOrderEditDraft((current) => {
+      if (!current) return current
+      const skuId = skuRows.find((sku) => !current.lines.some((line) => line.skuId === sku.id))?.id
+      if (!skuId) {
+        setStatusMessage('Every active SKU is already included in this order')
+        return current
+      }
+      return { ...current, lines: [...current.lines, { id: `detail-order-line-${Date.now()}`, skuId, quantity: 1 }] }
+    })
+  }
+
+  function removeDetailLine(id: string) {
+    setOrderEditDraft((current) => current && current.lines.length > 1
+      ? { ...current, lines: current.lines.filter((line) => line.id !== id) }
+      : current)
+  }
+
+  async function saveOrderDetails() {
+    if (!detailOrder || !orderEditDraft || !detailCanEdit) return
+    setBusyId(`update:${detailOrder.id}`)
+    setStatusMessage(`Updating ${detailOrder.id} without touching inventory`)
+    try {
+      const payload = await requestApi<SalesOrderUpdateResponse>(`/orders/${encodeURIComponent(detailOrder.id)}`, {
+        method: 'PATCH',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          lines: orderEditDraft.lines.map((line) => ({ skuId: line.skuId, quantity: Number(line.quantity) })),
+          discountPercent: Number(orderEditDraft.discountPercent),
+          taxPercent: Number(orderEditDraft.taxPercent),
+          shippingCost: Number(orderEditDraft.shippingCost),
+          customerReference: orderEditDraft.customerReference,
+          contactEmail: orderEditDraft.contactEmail,
+          shippingAddress: {
+            line1: orderEditDraft.shippingLine1,
+            city: orderEditDraft.shippingCity,
+            country: orderEditDraft.shippingCountry,
+          },
+          deliveryInstructions: orderEditDraft.deliveryInstructions,
+        }),
+      })
+      setOrderRows((current) => current.map((order) => (order.id === payload.order.id ? payload.order : order)))
+      setOrderEditDraft(orderEditDraftFrom(payload.order, detailCustomer))
+      setDetailMode('view')
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Order update failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function cancelSelectedOrder() {
+    if (!detailOrder || !detailCanCancel || cancelReason.trim().length < 3) return
+    setBusyId(`cancel:${detailOrder.id}`)
+    setStatusMessage(`Cancelling ${detailOrder.id} and releasing eligible reservations`)
+    try {
+      const payload = await requestApi<OrderCancellationResponse>(`/orders/${encodeURIComponent(detailOrder.id)}/cancel`, {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ reason: cancelReason.trim() }),
+      })
+      const refreshedOrders = await refreshOrders()
+      const cancelledOrder = payload.order ?? refreshedOrders.find((order) => order.id === detailOrder.id)
+      if (cancelledOrder) setOrderEditDraft(orderEditDraftFrom(cancelledOrder, detailCustomer))
+      setDetailMode('view')
+      setCancelReason('')
+      setDetailOrderId(detailOrder.id)
+      setSelectedOrderId(detailOrder.id)
+      setStatusMessage(payload.invariant)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Order cancellation failed')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function runOrderAction(
+    orderId: string,
+    action: 'reserve' | 'pack' | 'ship' | 'fulfill',
+    options: { allowPartial?: boolean } = {},
+  ) {
     setBusyId(`${action}:${orderId}`)
     const endpoint = `/orders/${encodeURIComponent(orderId)}/${action}`
     try {
@@ -10371,10 +13858,11 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         })
         invariant = payload.invariant
       } else if (action === 'reserve') {
-        const payload = await requestApi<OrderReservationResponse>(endpoint, { method: 'POST' })
-        invariant = payload.invariant
-      } else if (action === 'cancel') {
-        const payload = await requestApi<OrderCancellationResponse>(endpoint, { method: 'POST' })
+        const payload = await requestApi<OrderReservationResponse>(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allowPartial: options.allowPartial === true }),
+        })
         invariant = payload.invariant
       } else {
         const payload = await requestApi<OrderFulfillmentResponse>(endpoint, { method: 'POST' })
@@ -10390,7 +13878,43 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
     }
   }
 
+  const orderDetailFooter = detailOrder ? (
+    <div className="order-detail-footer">
+      {detailMode === 'view' ? (
+        <>
+          <div className="order-detail-footer-context"><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /><span>{formatCurrency(detailOrder.total)}</span></div>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={!detailCanEdit || busyId !== null} onClick={startOrderEdit}>Edit order</button>
+            <button className="ghost-button danger" type="button" disabled={!detailCanCancel || busyId !== null} onClick={() => setDetailMode('cancel')}>Cancel order</button>
+            <button className="primary-button" type="button" onClick={() => setDetailOrderId(null)}>Done</button>
+          </div>
+        </>
+      ) : detailMode === 'edit' ? (
+        <>
+          <span className="order-detail-footer-note">Saving recalculates the order but does not reserve or move stock.</span>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={busyId !== null} onClick={() => {
+              if (orderEditDirty && !window.confirm('Discard the changes made to this order?')) return
+              setOrderEditDraft(pristineOrderEditDraft)
+              setDetailMode('view')
+            }}>Discard</button>
+            <button className="primary-button" type="button" disabled={busyId !== null || !orderEditDraft || orderEditDraft.lines.length === 0 || orderEditDraft.lines.some((line) => line.quantity < 1)} onClick={() => void saveOrderDetails()}>Save changes</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="order-detail-footer-note">Cancellation is recorded in the order audit trail.</span>
+          <div className="document-actions">
+            <button className="secondary-button" type="button" disabled={busyId !== null} onClick={() => setDetailMode('view')}>Back</button>
+            <button className="primary-button danger" type="button" disabled={busyId !== null || cancelReason.trim().length < 3} onClick={() => void cancelSelectedOrder()}>Confirm cancellation</button>
+          </div>
+        </>
+      )}
+    </div>
+  ) : undefined
+
   return (
+    <>
     <div className="workspace-grid orders-grid">
       <Panel title="Customer & Order Entry" icon={ShoppingCart} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
         <div className="order-entry-grid">
@@ -10453,31 +13977,26 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                 ))}
               </select>
             </label>
-            <label className="field-row">
-              <span>SKU</span>
-              <select
-                aria-label="Order SKU"
-                value={orderDraft.skuId}
-                onChange={(event) => setOrderDraft((current) => ({ ...current, skuId: event.target.value }))}
-              >
-                {skuRows.map((sku) => (
-                  <option key={sku.id} value={sku.id}>
-                    {sku.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="document-list compact-list">
+              {draftLineRows.map((line) => (
+                <div className="document-row order-document-row" key={line.id}>
+                  <label className="field-row compact-field">
+                    <span>SKU</span>
+                    <select aria-label={`Order SKU ${line.id}`} value={line.skuId} onChange={(event) => updateOrderLine(line.id, { skuId: event.target.value })}>
+                      {skuRows.map((sku) => <option key={sku.id} value={sku.id}>{sku.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="field-row compact-field">
+                    <span>Packs</span>
+                    <input aria-label={`Order quantity ${line.id}`} min={1} type="number" value={line.quantity} onChange={(event) => updateOrderLine(line.id, { quantity: Number(event.target.value) })} />
+                  </label>
+                  <div className="mono-value">{formatCurrency(line.lineTotal)}</div>
+                  <button className="ghost-button tiny" type="button" onClick={() => removeOrderLine(line.id)} disabled={orderLines.length === 1}>Remove</button>
+                </div>
+              ))}
+              <button className="ghost-button small" type="button" onClick={addOrderLine}>Add SKU</button>
+            </div>
             <div className="form-triple">
-              <label className="field-row">
-                <span>Packs</span>
-                <input
-                  aria-label="Order quantity"
-                  min={1}
-                  type="number"
-                  value={orderDraft.quantity}
-                  onChange={(event) => setOrderDraft((current) => ({ ...current, quantity: Number(event.target.value) }))}
-                />
-              </label>
               <label className="field-row">
                 <span>Tax %</span>
                 <input
@@ -10507,7 +14026,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               className="primary-button"
               type="button"
               onClick={() => void createOrder()}
-              disabled={busyId === 'order-create' || !orderDraft.customerId || !orderDraft.skuId || orderDraft.quantity <= 0}
+              disabled={busyId === 'order-create' || !orderDraft.customerId || draftLineRows.length === 0 || draftLineRows.some((line) => line.quantity <= 0)}
             >
               Create Order
             </button>
@@ -10519,27 +14038,33 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         <div className="document-list compact-list order-list">
           {orderRows.map((order) => {
             const sku = skuById.get(order.skuId)
+            const orderLinesForDisplay = order.lines?.length
+              ? order.lines
+              : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
             const busy = busyId?.endsWith(order.id) ?? false
             return (
               <div
                 className={`document-row order-row ${selectedOrder?.id === order.id ? 'is-active' : ''}`}
                 key={order.id}
                 onClick={() => setSelectedOrderId(order.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    setSelectedOrderId(order.id)
-                  }
-                }}
-                role="button"
-                tabIndex={0}
               >
                 <div>
                   <strong>{order.id} / {order.customer}</strong>
-                  <span>{sku?.name ?? order.skuId} / {order.quantity} pack(s) / {formatCurrency(order.total)}</span>
+                  <span>{orderLinesForDisplay.length === 1 ? `${sku?.name ?? order.skuId} / ${orderLinesForDisplay[0]?.quantity ?? order.quantity} pack(s)` : `${orderLinesForDisplay.length} SKU lines / ${orderLinesForDisplay.reduce((sum, line) => sum + line.quantity, 0)} packs`} / {formatCurrency(order.total)}</span>
                   <span>{formatGrams(order.reservedGrams)} reserved / {formatGrams(order.fulfilledGrams)} fulfilled</span>
                 </div>
                 <StatusBadge status={orderStatusTone[order.status]} label={order.status} />
                 <div className="document-actions">
+                  <button
+                    className="secondary-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      openOrderDetails(order)
+                    }}
+                  >
+                    View details
+                  </button>
                   <button
                     className="ghost-button small"
                     type="button"
@@ -10547,7 +14072,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                       event.stopPropagation()
                       void runOrderAction(order.id, 'reserve')
                     }}
-                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status)}
+                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status) || order.reservedGrams > 0}
                   >
                     Reserve
                   </button>
@@ -10556,9 +14081,20 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation()
+                      void runOrderAction(order.id, 'reserve', { allowPartial: true })
+                    }}
+                    disabled={busy || !['DRAFT', 'CONFIRMED', 'BACKORDER'].includes(order.status) || order.reservedGrams > 0}
+                  >
+                    Reserve Available
+                  </button>
+                  <button
+                    className="ghost-button small"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
                       void runOrderAction(order.id, 'pack')
                     }}
-                    disabled={busy || order.status !== 'RESERVED'}
+                    disabled={busy || !['RESERVED', 'BACKORDER'].includes(order.status) || order.reservedGrams <= 0}
                   >
                     Pack
                   </button>
@@ -10580,20 +14116,9 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
                       event.stopPropagation()
                       void runOrderAction(order.id, 'fulfill')
                     }}
-                    disabled={busy || !['RESERVED', 'PACKED', 'SHIPPED'].includes(order.status)}
+                    disabled={busy || !['RESERVED', 'BACKORDER', 'PACKED', 'SHIPPED'].includes(order.status) || order.reservedGrams <= 0}
                   >
                     Fulfill
-                  </button>
-                  <button
-                    className="ghost-button small danger"
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void runOrderAction(order.id, 'cancel')
-                    }}
-                    disabled={busy || ['FULFILLED', 'SHIPPED', 'DELIVERED', 'INVOICED', 'CLOSED', 'CANCELLED'].includes(order.status)}
-                  >
-                    Cancel
                   </button>
                 </div>
               </div>
@@ -10603,12 +14128,12 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
       </Panel>
 
       <Panel title="Reservation vs Available" icon={Boxes}>
-        {selectedOrder && selectedSku ? (
+        {selectedOrder ? (
           <>
             <div className="metric-grid">
-              <Metric label="SKU" value={selectedSku.name} />
-              <Metric label="Can sell" value={`${selectedSku.canSellPacks} packs`} />
-              <Metric label="Required" value={formatGrams(selectedSku.packSizeGrams * selectedOrder.quantity)} />
+              <Metric label="SKU lines" value={String(selectedOrder.lines?.length ?? 1)} />
+              <Metric label="Packs" value={String((selectedOrder.lines?.reduce((sum, line) => sum + line.quantity, 0)) ?? selectedOrder.quantity)} />
+              <Metric label="Required" value={formatGrams(orderRequiredGrams(selectedOrder, skuRows))} />
               <Metric label="Reserved" value={formatGrams(selectedOrder.reservedGrams)} />
             </div>
             <div className="allocation-list">
@@ -10639,10 +14164,15 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               value={shipDraft.carrier}
               onChange={(event) => setShipDraft((current) => ({ ...current, carrier: event.target.value as ShipmentRecord['carrier'] }))}
             >
-              <option value="DHL">DHL</option>
-              <option value="FedEx">FedEx</option>
-              <option value="UPS">UPS</option>
-              <option value="Pickup">Pickup</option>
+              <optgroup label="Domestic Vietnam">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'VIETNAM').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
+              <optgroup label="International">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'INTERNATIONAL').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
+              <optgroup label="Pickup">
+                {shipmentCarrierOptions.filter((option) => option.scope === 'PICKUP').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </optgroup>
             </select>
           </label>
           <label className="field-row">
@@ -10662,7 +14192,7 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
               selectedShipments.map((shipment) => (
                 <div className="document-row shipment-row" key={shipment.id}>
                   <div>
-                    <strong>{shipment.id} / {shipment.carrier}</strong>
+                    <strong>{shipment.id} / {shipmentCarrierLabel(shipment.carrier)}</strong>
                     <span>{shipment.trackingNumber} / {formatGrams(shipment.weightGrams)}</span>
                   </div>
                   <StatusBadge status={shipmentStatusTone[shipment.status]} label={shipment.status} />
@@ -10701,85 +14231,338 @@ function OrdersWorkspace({ stock }: { stock: ReturnType<typeof stockSummary> }) 
         )}
       </Panel>
 
-      <Panel title="Orders Guardrails" icon={ShieldCheck}>
-        <ul className="policy-list">
-          <li>Order creation prices SKU packs but does not reserve or move inventory.</li>
-          <li>Reservation reduces available stock only and creates no InventoryMovement.</li>
-          <li>Cancel releases reserved grams without writing a movement row.</li>
-          <li>Fulfillment creates OUT movements and keeps shipment lot traceability plus invoice/COA evidence.</li>
-        </ul>
-      </Panel>
     </div>
+    {detailOrder ? (
+      <WorkspaceDialog
+        open
+        placement="drawer"
+        title={`${detailOrder.id} order details`}
+        description={`${detailOrder.customer} / created ${new Date(detailOrder.createdAt).toLocaleString()}`}
+        onClose={() => setDetailOrderId(null)}
+        footer={orderDetailFooter}
+        className="order-detail-dialog"
+        confirmDiscard={orderEditDirty}
+        discardConfirmationMessage="Discard the changes made to this order?"
+      >
+        {detailMode === 'view' ? (
+          <div className="order-detail-content" data-testid="order-detail-view">
+            <section className="order-detail-section order-detail-overview">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Order overview</span><h3>{detailOrder.customer}</h3></div><StatusBadge status={orderStatusTone[detailOrder.status]} label={detailOrder.status} /></div>
+              <div className="metric-grid compact-metrics">
+                <Metric label="Order total" value={formatCurrency(detailOrder.total)} />
+                <Metric label="SKU lines" value={String(detailOrder.lines?.length ?? 1)} />
+                <Metric label="Reserved" value={formatGrams(detailOrder.reservedGrams)} />
+                <Metric label="Fulfilled" value={formatGrams(detailOrder.fulfilledGrams)} />
+              </div>
+              {detailOrder.customerReference ? <div className="order-detail-reference"><span>Customer reference</span><strong>{detailOrder.customerReference}</strong></div> : null}
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Items</span><h3>Order lines</h3></div></div>
+              <div className="order-detail-lines">
+                {(detailOrder.lines?.length ? detailOrder.lines : [{ skuId: detailOrder.skuId, quantity: detailOrder.quantity, unitPrice: detailOrder.unitPrice, lineTotal: detailOrder.unitPrice * detailOrder.quantity }]).map((line) => (
+                  <div className="order-detail-line" key={line.skuId}>
+                    <div><strong>{skuById.get(line.skuId)?.name ?? line.skuId}</strong><span>{line.quantity} pack(s) at {formatCurrency(line.unitPrice)}</span></div>
+                    <strong>{formatCurrency(line.lineTotal)}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="order-detail-totals"><span>Discount {detailOrder.discountPercent}%</span><span>Tax {detailOrder.taxPercent}%</span><span>Shipping {formatCurrency(detailOrder.shippingCost)}</span><strong>Total {formatCurrency(detailOrder.total)}</strong></div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Delivery</span><h3>Recipient and shipping</h3></div></div>
+              <dl className="order-detail-definition-list">
+                <div><dt>Contact</dt><dd>{detailOrder.contactEmail ?? detailCustomer?.contactEmail ?? 'Not provided'}</dd></div>
+                <div><dt>Address</dt><dd>{[detailOrder.shippingAddress?.line1 ?? detailCustomer?.shippingAddress.line1, detailOrder.shippingAddress?.city ?? detailCustomer?.shippingAddress.city, detailOrder.shippingAddress?.country ?? detailCustomer?.shippingAddress.country].filter(Boolean).join(', ') || 'Not provided'}</dd></div>
+                <div><dt>Instructions</dt><dd>{detailOrder.deliveryInstructions || 'No special instructions'}</dd></div>
+                <div><dt>Carrier</dt><dd>{detailOrder.carrier ? shipmentCarrierLabel(detailOrder.carrier) : 'Not assigned'}</dd></div>
+                <div><dt>Tracking</dt><dd>{detailOrder.trackingNumber || 'Not assigned'}</dd></div>
+              </dl>
+            </section>
+
+            {detailOrder.status === 'CANCELLED' ? <section className="order-detail-section order-cancellation-evidence"><div className="order-detail-section-heading"><div><span className="section-eyebrow">Cancellation</span><h3>Order closed without fulfillment</h3></div></div><p>{detailOrder.cancellationReason ?? 'Cancelled by operator'}</p><small>{detailOrder.cancelledAt ? new Date(detailOrder.cancelledAt).toLocaleString() : 'Cancellation time unavailable'}</small></section> : null}
+          </div>
+        ) : detailMode === 'edit' && orderEditDraft ? (
+          <div className="order-detail-content order-detail-edit" data-testid="order-detail-edit">
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Commercial details</span><h3>Reference and pricing</h3></div></div>
+              <div className="form-grid-two">
+                <label className="field-row"><span>Customer reference</span><input value={orderEditDraft.customerReference} maxLength={80} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, customerReference: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Contact email</span><input type="email" value={orderEditDraft.contactEmail} maxLength={254} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, contactEmail: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Discount %</span><input type="number" min={0} max={90} value={orderEditDraft.discountPercent} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, discountPercent: Number(event.target.value) } : current)} /></label>
+                <label className="field-row"><span>Tax %</span><input type="number" min={0} max={30} value={orderEditDraft.taxPercent} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, taxPercent: Number(event.target.value) } : current)} /></label>
+                <label className="field-row"><span>Shipping cost</span><input type="number" min={0} value={orderEditDraft.shippingCost} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCost: Number(event.target.value) } : current)} /></label>
+                <div className="order-detail-estimate"><span>Repriced estimate</span><strong>{formatCurrency(detailDraftTotal)}</strong></div>
+              </div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Items</span><h3>Editable order lines</h3></div><button className="ghost-button small" type="button" onClick={addDetailLine}>Add SKU</button></div>
+              <div className="order-edit-lines">
+                {orderEditDraft.lines.map((line) => (
+                  <div className="order-edit-line" key={line.id}>
+                    <label className="field-row"><span>SKU</span><select value={line.skuId} onChange={(event) => updateDetailLine(line.id, { skuId: event.target.value })}>{skuRows.map((sku) => <option key={sku.id} value={sku.id}>{sku.name}</option>)}</select></label>
+                    <label className="field-row"><span>Packs</span><input type="number" min={1} max={100000} value={line.quantity} onChange={(event) => updateDetailLine(line.id, { quantity: Number(event.target.value) })} /></label>
+                    <button className="ghost-button danger small" type="button" disabled={orderEditDraft.lines.length === 1} onClick={() => removeDetailLine(line.id)}>Remove</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="order-detail-section">
+              <div className="order-detail-section-heading"><div><span className="section-eyebrow">Delivery</span><h3>Shipping destination</h3></div></div>
+              <div className="form-grid-two">
+                <label className="field-row wide-field"><span>Address</span><input value={orderEditDraft.shippingLine1} maxLength={200} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingLine1: event.target.value } : current)} /></label>
+                <label className="field-row"><span>City</span><input value={orderEditDraft.shippingCity} maxLength={100} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCity: event.target.value } : current)} /></label>
+                <label className="field-row"><span>Country</span><input value={orderEditDraft.shippingCountry} maxLength={100} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, shippingCountry: event.target.value } : current)} /></label>
+                <label className="field-row wide-field"><span>Delivery instructions</span><textarea rows={4} maxLength={1000} value={orderEditDraft.deliveryInstructions} onChange={(event) => setOrderEditDraft((current) => current ? { ...current, deliveryInstructions: event.target.value } : current)} /></label>
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div className="order-detail-content" data-testid="order-cancel-view">
+            <section className="order-detail-section order-cancel-confirmation">
+              <span className="section-eyebrow">Cancel order</span>
+              <h3>Cancel {detailOrder.id}?</h3>
+              <p>This stops the order and releases any active reservation. It does not delete order history or create an inventory movement.</p>
+              <label className="field-row"><span>Cancellation reason</span><textarea autoFocus rows={5} maxLength={500} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Explain why this order is being cancelled" /></label>
+              <small>{cancelReason.trim().length}/500 characters; at least 3 required.</small>
+            </section>
+          </div>
+        )}
+      </WorkspaceDialog>
+    ) : null}
+    </>
   )
 }
 
 function CostingWorkspace() {
   const [costingData, setCostingData] = useState<CostingOverview>(clientFallbackCosting)
+  const [formulaCost, setFormulaCost] = useState<FormulaCostReport>(clientFallbackCosting.formula)
   const [batchCost, setBatchCost] = useState<BatchCostReport>(clientFallbackBatchCost)
-  const [statusMessage, setStatusMessage] = useState('Loading costing read models')
-  const cogsTotal = costingData.cogs.reduce((sum, line) => sum + line.cogs, 0)
+  const [releasedBatches, setReleasedBatches] = useState<ProductionBatchRecord[]>([])
+  const [selectedBatchId, setSelectedBatchId] = useState('')
+  const selectedBatchIdRef = useRef('')
+  const [statusMessage, setStatusMessage] = useState('Loading released production cost sheets')
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [packSizeGrams, setPackSizeGrams] = useState(50)
+  const [targetMarginPercent, setTargetMarginPercent] = useState(58)
+
+  const selectedBatch = releasedBatches.find((batch) => batch.id === selectedBatchId)
+  const selectedBatchCogs = useMemo(
+    () => costingData.cogs.filter((line) => line.ref === selectedBatchId && line.type === 'PRODUCTION_CONSUMPTION'),
+    [costingData.cogs, selectedBatchId],
+  )
+  const selectedBatchCogsTotal = selectedBatchCogs.reduce((sum, line) => sum + line.cogs, 0)
+  const materialNames = useMemo(
+    () => new Map(formulaCost.lines.map((line) => [line.materialId, line.materialName])),
+    [formulaCost.lines],
+  )
+  const relevantPolicies = costingData.methodPolicies.filter((policy) => materialNames.has(policy.materialId))
+  const safeMarginPercent = Math.min(95, Math.max(0, targetMarginPercent))
+  const packCost = batchCost.costPerGram * packSizeGrams
+  const recommendedPrice = packCost > 0 ? packCost / (1 - safeMarginPercent / 100) : 0
+  const finishedPacks = packSizeGrams > 0 ? Math.floor(batchCost.outputGrams / packSizeGrams) : 0
+
+  const refreshCosting = useCallback(async (requestedBatchId?: string, signal?: AbortSignal) => {
+    setIsRefreshing(true)
+    try {
+      const [overview, batches] = await Promise.all([
+        requestApi<CostingOverview>('/costing/overview', { signal }),
+        requestApi<ProductionBatchRecord[]>('/production/batches', { signal }),
+      ])
+      if (signal?.aborted) {
+        return
+      }
+
+      const nextReleasedBatches = batches.filter((batch) => batch.status === 'RELEASED' && Boolean(batch.outputLot))
+      const preferredBatchId = requestedBatchId ?? selectedBatchIdRef.current
+      const nextBatchId = nextReleasedBatches.some((batch) => batch.id === preferredBatchId)
+        ? preferredBatchId
+        : nextReleasedBatches[0]?.id ?? ''
+
+      setCostingData(overview)
+      setReleasedBatches(nextReleasedBatches)
+      selectedBatchIdRef.current = nextBatchId
+      setSelectedBatchId(nextBatchId)
+
+      if (!nextBatchId) {
+        setFormulaCost(overview.formula)
+        setBatchCost(clientFallbackBatchCost)
+        setStatusMessage('No released production batch is ready for costing')
+        return
+      }
+
+      const selected = nextReleasedBatches.find((batch) => batch.id === nextBatchId)
+      if (!selected) {
+        return
+      }
+      const [nextFormulaCost, nextBatchCost] = await Promise.all([
+        requestApi<FormulaCostReport>(`/costing/formulas/${encodeURIComponent(selected.formulaId)}`, { signal }),
+        requestApi<BatchCostReport>(`/costing/batches/${encodeURIComponent(selected.id)}`, { signal }),
+      ])
+      if (signal?.aborted) {
+        return
+      }
+      setFormulaCost(nextFormulaCost)
+      setBatchCost(nextBatchCost)
+      setStatusMessage(`Cost sheet ready for ${selected.id}`)
+    } catch {
+      if (!signal?.aborted) {
+        setStatusMessage('Could not refresh costing data')
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsRefreshing(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
-
-    async function loadCosting() {
-      try {
-        const [overview, batch] = await Promise.all([
-          requestApi<CostingOverview>('/costing/overview', { signal: controller.signal }),
-          requestApi<BatchCostReport>('/costing/batches/BTH-2025-118', { signal: controller.signal }),
-        ])
-        setCostingData(overview)
-        setBatchCost(batch)
-        setStatusMessage('Costing synced from live API')
-      } catch {
-        if (!controller.signal.aborted) {
-          setStatusMessage('Using local costing seed until API is reachable')
-        }
-      }
-    }
-
-    void loadCosting()
-
+    void refreshCosting(undefined, controller.signal)
     return () => controller.abort()
-  }, [])
+  }, [refreshCosting])
 
   return (
     <div className="workspace-grid costing-grid">
-      <Panel title="Cost Trace" icon={BadgeDollarSign} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+      <Panel
+        title="Released Production Cost Sheet"
+        icon={BadgeDollarSign}
+        right={
+          <div className="action-row">
+            <DataTag label="Status" value={statusMessage} tone="blue" />
+            <button className="ghost-button tiny" type="button" onClick={() => void refreshCosting(selectedBatchId)} disabled={isRefreshing}>
+              {isRefreshing ? 'Refreshing' : 'Refresh'}
+            </button>
+          </div>
+        }
+      >
+        <div className="cost-sheet-controls">
+          <label className="field-row">
+            <span>Released production batch</span>
+            <select
+              value={selectedBatchId}
+              onChange={(event) => {
+                const nextBatchId = event.target.value
+                selectedBatchIdRef.current = nextBatchId
+                setSelectedBatchId(nextBatchId)
+                void refreshCosting(nextBatchId)
+              }}
+              disabled={releasedBatches.length === 0 || isRefreshing}
+            >
+              {releasedBatches.length === 0 ? <option value="">No released batches</option> : null}
+              {releasedBatches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.id} / {batch.formulaCode} / {formatGrams(batch.outputLot?.quantityGrams ?? 0)} output
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedBatch ? (
+            <div className="tag-row cost-sheet-tags">
+              <DataTag label="Formula" value={selectedBatch.formulaCode} tone="green" />
+              <DataTag label="Output lot" value={selectedBatch.outputLot?.lotNumber ?? 'Pending'} tone="blue" />
+              <DataTag label="Released" value="Ready" tone="green" />
+            </div>
+          ) : null}
+        </div>
+
+        {selectedBatch ? (
+          <>
+            <div className="metric-grid costing-metrics">
+              <Metric label="Finished output" value={formatGrams(batchCost.outputGrams)} />
+              <Metric label="Target batch" value={formatGrams(batchCost.targetGrams)} />
+              <Metric label="Yield variance" value={`${batchCost.yieldVariancePercent.toFixed(2)}%`} />
+              <Metric label="Finished cost / gram" value={formatCurrency(batchCost.costPerGram)} />
+              <Metric label="Batch cost" value={formatCurrency(batchCost.totalCost)} />
+              <Metric label="Input basis" value={batchCost.materialCostBasis === 'ACTUAL_LOT_CONSUMPTION' ? 'Actual lots' : 'Formula estimate'} />
+            </div>
+            <p className="caveat">{batchCost.invariant}</p>
+          </>
+        ) : (
+          <div className="empty-state compact">
+            Complete QC and release a production batch to create a finished-product cost sheet here.
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Finished Product Pricing" icon={ShoppingCart}>
+        {selectedBatch ? (
+          <>
+            <div className="pricing-scenario-grid">
+              <label className="field-row">
+                <span>Pack size (g)</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={packSizeGrams}
+                  onChange={(event) => setPackSizeGrams(Math.max(1, Number(event.target.value) || 1))}
+                />
+              </label>
+              <label className="field-row">
+                <span>Target margin (%)</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="95"
+                  step="1"
+                  value={targetMarginPercent}
+                  onChange={(event) => setTargetMarginPercent(Math.min(95, Math.max(0, Number(event.target.value) || 0)))}
+                />
+              </label>
+            </div>
+            <div className="metric-grid">
+              <Metric label="Pack cost" value={formatCurrency(packCost)} />
+              <Metric label="Suggested sell price" value={formatCurrency(recommendedPrice)} />
+              <Metric label="Gross profit / pack" value={formatCurrency(recommendedPrice - packCost)} />
+              <Metric label="Finished packs" value={String(finishedPacks)} />
+            </div>
+            <p className="caveat">This pricing scenario is calculated from the selected released batch and does not change your catalogue price list.</p>
+          </>
+        ) : (
+          <div className="empty-state compact">Choose a released production batch to calculate pack cost and pricing.</div>
+        )}
+      </Panel>
+
+      <Panel title="Formula Cost Trace" icon={FlaskConical}>
         <div className="metric-grid costing-metrics">
-          <Metric label={`${costingData.formula.formulaCode} total`} value={formatCurrency(costingData.formula.totalCost)} />
-          <Metric label="Formula cost / gram" value={formatCurrency(costingData.formula.costPerGram)} />
-          <Metric label="50g bottle" value={formatCurrency(costingData.formula.costPerBottle)} />
-          <Metric label="Inventory valuation" value={formatCurrency(costingData.valuation.totalValue)} />
-          <Metric label="COGS captured" value={formatCurrency(cogsTotal)} />
-          <Metric label="Most expensive" value={costingData.formula.mostExpensiveMaterial} />
+          <Metric label={`${formulaCost.formulaCode} composition`} value={formatCurrency(formulaCost.totalCost)} />
+          <Metric label="Formula cost / gram" value={formatCurrency(formulaCost.costPerGram)} />
+          <Metric label="50g formula reference" value={formatCurrency(formulaCost.costPerBottle)} />
+          <Metric label="Most expensive" value={formulaCost.mostExpensiveMaterial} />
         </div>
         <div className="trace-strip">
-          {costingData.formula.trace.slice(0, 4).map((trace) => (
+          {formulaCost.trace.slice(0, 4).map((trace) => (
             <span key={trace}>{trace}</span>
           ))}
         </div>
       </Panel>
 
-      <Panel title="Batch Cost" icon={FlaskConical}>
-        <div className="metric-grid">
-          <Metric label={batchCost.batchId} value={formatCurrency(batchCost.totalCost)} />
-          <Metric label="Cost / gram" value={formatCurrency(batchCost.costPerGram)} />
-          <Metric label="Material" value={formatCurrency(batchCost.materialCost)} />
-          <Metric label="Labor + overhead" value={formatCurrency(batchCost.laborCost + batchCost.overheadCost)} />
-        </div>
-        <p className="caveat">{batchCost.invariant}</p>
+      <Panel title="Batch Cost Breakdown" icon={Layers3}>
+        {selectedBatch ? (
+          <div className="metric-grid">
+            <Metric label="Raw material" value={formatCurrency(batchCost.materialCost)} />
+            <Metric label="Labor" value={formatCurrency(batchCost.laborCost)} />
+            <Metric label="Overhead" value={formatCurrency(batchCost.overheadCost)} />
+            <Metric label="Total" value={formatCurrency(batchCost.totalCost)} />
+          </div>
+        ) : (
+          <div className="empty-state compact">Batch cost appears when a released batch is selected.</div>
+        )}
       </Panel>
 
-      <Panel title="Cost Methods & Landed Cost" icon={Database}>
+      <Panel title="Cost Method & Landed Cost" icon={Database}>
         <div className="cost-policy-list">
-          {costingData.methodPolicies.map((policy) => {
+          {relevantPolicies.map((policy) => {
             const landed = costingData.landedCosts.find((profile) => profile.materialId === policy.materialId)
             return (
               <div className="cost-policy-row" key={policy.materialId}>
                 <div>
-                  <strong>{policy.materialId}</strong>
-                  <span>{policy.method}</span>
+                  <strong>{materialNames.get(policy.materialId) ?? policy.materialId}</strong>
+                  <span>{policy.method.replaceAll('_', ' ')}</span>
                 </div>
                 <DataTag label="Overhead" value={`${policy.overheadPercent}%`} tone="amber" />
                 <DataTag
@@ -10790,12 +14573,13 @@ function CostingWorkspace() {
               </div>
             )
           })}
+          {relevantPolicies.length === 0 ? <div className="empty-state compact">Material costing policies will appear with the selected formula.</div> : null}
         </div>
       </Panel>
 
       <Panel title="Formula Cost Breakdown" icon={Layers3}>
         <div className="cost-breakdown-list">
-          {costingData.formula.lines.map((line) => (
+          {formulaCost.lines.map((line) => (
             <div className="cost-breakdown-row" key={`${line.materialId}-${line.sourcePath}`}>
               <div>
                 <strong>{line.materialName}</strong>
@@ -10809,23 +14593,29 @@ function CostingWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="SKU Margin & Price List" icon={ShoppingCart}>
-        <div className="cost-breakdown-list">
-          {costingData.skuMargins.map((sku) => (
-            <div className="margin-row" key={sku.skuId}>
-              <div>
-                <strong>{sku.skuName}</strong>
-                <span>{sku.trace.join(' / ')}</span>
-              </div>
-              <DataTag label="Pack cost" value={formatCurrency(sku.packCost)} />
-              <DataTag label="Margin" value={`${sku.marginPercent.toFixed(1)}%`} tone={sku.marginPercent > 40 ? 'green' : 'amber'} />
-              <DataTag label="Target price" value={formatCurrency(sku.recommendedPrice)} tone="blue" />
+      <Panel title="Production Input COGS" icon={ClipboardCheck}>
+        {selectedBatchCogs.length > 0 ? (
+          <>
+            <div className="cost-breakdown-list compact-list">
+              {selectedBatchCogs.map((line) => (
+                <div className="valuation-row" key={line.movementId}>
+                  <div>
+                    <strong>{line.materialName}</strong>
+                    <span>{formatGrams(line.quantityGrams)} from the issued production lot</span>
+                  </div>
+                  <span>{formatCurrency(line.unitCost)}/g</span>
+                  <strong>{formatCurrency(line.cogs)}</strong>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+            <p className="caveat">Issued input COGS: {formatCurrency(selectedBatchCogsTotal)}</p>
+          </>
+        ) : (
+          <div className="empty-state compact">Production input cost entries will appear after the batch consumes inventory.</div>
+        )}
       </Panel>
 
-      <Panel title="Valuation Report" icon={Boxes}>
+      <Panel title="Inventory Valuation" icon={Boxes}>
         <div className="cost-breakdown-list compact-list">
           {costingData.valuation.lines.slice(0, 6).map((line) => (
             <div className="valuation-row" key={line.materialId}>
@@ -10833,36 +14623,11 @@ function CostingWorkspace() {
                 <strong>{line.materialName}</strong>
                 <span>{line.method} / {line.locationBreakdown.map((item) => item.location).join(', ')}</span>
               </div>
-              <span>{formatGrams(line.currentGrams)}</span>
               <span>{formatGrams(line.availableGrams)} available</span>
               <strong>{formatCurrency(line.value)}</strong>
             </div>
           ))}
         </div>
-      </Panel>
-
-      <Panel title="COGS Trace" icon={ClipboardCheck}>
-        <div className="cost-breakdown-list compact-list">
-          {costingData.cogs.map((line) => (
-            <div className="valuation-row" key={line.movementId}>
-              <div>
-                <strong>{line.materialName}</strong>
-                <span>{line.type} / {line.ref}</span>
-              </div>
-              <span>{formatGrams(line.quantityGrams)}</span>
-              <span>{formatCurrency(line.unitCost)}/g</span>
-              <strong>{formatCurrency(line.cogs)}</strong>
-            </div>
-          ))}
-        </div>
-      </Panel>
-
-      <Panel title="Finance Guardrails" icon={ShieldCheck}>
-        <ul className="policy-list">
-          <li>Costing is a read model over formula resolve, lot cost, landed cost, and movement COGS.</li>
-          <li>Margin is guarded by costing.view and finance.viewMargin role permissions.</li>
-          <li>Formula, valuation, and COGS traces are source-backed snapshots, not accounting journal posts.</li>
-        </ul>
       </Panel>
     </div>
   )
@@ -10870,35 +14635,51 @@ function CostingWorkspace() {
 
 function AnalyticsWorkspace() {
   const [analyticsData, setAnalyticsData] = useState<AnalyticsDashboardReport>(clientFallbackAnalytics)
+  const [operationalData, setOperationalData] = useState<OperationalAnalyticsReport | null>(null)
   const [statusMessage, setStatusMessage] = useState('Loading analytics dashboard')
   const [runningReportId, setRunningReportId] = useState<string | null>(null)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
   const burnChart = analyticsData.burnRate.map((row) => ({
     name: row.materialName.split(' ')[0],
     usage: row.usageGrams,
     daily: row.dailyBurnGrams,
   }))
 
-  useEffect(() => {
-    const controller = new AbortController()
-
-    async function loadAnalytics() {
+  const refreshAnalytics = useCallback(async (signal?: AbortSignal) => {
       try {
-        const dashboard = await requestApi<AnalyticsDashboardReport>('/analytics/dashboard', {
-          signal: controller.signal,
-        })
+        const [dashboard, operations] = await Promise.all([
+          requestApi<AnalyticsDashboardReport>('/analytics/dashboard', { signal }),
+          requestApi<OperationalAnalyticsReport>('/analytics/operations', { signal }),
+        ])
         setAnalyticsData(dashboard)
-        setStatusMessage('Analytics synced from live API')
+        setOperationalData(operations)
+        setLastSyncedAt(new Date().toISOString())
+        setStatusMessage('Analytics refreshed')
       } catch {
-        if (!controller.signal.aborted) {
+        if (!signal?.aborted) {
+          setOperationalData(null)
           setStatusMessage('Using local analytics seed until API is reachable')
         }
       }
-    }
-
-    void loadAnalytics()
-
-    return () => controller.abort()
   }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshAnalytics(controller.signal)
+      }
+    }
+    void refreshAnalytics(controller.signal)
+    const intervalId = window.setInterval(refreshWhenVisible, 30_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+
+    return () => {
+      controller.abort()
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [refreshAnalytics])
 
   async function runReport(reportId: string) {
     setRunningReportId(reportId)
@@ -10923,31 +14704,69 @@ function AnalyticsWorkspace() {
 
   return (
     <div className="workspace-grid analytics-grid">
-      <Panel title="Read-only Intelligence" icon={BarChart3} right={<DataTag label="Status" value={statusMessage} tone="blue" />}>
+      <Panel title="Live Analyst Dashboard" icon={BarChart3} right={<div className="action-row"><DataTag label="Status" value={statusMessage} tone="blue" /><button className="ghost-button tiny" type="button" onClick={() => void refreshAnalytics()}>Refresh</button></div>}>
         <div className="metric-grid analytics-metrics">
           <Metric label="Burn rows" value={String(analyticsData.burnRate.length)} />
           <Metric label="Forecast rows" value={String(analyticsData.lowStockForecast.length)} />
           <Metric label="Expiry risks" value={String(analyticsData.expiryRisk.length)} />
           <Metric label="Reports" value={String(analyticsData.scheduledReports.length)} />
         </div>
+        <div className="tag-row">
+          <DataTag label="Refresh" value="30 sec" tone="green" />
+          <DataTag label="Last sync" value={lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString() : 'Waiting'} />
+        </div>
         <div className="chart-wrap compact-chart">
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={burnChart}>
               <defs>
                 <linearGradient id="burnUsage" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#4d9bff" stopOpacity={0.4} />
-                  <stop offset="95%" stopColor="#4d9bff" stopOpacity={0.02} />
+                  <stop offset="5%" stopColor="#0f766e" stopOpacity={0.4} />
+                  <stop offset="95%" stopColor="#0f766e" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
               <XAxis dataKey="name" stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
               <YAxis stroke="rgba(225,233,244,0.58)" tickLine={false} axisLine={false} />
               <Tooltip contentStyle={{ background: '#111827', border: '1px solid rgba(255,255,255,0.12)' }} />
-              <Area type="monotone" dataKey="usage" stroke="#4d9bff" fill="url(#burnUsage)" />
+              <Area type="monotone" dataKey="usage" stroke="#0f766e" fill="url(#burnUsage)" />
             </AreaChart>
           </ResponsiveContainer>
         </div>
         <p className="caveat">{analyticsData.invariant}</p>
+      </Panel>
+
+      <Panel title="Operational P1 Signals" icon={Activity}>
+        {operationalData ? (
+          <>
+            <div className="metric-grid analytics-metrics">
+              <Metric label="Quarantine lots" value={String(operationalData.quarantineLots)} />
+              <Metric label="Open discrepancies" value={String(operationalData.openReceiptDiscrepancies)} />
+              <Metric label="QC failures" value={String(operationalData.qcFailures)} />
+              <Metric label="Actual margins" value={String(operationalData.actualBatchMargins.length)} />
+            </div>
+            <div className="analytics-list compact-list">
+              {operationalData.supplierPerformance.slice(0, 3).map((supplier) => (
+                <div className="analytics-row" key={supplier.supplierId}>
+                  <div>
+                    <strong>{supplier.supplierId}</strong>
+                    <span>{supplier.receipts} receipt(s) / {supplier.returned} returned</span>
+                  </div>
+                  <DataTag label="Accepted" value={`${supplier.acceptanceRatePercent}%`} tone={supplier.acceptanceRatePercent >= 95 ? 'green' : 'amber'} />
+                </div>
+              ))}
+              {operationalData.landedCostVariance.slice(0, 3).map((row) => (
+                <div className="analytics-row" key={row.receiptId}>
+                  <div>
+                    <strong>{row.receiptId}</strong>
+                    <span>{formatCurrency(row.totalLandedCost)} landed on {formatCurrency(row.materialValue)} material value</span>
+                  </div>
+                  <DataTag label="Variance" value={`${row.landedPercent}%`} tone="blue" />
+                </div>
+              ))}
+            </div>
+            <p className="caveat">{operationalData.invariant}</p>
+          </>
+        ) : <div className="empty-state compact">Operational analytics is unavailable until the tenant-scoped API responds.</div>}
       </Panel>
 
       <Panel title="Role Dashboards" icon={UsersRound}>
@@ -11058,65 +14877,15 @@ function AnalyticsWorkspace() {
   )
 }
 
-function SaasWorkspace({ session }: { session: AuthSession }) {
+function SaasWorkspace({ session, workspaceAccess }: { session: AuthSession; workspaceAccess: WorkspaceAccess | null }) {
   const internalAdminView = isInternalAdminSession(session)
-  const consoleApiLabel = internalAdminView ? 'Commercial console API' : 'Billing console API'
-  const syncedMessage = internalAdminView ? 'Commercial console synced from live API' : 'Billing console synced from live API'
-  const loadingMessage = internalAdminView ? 'Loading SaaS readiness controls' : 'Loading billing controls'
+  const syncedMessage = 'Workspace access refreshed'
+  const loadingMessage = 'Loading workspace readiness controls'
   const fallbackMessage = internalAdminView
-    ? 'Using local SaaS readiness seed until API is reachable'
-    : 'Using local billing seed until API is reachable'
-  const fallback = useMemo<SaasConsoleResponse>(() => ({
-    plans: [clientFallbackPlan],
-    plan: clientFallbackPlan,
-    subscription: {
-      id: 'SUB-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      planId: clientFallbackPlan.id,
-      provider: 'manual',
-      collectionMode: 'manual_invoice',
-      status: 'trialing',
-      currentPeriodStart: 'client-fallback',
-      currentPeriodEnd: 'client-fallback',
-      canWrite: false,
-      canExport: true,
-      nextInvoiceAt: 'client-fallback',
-      updatedAt: 'client-fallback',
-    },
-    usage: {
-      id: 'USG-CLIENT-FALLBACK',
-      organizationId: session.organizationId,
-      periodStart: 'client-fallback',
-      periodEnd: 'client-fallback',
-      activeSeats: 0,
-      materials: 0,
-      formulas: 0,
-      lots: 0,
-      documents: 0,
-      storageGb: 0,
-      apiCalls: 0,
-      webhooks: 0,
-      auditEvents: 0,
-      lastCalculatedAt: 'client-fallback',
-    },
-    limitChecks: [],
-    invoices: [],
-    sso: clientFallbackSso,
-    apiKeys: [],
-    webhooks: [],
-    webhookDeliveries: [],
-    auditExports: [],
-    readiness: [
-      {
-        key: 'api-offline',
-        label: consoleApiLabel,
-        status: 'warning',
-        detail: 'Client fallback is active until API is reachable',
-      },
-    ],
-    invariant: 'client fallback contains no commercial state; API is source of truth',
-  }), [consoleApiLabel, session.organizationId])
-  const [saasData, setSaasData] = useState<SaasConsoleResponse>(fallback)
+    ? 'Live workspace readiness API is unavailable'
+    : 'Live workspace access API is unavailable'
+  const [saasData, setSaasData] = useState<SaasConsoleResponse | null>(null)
+  const [integrationReadiness, setIntegrationReadiness] = useState<IntegrationReadinessResponse | null>(null)
   const [statusMessage, setStatusMessage] = useState(loadingMessage)
   const [auditExport, setAuditExport] = useState<AuditExportResponse | null>(null)
   const [billingAction, setBillingAction] = useState<BillingActionResponse | null>(null)
@@ -11125,13 +14894,13 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   const [trustBusyAction, setTrustBusyAction] = useState<string | null>(null)
   const [trustSecret, setTrustSecret] = useState<{ label: string; value: string } | null>(null)
   const [ssoDraft, setSsoDraft] = useState({
-    domain: fallback.sso.domain,
-    issuerUrl: fallback.sso.issuerUrl,
-    metadataUrl: fallback.sso.metadataUrl ?? '',
-    clientId: fallback.sso.clientId ?? '',
-    enforceSso: fallback.sso.enforceSso,
-    scimEnabled: fallback.sso.scim.enabled,
-    roleMapping: Object.entries(fallback.sso.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
+    domain: clientFallbackSso.domain,
+    issuerUrl: clientFallbackSso.issuerUrl,
+    metadataUrl: clientFallbackSso.metadataUrl ?? '',
+    clientId: clientFallbackSso.clientId ?? '',
+    enforceSso: clientFallbackSso.enforceSso,
+    scimEnabled: clientFallbackSso.scim.enabled,
+    roleMapping: Object.entries(clientFallbackSso.roleMapping).map(([group, role]) => `${group}:${role}`).join('\n'),
   })
   const [apiKeyDraft, setApiKeyDraft] = useState({
     label: 'Operations integration',
@@ -11141,11 +14910,18 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     url: 'https://hooks.example.test/olfactoryops',
     events: 'order.fulfilled,document.downloaded,audit.export.ready',
   })
-  const activeSeats = saasData.usage.activeSeats
-  const storageUsedGb = saasData.usage.storageGb
-  const apiUsage = saasData.usage.apiCalls
-  const saasHealth = useMemo(() => buildSaasHealthSummary(saasData), [saasData])
-  const saasHealthSource = statusMessage.toLowerCase().includes('fallback') ? 'Local seed' : 'Live API'
+  const [customDomainDraft, setCustomDomainDraft] = useState('')
+  const [customDomainProvisioning, setCustomDomainProvisioning] = useState<SaasCustomDomainRecord | null>(null)
+  const [customDomains, setCustomDomains] = useState<SaasCustomDomainRecord[]>([])
+  const [workspaceMembers, setWorkspaceMembers] = useState<MembershipRecord[] | null>(null)
+  const activeSeats = saasData?.usage.activeSeats ?? 0
+  const storageUsedGb = saasData?.usage.storageGb ?? 0
+  const apiUsage = saasData?.usage.apiCalls ?? 0
+  const saasHealth = useMemo(() => saasData ? buildSaasHealthSummary(saasData) : null, [saasData])
+  const saasHealthSource = saasData ? 'Live API' : 'Unavailable'
+  const canProvisionCustomDomain = session.role === 'Owner' || session.role === 'Admin'
+  const canManageMembers = sessionHasPermission(session, 'security.manageUsers')
+  const betaAccess = saasData?.billingMode === 'managed_beta'
 
   function syncSsoDraft(next: SsoConfigRecord) {
     setSsoDraft({
@@ -11159,6 +14935,16 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     })
   }
 
+  const loadCustomDomains = useCallback(async (signal?: AbortSignal) => {
+    if (!canProvisionCustomDomain) {
+      setCustomDomains([])
+      return []
+    }
+    const payload = await requestApi<{ domains: SaasCustomDomainRecord[] }>('/saas/custom-domains', { signal })
+    setCustomDomains(payload.domains)
+    return payload.domains
+  }, [canProvisionCustomDomain])
+
   useEffect(() => {
     const controller = new AbortController()
 
@@ -11167,10 +14953,29 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         const payload = await requestApi<SaasConsoleResponse>('/billing/console', { signal: controller.signal })
         setSaasData(payload)
         syncSsoDraft(payload.sso)
+        if (canManageMembers) {
+          try {
+            const tenant = await requestApi<TenantConsoleResponse>('/security/tenant-console', { signal: controller.signal })
+            if (!controller.signal.aborted) setWorkspaceMembers(tenant.memberships)
+          } catch {
+            if (!controller.signal.aborted) setWorkspaceMembers(null)
+          }
+        }
+        await loadCustomDomains(controller.signal)
+        if (canProvisionCustomDomain) {
+          try {
+            const readiness = await requestApi<IntegrationReadinessResponse>('/integrations/readiness', { signal: controller.signal })
+            setIntegrationReadiness(readiness)
+          } catch {
+            setIntegrationReadiness(null)
+          }
+        }
         setStatusMessage(syncedMessage)
-      } catch {
+      } catch (error) {
         if (!controller.signal.aborted) {
-          setStatusMessage(fallbackMessage)
+          setSaasData(null)
+          setIntegrationReadiness(null)
+          setStatusMessage(error instanceof Error ? `Workspace services unavailable: ${error.message}` : fallbackMessage)
         }
       }
     }
@@ -11178,12 +14983,29 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     void loadSaasConsole()
 
     return () => controller.abort()
-  }, [fallbackMessage, syncedMessage])
+  }, [canManageMembers, canProvisionCustomDomain, fallbackMessage, loadCustomDomains, syncedMessage])
 
   async function refreshSaasConsole(status?: string) {
     const consolePayload = await requestApi<SaasConsoleResponse>('/billing/console')
     setSaasData(consolePayload)
     syncSsoDraft(consolePayload.sso)
+    if (canManageMembers) {
+      try {
+        const tenant = await requestApi<TenantConsoleResponse>('/security/tenant-console')
+        setWorkspaceMembers(tenant.memberships)
+      } catch {
+        setWorkspaceMembers(null)
+      }
+    }
+    await loadCustomDomains()
+    if (canProvisionCustomDomain) {
+      try {
+        const readiness = await requestApi<IntegrationReadinessResponse>('/integrations/readiness')
+        setIntegrationReadiness(readiness)
+      } catch {
+        setIntegrationReadiness(null)
+      }
+    }
     if (status) {
       setStatusMessage(status)
     }
@@ -11243,25 +15065,6 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
-  async function selectBillingPlan(planId: string) {
-    setBillingBusyAction(planId)
-    setStatusMessage(`Selecting ${planId}`)
-    try {
-      const payload = await requestApi<BillingActionResponse>('/billing/subscription/select-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, billingCycle: 'monthly' }),
-      })
-      const consolePayload = await refreshSaasConsole()
-      setBillingAction(payload)
-      setStatusMessage(`${consolePayload.plan.name} selected for this workspace`)
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Plan selection failed')
-    } finally {
-      setBillingBusyAction(null)
-    }
-  }
-
   async function retryWebhookDelivery(deliveryId: string) {
     setBillingBusyAction(deliveryId)
     setStatusMessage(`Retrying ${deliveryId}`)
@@ -11279,6 +15082,10 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
   }
 
   async function saveSsoConfig() {
+    if (!saasData) {
+      setStatusMessage('Live workspace access data is unavailable')
+      return
+    }
     setTrustBusyAction('sso')
     setTrustSecret(null)
     try {
@@ -11443,25 +15250,103 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
     }
   }
 
+  async function provisionCustomDomain() {
+    setTrustBusyAction('custom-domain')
+    try {
+      const payload = await requestApi<{ domain: SaasCustomDomainRecord }>('/saas/custom-domains/provision', {
+        method: 'POST',
+        headers: idempotencyHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ hostname: customDomainDraft.trim().toLowerCase() }),
+      })
+      setCustomDomainProvisioning(payload.domain)
+      setCustomDomains((current) => [payload.domain, ...current.filter((domain) => domain.id !== payload.domain.id)])
+      setCustomDomainDraft('')
+      setStatusMessage(`Cloudflare accepted ${payload.domain.hostname}; complete the DNS/DCV record before going live`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Custom domain provisioning failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  async function refreshCustomDomain(domain: SaasCustomDomainRecord) {
+    setTrustBusyAction(domain.id)
+    try {
+      const payload = await requestApi<{ domain: SaasCustomDomainRecord }>(`/saas/custom-domains/${encodeURIComponent(domain.id)}/refresh`, {
+        method: 'POST',
+        headers: idempotencyHeaders(),
+      })
+      setCustomDomainProvisioning(payload.domain)
+      setCustomDomains((current) => current.map((candidate) => candidate.id === payload.domain.id ? payload.domain : candidate))
+      await refreshSaasConsole(`${payload.domain.hostname} is ${payload.domain.status.replace('_', ' ')}`)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : 'Custom domain status refresh failed')
+    } finally {
+      setTrustBusyAction(null)
+    }
+  }
+
+  if (!saasData || !saasHealth) {
+    return (
+      <div className="workspace-grid saas-grid">
+        <Panel title="Workspace Services" icon={ShieldCheck}>
+          <div className="empty-state">
+            <strong>Live workspace access data is unavailable.</strong>
+            <span>{statusMessage}</span>
+            <span>No local commercial fallback is shown while the API is unavailable.</span>
+          </div>
+          <div className="action-row">
+            <button className="primary-button" type="button" onClick={() => void refreshSaasConsole('Workspace services refreshed')}>
+              Retry workspace services
+            </button>
+          </div>
+        </Panel>
+      </div>
+    )
+  }
+
   return (
     <div className="workspace-grid saas-grid">
+      {canProvisionCustomDomain && integrationReadiness ? (
+        <Panel className="wide" title="Integration Readiness" icon={Gauge}>
+          <div className="integration-summary-grid">
+            {integrationReadiness.checks.map((check) => (
+              <div className="integration-summary-row" key={check.key}>
+                <div>
+                  <strong>{check.label}</strong>
+                  <span>{compactIntegrationDetail(check)}</span>
+                </div>
+                <StatusBadge
+                  status={check.status === 'ready' ? 'stable' : check.status === 'blocked' ? 'alert' : 'review'}
+                  label={check.status.replace('_', ' ').toUpperCase()}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="action-row">
+            <DataTag label={integrationReadiness.billingMode === 'managed_beta' ? 'Beta access' : 'Billing mode'} value={integrationReadiness.billingMode.replace('_', ' ')} tone="blue" />
+            <DataTag label="Checked" value={new Date(integrationReadiness.checkedAt).toLocaleTimeString()} tone="green" />
+          </div>
+        </Panel>
+      ) : null}
+
       {internalAdminView ? (
         <Panel
           className="wide saas-health-panel"
-          title="SaaS Health"
+          title="Workspace Health"
           icon={Gauge}
           right={<StatusBadge status={saasHealthTone(saasHealth.status)} label={`${saasHealth.score}%`} />}
         >
           <div className="saas-health-summary">
             <div className="saas-health-score">
-              <span className="mono-small">Commercial readiness</span>
+              <span className="mono-small">{betaAccess ? 'Beta workspace readiness' : 'Commercial readiness'}</span>
               <strong>{saasHealth.score}%</strong>
               <span>
                 {saasHealth.blockedCount > 0
                   ? 'Blocked controls need admin action before launch.'
                   : saasHealth.warningCount > 0
-                    ? 'Sell-ready with warnings to watch before launch.'
-                    : 'All SaaS health controls are passing.'}
+                    ? betaAccess ? 'Beta safeguards have warnings to review.' : 'Sell-ready with warnings to watch before launch.'
+                    : betaAccess ? 'All beta workspace safeguards are passing.' : 'All SaaS health controls are passing.'}
               </span>
             </div>
             <div className="metric-grid saas-health-metrics">
@@ -11489,7 +15374,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             <button
               className="ghost-button"
               type="button"
-              onClick={() => void refreshSaasConsole('SaaS health recalculated from live API')}
+              onClick={() => void refreshSaasConsole('Workspace health refreshed')}
             >
               Refresh health
             </button>
@@ -11498,12 +15383,9 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </Panel>
       ) : null}
 
-      <Panel title="Billing & Plan Limits" icon={BadgeDollarSign}>
+      <Panel title={betaAccess ? 'Beta workspace access' : 'Workspace Access'} icon={ShieldCheck}>
         <div className="metric-grid">
-          <Metric label="Plan" value={saasData.plan.name} />
-          <Metric label="Monthly" value={formatCurrency(saasData.plan.monthlyPrice)} />
-          <Metric label="Status" value={saasData.subscription.status.toUpperCase()} />
-          <Metric label="Next invoice" value={new Date(saasData.subscription.nextInvoiceAt).toLocaleDateString()} />
+          <Metric label="Status" value={betaAccess ? 'BETA ENABLED' : saasData.subscription.status.toUpperCase()} />
           <Metric label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} />
           <Metric label="Storage" value={`${storageUsedGb.toFixed(3)}/${saasData.plan.storageGb}GB`} />
         </div>
@@ -11511,26 +15393,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           <span style={{ width: `${Math.min(100, (activeSeats / saasData.plan.seats) * 100)}%` }} />
         </div>
         <div className="action-row">
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => void runBillingAction('checkout', '/billing/checkout', {
-              body: JSON.stringify({ planId: saasData.plan.id, mode: internalAdminView ? 'manual_sales' : 'customer_checkout' }),
-              headers: { 'Content-Type': 'application/json' },
-            })}
-            disabled={billingBusyAction !== null}
-          >
-            {internalAdminView ? 'Start sale' : 'Upgrade plan'}
-          </button>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={() => void runBillingAction('portal', '/billing/portal')}
-            disabled={billingBusyAction !== null}
-          >
-            Billing portal
-          </button>
-          {internalAdminView && saasData.subscription.canWrite ? (
+          {internalAdminView && !betaAccess && saasData.subscription.canWrite ? (
             <button
               className="ghost-button"
               type="button"
@@ -11543,7 +15406,7 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
               Freeze workspace
             </button>
           ) : null}
-          {!saasData.subscription.canWrite ? (
+          {internalAdminView && !betaAccess && !saasData.subscription.canWrite ? (
             <button
               className="primary-button"
               type="button"
@@ -11555,15 +15418,17 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
           ) : null}
         </div>
         <ul className="policy-list">
-          <li>Plan limits are enforced server-side before {internalAdminView ? 'commercial writes' : 'workspace changes'}.</li>
+          <li>{betaAccess ? 'Enabled workspace features are available for member testing during beta.' : `Workspace capacity controls remain enforced server-side before ${internalAdminView ? 'commercial writes' : 'workspace changes'}.`}</li>
           <li>
-            {internalAdminView
+            {betaAccess
+              ? 'Pricing, plan selection, invoices, checkout, and the billing portal are hidden until commercial launch.'
+              : internalAdminView
               ? 'Workspace freeze keeps read/export access and blocks create/update operations.'
-              : 'Billing portal and upgrades never bypass workspace-scoped permission checks.'}
+              : 'Subscription changes are temporarily managed by OlfactoryOps during beta.'}
           </li>
           <li>{statusMessage}</li>
         </ul>
-        {billingAction ? (
+        {internalAdminView && billingAction ? (
           <div className="audit-export-card">
             <span className="mono-small">{billingAction.id}</span>
             <strong>{billingAction.mode} / {billingAction.status}</strong>
@@ -11573,32 +15438,36 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         ) : null}
       </Panel>
 
-      <Panel title="Plan Catalog" icon={BadgeDollarSign}>
-        <div className="mini-plan-list">
-          {saasData.plans.map((plan) => {
-            const selected = saasData.subscription.planId === plan.id
-            return (
-              <div className={`mini-plan-row ${selected ? 'is-current' : ''}`} key={plan.id}>
-                <div>
-                  <span className="mono-small">{billingPlanAudience(plan)}</span>
-                  <strong>{plan.name} / {plan.monthlyPrice === 0 ? '$0' : formatCurrency(plan.monthlyPrice)}</strong>
-                  <span>{plan.seats} seats / {plan.storageGb}GB / {plan.apiQuota} API calls</span>
+      {canManageMembers ? (
+        <Panel title="Workspace members" icon={UsersRound}>
+          <div className="member-access-summary">
+            <div>
+              <span>Membership</span>
+              <strong>{betaAccess ? 'Managed beta access' : saasData.plan.name}</strong>
+              <small>{betaAccess ? 'Commercial plans are hidden while beta access is managed directly.' : 'Workspace capacity is enforced server-side.'}</small>
+            </div>
+            <DataTag label="Seats" value={`${activeSeats}/${saasData.plan.seats}`} tone="green" />
+          </div>
+          {workspaceMembers ? (
+            <div className="workspace-member-list" aria-label="Workspace members">
+              {workspaceMembers.map((member) => (
+                <div className="workspace-member-row" key={member.id}>
+                  <div>
+                    <strong>{member.name}</strong>
+                    <span>{member.email}</span>
+                  </div>
+                  <span className="workspace-member-role">{member.role}</span>
+                  <StatusBadge status={memberStatus(member.status)} label={member.status.toLowerCase()} />
                 </div>
-                <button
-                  className={selected ? 'ghost-button small' : 'primary-button small'}
-                  type="button"
-                  onClick={() => void selectBillingPlan(plan.id)}
-                  disabled={billingBusyAction !== null}
-                >
-                  {selected ? 'Current' : 'Select'}
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      </Panel>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact-empty-state">Member records are unavailable. Refresh workspace access to try again.</div>
+          )}
+        </Panel>
+      ) : null}
 
-      <Panel title="Usage Enforcement" icon={Gauge}>
+      <Panel title={betaAccess ? 'Beta capacity' : 'Usage Enforcement'} icon={Gauge}>
         <div className="document-list compact-list">
           {saasData.limitChecks.map((check) => (
             <div className="document-row" key={check.key}>
@@ -11615,20 +15484,106 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
         </div>
       </Panel>
 
-      <Panel title="Invoices & Collection" icon={ClipboardCheck}>
-        <div className="document-list compact-list">
-          {saasData.invoices.map((invoice) => (
-            <div className="document-row" key={invoice.id}>
-              <div>
-                <strong>{invoice.number}</strong>
-                <span>{formatCurrency(invoice.amountDue)} due {new Date(invoice.dueAt).toLocaleDateString()}</span>
-                <span>{invoice.hostedInvoiceUrl}</span>
+      {saasData.billingMode === 'self_service' ? (
+        <Panel title="Invoices & Collection" icon={ClipboardCheck}>
+          <div className="document-list compact-list">
+            {saasData.invoices.map((invoice) => (
+              <div className="document-row" key={invoice.id}>
+                <div>
+                  <strong>{invoice.number}</strong>
+                  <span>{formatCurrency(invoice.amountDue)} due {new Date(invoice.dueAt).toLocaleDateString()}</span>
+                  <span>{invoice.hostedInvoiceUrl}</span>
+                </div>
+                <StatusBadge status={invoice.status === 'paid' ? 'stable' : 'review'} label={invoice.status.toUpperCase()} />
               </div>
-              <StatusBadge status={invoice.status === 'paid' ? 'stable' : 'review'} label={invoice.status.toUpperCase()} />
+            ))}
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel title="Workspace addresses" icon={Globe2}>
+        <div className="document-list compact-list">
+          <div className="document-row">
+            <div>
+              <strong>System address</strong>
+              {workspaceAccess?.workspaceUrl ? (
+                <a href={workspaceAccess.workspaceUrl}>{workspaceAccess.systemHostname}</a>
+              ) : (
+                <span>Loading your workspace address</span>
+              )}
             </div>
-          ))}
+            <StatusBadge status="stable" label="ACTIVE" />
+          </div>
+          <div className="document-row">
+            <div>
+              <strong>External domain</strong>
+              <span>{workspaceAccess?.externalDomain ?? 'Not connected'}</span>
+            </div>
+            <StatusBadge status={workspaceAccess?.externalDomain ? 'stable' : 'review'} label={workspaceAccess?.externalDomain ? 'ACTIVE' : 'OPTIONAL'} />
+          </div>
         </div>
       </Panel>
+
+      {canProvisionCustomDomain ? (
+        <Panel title="Custom Domain" icon={Globe2}>
+          <p className="caveat">Provision a customer-owned hostname through Cloudflare for SaaS. It becomes the workspace hostname only after Cloudflare reports it active.</p>
+          <label className="field-row">
+            <span>Hostname</span>
+            <input
+              value={customDomainDraft}
+              placeholder="app.customer-domain.com"
+              onChange={(event) => setCustomDomainDraft(event.target.value)}
+            />
+          </label>
+          <div className="action-row">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={trustBusyAction !== null || !customDomainDraft.trim()}
+              onClick={() => void provisionCustomDomain()}
+            >
+              {trustBusyAction === 'custom-domain' ? 'Provisioning' : 'Provision hostname'}
+            </button>
+          </div>
+          {customDomainProvisioning ? (
+            <div className="audit-export-card">
+              <span className="mono-small">Cloudflare hostname {customDomainProvisioning.providerId}</span>
+              <strong>{customDomainProvisioning.hostname}</strong>
+              <StatusBadge
+                status={customDomainProvisioning.status === 'active' ? 'stable' : customDomainProvisioning.status === 'failed' ? 'alert' : 'review'}
+                label={customDomainProvisioning.status.replace('_', ' ').toUpperCase()}
+              />
+              {Object.keys(customDomainProvisioning.validation).length > 0 ? (
+                Object.entries(customDomainProvisioning.validation).map(([key, value]) => <span key={key}>{key}: {value}</span>)
+              ) : (
+                <span>Cloudflare did not require an additional DNS record for this hostname.</span>
+              )}
+            </div>
+          ) : null}
+          {customDomains.length > 0 ? (
+            <div className="document-list compact-list">
+              {customDomains.map((domain) => (
+                <div className="document-row" key={domain.id}>
+                  <div>
+                    <strong>{domain.hostname}</strong>
+                    <span>Cloudflare: {domain.providerStatus ?? 'pending'} / SSL: {domain.sslStatus ?? 'pending'}</span>
+                    {domain.verificationErrors.length > 0 ? <span>{domain.verificationErrors.join(' ')}</span> : null}
+                  </div>
+                  <div className="action-row">
+                    <StatusBadge
+                      status={domain.status === 'active' ? 'stable' : domain.status === 'failed' ? 'alert' : 'review'}
+                      label={domain.status.replace('_', ' ').toUpperCase()}
+                    />
+                    <button className="ghost-button tiny" type="button" disabled={trustBusyAction !== null} onClick={() => void refreshCustomDomain(domain)}>
+                      {trustBusyAction === domain.id ? 'Checking...' : 'Refresh'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </Panel>
+      ) : null}
 
       {trustSecret ? (
         <Panel className="wide" title="One-Time Secret Reveal" icon={FileLock2}>
@@ -11697,13 +15652,13 @@ function SaasWorkspace({ session }: { session: AuthSession }) {
             {trustBusyAction === 'scim' ? 'Rotating' : 'Rotate SCIM token'}
           </button>
         </div>
-        <div className="record-grid compact-record-grid">
+        <div className="scim-role-mapping-list">
           {Object.entries(saasData.sso.roleMapping).map(([group, role]) => (
-            <div className="record-card" key={group}>
+            <div className="scim-role-mapping" key={group}>
               <div>
                 <span className="mono-small">{group}</span>
                 <strong>{role}</strong>
-                <span>{saasData.sso.scim.deprovisionAction.replace('_', ' ')}</span>
+                <span>On deprovision: {saasData.sso.scim.deprovisionAction.replace('_', ' ')}</span>
               </div>
             </div>
           ))}
@@ -11964,7 +15919,7 @@ function fieldStatus(status: CustomFieldDefinition['status']): DomainStatus {
   return status === 'ACTIVE' ? 'stable' : 'draft'
 }
 
-function CustomizationWorkspace() {
+function CustomizationWorkspace({ onBrandingSaved }: { onBrandingSaved: (branding: BrandingConfig) => void }) {
   const fallbackCustomization = useMemo(buildCustomizationFallback, [])
   const initialSequence = fallbackCustomization.numberingSequences[0]!
   const [customizationData, setCustomizationData] = useState<CustomizationConsoleResponse>(fallbackCustomization)
@@ -11980,6 +15935,8 @@ function CustomizationWorkspace() {
   const [fieldKey, setFieldKey] = useState('regulatoryReviewCode')
   const [fieldRequired, setFieldRequired] = useState(false)
   const [fieldOptions, setFieldOptions] = useState('citrus, floral, woody')
+  const logoImageUrl = normalizeBrandLogoImageUrl(brandingDraft.logoImageUrl)
+  const logoImageInvalid = brandingDraft.logoMode === 'image' && !logoImageUrl
 
   const syncCustomizationData = useCallback((next: CustomizationConsoleResponse, nextStatus: string) => {
     setCustomizationData(next)
@@ -11995,7 +15952,7 @@ function CustomizationWorkspace() {
     setCustomizationStatus(nextStatus)
   }, [selectedSequenceKey])
 
-  const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization console synced from API') => {
+  const refreshCustomizationConsole = useCallback(async (nextStatus = 'Customization settings refreshed') => {
     try {
       const payload = await requestApi<CustomizationConsoleResponse>('/customization-console')
       syncCustomizationData(payload, nextStatus)
@@ -12038,6 +15995,10 @@ function CustomizationWorkspace() {
         audit: addAudit(current.audit, payload.audit),
       }))
       setSettingsDraft(payload.settings)
+      const locale: UiLocale = payload.settings.locale === 'vi-VN' ? 'vi-VN' : 'en-US'
+      window.localStorage.setItem(localeStorageKey, locale)
+      document.documentElement.lang = locale
+      window.dispatchEvent(new CustomEvent<UiLocale>(localeChangeEvent, { detail: locale }))
       setCustomizationStatus('Workspace settings saved with audit evidence')
     } catch {
       setCustomizationStatus('Settings update blocked by customization policy')
@@ -12157,11 +16118,24 @@ function CustomizationWorkspace() {
   }
 
   async function saveBranding() {
+    if (!brandingDraft.displayName.trim()) {
+      setCustomizationStatus('Workspace branding needs a display name')
+      return
+    }
+    if (logoImageInvalid) {
+      setCustomizationStatus('Logo image mode needs a valid HTTPS image URL')
+      return
+    }
     try {
       const payload = await requestApi<BrandingUpdateResponse>('/branding', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(brandingDraft),
+        body: JSON.stringify({
+          ...brandingDraft,
+          displayName: brandingDraft.displayName.trim(),
+          accentColor: controlledAccentColor(brandingDraft.accentColor),
+          logoImageUrl: brandingDraft.logoImageUrl?.trim() ?? '',
+        }),
       })
       setCustomizationData((current) => ({
         ...current,
@@ -12169,9 +16143,10 @@ function CustomizationWorkspace() {
         audit: addAudit(current.audit, payload.audit),
       }))
       setBrandingDraft(payload.branding)
-      setCustomizationStatus('Export branding saved as workspace configuration')
-    } catch {
-      setCustomizationStatus('Branding update blocked; accent color must be hex')
+      onBrandingSaved(payload.branding)
+      setCustomizationStatus('Workspace branding saved as shared configuration')
+    } catch (error) {
+      setCustomizationStatus(error instanceof Error ? error.message : 'Branding update blocked by workspace policy')
     }
   }
 
@@ -12186,11 +16161,14 @@ function CustomizationWorkspace() {
         <div className="customization-form-grid">
           <label className="field-row">
             <span>Locale</span>
-            <input
+            <select
               aria-label="Customization locale"
               value={settingsDraft.locale}
               onChange={(event) => setSettingsDraft((current) => ({ ...current, locale: event.target.value }))}
-            />
+            >
+              <option value="en-US">English</option>
+              <option value="vi-VN">Tieng Viet</option>
+            </select>
           </label>
           <label className="field-row">
             <span>Timezone</span>
@@ -12441,7 +16419,7 @@ function CustomizationWorkspace() {
         </div>
       </Panel>
 
-      <Panel title="Export Branding" icon={Sparkles}>
+      <Panel title="Workspace & Export Branding" icon={Sparkles}>
         <div className="customization-form-grid">
           <label className="field-row">
             <span>Display name</span>
@@ -12456,12 +16434,12 @@ function CustomizationWorkspace() {
             <input
               aria-label="Branding accent color"
               type="color"
-              value={brandingDraft.accentColor}
-              onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: event.target.value }))}
+              value={controlledAccentColor(brandingDraft.accentColor)}
+              onChange={(event) => setBrandingDraft((current) => ({ ...current, accentColor: controlledAccentColor(event.target.value) }))}
             />
           </label>
           <label className="field-row">
-            <span>Logo mode</span>
+            <span>Sidebar identity</span>
             <select
               aria-label="Branding logo mode"
               value={brandingDraft.logoMode}
@@ -12472,10 +16450,27 @@ function CustomizationWorkspace() {
                 }))
               }
             >
-              <option value="wordmark">wordmark</option>
-              <option value="monogram">monogram</option>
+              <option value="wordmark">Text wordmark</option>
+              <option value="monogram">Workspace initials</option>
+              <option value="image">Logo image</option>
             </select>
           </label>
+          {brandingDraft.logoMode === 'image' ? (
+            <label className="field-row wide-field">
+              <span>Logo image URL</span>
+              <input
+                aria-label="Branding logo image URL"
+                inputMode="url"
+                placeholder="https://cdn.example.com/brand-logo.png"
+                type="url"
+                value={brandingDraft.logoImageUrl ?? ''}
+                onChange={(event) => setBrandingDraft((current) => ({ ...current, logoImageUrl: event.target.value }))}
+              />
+              <small className={logoImageInvalid ? 'field-hint is-danger' : 'field-hint'}>
+                Use a permanent HTTPS image. The logo is shown to every workspace member.
+              </small>
+            </label>
+          ) : null}
           <label className="field-row">
             <span>Label template</span>
             <input
@@ -12494,19 +16489,45 @@ function CustomizationWorkspace() {
               }
             />
           </label>
-          <button className="primary-button" type="button" onClick={() => void saveBranding()}>
-            Save branding
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() =>
+              setBrandingDraft((current) => ({
+                ...current,
+                displayName: 'OlfactoryOps',
+                logoMode: 'wordmark',
+                logoImageUrl: '',
+              }))
+            }
+          >
+            Use OlfactoryOps default
+          </button>
+          <button
+            className="primary-button"
+            disabled={!brandingDraft.displayName.trim() || logoImageInvalid}
+            type="button"
+            onClick={() => void saveBranding()}
+          >
+            Save workspace branding
           </button>
         </div>
-        <div className="branding-preview" style={{ borderColor: `${brandingDraft.accentColor}66` }}>
+        <div className="branding-preview" style={{ borderColor: `${controlledAccentColor(brandingDraft.accentColor)}66` }}>
           <div>
-            <span className="mono-small">Export preview</span>
-            <strong style={{ color: brandingDraft.accentColor }}>{brandingDraft.displayName}</strong>
+            <span className="mono-small">Workspace & export preview</span>
+            <strong style={{ color: controlledAccentColor(brandingDraft.accentColor) }}>{brandingDraft.displayName}</strong>
             <span>{brandingDraft.documentFooter}</span>
           </div>
-          <span className="label-preview">
-            {brandingDraft.labelTemplate.replace('{brand}', 'NXL').replace('{sequence}', '0430')}
-          </span>
+          <div className="branding-preview-media">
+            {brandingDraft.logoMode === 'image' && logoImageUrl ? (
+              <img alt={`${brandingDraft.displayName || 'Workspace'} logo preview`} src={logoImageUrl} onError={(event) => { event.currentTarget.hidden = true }} />
+            ) : (
+              <span className="branding-preview-mode">{brandingDraft.logoMode === 'monogram' ? 'Initials' : 'Text wordmark'}</span>
+            )}
+            <span className="label-preview">
+              {brandingDraft.labelTemplate.replace('{brand}', 'NXL').replace('{sequence}', '0430')}
+            </span>
+          </div>
         </div>
       </Panel>
 
@@ -12614,7 +16635,7 @@ function IdentityWorkspace() {
     tenantData.permissionMatrix.find((matrix) => matrix.role === selectedRolePolicy?.role) ?? tenantData.permissionMatrix[0]
   const selectedPermissionKeys = new Set(selectedRolePolicy?.permissions ?? [])
 
-  async function refreshTenantConsole(nextStatus = 'Workspace console synced from API') {
+  async function refreshTenantConsole(nextStatus = 'Workspace settings refreshed') {
     if (tenantPermissionMutationRef.current) {
       return
     }
@@ -13195,35 +17216,7 @@ function IdentityWorkspace() {
   )
 }
 
-function WorkflowGraph({
-  nodes,
-  onNavigate,
-}: {
-  nodes: { key: DomainKey; label: string; detail: string }[]
-  onNavigate: (key: DomainKey) => void
-}) {
-  return (
-    <div className="workflow-graph">
-      {nodes.map((node, index) => {
-        const Icon = domainIcons[node.key]
-        return (
-          <div className="workflow-step-wrap" key={node.key}>
-            <button className="workflow-step" type="button" onClick={() => onNavigate(node.key)}>
-              <Icon size={18} />
-              <strong>{node.label}</strong>
-              <span>{node.detail}</span>
-            </button>
-            {index < nodes.length - 1 && <ChevronRight className="workflow-arrow" size={18} />}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 function DomainMatrix({ session, onNavigate }: { session: AuthSession; onNavigate: (key: DomainKey) => void }) {
-  const internalAdminView = isInternalAdminSession(session)
-
   return (
     <div className="domain-matrix">
       {visibleDomainsForSession(session).map((domain) => {
@@ -13234,13 +17227,8 @@ function DomainMatrix({ session, onNavigate }: { session: AuthSession; onNavigat
             <Icon size={18} />
             <div>
               <strong>{displayDomain.shortName}</strong>
-              <span>{internalAdminView ? displayDomain.owner : displayDomain.screens[0]}</span>
+              <span>{displayDomain.screens[0] ?? displayDomain.responsibility}</span>
             </div>
-            {internalAdminView ? (
-              <div className="health-bar">
-                <span style={{ width: `${displayDomain.health}%` }} />
-              </div>
-            ) : null}
           </button>
         )
       })}
@@ -13284,26 +17272,32 @@ function EnterpriseReadiness({
   )
 }
 
+const evaporationSeriesColors = ['#38bdf8', '#f59e0b', '#34d399', '#f472b6', '#a78bfa', '#fb7185', '#f97316', '#22c55e']
+
 function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve> }) {
+  const materialSeries = curve[0]?.materials ?? []
+  const materialNameById = new Map(materialSeries.map((material) => [material.materialId, material.materialName]))
+  const curveData = curve.map((point) => ({
+    hour: point.hour,
+    ...Object.fromEntries(point.materials.map((material) => [material.materialId, material.remainingPercent])),
+  }))
+  const checkpoints = [4, 12, 24]
+  const pointByHour = new Map(curve.map((point) => [point.hour, point]))
+
   return (
-    <div className="chart-wrap">
+    <div className="chart-wrap evaporation-chart">
       <ResponsiveContainer width="100%" height={250}>
-        <AreaChart data={curve} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
-          <defs>
-            <linearGradient id="topGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#4d9bff" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#4d9bff" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="heartGradient" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="5%" stopColor="#c4a86a" stopOpacity={0.32} />
-              <stop offset="95%" stopColor="#c4a86a" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+        <LineChart data={curveData} margin={{ top: 12, right: 12, left: -20, bottom: 0 }}>
           <CartesianGrid stroke="rgba(255,255,255,.06)" vertical={false} />
           <XAxis dataKey="hour" stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} />
-          <YAxis stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} />
+          <YAxis domain={[0, 100]} stroke="rgba(158,166,180,.62)" tickLine={false} axisLine={false} tickFormatter={(value) => `${value}%`} />
           <Tooltip
             cursor={{ stroke: 'rgba(77,155,255,.32)' }}
+            labelFormatter={(hour) => `After ${hour}h`}
+            formatter={(value, materialId) => [
+              `${Number(value).toFixed(1)}% remaining`,
+              materialNameById.get(String(materialId)) ?? String(materialId),
+            ]}
             contentStyle={{
               background: 'rgba(9,10,13,.92)',
               border: '1px solid rgba(255,255,255,.1)',
@@ -13311,11 +17305,39 @@ function EvaporationChart({ curve }: { curve: ReturnType<typeof evaporationCurve
               color: 'rgba(233,236,243,.92)',
             }}
           />
-          <Area type="monotone" dataKey="Top" stroke="#4d9bff" fill="url(#topGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Heart" stroke="#c4a86a" fill="url(#heartGradient)" strokeWidth={2} />
-          <Area type="monotone" dataKey="Base" stroke="#37d6a0" fill="transparent" strokeWidth={2} strokeDasharray="5 5" />
-        </AreaChart>
+          <Legend formatter={(materialId) => materialNameById.get(String(materialId)) ?? String(materialId)} />
+          {materialSeries.map((material, index) => (
+            <Line
+              key={material.materialId}
+              type="monotone"
+              dataKey={material.materialId}
+              name={material.materialId}
+              stroke={evaporationSeriesColors[index % evaporationSeriesColors.length]}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          ))}
+        </LineChart>
       </ResponsiveContainer>
+      <div className="evaporation-material-list" aria-label="Material evaporation breakdown">
+        {materialSeries.map((material, index) => (
+          <div className="evaporation-material-row" key={material.materialId}>
+            <div>
+              <span
+                className="evaporation-swatch"
+                style={{ backgroundColor: evaporationSeriesColors[index % evaporationSeriesColors.length] }}
+              />
+              <strong>{material.materialName}</strong>
+              <span>{material.tier} / {material.initialPercent.toFixed(2)}% of formula</span>
+            </div>
+            {checkpoints.map((hour) => {
+              const remaining = pointByHour.get(hour)?.materials.find((item) => item.materialId === material.materialId)?.remainingPercent ?? 0
+              return <span key={hour}><b>{hour}h</b> {remaining.toFixed(1)}%</span>
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -13404,6 +17426,227 @@ function UsagePreview({
   )
 }
 
+function QrLotScanner({
+  open,
+  onClose,
+  onScan,
+}: {
+  open: boolean
+  onClose: () => void
+  onScan: (value: string) => void
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [status, setStatus] = useState('Allow camera access to scan an OlfactoryOps lot label.')
+  const [manualValue, setManualValue] = useState('')
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    let stream: MediaStream | undefined
+    let interval: number | undefined
+    let stopped = false
+    let scanning = false
+    const detectorConstructor = (window as unknown as {
+      BarcodeDetector?: new (options?: { formats?: string[] }) => {
+        detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>
+      }
+    }).BarcodeDetector
+
+    async function startCamera() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus('Camera access is unavailable in this browser. Paste the label value below instead.')
+        return
+      }
+      if (!detectorConstructor) {
+        setStatus('This browser does not expose a QR detector. Paste the label value below instead.')
+        return
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false })
+        const video = videoRef.current
+        if (!video || stopped) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        video.srcObject = stream
+        await video.play()
+        const detector = new detectorConstructor({ formats: ['qr_code'] })
+        setStatus('Point the camera at an OlfactoryOps QR lot label.')
+        interval = window.setInterval(async () => {
+          if (scanning || stopped || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return
+          }
+          scanning = true
+          try {
+            const detected = await detector.detect(video)
+            const value = detected[0]?.rawValue
+            if (value) {
+              onScan(value)
+            }
+          } catch {
+            // Keep scanning; transient detector frames are expected.
+          } finally {
+            scanning = false
+          }
+        }, 320)
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Camera access was not granted')
+      }
+    }
+
+    void startCamera()
+    return () => {
+      stopped = true
+      if (interval) window.clearInterval(interval)
+      stream?.getTracks().forEach((track) => track.stop())
+    }
+  }, [onScan, open])
+
+  return (
+    <BlackPopup
+      open={open}
+      title="Scan inventory QR"
+      description="The scanner only selects a lot in the current workspace. It never changes stock."
+      actionLabel="Close"
+      onClose={onClose}
+      onAction={onClose}
+    >
+      <div className="qr-scanner">
+        <video className="qr-scanner-video" ref={videoRef} muted playsInline />
+        <p className="muted-copy">{status}</p>
+        <label className="field-row">
+          <span>Manual label value</span>
+          <input value={manualValue} onChange={(event) => setManualValue(event.target.value)} placeholder="OLFOPS|LOT|lot-id|..." />
+        </label>
+        <button className="ghost-button small" type="button" disabled={!manualValue.trim()} onClick={() => onScan(manualValue)}>
+          Select scanned lot
+        </button>
+      </div>
+    </BlackPopup>
+  )
+}
+
+function NotificationCenter({
+  open,
+  onClose,
+  onNavigate,
+}: {
+  open: boolean
+  onClose: () => void
+  onNavigate: (key: DomainKey) => void
+}) {
+  const [notifications, setNotifications] = useState<AppNotificationRecord[]>([])
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('')
+
+  const loadNotifications = useCallback(async () => {
+    setLoading(true)
+    try {
+      await requestApi<{ created: number }>('/notifications/refresh', { method: 'POST' })
+      const payload = await requestApi<{ notifications: AppNotificationRecord[]; unreadCount: number }>('/notifications')
+      setNotifications(payload.notifications)
+      setStatus(payload.notifications.length === 0 ? 'No notifications yet.' : '')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not load notifications')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) {
+      void loadNotifications()
+    }
+  }, [loadNotifications, open])
+
+  async function openNotification(notification: AppNotificationRecord) {
+    if (!notification.readAt) {
+      try {
+        await requestApi(`/notifications/${encodeURIComponent(notification.id)}/read`, { method: 'POST' })
+        setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item))
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Could not mark notification as read')
+      }
+    }
+    const key = domainKeyForHref(notification.href)
+    if (key) {
+      onNavigate(key)
+    }
+  }
+
+  async function markAllRead() {
+    try {
+      await requestApi('/notifications/read-all', { method: 'POST' })
+      setNotifications((current) => current.map((item) => item.readAt ? item : { ...item, readAt: new Date().toISOString() }))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Could not update notifications')
+    }
+  }
+
+  return (
+    <AnimatePresence>
+      {open ? (
+        <motion.section
+          className="notification-center glass"
+          aria-label="Notification center"
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+        >
+          <div className="notification-center-header">
+            <div>
+              <span className="eyebrow">Workspace inbox</span>
+              <strong>{uiText('Notifications')}</strong>
+            </div>
+            <div className="notification-center-actions">
+              <button className="ghost-button tiny" type="button" onClick={() => void markAllRead()} disabled={notifications.every((item) => item.readAt)}>
+                {uiText('Mark all read')}
+              </button>
+              <button className="icon-button" type="button" onClick={onClose} aria-label={uiText('Close notifications')}>
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+          <div className="notification-center-list" aria-live="polite">
+            {loading ? <span className="muted-copy">{uiText('Loading notifications...')}</span> : null}
+            {!loading && status ? <span className="muted-copy">{uiText(status)}</span> : null}
+            {!loading && !status ? notifications.map((notification) => (
+              <button
+                className={`notification-item ${notification.readAt ? '' : 'is-unread'}`}
+                key={notification.id}
+                type="button"
+                onClick={() => void openNotification(notification)}
+              >
+                <span className={`notification-dot notification-${notification.category}`} />
+                <span>
+                  <strong>{notification.title}</strong>
+                  <small>{notification.body}</small>
+                </span>
+              </button>
+            )) : null}
+          </div>
+        </motion.section>
+      ) : null}
+    </AnimatePresence>
+  )
+}
+
+function domainKeyForHref(href?: string): DomainKey | null {
+  const normalized = href?.split('?')[0]
+  const map: Record<string, DomainKey> = {
+    '/materials': 'materials',
+    '/formulas': 'formulas',
+    '/inventory': 'inventory',
+    '/procurement': 'procurement',
+    '/security': 'identity',
+    '/settings': 'customization',
+    '/customization': 'customization',
+    '/saas': 'saas',
+  }
+  return normalized ? map[normalized] ?? null : null
+}
+
 function CommandPalette({
   open,
   session,
@@ -13419,6 +17662,7 @@ function CommandPalette({
 }) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [globalResults, setGlobalResults] = useState<GlobalSearchResult[]>([])
   const internalAdminView = isInternalAdminSession(session)
   const commandDomains = useMemo(() => visibleDomainsForSession(session), [session])
   const canCommitLabUsage = sessionHasPermission(session, 'inventory.commitLabUsage')
@@ -13426,7 +17670,7 @@ function CommandPalette({
     internalAdminView && (domainVisibleForSession('saas', session) || sessionHasPermission(session, 'audit.export'))
   const commands = useMemo(
     () => [
-      { label: 'Open OlfactoryOps Console', detail: 'Dashboard', action: () => onNavigate('dashboard') },
+      { label: 'Open workspace overview', detail: 'Overview', action: () => onNavigate('dashboard') },
       ...commandDomains.map((domain) => {
         const displayDomain = domainDisplayForSession(domain, session)
         return {
@@ -13450,7 +17694,21 @@ function CommandPalette({
     ],
     [canCommitLabUsage, canReviewAuditExport, commandDomains, internalAdminView, onCommit, onNavigate, session],
   )
-  const filtered = commands.filter((command) =>
+  const remoteCommands = useMemo(
+    () => globalResults
+      .map((result) => {
+        const key = domainKeyForHref(result.href)
+        if (!key) return null
+        return {
+          label: result.title,
+          detail: `${result.kind.toUpperCase()} / ${result.subtitle}`,
+          action: () => onNavigate(key),
+        }
+      })
+      .filter((command): command is { label: string; detail: string; action: () => void } => command !== null),
+    [globalResults, onNavigate],
+  )
+  const filtered = [...commands, ...remoteCommands].filter((command) =>
     `${command.label} ${command.detail}`.toLowerCase().includes(query.toLowerCase()),
   )
 
@@ -13458,8 +17716,26 @@ function CommandPalette({
     if (open) {
       setQuery('')
       setSelectedIndex(0)
+      setGlobalResults([])
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || query.trim().length < 2) {
+      setGlobalResults([])
+      return
+    }
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => {
+      void requestApi<{ query: string; results: GlobalSearchResult[] }>(`/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal })
+        .then((payload) => setGlobalResults(payload.results))
+        .catch(() => setGlobalResults([]))
+    }, 180)
+    return () => {
+      controller.abort()
+      window.clearTimeout(timeout)
+    }
+  }, [open, query])
 
   function run(index: number) {
     filtered[index]?.action()
@@ -13552,77 +17828,58 @@ function BlackPopup({
   children: ReactNode
 }) {
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div className="modal-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.div
-            className="black-popup glass"
-            role="dialog"
-            aria-modal="true"
-            aria-label={title}
-            initial={{ opacity: 0, scale: 0.96, y: 16 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 16 }}
-          >
-            <div className="popup-header">
-              <div>
-                <h2>{title}</h2>
-                <p>{description}</p>
-              </div>
-              <button className="icon-button" type="button" onClick={onClose} aria-label="Close dialog">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="popup-body">{children}</div>
-            <div className="popup-actions">
-              <button className="ghost-button" type="button" onClick={onClose}>
-                Cancel
-              </button>
-              <button className="primary-button" type="button" onClick={() => void onAction()} disabled={actionDisabled}>
-                {actionLabel}
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
+    <WorkspaceDialog
+      open={open}
+      title={title}
+      description={description}
+      onClose={onClose}
+      className="black-popup"
+      footer={(
+        <div className="popup-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary-button" type="button" onClick={() => void onAction()} disabled={actionDisabled}>
+            {actionLabel}
+          </button>
+        </div>
       )}
-    </AnimatePresence>
+    >
+      <div className="popup-body">{children}</div>
+    </WorkspaceDialog>
   )
 }
 
-function Panel({
+function FormulaSheetDialog({
   title,
-  icon: Icon,
-  right,
-  children,
+  onClose,
   className = '',
+  children,
 }: {
   title: string
-  icon: LucideIcon
-  right?: ReactNode
-  children: ReactNode
+  onClose: () => void
   className?: string
+  children: ReactNode
 }) {
   return (
-    <section className={`panel glass glass-hover ${className}`}>
-      <div className="panel-header">
-        <div className="panel-title-row">
-          <span className="icon-chip">
-            <Icon size={17} />
-          </span>
-          <h2>{title}</h2>
-        </div>
-        {right}
-      </div>
+    <WorkspaceDialog
+      open
+      title={title}
+      onClose={onClose}
+      className={`formula-sheet ${className}`.trim()}
+      showHeader={false}
+      showGrip={false}
+    >
       {children}
-    </section>
+    </WorkspaceDialog>
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, countUpValue }: { label: string; value: string; countUpValue?: number }) {
   return (
     <div className="metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{Number.isFinite(countUpValue) ? <CountUp value={countUpValue ?? 0} /> : value}</strong>
     </div>
   )
 }
@@ -13693,6 +17950,14 @@ function LabBackdrop() {
       <div className="scanline" />
     </div>
   )
+}
+
+function App() {
+  const path = window.location.pathname
+  // V2 owns the public authentication entrypoints as well as the workspace.
+  // Keeping this decision at the application boundary prevents the legacy
+  // shell from taking authority for a direct /login or /signup navigation.
+  return path === '/login' || path === '/signup' || path.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
 }
 
 export default App
