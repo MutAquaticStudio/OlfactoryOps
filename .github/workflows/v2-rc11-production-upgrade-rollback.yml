@@ -1,0 +1,99 @@
+name: V2 RC11 Production Upgrade Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC11 SHA whose upgrade is being reversed.
+        required: true
+        type: string
+      confirm_rollback:
+        description: Type ROLLBACK_RC11_TO_RC10_COMPONENTS.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc11-production-upgrade
+  cancel-in-progress: false
+
+env:
+  RC11_SHA: 98cfac77853ffb0b6b69235bb3483117dc3b6961
+  RC11_TAG: v2-production-rc11
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+
+jobs:
+  rollback:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Validate immutable rollback boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.release_sha }}" = "$RC11_SHA"
+          test "${{ inputs.confirm_rollback }}" = ROLLBACK_RC11_TO_RC10_COMPONENTS
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC11_TAG")" = "$RC11_SHA"
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+      - name: Install pinned operations tooling without provider credentials
+        run: npm ci --ignore-scripts
+      - id: capture
+        name: Capture exact RC10 component rollback targets
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          state="$RUNNER_TEMP/rc11-rollback-${GITHUB_RUN_ID}"
+          mkdir -p "$state"
+          chmod 700 "$state"
+          RC11_UPGRADE_STATE_DIRECTORY="$state" node scripts/capture-v2-rc11-upgrade-state.mjs capture
+          test -s "$state/rollback-state.json"
+          chmod 600 "$state/rollback-state.json"
+          echo "state_directory=$state" >> "$GITHUB_OUTPUT"
+          echo 'RC11_ROLLBACK_TARGETS=PASS'
+      - name: Restore exact captured RC10 Workers and Pages deployment
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RC11_UPGRADE_STATE_DIRECTORY: ${{ steps.capture.outputs.state_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          for service in tenant-router cloud-runtime api; do
+            version="$(node scripts/capture-v2-rc11-upgrade-state.mjs rollback-version "$service")"
+            name="$(node scripts/capture-v2-rc11-upgrade-state.mjs service "$service")"
+            ./node_modules/.bin/wrangler rollback "$version" --name "$name" --yes > /dev/null
+          done
+          node scripts/capture-v2-rc11-upgrade-state.mjs rollback-pages
+          node scripts/capture-v2-rc11-upgrade-state.mjs verify-rc10-public
+          echo 'RC11_UPGRADE_ROLLBACK=PASS'
+      - name: Remove private rollback state
+        if: ${{ always() }}
+        env:
+          STATE_DIRECTORY: ${{ steps.capture.outputs.state_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STATE_DIRECTORY"
+          rm -rf -- "$STATE_DIRECTORY"
+          test ! -e "$STATE_DIRECTORY"
+          echo 'RC11_ROLLBACK_LOCAL_CLEANUP=PASS'

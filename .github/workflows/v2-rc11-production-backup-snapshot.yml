@@ -1,0 +1,193 @@
+name: V2 RC11 Production Backup Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC11 SHA.
+        required: true
+        type: string
+      confirm_backup:
+        description: Type CREATE_RC11_PRECUTOVER_BACKUP.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc11-production-backup-snapshot
+  cancel-in-progress: false
+
+env:
+  RC11_SHA: 98cfac77853ffb0b6b69235bb3483117dc3b6961
+  RC11_TAG: v2-production-rc11
+  BACKUP_BUCKET: olfactoryops-v2-production-backups
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        name: Validate exact RC11 backup request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_backup }}" = CREATE_RC11_PRECUTOVER_BACKUP
+          test "${{ inputs.release_sha }}" = "$RC11_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC11_TAG")" = "$RC11_SHA"
+          echo "release_sha=$RC11_SHA" >> "$GITHUB_OUTPUT"
+          echo "BACKUP_RELEASE_IDENTITY=PASS"
+
+  snapshot:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    env:
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install pinned operations tooling without provider credentials
+        run: npm ci --ignore-scripts
+      - name: Preflight the dedicated private R2 backup bucket
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BACKUP_TOKEN: ${{ secrets.CLOUDFLARE_R2_BACKUP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          BACKUP_BUCKET="$BACKUP_BUCKET" node scripts/verify-v2-rc11-backup-r2-private.mjs
+      - name: Create and validate a runner-local custom-format dump
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="$RUNNER_TEMP/rc11-production-backup"
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          chmod 700 "$dir"
+          test -n "$PRODUCTION_DATABASE_URL"
+          set +e
+          server_version="$(psql "$PRODUCTION_DATABASE_URL" -AtX -c 'SHOW server_version_num' 2>"$dir/psql.err")"
+          psql_status=$?
+          set -e
+          if [ "$psql_status" -ne 0 ] || ! [[ "$server_version" =~ ^[0-9]+$ ]]; then
+            echo "BACKUP_DATABASE_VERSION=UNPROVEN"
+            echo "BACKUP_DATABASE_CONNECTIVITY=FAIL"
+            exit 1
+          fi
+          server_major="$((server_version / 10000))"
+          pg_dump_bin="$(command -v pg_dump)"
+          pg_restore_bin="$(command -v pg_restore)"
+          client_version="$("$pg_dump_bin" --version | awk '{print $3}')"
+          client_major="${client_version%%.*}"
+          [[ "$server_major" =~ ^[0-9]+$ && "$client_major" =~ ^[0-9]+$ ]]
+          echo "BACKUP_SERVER_MAJOR=$server_major"
+          echo "BACKUP_CLIENT_MAJOR=$client_major"
+          if [ "$client_major" -lt "$server_major" ]; then
+            . /etc/os-release
+            sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+            curl --fail --silent --show-error https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc > /dev/null
+            echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "postgresql-client-$server_major"
+            pg_dump_bin="/usr/lib/postgresql/$server_major/bin/pg_dump"
+            pg_restore_bin="/usr/lib/postgresql/$server_major/bin/pg_restore"
+            client_version="$("$pg_dump_bin" --version | awk '{print $3}')"
+            client_major="${client_version%%.*}"
+            test "$client_major" -ge "$server_major"
+            echo "BACKUP_CLIENT_COMPATIBILITY=PASS"
+          else
+            echo "BACKUP_CLIENT_COMPATIBILITY=PASS"
+          fi
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          key="rc11/precutover/$timestamp/production-${RELEASE_SHA:0:12}.dump"
+          dump="$dir/production.dump"
+          if ! "$pg_dump_bin" --format=custom --no-owner --no-acl --file "$dump" "$PRODUCTION_DATABASE_URL" > /dev/null 2>"$dir/pg_dump.err"; then
+            echo "BACKUP_DUMP=FAIL"
+            exit 1
+          fi
+          "$pg_restore_bin" --list "$dump" > /dev/null
+          sha256sum "$dump" | awk '{print $1}' > "$dir/checksum"
+          printf '%s' "$timestamp" > "$dir/timestamp"
+          printf '%s' "$key" > "$dir/key"
+          printf '%s' "$dump" > "$dir/dump-path"
+          printf '%s' "$pg_restore_bin" > "$dir/pg-restore-bin"
+          echo "BACKUP_TYPE=PRIVATE_R2_PG_DUMP"
+          echo "BACKUP_CREATED_AT=$timestamp"
+          echo "BACKUP_LOCAL_ARCHIVE_VALIDATION=PASS"
+      - name: Upload, download, checksum, and validate the same private object
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_BACKUP_TOKEN: ${{ secrets.CLOUDFLARE_R2_BACKUP_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          dir="$RUNNER_TEMP/rc11-production-backup"
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          dump="$(cat "$dir/dump-path")"
+          key="$(cat "$dir/key")"
+          original="$(cat "$dir/checksum")"
+          pg_restore_bin="$(cat "$dir/pg-restore-bin")"
+          downloaded="$dir/downloaded.dump"
+          if ! CLOUDFLARE_API_TOKEN="$CLOUDFLARE_R2_BACKUP_TOKEN" ./node_modules/.bin/wrangler r2 object put "$BACKUP_BUCKET/$key" --remote --file "$dump" > /dev/null 2>"$dir/object-put.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_PUT"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=WRANGLER"
+            exit 1
+          fi
+          if ! CLOUDFLARE_API_TOKEN="$CLOUDFLARE_R2_BACKUP_TOKEN" ./node_modules/.bin/wrangler r2 object get "$BACKUP_BUCKET/$key" --remote --file "$downloaded" > /dev/null 2>"$dir/object-get.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_GET"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=WRANGLER"
+            exit 1
+          fi
+          if ! test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$original"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_VERIFY"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=UNCLASSIFIED"
+            exit 1
+          fi
+          if ! "$pg_restore_bin" --list "$downloaded" > /dev/null 2>"$dir/pg_restore-downloaded.err"; then
+            echo "BACKUP_R2_API_OPERATION=OBJECT_VERIFY"
+            echo "BACKUP_R2_API_HTTP_STATUS=UNKNOWN"
+            echo "BACKUP_R2_API_CF_ERROR_CODE=NONE"
+            echo "BACKUP_R2_FAILURE_CLASS=UNCLASSIFIED"
+            exit 1
+          fi
+          echo "BACKUP_OBJECT_EXISTS=PASS"
+          echo "BACKUP_CHECKSUM=PASS"
+          echo "BACKUP_ARCHIVE_VALIDATION=PASS"
+          echo "PRODUCTION_BACKUP_READY=PASS"
+      - name: Delete all local backup evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/rc11-production-backup"
+          test ! -e "$RUNNER_TEMP/rc11-production-backup"
+          echo "BACKUP_LOCAL_CLEANUP=PASS"
