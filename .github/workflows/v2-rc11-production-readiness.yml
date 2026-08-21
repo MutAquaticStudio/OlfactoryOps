@@ -1,0 +1,289 @@
+name: V2 RC11 Production Readiness Attestation
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC11 SHA.
+        required: true
+        type: string
+      active_rc_tag:
+        description: Exact immutable RC11 tag.
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful authoritative RC11 candidate acceptance run ID.
+        required: true
+        type: string
+      environment_revalidation_run_id:
+        description: Successful RC11 production environment revalidation run ID.
+        required: true
+        type: string
+      backup_run_id:
+        description: Successful RC11 production backup snapshot run ID.
+        required: true
+        type: string
+      confirm_readiness:
+        description: Type ASSESS_RC11_PRODUCTION_READINESS to run read-mostly checks.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v2-rc11-production-readiness
+  cancel-in-progress: false
+
+env:
+  RC11_SHA: 98cfac77853ffb0b6b69235bb3483117dc3b6961
+  RC11_TAG: v2-production-rc11
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  RC10_RUNTIME_BASE_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+
+jobs:
+  validate-input:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - id: validate
+        name: Validate immutable RC11 and release branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_readiness }}" = ASSESS_RC11_PRODUCTION_READINESS
+          test "${{ inputs.active_rc_tag }}" = "$RC11_TAG"
+          test "${{ inputs.release_sha }}" = "$RC11_SHA"
+          [[ "${{ inputs.candidate_run_id }}" =~ ^[0-9]+$ ]]
+          [[ "${{ inputs.environment_revalidation_run_id }}" =~ ^[0-9]+$ ]]
+          [[ "${{ inputs.backup_run_id }}" =~ ^[0-9]+$ ]]
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC11_TAG")" = "$RC11_SHA"
+          test "$(git rev-list -n 1 v2-production-rc9)" = "$RC9_SHA"
+          if git show-ref --verify --quiet refs/tags/v2-production-live; then
+            test "$(git rev-list -n 1 v2-production-live)" = "$RC10_RUNTIME_BASE_SHA"
+          fi
+          echo "release_sha=$RC11_SHA" >> "$GITHUB_OUTPUT"
+          echo "READINESS_RELEASE_IDENTITY=PASS"
+
+  assess:
+    needs: validate-input
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      RELEASE_SHA: ${{ needs.validate-input.outputs.release_sha }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+      ENVIRONMENT_REVALIDATION_RUN_ID: ${{ inputs.environment_revalidation_run_id }}
+      BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate-input.outputs.release_sha }}
+          fetch-depth: 0
+          path: release
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - name: Install exact RC11 dependencies without provider credentials
+        run: npm ci --prefix release
+      - name: Verify authoritative RC11 candidate acceptance evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/candidate-metadata.json"
+          log="$RUNNER_TEMP/candidate.log"
+          trap 'rm -f "$metadata" "$log"' EXIT
+          gh run view "$CANDIDATE_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json workflowName,conclusion,event > "$metadata"
+          grep -Fq 'V2 RC11 Isolated Production Candidate' "$metadata"
+          grep -Fq '"conclusion":"success"' "$metadata"
+          grep -Fq '"event":"workflow_dispatch"' "$metadata"
+          gh run view "$CANDIDATE_RUN_ID" --repo "${GITHUB_REPOSITORY}" --log > "$log"
+          if grep -Fq 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP' "$log"; then
+            grep -Fq 'REAL_PLATFORM_OWNER_PRESERVED=PASS' "$log"
+            grep -Fq 'ACTIVE_PLATFORM_OWNER_COUNT=ONE' "$log"
+            grep -Fq 'PLATFORM_OWNER_ROLE=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_STATUS_ACTIVE=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_MFA_REQUIRED=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_AUDIT_EVENT=PASS' "$log"
+            grep -Fq 'PLATFORM_OWNER_READY=PASS' "$log"
+            echo 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP'
+          else
+            echo 'CANDIDATE_ACCEPTANCE_MODE=LEGACY_PRE_BOOTSTRAP'
+          fi
+          grep -Fq 'CANDIDATE_BROWSER_ACCEPTANCE=PASS' "$log"
+          grep -Fq 'productionCandidateAcceptance":"PASS' "$log"
+          grep -Fq 'candidateFixtureCleanup":"ARCHIVED' "$log"
+          grep -Fq "$RELEASE_SHA" "$log"
+          echo "AUTHORITATIVE_RC11_CANDIDATE_RUN=$CANDIDATE_RUN_ID"
+          echo "PRODUCTION_CANDIDATE_ACCEPTANCE=PASS"
+      - name: Verify fresh RC11 production revalidation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/revalidation-metadata.json"
+          log="$RUNNER_TEMP/revalidation.log"
+          trap 'rm -f "$metadata" "$log"' EXIT
+          gh run view "$ENVIRONMENT_REVALIDATION_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json workflowName,conclusion,event > "$metadata"
+          grep -Fq 'V2 RC11 Production Environment Revalidation' "$metadata"
+          grep -Fq '"conclusion":"success"' "$metadata"
+          gh run view "$ENVIRONMENT_REVALIDATION_RUN_ID" --repo "${GITHUB_REPOSITORY}" --log > "$log"
+          grep -Fq "PRODUCTION_RELEASE_IDENTITY=PASS" "$log"
+          grep -Fq "PRODUCTION_SECRET_BOUNDARY_REVALIDATION=PASS" "$log"
+          grep -Fq "PRODUCTION_SECRET_SCAN=PASS" "$log"
+          grep -Fq "PRODUCTION_DATABASE_CONNECTIVITY=PASS" "$log"
+          grep -Fq "$RELEASE_SHA" "$log"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          echo "PRODUCTION_ENVIRONMENT_REVALIDATION=PASS"
+      - name: Verify immutable RC11 production backup evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/backup-metadata.json"
+          log="$RUNNER_TEMP/backup.log"
+          trap 'rm -f "$metadata" "$log"' EXIT
+          gh run view "$BACKUP_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json workflowName,conclusion,event,createdAt > "$metadata"
+          grep -Fq 'V2 RC11 Production Backup Snapshot' "$metadata"
+          grep -Fq '"conclusion":"success"' "$metadata"
+          grep -Fq '"event":"workflow_dispatch"' "$metadata"
+          created_at="$(node -e "const fs=require('fs'); const x=JSON.parse(fs.readFileSync(process.argv[1])); process.stdout.write(x.createdAt)" "$metadata")"
+          created_epoch="$(date -d "$created_at" +%s)"
+          now_epoch="$(date -u +%s)"
+          test "$created_epoch" -le "$now_epoch"
+          test "$((now_epoch - created_epoch))" -le 86400
+          gh run view "$BACKUP_RUN_ID" --repo "${GITHUB_REPOSITORY}" --log > "$log"
+          grep -Fq "$RELEASE_SHA" "$log"
+          grep -Fq 'BACKUP_OBJECT_EXISTS=PASS' "$log"
+          grep -Fq 'BACKUP_CHECKSUM=PASS' "$log"
+          grep -Fq 'BACKUP_ARCHIVE_VALIDATION=PASS' "$log"
+          grep -Fq 'PRODUCTION_BACKUP_READY=PASS' "$log"
+          echo "PRODUCTION_BACKUP_RUN=$BACKUP_RUN_ID"
+          echo "PRODUCTION_BACKUP_READY=PASS" | tee "$RUNNER_TEMP/backup.txt"
+      - name: Resolve the exact production Pages project
+        id: pages-project
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/scripts/resolve-v2-production-pages-project.mjs | tee "$RUNNER_TEMP/pages-project.txt"
+          project="$(sed -n 's/^PRODUCTION_PAGES_PROJECT=//p' "$RUNNER_TEMP/pages-project.txt")"
+          test "$project" = olfactoryops-v2-production
+          echo "PRODUCTION_PAGES_PROJECT=$project" >> "$GITHUB_ENV"
+          grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$RUNNER_TEMP/pages-project.txt"
+      - name: Verify the configured production smoke tenant target
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
+          PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}
+          PRODUCTION_SMOKE_TENANT_HOSTNAME: ${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+        run: node ops/scripts/verify-v2-production-smoke-tenant-readiness.mjs | tee "$RUNNER_TEMP/smoke-tenant.txt"
+      - name: Verify production runtime role, privileges, and RLS read-only
+        continue-on-error: true
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+        run: node ops/scripts/verify-v2-production-runtime-privileges.mjs | tee "$RUNNER_TEMP/runtime-privileges.txt"
+      - name: Verify exactly one active Platform Owner with MFA
+        continue-on-error: true
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/release
+        run: node ops/scripts/verify-v2-production-owner-readiness.mjs | tee "$RUNNER_TEMP/platform-owner.txt"
+      - name: Verify rollback identifiers and read-only recovery surfaces
+        continue-on-error: true
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
+          PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
+        run: node ops/scripts/verify-v2-production-rollback-readiness.mjs | tee "$RUNNER_TEMP/rollback.txt"
+      - name: Verify immutable scientific image identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE"
+          test -n "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE"
+          [[ "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" == *@"$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" ]]
+          [[ "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" == *@"$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST" ]]
+          [[ "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" != *:latest* ]]
+          [[ "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" != *:latest* ]]
+          echo "SCIENTIFIC_FEATURE_IMAGE_IDENTITY=PASS"
+          echo "SCIENTIFIC_MODEL_IMAGE_IDENTITY=PASS"
+          echo "SCIENTIFIC_RELEASE_IDENTITY=PASS"
+      - name: Verify RC11 has no migration delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git -C release diff --quiet "$RC10_RUNTIME_BASE_SHA" "$RELEASE_SHA" -- infra/postgres/migrations migrations; then
+            echo "MIGRATION_DELTA=NONE"
+          else
+            echo "MIGRATION_DELTA=UNEXPECTED"
+            exit 1
+          fi
+      - name: Consolidate the fail-closed readiness attestation
+        id: attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_file="$RUNNER_TEMP/runtime-privileges.txt"
+          owner_file="$RUNNER_TEMP/platform-owner.txt"
+          rollback_file="$RUNNER_TEMP/rollback.txt"
+          backup_file="$RUNNER_TEMP/backup.txt"
+          smoke_file="$RUNNER_TEMP/smoke-tenant.txt"
+          pages_file="$RUNNER_TEMP/pages-project.txt"
+          test -s "$runtime_file" && test -s "$owner_file" && test -s "$rollback_file" && test -s "$backup_file" && test -s "$smoke_file" && test -s "$pages_file"
+          grep -Fq 'PRODUCTION_RUNTIME_PRIVILEGES=PASS' "$runtime_file"
+          grep -Fq 'PRODUCTION_RLS_RUNTIME_EFFECT=PASS' "$runtime_file"
+          grep -Fq 'ACTIVE_PLATFORM_OWNER_COUNT=ONE' "$owner_file"
+          grep -Fq 'PLATFORM_OWNER_ROLE=PASS' "$owner_file"
+          grep -Fq 'PLATFORM_OWNER_STATUS_ACTIVE=PASS' "$owner_file"
+          grep -Fq 'PLATFORM_OWNER_MFA_REQUIRED=PASS' "$owner_file"
+          grep -Fq 'PLATFORM_OWNER_AUDIT_EVENT=PASS' "$owner_file"
+          grep -Fq 'PLATFORM_OWNER_READY=PASS' "$owner_file"
+          grep -Fq 'PRODUCTION_ROLLBACK_READY=PASS' "$rollback_file"
+          grep -Fq 'PRODUCTION_BACKUP_READY=PASS' "$backup_file"
+          grep -Fq 'PRODUCTION_SMOKE_TENANT_HOSTNAME_READY=PASS' "$smoke_file"
+          grep -Fq 'PRODUCTION_SMOKE_LOGIN_IDENTITY_READY=PASS' "$smoke_file"
+          grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$pages_file"
+          echo '{"releaseSha":"'"$RELEASE_SHA"'","releaseTag":"v2-production-rc11","candidateRunId":"'"$CANDIDATE_RUN_ID"'","productionReadinessAttested":true,"p0":0,"p1":0}' > "$RUNNER_TEMP/rc11-production-readiness.json"
+          echo "PRODUCTION_READY=YES"
+          echo "READINESS_ATTESTATION=$RUNNER_TEMP/rc11-production-readiness.json" >> "$GITHUB_OUTPUT"
+      - name: Remove readiness evidence
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP"/candidate-metadata.json "$RUNNER_TEMP"/candidate.log "$RUNNER_TEMP"/revalidation-metadata.json "$RUNNER_TEMP"/revalidation.log "$RUNNER_TEMP"/backup-metadata.json "$RUNNER_TEMP"/backup.log "$RUNNER_TEMP"/runtime-privileges.txt "$RUNNER_TEMP"/platform-owner.txt "$RUNNER_TEMP"/rollback.txt "$RUNNER_TEMP"/backup.txt "$RUNNER_TEMP"/smoke-tenant.txt "$RUNNER_TEMP"/pages-project.txt "$RUNNER_TEMP/rc11-production-readiness.json"
