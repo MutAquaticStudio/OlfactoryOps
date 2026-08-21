@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { classifyPublicLogin, responseCookie } from './verify-v2-production-public-smoke.mjs'
+import { classifyPublicLogin, isProductionTenantHostname, responseCookie } from './verify-v2-production-public-smoke.mjs'
 
 const source = readFileSync(new URL('./verify-v2-production-public-smoke.mjs', import.meta.url), 'utf8')
 
 describe('V2 public smoke contract', () => {
   it('uses the V2 health, auth, and session contracts', () => {
     expect(source).toContain("requiredTenantUrl('PRODUCTION_SMOKE_TENANT_URL')")
-    expect(source).toContain("url.hostname === 'next.labofscents.org'")
+    expect(source).toContain('isProductionTenantHostname(url.hostname)')
     expect(source).toContain("body?.status !== 'ok'")
     expect(source).toContain("body?.database !== 'hyperdrive'")
     expect(source).toContain("'/v2/platform/auth/login'")
@@ -23,6 +23,13 @@ describe('V2 public smoke contract', () => {
     const cookie = responseCookie({ headers })
     expect(cookie).toMatchObject({ secure: true, httpOnly: true, sameSite: 'samesite=lax' })
     expect(cookie.pair).toBe('oo_v2_session=opaque')
+  })
+
+  it('accepts only a non-public production tenant hostname', () => {
+    expect(isProductionTenantHostname('smoke.labofscents.org')).toBe(true)
+    expect(isProductionTenantHostname('rc9-release-31736285494-469ca8942a.next.labofscents.org')).toBe(false)
+    expect(isProductionTenantHostname('api.labofscents.org')).toBe(false)
+    expect(isProductionTenantHostname('labofscents.org')).toBe(false)
   })
 
   it('classifies a failed login using only bounded transport and session markers', () => {
