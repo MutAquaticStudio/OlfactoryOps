@@ -33,20 +33,20 @@ try {
   console.log('PUBLIC_CSRF=PASS')
   console.log('PUBLIC_TENANT_RESOLUTION=PASS')
 
-  const materialA = await request('/v2/lab/materials', { method: 'POST', session: sessionA, body: { name: `Public acceptance ${suffix}`, internalCode: `PUBLIC-${suffix}` } })
+  const materialA = await acceptanceOperation('MATERIALS', () => request('/v2/lab/materials', { method: 'POST', session: sessionA, body: { name: `Public acceptance ${suffix}`, internalCode: `PUBLIC-${suffix}` } }))
   if (materialA.status !== 200 || typeof materialA.body?.material?.id !== 'string') throw acceptanceFailure('MATERIALS')
-  const materialB = await request('/v2/lab/materials', { method: 'POST', session: sessionB, body: { name: `Public acceptance B ${suffix}`, internalCode: `PUBLIC-B-${suffix}` } })
+  const materialB = await acceptanceOperation('MATERIALS', () => request('/v2/lab/materials', { method: 'POST', session: sessionB, body: { name: `Public acceptance B ${suffix}`, internalCode: `PUBLIC-B-${suffix}` } }))
   if (materialB.status !== 200 || typeof materialB.body?.material?.id !== 'string') throw acceptanceFailure('MATERIALS')
-  const listA = await request('/v2/lab/materials', { session: sessionA })
-  const listB = await request('/v2/lab/materials', { session: sessionB })
+  const listA = await acceptanceOperation('TENANT_ISOLATION', () => request('/v2/lab/materials', { session: sessionA }))
+  const listB = await acceptanceOperation('TENANT_ISOLATION', () => request('/v2/lab/materials', { session: sessionB }))
   if (listA.status !== 200 || listB.status !== 200 || !contains(listA.body, materialA.body.material.id) || contains(listA.body, materialB.body.material.id) || !contains(listB.body, materialB.body.material.id) || contains(listB.body, materialA.body.material.id)) throw acceptanceFailure('TENANT_ISOLATION')
-  const crossRead = await request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { session: sessionA })
-  const crossWrite = await request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { method: 'PATCH', session: sessionA, body: { description: 'denied' } })
+  const crossRead = await acceptanceOperation('CROSS_TENANT_READ', () => request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { session: sessionA }))
+  const crossWrite = await acceptanceOperation('CROSS_TENANT_WRITE', () => request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { method: 'PATCH', session: sessionA, body: { description: 'denied' } }))
   if (![403, 404].includes(crossRead.status)) throw acceptanceFailure('CROSS_TENANT_READ')
   if (![403, 404].includes(crossWrite.status)) throw acceptanceFailure('CROSS_TENANT_WRITE')
-  const inventory = await request('/v2/lab/inventory/summary', { session: sessionA })
+  const inventory = await acceptanceOperation('INVENTORY', () => request('/v2/lab/inventory/summary', { session: sessionA }))
   if (inventory.status !== 200) throw acceptanceFailure('INVENTORY')
-  const admin = await request('/v2/admin/me', { session: sessionA })
+  const admin = await acceptanceOperation('PLATFORM_ADMIN', () => request('/v2/admin/me', { session: sessionA }))
   if (admin.status !== 403) throw acceptanceFailure('PLATFORM_ADMIN')
   console.log('PUBLIC_RLS=PASS')
   console.log('PUBLIC_TENANT_ISOLATION=PASS')
@@ -157,6 +157,14 @@ async function json(url) {
 
 function contains(body, id) { return JSON.stringify(body ?? {}).includes(id) }
 function acceptanceFailure(phase) { return new PublicAcceptanceFailure(phase) }
+async function acceptanceOperation(phase, operation) {
+  try {
+    return await operation()
+  } catch (error) {
+    if (error instanceof PublicAcceptanceFailure) throw error
+    throw acceptanceFailure(phase)
+  }
+}
 class PublicAcceptanceFailure extends Error {
   constructor(phase) {
     super(publicAcceptanceFailurePhase(phase))
