@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact current release SHA from codex/v2-production-go-live.
+        description: Exact immutable RC10 SHA from v2-production-rc10.
         required: true
         type: string
       operation:
@@ -42,11 +42,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   CANDIDATE_API_HOSTNAME: api-next.labofscents.org
   CANDIDATE_ADMIN_HOSTNAME: admin-next.labofscents.org
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
   RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
 
 jobs:
   validate-candidate-revision:
@@ -76,10 +76,10 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           case "$OPERATION" in pages|cloud-runtime|api|tenant-router|smoke) ;; *) exit 2 ;; esac
           case "$CANDIDATE_ACCEPTANCE_MODE" in LEGACY_PRE_BOOTSTRAP|POST_BOOTSTRAP) ;; *) exit 2 ;; esac
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
+          git fetch --force --tags origin
           git cat-file -e "${RELEASE_SHA}^{commit}"
-          test "$RELEASE_SHA" = "$release_branch_sha"
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$RELEASE_SHA" = "$RC10_SHA"
           if [ "$CANDIDATE_ACCEPTANCE_MODE" = "POST_BOOTSTRAP" ]; then
             test "$OPERATION" = "smoke"
             test "$RELEASE_SHA" = "$RC10_SHA"

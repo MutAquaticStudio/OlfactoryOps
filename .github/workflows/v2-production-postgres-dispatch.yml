@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact approved SHA from codex/v2-production-go-live or a v2-production tag.
+        description: Exact approved SHA from the immutable production release tag or a v2-production tag.
         required: true
         type: string
       confirm_production:
@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
 
 jobs:
   validate-production-revision:
@@ -42,13 +41,9 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_PRODUCTION" = "APPLY_PRODUCTION"
           [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
-          git fetch --tags origin
+          git fetch --force --tags origin
           git cat-file -e "${RELEASE_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
-            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
-          fi
+          git tag --points-at "$RELEASE_SHA" -l 'v2-production-*' | grep -Eq '^v2-production-(rc[0-9][0-9]*|ready|live)$'
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
   migrate-production:

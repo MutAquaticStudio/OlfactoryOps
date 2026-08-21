@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       staging_sha:
-        description: Exact current SHA of codex/cloudflare-cloud-native-runtime.
+        description: Exact current SHA of main.
         required: true
         type: string
       confirm_staging:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_BRANCH: main
 
 jobs:
   validate-staging-revision:

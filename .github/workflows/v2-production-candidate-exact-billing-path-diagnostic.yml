@@ -21,7 +21,6 @@ concurrency:
 
 env:
   RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
-  RELEASE_BRANCH: codex/v2-production-go-live
   CANDIDATE_API_SERVICE: olfactoryops-v2-api-production-candidate
   EXPECTED_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739
 
@@ -47,8 +46,6 @@ jobs:
           node scripts/verify-v2-production-candidate-exact-billing-path-diagnostic-workflow.mjs
           test "$RELEASE_SHA" = "$RC9_SHA"
           test "$CONFIRM_DIAGNOSTIC" = 'DIAGNOSE_RC9_EXACT_BILLING_PATH'
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          test "$(git rev-parse FETCH_HEAD)" = "$RC9_SHA"
           git fetch --tags origin
           test "$(git rev-parse v2-production-rc9^{})" = "$RC9_SHA"
           printf 'release_sha=%s\n' "$RC9_SHA" >> "$GITHUB_OUTPUT"

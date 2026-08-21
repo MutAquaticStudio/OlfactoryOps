@@ -11,7 +11,7 @@ on:
   pull_request:
     paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
   push:
-    branches: [main, master, "release-*", "codex/cloudflare-cloud-native-runtime"]
+    branches: [main, master, "release-*"]
     paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
 
 permissions:

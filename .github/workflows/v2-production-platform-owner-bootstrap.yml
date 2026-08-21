@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   RC10_TAG: v2-production-rc10
 
@@ -46,11 +45,8 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_PLATFORM_OWNER_BOOTSTRAP" = "ASSIGN_PLATFORM_OWNER"
           test "$RELEASE_SHA" = "$RC10_SHA"
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
           git fetch --force --tags origin
           release_sha="$(git rev-parse "${RELEASE_SHA}^{commit}")"
-          test "$release_sha" = "$release_branch_sha"
           test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
           echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 

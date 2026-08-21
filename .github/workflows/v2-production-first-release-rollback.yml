@@ -30,7 +30,9 @@ env:
   ACTIVE_RC_TAG: v2-production-rc10
   ACTIVE_RC_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   READINESS_TAG: v2-production-ready
-  RELEASE_BRANCH: codex/v2-production-go-live
+  RC9_TAG: v2-production-rc9
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  RC11_TAG: v2-production-rc11
 
 jobs:
   validate:
@@ -52,11 +54,11 @@ jobs:
             LEAVE_RC10_UNROUTED|DELETE_RC10_FIRST_RELEASE_WORKERS) ;;
             *) exit 1 ;;
           esac
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          test "$(git rev-parse FETCH_HEAD)" = "$ACTIVE_RC_SHA"
           git fetch --force --tags origin
           test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
           test "$(git rev-list -n 1 "$READINESS_TAG")" = "$ACTIVE_RC_SHA"
+          test "$(git rev-list -n 1 "$RC9_TAG")" = "$RC9_SHA"
+          ! git show-ref --verify --quiet "refs/tags/$RC11_TAG"
 
   rollback:
     needs: validate

@@ -15,7 +15,7 @@ Read the source pack in [`docs/v2/README.md`](docs/v2/README.md), then [`docs/v2
 
 ## Cloudflare runtime checkpoint
 
-The branch `codex/cloudflare-cloud-native-runtime` keeps PostgreSQL as V2
+`main` keeps PostgreSQL as V2
 source-of-truth and adds an isolated Cloudflare Worker runtime for Hyperdrive,
 private R2 artifacts, the approved Material Evidence Vectorize space, Queue/Workflow job
 delivery, and private scientific Containers. Routine `npm.cmd run dev`, test,

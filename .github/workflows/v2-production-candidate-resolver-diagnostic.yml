@@ -24,7 +24,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
 
 jobs:
@@ -54,13 +53,9 @@ jobs:
           test "$slug" != "$FIXTURE_HOSTNAME"
           test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
           [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
-          git fetch --tags origin
+          git fetch --force --tags origin
           git cat-file -e "${RELEASE_SHA}^{commit}"
-          if ! git merge-base --is-ancestor "$RELEASE_SHA" "$release_branch_sha"; then
-            git tag --contains "$RELEASE_SHA" | grep -Eq '^v2-production-(rc|ready|live)'
-          fi
+          git tag --points-at "$RELEASE_SHA" -l 'v2-production-*' | grep -Eq '^v2-production-(rc[0-9][0-9]*|ready|live)$'
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           echo "fixture_hostname=$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
 

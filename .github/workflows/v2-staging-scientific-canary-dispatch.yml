@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_sha:
-        description: Exact current SHA of codex/v2-production-go-live to verify without deployment.
+        description: Exact immutable production RC tag SHA to verify without deployment.
         required: true
         type: string
       confirm_canary:
@@ -20,7 +20,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   STAGING_R2_BUCKET: olfactoryops-v2-artifacts-staging
 
 jobs:
@@ -40,9 +39,9 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_CANARY" = "RUN_ONE_RC6_SCIENTIFIC_CANARY"
           [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git fetch --force --tags origin
           git cat-file -e "${RELEASE_SHA}^{commit}"
+          git tag --points-at "$RELEASE_SHA" -l 'v2-production-rc*' | grep -Eq '^v2-production-rc[0-9][0-9]*$'
           echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
 
   run-one-canary:

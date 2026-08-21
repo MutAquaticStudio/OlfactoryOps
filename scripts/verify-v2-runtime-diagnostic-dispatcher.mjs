@@ -40,7 +40,6 @@ const requiredFragments = [
   "EXPECTED_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org",
   "EXPECTED_PRODUCTION_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739",
   "v2-production-rc9^{}",
-  'test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$TARGET_RELEASE_SHA"',
   "release_sha:",
   "environment: production",
   "confirm_diagnostic",
@@ -88,6 +87,10 @@ if (workflow.includes("wrangler delete")) {
   throw new Error(
     "diagnostic cleanup must use the direct Workers Scripts DELETE API, never wrangler delete",
   );
+}
+
+if (workflow.includes("RELEASE_BRANCH")) {
+  throw new Error("diagnostic dispatcher must use immutable RC9 tag validation");
 }
 
 if (

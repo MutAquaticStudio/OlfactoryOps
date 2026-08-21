@@ -37,7 +37,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   RC10_TAG: v2-production-rc10
   RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
@@ -65,8 +64,6 @@ jobs:
           [[ "${{ inputs.candidate_run_id }}" =~ ^[0-9]+$ ]]
           [[ "${{ inputs.environment_revalidation_run_id }}" =~ ^[0-9]+$ ]]
           [[ "${{ inputs.backup_run_id }}" =~ ^[0-9]+$ ]]
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
           git fetch --force --tags origin
           test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
           test "$(git rev-list -n 1 v2-production-rc9)" = "$RC9_SHA"

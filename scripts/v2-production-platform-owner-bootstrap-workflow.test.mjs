@@ -10,7 +10,7 @@ test("Platform Owner dispatcher binds dispatch, release source, and revalidation
   expect(workflow).toContain(
     "if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}",
   );
-  expect(workflow).toContain('test "$release_sha" = "$release_branch_sha"');
+  expect(workflow).not.toContain("RELEASE_BRANCH");
   expect(workflow).toContain(
     'test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"',
   );

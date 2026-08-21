@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       staging_sha:
-        description: Exact deployed SHA of codex/cloudflare-cloud-native-runtime.
+        description: Exact deployed SHA of main.
         required: true
         type: string
       confirm_staging:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_BRANCH: main
   STAGING_R2_BUCKET: olfactoryops-v2-artifacts-staging
 
 jobs:

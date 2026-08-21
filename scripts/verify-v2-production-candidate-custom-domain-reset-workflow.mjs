@@ -34,7 +34,6 @@ requireFragments(workflow, "candidate Custom Domain reset workflow", [
   "TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org",
   "TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate",
   "TARGET_PAGES_ORIGIN: https://57b7300b.olfactoryops-v2-production-candidate.pages.dev",
-  "RELEASE_BRANCH: codex/v2-production-go-live",
   "RELEASE_TAG: v2-production-rc9",
   "RESET_RC9_CANDIDATE_CUSTOM_DOMAIN",
   "node scripts/reset-v2-production-candidate-custom-domain.mjs preflight",
@@ -131,6 +130,11 @@ requireAbsent(
   workflow,
   "candidate Custom Domain reset workflow",
   /(?:\bwrangler\s+(?:deploy|delete|secret|pages)\b|workers\/(?:routes)|\[\[routes\]\]|custom_domain\s*=|routes\s*=|--keep-vars|\b(?:psql|prisma)\b|\b(?:INSERT\s+INTO|UPDATE\s+[A-Za-z_]|ALTER\s+(?:TABLE|ROLE)|CREATE\s+(?:TABLE|ROLE|SCHEMA)|DROP\s+(?:TABLE|ROLE|SCHEMA))\b|git\s+worktree\s+(?:add|remove)|\bgh\s+(?:api|workflow|secret|variable)\b|PRODUCTION_DATABASE_URL|DATABASE_URL|V2_[A-Z_]*PEPPER|SCIENTIFIC_)/i,
+);
+requireAbsent(
+  workflow,
+  "candidate Custom Domain reset workflow",
+  /codex\/v2-production-go-live/,
 );
 requireAbsent(
   workflow,

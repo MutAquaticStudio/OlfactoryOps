@@ -22,7 +22,6 @@ concurrency:
 env:
   RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   RC10_TAG: v2-production-rc10
-  RELEASE_BRANCH: codex/v2-production-go-live
 
 jobs:
   validate:
@@ -46,8 +45,6 @@ jobs:
           set -euo pipefail
           test "$CONFIRM_DIAGNOSTIC" = DIAGNOSE_RC10_PLATFORM_OWNER_BOOTSTRAP
           test "$RELEASE_SHA" = "$RC10_SHA"
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
           git fetch --force --tags origin
           test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
           echo "release_sha=$RC10_SHA" >> "$GITHUB_OUTPUT"

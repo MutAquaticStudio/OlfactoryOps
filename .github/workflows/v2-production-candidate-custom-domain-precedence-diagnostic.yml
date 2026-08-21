@@ -28,7 +28,6 @@ env:
   TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
   TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
   TARGET_ZONE_NAME: labofscents.org
-  RELEASE_BRANCH: codex/v2-production-go-live
   RELEASE_TAG: v2-production-rc9
 
 jobs:
@@ -57,11 +56,8 @@ jobs:
           test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
           [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
           [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
-          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
           git fetch --tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
-          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
           printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
 

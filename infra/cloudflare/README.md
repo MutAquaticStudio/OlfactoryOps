@@ -18,7 +18,7 @@ runtime architecture.
 
 ## Current branch/tag
 
-- Working branch: `codex/cloudflare-cloud-native-runtime`
+- Working branch: `main`
 - Pre-migration checkpoint: `pre-cloudflare-cloud-native-migration-20260810`
 - Current migration tag (planned): `v2-cloudflare-runtime-foundation` will be created after this branch is validated.
 

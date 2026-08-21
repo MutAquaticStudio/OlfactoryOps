@@ -24,7 +24,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
   EXPECTED_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
   EXPECTED_ORGANIZATION_ID_SHA: 9aa21989136c3edbd2f04466a25f38254f9611d1a251013f9106f2f8712f1a88
@@ -66,12 +65,9 @@ jobs:
           test "$slug" != "$FIXTURE_HOSTNAME"
           test "$FIXTURE_HOSTNAME" = "$(printf '%s' "$FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
           [[ "$slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
-          git fetch --no-tags origin \
-            "+refs/heads/$RELEASE_BRANCH:refs/remotes/origin/$RELEASE_BRANCH"
           git fetch --tags origin
           git cat-file -e "${TARGET_RELEASE_SHA}^{commit}"
           test "$(git rev-parse 'v2-production-rc9^{}')" = "$TARGET_RELEASE_SHA"
-          test "$(git rev-parse "origin/$RELEASE_BRANCH")" = "$TARGET_RELEASE_SHA"
           [[ "$DIAGNOSTIC_WORKER_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
           test "${#DIAGNOSTIC_WORKER_NAME}" -le 63
           for required_file in \

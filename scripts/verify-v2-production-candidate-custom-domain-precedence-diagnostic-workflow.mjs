@@ -41,7 +41,6 @@ requireFragments(workflow, "Custom Domain precedence workflow", [
   "TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org",
   "TARGET_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate",
   "TARGET_ZONE_NAME: labofscents.org",
-  "RELEASE_BRANCH: codex/v2-production-go-live",
   "RELEASE_TAG: v2-production-rc9",
   "DIAGNOSE_RC9_CUSTOM_DOMAIN_PRECEDENCE",
   "$RELEASE_TAG^{}",
@@ -69,6 +68,11 @@ requireAbsent(
   workflow,
   "Custom Domain precedence workflow",
   /(?:\bwrangler\b|\bcurl\b|\bgh\s+(?:api|workflow|secret|variable)\b|\b(?:psql|prisma)\b|\b(?:INSERT\s+INTO|UPDATE\s+[A-Za-z_]|ALTER\s+(?:TABLE|ROLE)|CREATE\s+(?:TABLE|ROLE|SCHEMA)|DROP\s+(?:TABLE|ROLE|SCHEMA))\b|git\s+worktree\s+(?:add|remove)|PRODUCTION_DATABASE_URL|DATABASE_URL|V2_[A-Z_]*PEPPER|SCIENTIFIC_)/i,
+);
+requireAbsent(
+  workflow,
+  "Custom Domain precedence workflow",
+  /codex\/v2-production-go-live/,
 );
 requireAbsent(
   workflow,

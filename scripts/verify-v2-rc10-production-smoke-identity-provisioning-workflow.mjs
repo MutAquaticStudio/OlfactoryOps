@@ -57,7 +57,7 @@ const reverifyStart = workflow.indexOf(
   "- name: Reverify the provisioned smoke identity with a read-only database session",
 );
 const validationFetchStart = workflow.indexOf(
-  'git fetch --no-tags origin "$RELEASE_BRANCH"',
+  'git fetch --force --tags origin',
 );
 const validationCredentialStart = workflow.indexOf("persist-credentials: true");
 

@@ -26,7 +26,6 @@ concurrency:
 env:
   TARGET_RELEASE_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
   TARGET_TENANT_URL: https://rc9-release-31736285494-469ca8942a.next.labofscents.org
-  RELEASE_BRANCH: codex/v2-production-go-live
   RELEASE_TAG: v2-production-rc9
 
 jobs:
@@ -53,11 +52,8 @@ jobs:
           test "$CONFIRM_DIAGNOSTIC" = "DIAGNOSE_RC9_CANDIDATE_BROWSER_RUNTIME"
           test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
           test "$TENANT_URL" = "$TARGET_TENANT_URL"
-          git fetch --no-tags origin "refs/heads/$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
           git fetch --tags origin "refs/tags/$RELEASE_TAG"
           test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
-          test "$release_branch_sha" = "$TARGET_RELEASE_SHA"
           printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
           printf 'tenant_url=%s\n' "$TENANT_URL" >> "$GITHUB_OUTPUT"
 
