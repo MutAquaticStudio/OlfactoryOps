@@ -19,6 +19,9 @@ async function main() {
     console.log('PUBLIC_V2_SMOKE=PASS')
   } catch (error) {
     const phase = error instanceof SmokeFailure ? error.phase : 'UNCLASSIFIED'
+    if (error instanceof SmokeFailure) {
+      for (const line of error.evidence) console.log(line)
+    }
     console.log(`PUBLIC_V2_SMOKE_FAILURE=${phase}`)
     console.log('PUBLIC_V2_SMOKE=FAIL')
     process.exitCode = 1
@@ -62,15 +65,14 @@ async function main() {
 
   async function checkLoginAndSession() {
   const origin = tenantUrl.origin
-  const login = await jsonRequest(new URL('/v2/platform/auth/login', apiUrl), {
+  const login = await loginRequest(new URL('/v2/platform/auth/login', apiUrl), {
     method: 'POST',
     headers: { origin, 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ email, password }),
   })
+  const loginResult = classifyPublicLogin(login)
+  if (!loginResult.pass) throw new SmokeFailure('PUBLIC_LOGIN', loginResult.evidence)
   const cookie = login.cookie
-  if (login.response.status !== 200 || !cookie?.name?.startsWith('oo_v2_session=') || !cookie.secure || !cookie.httpOnly || !cookie.sameSite || typeof login.body?.csrfToken !== 'string' || login.body.csrfToken.length < 16) {
-    throw new SmokeFailure('PUBLIC_LOGIN')
-  }
   results.push({ name: 'PUBLIC_LOGIN' })
   results.push({ name: 'PUBLIC_SESSION' })
   results.push({ name: 'PUBLIC_CSRF' })
@@ -109,6 +111,21 @@ async function main() {
   }
   return { response, body, cookie: responseCookie(response) }
   }
+
+  async function loginRequest(url, init) {
+    let response
+    try {
+      response = await fetch(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(20_000) })
+    } catch {
+      return { response: undefined, parsedJson: false, body: undefined, cookie: undefined }
+    }
+    try {
+      const body = await response.json()
+      return { response, parsedJson: true, body, cookie: responseCookie(response) }
+    } catch {
+      return { response, parsedJson: false, body: undefined, cookie: undefined }
+    }
+  }
 }
 
 function responseCookie(response) {
@@ -145,7 +162,66 @@ function requiredTenantUrl(name) {
 function html(value) { return /^text\/html(?:;|$)/i.test(value) }
 
 class SmokeFailure extends Error {
-  constructor(phase) { super(phase); this.phase = phase }
+  constructor(phase, evidence = []) {
+    super(phase)
+    this.phase = phase
+    this.evidence = evidence.filter(safePublicLoginEvidence)
+  }
+}
+
+function safePublicLoginEvidence(line) {
+  return /^PUBLIC_LOGIN_HTTP_STATUS=(?:[1-5]\d\d|UNAVAILABLE)$/.test(line) ||
+    /^PUBLIC_LOGIN_RESPONSE=(?:JSON|NON_JSON|TRANSPORT)$/.test(line) ||
+    /^PUBLIC_LOGIN_SESSION_COOKIE=(?:PASS|FAIL|UNPROVEN)$/.test(line) ||
+    /^PUBLIC_LOGIN_CSRF=(?:PASS|FAIL|UNPROVEN)$/.test(line)
+}
+
+function safeLoginStatus(response) {
+  const status = response?.status
+  return Number.isInteger(status) && status >= 100 && status <= 599
+    ? String(status)
+    : 'UNAVAILABLE'
+}
+
+export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
+  if (!response) {
+    return {
+      pass: false,
+      evidence: [
+        'PUBLIC_LOGIN_HTTP_STATUS=UNAVAILABLE',
+        'PUBLIC_LOGIN_RESPONSE=TRANSPORT',
+        'PUBLIC_LOGIN_SESSION_COOKIE=UNPROVEN',
+        'PUBLIC_LOGIN_CSRF=UNPROVEN',
+      ],
+    }
+  }
+  if (!parsedJson) {
+    return {
+      pass: false,
+      evidence: [
+        `PUBLIC_LOGIN_HTTP_STATUS=${safeLoginStatus(response)}`,
+        'PUBLIC_LOGIN_RESPONSE=NON_JSON',
+        'PUBLIC_LOGIN_SESSION_COOKIE=UNPROVEN',
+        'PUBLIC_LOGIN_CSRF=UNPROVEN',
+      ],
+    }
+  }
+  const sessionCookie = Boolean(
+    cookie?.name?.startsWith('oo_v2_session=') &&
+      cookie.secure &&
+      cookie.httpOnly &&
+      cookie.sameSite,
+  )
+  const csrf = typeof body?.csrfToken === 'string' && body.csrfToken.length >= 16
+  return {
+    pass: response.status === 200 && sessionCookie && csrf,
+    evidence: [
+      `PUBLIC_LOGIN_HTTP_STATUS=${safeLoginStatus(response)}`,
+      'PUBLIC_LOGIN_RESPONSE=JSON',
+      `PUBLIC_LOGIN_SESSION_COOKIE=${sessionCookie ? 'PASS' : 'FAIL'}`,
+      `PUBLIC_LOGIN_CSRF=${csrf ? 'PASS' : 'FAIL'}`,
+    ],
+  }
 }
 
 export { responseCookie }
