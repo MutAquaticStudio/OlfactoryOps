@@ -18,6 +18,7 @@ const required = [
   'verify-v2-production-postcutover-route-rollback.mjs',
   'rollback_status=${PIPESTATUS[0]}',
   'POSTCUTOVER_ROUTE_HANDOFF_STATE',
+  'INVENTORY_(ATTEMPTED|HTTP_STATUS|CF_ERROR_CODE)',
   'PUBLIC_ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}',
   'ROLLBACK_TO_ABSENCE_READY=PASS',
   'PRODUCTION_ROUTE_ROLLBACK_READY=PASS',

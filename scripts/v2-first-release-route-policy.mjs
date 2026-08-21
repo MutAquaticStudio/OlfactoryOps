@@ -209,6 +209,7 @@ export async function verifyPostCutoverRouteRollback({
     state: "BASELINE_INVALID",
     previousTargets: emptyPreviousTargets(),
     cleanupReady: false,
+    routeInventory: emptyRouteInventoryEvidence(),
   };
   if (
     !validAccount(account) ||
@@ -232,8 +233,13 @@ export async function verifyPostCutoverRouteRollback({
     path: "/zones/" + encodeURIComponent(zone.id) + "/workers/routes",
   });
   if (!response.ok || !Array.isArray(response.result)) {
-    return { ...unavailable, state: "ROUTE_INVENTORY_UNPROVEN" };
+    return {
+      ...unavailable,
+      state: "ROUTE_INVENTORY_UNPROVEN",
+      routeInventory: routeInventoryEvidence(response),
+    };
   }
+  const routeInventory = routeInventoryEvidence(response);
   for (const route of baseline.routes) {
     const replacement = PUBLIC_ROUTE_SPECS.find(
       (specification) => specification.key === route.key,
@@ -247,7 +253,11 @@ export async function verifyPostCutoverRouteRollback({
       matches[0]?.id !== route.id ||
       matches[0]?.script !== replacement.replacementService
     ) {
-      return { ...unavailable, state: "ROUTE_HANDOFF_DRIFT" };
+      return {
+        ...unavailable,
+        state: "ROUTE_HANDOFF_DRIFT",
+        routeInventory,
+      };
     }
   }
 
@@ -267,6 +277,7 @@ export async function verifyPostCutoverRouteRollback({
       state: "PREVIOUS_TARGET_UNPROVEN",
       previousTargets,
       cleanupReady: false,
+      routeInventory,
     };
   }
 
@@ -290,6 +301,7 @@ export async function verifyPostCutoverRouteRollback({
       state: "RC10_ROUTE_CLEANUP_UNPROVEN",
       previousTargets,
       cleanupReady: false,
+      routeInventory,
     };
   }
   const domains = await cloudflareRequest({
@@ -308,9 +320,16 @@ export async function verifyPostCutoverRouteRollback({
       state: "RC10_CUSTOM_DOMAIN_CLEANUP_UNPROVEN",
       previousTargets,
       cleanupReady: false,
+      routeInventory,
     };
   }
-  return { pass: true, state: "READY", previousTargets, cleanupReady: true };
+  return {
+    pass: true,
+    state: "READY",
+    previousTargets,
+    cleanupReady: true,
+    routeInventory,
+  };
 }
 
 export async function handoffApprovedRoutes({
@@ -572,6 +591,18 @@ function emptyPreviousTargets() {
   return Object.fromEntries(
     PUBLIC_ROUTE_SPECS.map((specification) => [specification.key, false]),
   );
+}
+
+function emptyRouteInventoryEvidence() {
+  return { attempted: false, httpStatus: "0", cfErrorCode: "NONE" };
+}
+
+function routeInventoryEvidence(response) {
+  return {
+    attempted: true,
+    httpStatus: response.status,
+    cfErrorCode: response.cfErrorCode,
+  };
 }
 
 async function workerAbsentWithNoCustomDomain({

@@ -30,9 +30,24 @@ export async function verifyProductionPostcutoverRouteRollback({
           state: "BASELINE_UNAVAILABLE",
           previousTargets: { api: false, tenantRouter: false },
           cleanupReady: false,
+          routeInventory: {
+            attempted: false,
+            httpStatus: "0",
+            cfErrorCode: "NONE",
+          },
         };
   const pass = result.pass;
   emit(`POSTCUTOVER_ROUTE_HANDOFF_STATE=${pass ? "PASS" : "FAIL"}`);
+  emit(
+    "POSTCUTOVER_ROUTE_INVENTORY_ATTEMPTED=" +
+      (result.routeInventory.attempted ? "YES" : "NO"),
+  );
+  emit(
+    `POSTCUTOVER_ROUTE_INVENTORY_HTTP_STATUS=${result.routeInventory.httpStatus}`,
+  );
+  emit(
+    `POSTCUTOVER_ROUTE_INVENTORY_CF_ERROR_CODE=${result.routeInventory.cfErrorCode}`,
+  );
   emit(
     "PREVIOUS_API_ROUTE_TARGET_PROVEN=" +
       (result.previousTargets.api ? "PASS" : "UNPROVEN"),
