@@ -1,0 +1,158 @@
+name: V2 RC10 Production Live Finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC10 SHA.
+        required: true
+        type: string
+      public_acceptance_run_id:
+        description: Successful V2 Production Public Acceptance run ID.
+        required: true
+        type: string
+      confirm_finalization:
+        description: Type FINALIZE_RC10_PRODUCTION_LIVE.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: v2-production-release-dispatch
+  cancel-in-progress: false
+
+env:
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RC9_TAG: v2-production-rc9
+  RC9_SHA: de0734df2d2b5b2dd3a2a67ee542131235e75eb7
+  READY_TAG: v2-production-ready
+  LIVE_TAG: v2-production-live
+  RC11_TAG: v2-production-rc11
+  RELEASE_BRANCH: codex/v2-production-go-live
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate immutable finalization request
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_finalization }}" = FINALIZE_RC10_PRODUCTION_LIVE
+          test "${{ inputs.release_sha }}" = "$RC10_SHA"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$READY_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$RC9_TAG")" = "$RC9_SHA"
+          ! git show-ref --verify --quiet "refs/tags/$RC11_TAG"
+
+  finalize:
+    needs: validate
+    if: ${{ github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate immutable release tags after approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          test "$(git rev-parse FETCH_HEAD)" = "$RC10_SHA"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$READY_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$RC9_TAG")" = "$RC9_SHA"
+          ! git show-ref --verify --quiet "refs/tags/$RC11_TAG"
+      - name: Verify the fresh successful public acceptance run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}
+          PUBLIC_ACCEPTANCE_RUN_FILE: ${{ runner.temp }}/v2-production-live-finalization-${{ github.run_id }}/acceptance-run.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          run_directory="$(dirname "$PUBLIC_ACCEPTANCE_RUN_FILE")"
+          mkdir -p "$run_directory"
+          chmod 700 "$run_directory"
+          trap 'rm -rf -- "$run_directory"' EXIT
+          if ! gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PUBLIC_ACCEPTANCE_RUN_ID" > "$PUBLIC_ACCEPTANCE_RUN_FILE" 2>/dev/null; then
+            echo 'PUBLIC_ACCEPTANCE_RUN_VERIFIED=FAIL'
+            echo 'PUBLIC_ACCEPTANCE_RUN_STATE=RUN_READ_UNAVAILABLE'
+            exit 1
+          fi
+          chmod 600 "$PUBLIC_ACCEPTANCE_RUN_FILE"
+          node scripts/verify-v2-production-live-finalization.mjs
+      - name: Revalidate read-only rollback capability
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
+          PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
+          ROLLBACK_EVIDENCE_FILE: ${{ runner.temp }}/v2-production-live-finalization-${{ github.run_id }}/rollback.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$(dirname "$ROLLBACK_EVIDENCE_FILE")"
+          node scripts/verify-v2-production-rollback-readiness.mjs > "$ROLLBACK_EVIDENCE_FILE"
+          grep -Fx 'ROLLBACK_PAGES_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
+          grep -Fx 'PRODUCTION_ROLLBACK_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
+          rm -f -- "$ROLLBACK_EVIDENCE_FILE"
+      - name: Create or verify the exact immutable live tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/$LIVE_TAG"; then
+            test "$(git rev-list -n 1 "$LIVE_TAG")" = "$RC10_SHA"
+          else
+            if ! gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$LIVE_TAG" -f "sha=$RC10_SHA" > /dev/null 2>&1; then
+              echo 'V2_PRODUCTION_LIVE_TAG=FAIL'
+              exit 1
+            fi
+            git fetch --force --tags origin
+            test "$(git rev-list -n 1 "$LIVE_TAG")" = "$RC10_SHA"
+          fi
+          echo "V2_PRODUCTION_READY_TAG=$RC10_SHA"
+          echo "V2_PRODUCTION_LIVE_TAG=$RC10_SHA"
+          echo 'STAGE_10_PUBLIC_ACCEPTANCE=PASS'
+          echo 'PUBLIC_ROUTES_RC10=PASS'
+          echo 'PUBLIC_SMOKE=PASS'
+          echo 'PRODUCTION_DEPLOYED=YES'
+          echo 'SAFE_TO_USE_PRODUCTION=YES'
+          echo 'GO_LIVE=YES'
+          echo 'RC9_PRESERVED=YES'
+          echo 'RC11_CREATED=NO'
+      - name: Remove runner-local finalization evidence
+        if: ${{ always() }}
+        env:
+          FINALIZATION_DIRECTORY: ${{ runner.temp }}/v2-production-live-finalization-${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$FINALIZATION_DIRECTORY"
+          test ! -e "$FINALIZATION_DIRECTORY"
