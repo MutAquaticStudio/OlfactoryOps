@@ -153,10 +153,15 @@ function requiredUrl(name) {
 
 function requiredTenantUrl(name) {
   const url = requiredUrl(name)
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/.test(url.hostname) || url.hostname === 'next.labofscents.org') {
+  if (!isProductionTenantHostname(url.hostname)) {
     throw new SmokeFailure(`CONFIG_${name}`)
   }
   return url
+}
+
+function isProductionTenantHostname(hostname) {
+  const match = /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.labofscents\.org$/.exec(hostname)
+  return Boolean(match) && !new Set(['api', 'admin', 'www']).has(match[1])
 }
 
 function html(value) { return /^text\/html(?:;|$)/i.test(value) }
@@ -244,6 +249,6 @@ export function classifyPublicLogin({ response, parsedJson, cookie, body }) {
   }
 }
 
-export { responseCookie }
+export { isProductionTenantHostname, responseCookie }
 
 if (process.argv[1] && new URL(import.meta.url).pathname === new URL(`file://${process.argv[1].replaceAll('\\', '/')}`).pathname) await main()
