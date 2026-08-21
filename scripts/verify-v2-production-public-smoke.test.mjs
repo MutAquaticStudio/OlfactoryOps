@@ -6,6 +6,8 @@ const source = readFileSync(new URL('./verify-v2-production-public-smoke.mjs', i
 
 describe('V2 public smoke contract', () => {
   it('uses the V2 health, auth, and session contracts', () => {
+    expect(source).toContain("requiredTenantUrl('PRODUCTION_SMOKE_TENANT_URL')")
+    expect(source).toContain("url.hostname === 'next.labofscents.org'")
     expect(source).toContain("body?.status !== 'ok'")
     expect(source).toContain("body?.database !== 'hyperdrive'")
     expect(source).toContain("'/v2/platform/auth/login'")
