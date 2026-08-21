@@ -18,6 +18,7 @@ const required = [
   'verify-v2-production-rollback-readiness.mjs',
   'rollback_status=${PIPESTATUS[0]}',
   'ROLLBACK_PAGES_(BASELINE|READY)',
+  'CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
   'PUBLIC_ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}',
   'PRODUCTION_ROLLBACK_READY=PASS',
   'refs/tags/$LIVE_TAG',
