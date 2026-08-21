@@ -397,18 +397,15 @@ function createRequester(context, fetchImpl) {
   return async (path, method, body, paginated = false) => {
     let response;
     try {
-      response = await fetchImpl(
-        `${API_BASE}/accounts/${encodeURIComponent(context.account)}${path}`,
-        {
-          method,
-          headers: {
-            authorization: `Bearer ${context.token}`,
-            ...(body ? { "content-type": "application/json" } : {}),
-          },
-          ...(body ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.timeout(20_000),
+      response = await fetchImpl(requestUrl(context.account, path), {
+        method,
+        headers: {
+          authorization: `Bearer ${context.token}`,
+          ...(body ? { "content-type": "application/json" } : {}),
         },
-      );
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(20_000),
+      });
     } catch {
       throw new PagesDomainHandoffError(
         "PAGES_DOMAIN_CONTROL_PLANE_UNAVAILABLE",
@@ -443,6 +440,14 @@ function createRequester(context, fetchImpl) {
     }
     return envelope.result;
   };
+}
+
+function requestUrl(account, path) {
+  return path === "/zones" ||
+    path.startsWith("/zones/") ||
+    path.startsWith("/zones?")
+    ? `${API_BASE}${path}`
+    : `${API_BASE}/accounts/${encodeURIComponent(account)}${path}`;
 }
 
 function validateBaseline(value, releaseSha) {

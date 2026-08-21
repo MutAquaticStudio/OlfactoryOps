@@ -167,6 +167,14 @@ describe("RC10 production Pages domain handoff", () => {
     expect(emitted.join("\n")).not.toContain(predecessor);
     expect(emitted.join("\n")).not.toContain("provider-token");
     expect(state.calls.every((call) => call.method === "GET")).toBe(true);
+    expect(state.calls.some((call) => call.path === "/client/v4/zones")).toBe(
+      true,
+    );
+    expect(
+      state.calls.some((call) =>
+        call.path.includes("/accounts/account-fixture/zones"),
+      ),
+    ).toBe(false);
   });
 
   it("attaches the exact Pages domain, changes only its exact CNAME, and verifies public RC10 identity", async () => {
