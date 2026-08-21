@@ -15,6 +15,7 @@ on:
           - api
           - tenant-router
           - pages
+          - pages-domain-handoff
           - cloud-runtime
           - route-handoff
           - smoke
@@ -62,6 +63,7 @@ jobs:
             api) expected_confirmation=DEPLOY_PRODUCTION_API ;;
             tenant-router) expected_confirmation=DEPLOY_PRODUCTION_TENANT_ROUTER ;;
             pages) expected_confirmation=DEPLOY_PRODUCTION_PAGES ;;
+            pages-domain-handoff) expected_confirmation=HANDOFF_PRODUCTION_PAGES_DOMAIN ;;
             cloud-runtime) expected_confirmation=DEPLOY_PRODUCTION_CLOUD_RUNTIME ;;
             route-handoff) expected_confirmation=HANDOFF_PRODUCTION_FIRST_RELEASE_ROUTES ;;
             smoke) expected_confirmation=RUN_PRODUCTION_SMOKE ;;
@@ -276,6 +278,68 @@ jobs:
           set -euo pipefail
           npm run build
           npx wrangler pages deploy dist --project-name "$PRODUCTION_PAGES_PROJECT" --branch production --commit-hash "${{ needs.validate-production-revision.outputs.release_sha }}" --commit-message "production candidate ${{ needs.validate-production-revision.outputs.release_sha }}" --commit-dirty=false
+
+  handoff-production-pages-domain:
+    if: ${{ needs.validate-production-revision.outputs.operation == 'pages-domain-handoff' }}
+    needs: validate-production-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - id: preflight
+        name: Preflight the exact RC10 Pages domain handoff and predecessor DNS state
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+          PAGES_DOMAIN_BASELINE_FILE: ${{ runner.temp }}/v2-production-pages-domain-handoff-${{ github.run_id }}/baseline.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$(dirname "$PAGES_DOMAIN_BASELINE_FILE")"
+          chmod 700 "$(dirname "$PAGES_DOMAIN_BASELINE_FILE")"
+          node ops/scripts/handoff-v2-rc10-production-pages-domain.mjs preflight
+          test -s "$PAGES_DOMAIN_BASELINE_FILE"
+          chmod 600 "$PAGES_DOMAIN_BASELINE_FILE"
+      - id: handoff
+        name: Handoff only the verified production Pages apex to exact RC10
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+          PAGES_DOMAIN_BASELINE_FILE: ${{ runner.temp }}/v2-production-pages-domain-handoff-${{ github.run_id }}/baseline.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          node ops/scripts/handoff-v2-rc10-production-pages-domain.mjs handoff
+      - name: Restore the exact Pages predecessor if the bounded handoff fails
+        if: ${{ failure() && steps.preflight.outcome == 'success' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
+          PAGES_DOMAIN_BASELINE_FILE: ${{ runner.temp }}/v2-production-pages-domain-handoff-${{ github.run_id }}/baseline.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          node ops/scripts/handoff-v2-rc10-production-pages-domain.mjs recover
+      - name: Remove runner-local Pages domain handoff state
+        if: ${{ always() }}
+        env:
+          PAGES_DOMAIN_BASELINE_DIRECTORY: ${{ runner.temp }}/v2-production-pages-domain-handoff-${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$PAGES_DOMAIN_BASELINE_DIRECTORY"
+          test ! -e "$PAGES_DOMAIN_BASELINE_DIRECTORY"
 
   handoff-production-first-release-routes:
     if: ${{ needs.validate-production-revision.outputs.operation == 'route-handoff' }}
