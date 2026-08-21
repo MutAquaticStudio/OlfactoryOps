@@ -440,7 +440,7 @@ jobs:
     env:
       RELEASE_SHA: ${{ needs.validate-production-revision.outputs.release_sha }}
       PRODUCTION_SMOKE_APP_URL: https://labofscents.org
-      PRODUCTION_SMOKE_TENANT_URL: https://next.labofscents.org
+      PRODUCTION_SMOKE_TENANT_URL: https://${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}
       PRODUCTION_SMOKE_API_URL: https://api.labofscents.org
       PRODUCTION_SMOKE_LOGIN_EMAIL: ${{ secrets.PRODUCTION_SMOKE_LOGIN_EMAIL }}
       PRODUCTION_SMOKE_LOGIN_PASSWORD: ${{ secrets.PRODUCTION_SMOKE_LOGIN_PASSWORD }}

@@ -42,6 +42,12 @@ describe("production dispatcher hardening", () => {
     expect(smoke).toContain(
       "node ops/scripts/verify-v2-production-public-smoke.mjs",
     );
+    expect(smoke).toContain(
+      "PRODUCTION_SMOKE_TENANT_URL: https://${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}",
+    );
+    expect(smoke).not.toContain(
+      "PRODUCTION_SMOKE_TENANT_URL: https://next.labofscents.org",
+    );
     expect(smoke).not.toContain("test:qa:production-smoke");
     expect(smoke).not.toContain("npm ci");
   });

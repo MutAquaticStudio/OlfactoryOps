@@ -3,7 +3,7 @@ const paths = ['/', '/login', '/signup', '/v2/login', '/v2/signup']
 async function main() {
   const expectedSha = required('RELEASE_SHA').toLowerCase()
   const appUrl = requiredUrl('PRODUCTION_SMOKE_APP_URL')
-  const tenantUrl = requiredUrl('PRODUCTION_SMOKE_TENANT_URL')
+  const tenantUrl = requiredTenantUrl('PRODUCTION_SMOKE_TENANT_URL')
   const apiUrl = requiredUrl('PRODUCTION_SMOKE_API_URL')
   const email = required('PRODUCTION_SMOKE_LOGIN_EMAIL')
   const password = required('PRODUCTION_SMOKE_LOGIN_PASSWORD')
@@ -131,6 +131,14 @@ function requiredUrl(name) {
   let url
   try { url = new URL(value) } catch { throw new SmokeFailure(`CONFIG_${name}`) }
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) throw new SmokeFailure(`CONFIG_${name}`)
+  return url
+}
+
+function requiredTenantUrl(name) {
+  const url = requiredUrl(name)
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$/.test(url.hostname) || url.hostname === 'next.labofscents.org') {
+    throw new SmokeFailure(`CONFIG_${name}`)
+  }
   return url
 }
 
