@@ -44,6 +44,7 @@ function fetchForPostcutover({
   predecessorVersionChanged = false,
   handoffDrift = false,
   customDomainPresent = false,
+  routeInventoryForbidden = false,
 } = {}) {
   return vi.fn(async (input) => {
     const path = new URL(String(input)).pathname;
@@ -54,6 +55,15 @@ function fetchForPostcutover({
       });
     }
     if (path === "/client/v4/zones/zone-fixture/workers/routes") {
+      if (routeInventoryForbidden) {
+        return response(
+          {
+            success: false,
+            errors: [{ code: 10000, message: "provider-secret-message" }],
+          },
+          403,
+        );
+      }
       return response({
         success: true,
         result: [
@@ -141,6 +151,9 @@ describe("post-cutover first-release route rollback readiness", () => {
     expect(result).toMatchObject({ pass: true, state: "READY" });
     expect(output).toEqual([
       "POSTCUTOVER_ROUTE_HANDOFF_STATE=PASS",
+      "POSTCUTOVER_ROUTE_INVENTORY_ATTEMPTED=YES",
+      "POSTCUTOVER_ROUTE_INVENTORY_HTTP_STATUS=200",
+      "POSTCUTOVER_ROUTE_INVENTORY_CF_ERROR_CODE=NONE",
       "PREVIOUS_API_ROUTE_TARGET_PROVEN=PASS",
       "PREVIOUS_TENANT_ROUTER_ROUTE_TARGET_PROVEN=PASS",
       "FIRST_RELEASE_ROUTE_ROLLBACK_POLICY=PASS",
@@ -174,6 +187,30 @@ describe("post-cutover first-release route rollback readiness", () => {
     expect(output).toContain(
       "PRODUCTION_ROUTE_ROLLBACK_READY=UNPROVEN",
     );
+  });
+
+  it("reports only bounded route-inventory authorization evidence", async () => {
+    const output = [];
+    const result = await verifyProductionPostcutoverRouteRollback({
+      environment: environment(),
+      fetchImpl: fetchForPostcutover({ routeInventoryForbidden: true }),
+      emit: (line) => output.push(line),
+    });
+
+    expect(result).toMatchObject({
+      pass: false,
+      state: "ROUTE_INVENTORY_UNPROVEN",
+      routeInventory: {
+        attempted: true,
+        httpStatus: "403",
+        cfErrorCode: "10000",
+      },
+    });
+    expect(output).toContain("POSTCUTOVER_ROUTE_INVENTORY_HTTP_STATUS=403");
+    expect(output).toContain(
+      "POSTCUTOVER_ROUTE_INVENTORY_CF_ERROR_CODE=10000",
+    );
+    expect(JSON.stringify(output)).not.toContain("provider-secret-message");
   });
 
   it("fails closed before predecessor checks when a handed-off route drifts", async () => {
