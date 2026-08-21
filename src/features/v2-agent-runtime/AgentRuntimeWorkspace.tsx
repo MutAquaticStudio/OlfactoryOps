@@ -103,7 +103,7 @@ function noticeFrom(error: unknown) {
   if (error instanceof AgentRuntimeRequestError && error.code === 'AGENT_RUNTIME_NOT_CONFIGURED') {
     return 'The governed Phase 9 runtime adapter is not configured in this environment. No provider work was started.'
   }
-  return error instanceof Error ? error.message : 'Unable to complete the agent runtime request.'
+  return 'The Agent Console could not complete this request. Try again or review the governed run evidence.'
 }
 
 function statusClass(status?: string | null) {
@@ -270,7 +270,7 @@ export function AgentRuntimeWorkspace({ apiBase = defaultAgentRuntimeApiBase, ca
           void loadSelectedRun(runId)
         }
       },
-      onError: (error) => setNotice({ kind: 'error', message: error.message }),
+      onError: (error) => setNotice({ kind: 'error', message: noticeFrom(error) }),
     })
     return () => connection.close()
   }, [apiBase, canView, loadSelectedRun, selectedRun?.run.id, updateTimeline])
@@ -338,8 +338,8 @@ export function AgentRuntimeWorkspace({ apiBase = defaultAgentRuntimeApiBase, ca
   return <section className="agent-runtime-workspace" data-testid="v2-agent-runtime">
     <header className="agent-runtime-header">
       <div>
-        <span className="v2-eyebrow">V2 agent runtime</span>
-        <h2>Agent Console</h2>
+        <span className="v2-eyebrow">Agent runtime</span>
+        <h2>Governed runtime</h2>
         <p>Persisted runs, approvals, and evidence are shown here. This console does not make direct provider calls.</p>
       </div>
       <button type="button" className="agent-runtime-icon-button" title="Refresh persisted agent runtime data" aria-label="Refresh persisted agent runtime data" onClick={() => void refreshConsole()} disabled={busy}>
@@ -409,7 +409,7 @@ function TimelinePanel({ events }: { events: AgentRuntimeEvent[] }) {
 }
 
 function ToolCallsPanel({ toolCalls }: { toolCalls: AgentRunDetail['toolCalls'] }) {
-  return <section className="agent-runtime-detail-panel" aria-labelledby="agent-tool-calls-heading"><div className="agent-runtime-panel-heading"><div><span className="agent-runtime-kicker">Tools</span><h4 id="agent-tool-calls-heading">Tool calls</h4></div><Wrench size={18} aria-hidden="true" /></div>{toolCalls?.length ? <div className="agent-runtime-record-list">{toolCalls.map((call, index) => <div key={`${call.id}-${index}`}><strong>{call.toolKey || call.tool || 'Registered tool'}</strong><span className={statusClass(call.status)}>{call.status || 'Unknown'}</span><small>Input {shortId(call.inputHash)} · Output {shortId(call.outputHash)}</small>{call.error ? <p className="agent-runtime-error-text">{call.error}</p> : null}</div>)}</div> : <EmptyState>No persisted tool-call record is available.</EmptyState>}</section>
+  return <section className="agent-runtime-detail-panel" aria-labelledby="agent-tool-calls-heading"><div className="agent-runtime-panel-heading"><div><span className="agent-runtime-kicker">Tools</span><h4 id="agent-tool-calls-heading">Tool calls</h4></div><Wrench size={18} aria-hidden="true" /></div>{toolCalls?.length ? <div className="agent-runtime-record-list">{toolCalls.map((call, index) => <div key={`${call.id}-${index}`}><strong>{call.toolKey || call.tool || 'Registered tool'}</strong><span className={statusClass(call.status)}>{call.status || 'Unknown'}</span><small>Input {shortId(call.inputHash)} · Output {shortId(call.outputHash)}</small>{call.error ? <p className="agent-runtime-error-text">A governed tool error was recorded. Raw provider details are not displayed here.</p> : null}</div>)}</div> : <EmptyState>No persisted tool-call record is available.</EmptyState>}</section>
 }
 
 function ArtifactsPanel({ artifacts }: { artifacts: AgentRunDetail['artifacts'] }) {
@@ -423,7 +423,7 @@ function EvidencePanel({ evidence }: { evidence: AgentRunEvidence | undefined })
 }
 
 function ErrorsPanel({ errors }: { errors: AgentRunDetail['errors'] }) {
-  return <section className="agent-runtime-detail-panel" aria-labelledby="agent-errors-heading"><div className="agent-runtime-panel-heading"><div><span className="agent-runtime-kicker">Failures</span><h4 id="agent-errors-heading">Errors</h4></div><AlertTriangle size={18} aria-hidden="true" /></div>{errors?.length ? <div className="agent-runtime-record-list">{errors.map((error, index) => <div key={`${error.id || error.code || 'error'}-${index}`}><strong>{error.code || 'Agent runtime error'}</strong><p className="agent-runtime-error-text">{error.message || 'No persisted error message is available.'}</p><small>{error.retryable ? 'Retryable by the service policy.' : 'Not marked retryable.'}</small></div>)}</div> : <EmptyState>No persisted errors are available.</EmptyState>}</section>
+  return <section className="agent-runtime-detail-panel" aria-labelledby="agent-errors-heading"><div className="agent-runtime-panel-heading"><div><span className="agent-runtime-kicker">Failures</span><h4 id="agent-errors-heading">Errors</h4></div><AlertTriangle size={18} aria-hidden="true" /></div>{errors?.length ? <div className="agent-runtime-record-list">{errors.map((error, index) => <div key={`${error.id || error.code || 'error'}-${index}`}><strong>{error.code || 'Agent runtime error'}</strong><p className="agent-runtime-error-text">A bounded failure record is available to authorized operational review. Raw exceptions are not displayed here.</p><small>{error.retryable ? 'Retryable by the service policy.' : 'Not marked retryable.'}</small></div>)}</div> : <EmptyState>No persisted errors are available.</EmptyState>}</section>
 }
 
 function ConfirmationPreview({ preview }: { preview: AgentConfirmationPreview }) {
