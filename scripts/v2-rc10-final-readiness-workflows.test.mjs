@@ -330,6 +330,7 @@ describe("RC10 final readiness operations", () => {
     expect(acceptance).not.toContain("PUBLIC_TENANT_URL: https://next.labofscents.org");
     expect(acceptance).not.toMatch(/wrangler\s+(deploy|pages)/i);
     expect(publicHarness).toContain("PUBLIC_ACCEPTANCE_FIXTURE_CLEANUP=PASS");
+    expect(publicHarness).toContain("PUBLIC_ACCEPTANCE_FAILURE_PHASE=");
     expect(publicHarness).toContain("PUBLIC_CROSS_TENANT_READ_DENIAL=PASS");
     expect(publicHarness).toContain("PUBLIC_PLATFORM_ADMIN_ISOLATION=PASS");
   });

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { publicAcceptanceFailurePhase } from './v2-production-public-acceptance-classification.mjs'
 
 const expectedSha = required('RELEASE_SHA').toLowerCase()
 const apiUrl = requiredUrl('PUBLIC_API_URL')
@@ -12,7 +13,7 @@ const organizations = []
 let client
 
 try {
-  if (approval !== 'RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE') throw new Error('APPROVAL')
+  if (approval !== 'RUN_V2_PRODUCTION_PUBLIC_ACCEPTANCE') throw acceptanceFailure('PRECONDITION')
   await verifyPublicSurfaces()
   client = new pg.Client({ connectionString: databaseUrl, connectionTimeoutMillis: 15_000, query_timeout: 15_000, statement_timeout: 15_000 })
   await client.connect()
@@ -33,19 +34,20 @@ try {
   console.log('PUBLIC_TENANT_RESOLUTION=PASS')
 
   const materialA = await request('/v2/lab/materials', { method: 'POST', session: sessionA, body: { name: `Public acceptance ${suffix}`, internalCode: `PUBLIC-${suffix}` } })
-  if (materialA.status !== 200 || typeof materialA.body?.material?.id !== 'string') throw new Error('MATERIALS')
+  if (materialA.status !== 200 || typeof materialA.body?.material?.id !== 'string') throw acceptanceFailure('MATERIALS')
   const materialB = await request('/v2/lab/materials', { method: 'POST', session: sessionB, body: { name: `Public acceptance B ${suffix}`, internalCode: `PUBLIC-B-${suffix}` } })
-  if (materialB.status !== 200 || typeof materialB.body?.material?.id !== 'string') throw new Error('MATERIALS')
+  if (materialB.status !== 200 || typeof materialB.body?.material?.id !== 'string') throw acceptanceFailure('MATERIALS')
   const listA = await request('/v2/lab/materials', { session: sessionA })
   const listB = await request('/v2/lab/materials', { session: sessionB })
-  if (listA.status !== 200 || listB.status !== 200 || !contains(listA.body, materialA.body.material.id) || contains(listA.body, materialB.body.material.id) || !contains(listB.body, materialB.body.material.id) || contains(listB.body, materialA.body.material.id)) throw new Error('TENANT_ISOLATION')
+  if (listA.status !== 200 || listB.status !== 200 || !contains(listA.body, materialA.body.material.id) || contains(listA.body, materialB.body.material.id) || !contains(listB.body, materialB.body.material.id) || contains(listB.body, materialA.body.material.id)) throw acceptanceFailure('TENANT_ISOLATION')
   const crossRead = await request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { session: sessionA })
   const crossWrite = await request(`/v2/lab/materials/${encodeURIComponent(materialB.body.material.id)}`, { method: 'PATCH', session: sessionA, body: { description: 'denied' } })
-  if (![403, 404].includes(crossRead.status) || ![403, 404].includes(crossWrite.status)) throw new Error('CROSS_TENANT')
+  if (![403, 404].includes(crossRead.status)) throw acceptanceFailure('CROSS_TENANT_READ')
+  if (![403, 404].includes(crossWrite.status)) throw acceptanceFailure('CROSS_TENANT_WRITE')
   const inventory = await request('/v2/lab/inventory/summary', { session: sessionA })
-  if (inventory.status !== 200) throw new Error('INVENTORY')
+  if (inventory.status !== 200) throw acceptanceFailure('INVENTORY')
   const admin = await request('/v2/admin/me', { session: sessionA })
-  if (admin.status !== 403) throw new Error('PLATFORM_ADMIN')
+  if (admin.status !== 403) throw acceptanceFailure('PLATFORM_ADMIN')
   console.log('PUBLIC_RLS=PASS')
   console.log('PUBLIC_TENANT_ISOLATION=PASS')
   console.log('PUBLIC_CROSS_TENANT_READ_DENIAL=PASS')
@@ -63,7 +65,8 @@ try {
   console.log('P0=0')
   console.log('P1=0')
   process.exitCode = 1
-} catch {
+} catch (error) {
+  console.log(`PUBLIC_ACCEPTANCE_FAILURE_PHASE=${publicAcceptanceFailurePhase(error?.phase)}`)
   console.log('PUBLIC_ACCEPTANCE=FAIL')
   process.exitCode = 1
 } finally {
@@ -90,15 +93,15 @@ try {
 
 async function verifyPublicSurfaces() {
   const health = await json(new URL('/health', apiUrl))
-  if (health.status !== 200 || health.body?.status !== 'ok' || health.body?.environment !== 'production' || health.body?.database !== 'hyperdrive' || health.body?.releaseGitSha?.toLowerCase() !== expectedSha) throw new Error('API_HEALTH')
+  if (health.status !== 200 || health.body?.status !== 'ok' || health.body?.environment !== 'production' || health.body?.database !== 'hyperdrive' || health.body?.releaseGitSha?.toLowerCase() !== expectedSha) throw acceptanceFailure('API_HEALTH')
   const manifest = await json(new URL('/release.json', appUrl))
-  if (manifest.status !== 200 || manifest.body?.fullGitSha?.toLowerCase() !== expectedSha || manifest.body?.artifact !== 'pages') throw new Error('PAGES_IDENTITY')
+  if (manifest.status !== 200 || manifest.body?.fullGitSha?.toLowerCase() !== expectedSha || manifest.body?.artifact !== 'pages') throw acceptanceFailure('PAGES_IDENTITY')
   for (const path of ['/', '/login', '/signup', '/v2/login', '/v2/signup']) {
     const response = await fetch(new URL(path, appUrl), { redirect: 'manual', signal: AbortSignal.timeout(20_000) })
-    if (response.status !== 200 || !/^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')) throw new Error('PAGES_ROUTES')
+    if (response.status !== 200 || !/^text\/html(?:;|$)/i.test(response.headers.get('content-type') ?? '')) throw acceptanceFailure('PAGES_ROUTES')
   }
   const router = await fetch(tenantUrl, { redirect: 'manual', signal: AbortSignal.timeout(20_000) })
-  if (router.status !== 200 || router.headers.get('x-olfactoryops-workspace-router') !== 'active' || router.headers.get('x-olfactoryops-release-environment') !== 'production' || router.headers.get('x-olfactoryops-release-sha')?.toLowerCase() !== expectedSha) throw new Error('TENANT_ROUTER')
+  if (router.status !== 200 || router.headers.get('x-olfactoryops-workspace-router') !== 'active' || router.headers.get('x-olfactoryops-release-environment') !== 'production' || router.headers.get('x-olfactoryops-release-sha')?.toLowerCase() !== expectedSha) throw acceptanceFailure('TENANT_ROUTER')
   console.log('PUBLIC_APP=PASS')
   console.log('PUBLIC_PAGES=PASS')
   console.log('PUBLIC_RELEASE_IDENTITY=PASS')
@@ -110,21 +113,27 @@ async function signup(slug) {
   const email = `${slug}@public.invalid`
   const password = `Public-${randomUUID()}-Aa1!`
   const result = await request('/v2/platform/auth/signup', { method: 'POST', body: { organizationName: `Public acceptance ${slug}`, workspaceSlug: slug, email, password }, origin: tenantUrl.origin })
-  if (result.status !== 200 || typeof result.body?.membership?.organizationId !== 'string' || typeof result.body?.user?.id !== 'string' || typeof result.body?.hostname?.hostname !== 'string') throw new Error('SIGNUP')
+  if (result.status !== 200 || typeof result.body?.membership?.organizationId !== 'string' || typeof result.body?.user?.id !== 'string' || typeof result.body?.hostname?.hostname !== 'string') throw acceptanceFailure('SIGNUP')
   organizations.push(result.body.membership.organizationId)
   return { userId: result.body.user.id, organizationId: result.body.membership.organizationId, hostname: result.body.hostname.hostname, email, password }
 }
 
-async function verifyUser(userId) { await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId]) }
+async function verifyUser(userId) {
+  try {
+    await client.query('UPDATE v2_users SET verified_at = now() WHERE id = $1', [userId])
+  } catch {
+    throw acceptanceFailure('FIXTURE_VERIFICATION')
+  }
+}
 
 async function login(identity) {
   const origin = `https://${identity.hostname}`
   const result = await request('/v2/platform/auth/login', { method: 'POST', origin, body: { email: identity.email, password: identity.password } })
-  if (result.status !== 200 || !result.cookie || typeof result.body?.csrfToken !== 'string') throw new Error('LOGIN')
+  if (result.status !== 200 || !result.cookie || typeof result.body?.csrfToken !== 'string') throw acceptanceFailure('LOGIN')
   return { origin, cookie: result.cookie, csrf: result.body.csrfToken }
 }
 
-async function expectJson(path, session, status) { const result = await request(path, { session }); if (result.status !== status) throw new Error('SESSION') }
+async function expectJson(path, session, status) { const result = await request(path, { session }); if (result.status !== status) throw acceptanceFailure('SESSION') }
 
 async function request(path, { method = 'GET', session, body, origin } = {}) {
   const headers = { accept: 'application/json', 'content-type': 'application/json' }
@@ -147,5 +156,12 @@ async function json(url) {
 }
 
 function contains(body, id) { return JSON.stringify(body ?? {}).includes(id) }
+function acceptanceFailure(phase) { return new PublicAcceptanceFailure(phase) }
+class PublicAcceptanceFailure extends Error {
+  constructor(phase) {
+    super(publicAcceptanceFailurePhase(phase))
+    this.phase = publicAcceptanceFailurePhase(phase)
+  }
+}
 function required(name) { const value = process.env[name]?.trim(); if (!value) throw new Error(`CONFIG_${name}`); return value }
 function requiredUrl(name) { const value = required(name); const url = new URL(value); if (url.protocol !== 'https:' || url.username || url.password || url.port || url.search || url.hash) throw new Error(`CONFIG_${name}`); return url }
