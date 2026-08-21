@@ -68,5 +68,5 @@ jobs:
           PUBLIC_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
           PUBLIC_API_URL: https://api.labofscents.org
           PUBLIC_APP_URL: https://labofscents.org
-          PUBLIC_TENANT_URL: https://next.labofscents.org
+          PUBLIC_TENANT_URL: https://${{ vars.PRODUCTION_SMOKE_TENANT_HOSTNAME }}
         run: node scripts/verify-v2-production-public-acceptance.mjs
