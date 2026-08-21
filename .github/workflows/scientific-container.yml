@@ -1,0 +1,115 @@
+name: Scientific Container Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: Publish immutable images only when Cloudflare credentials are configured.
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
+  push:
+    branches: [main, master, "release-*"]
+    paths: ["services/scientific/**", "worker/cloud-runtime/**", "wrangler.v2-cloud-runtime.example.toml", "wrangler.v2-cloud-runtime-production.example.toml", "scripts/verify-scientific-remote.mjs", ".github/workflows/scientific-container.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  scientific-images:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Verify pinned component provenance
+        run: |
+          DATABASE_URL=postgresql://schema_check:schema_check@127.0.0.1:5432/schema_check npx prisma validate --schema infra/postgres/prisma/schema.prisma
+          test -f services/scientific/runtime/component-pins.json
+          test -f services/scientific/runtime/model-component-pins.json
+          cmp services/scientific/runtime/model-component-pins.json services/scientific/model-runtime/model-component-pins.json
+      - name: Build and run Linux feature runtime checks
+        run: |
+          docker buildx build --platform linux/amd64 --load --file services/scientific/runtime/Dockerfile --tag olfactoryops-scientific-feature:${IMAGE_TAG} services/scientific/runtime
+          docker run --rm -e SCIENTIFIC_SERVICE_SHARED_SECRET=scientific-http-test-secret --entrypoint python olfactoryops-scientific-feature:${IMAGE_TAG} -m unittest discover -s /app/tests -p 'test_*.py'
+      - name: Verify Linux feature runtime startup through its image entrypoint
+        run: |
+          set -euo pipefail
+          container_name="olfactoryops-scientific-feature-health"
+          cleanup() {
+            docker rm --force "$container_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name "$container_name" --publish 127.0.0.1:18099:8099 \
+            --env SCIENTIFIC_SERVICE_HOST=0.0.0.0 \
+            --entrypoint /opt/conda/bin/python \
+            olfactoryops-scientific-feature:${IMAGE_TAG} -m scientific_runtime.server >/dev/null
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 2 http://127.0.0.1:18099/health > feature-health.json; then
+              node -e "const health=require('./feature-health.json'); if (health.status !== 'ok' || typeof health.runtimeVersion !== 'string') process.exit(1)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'Feature runtime did not expose its bounded health response.' >&2
+          exit 1
+      - name: Build and run Linux model compatibility checks
+        run: |
+          docker buildx build --platform linux/amd64 --load --file services/scientific/model-runtime/Dockerfile --tag olfactoryops-scientific-model:${IMAGE_TAG} services/scientific/model-runtime
+          docker run --rm olfactoryops-scientific-model:${IMAGE_TAG} python /opt/test_model_runtime.py
+          docker run --rm -e SCIENTIFIC_SERVICE_SHARED_SECRET=model-http-test-secret --entrypoint python olfactoryops-scientific-model:${IMAGE_TAG} -m unittest discover -s /opt -p 'test_model_runtime_server.py'
+          docker run --rm olfactoryops-scientific-model:${IMAGE_TAG} python /opt/olfactory_pipeline.py > model-runtime-provenance.json
+      - name: Upload non-sensitive scientific CI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-ci-evidence-${{ github.sha }}
+          path: model-runtime-provenance.json
+          if-no-files-found: error
+
+  publish-scientific-images:
+    needs: scientific-images
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.push_images == true }}
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Download verified scientific CI evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: scientific-ci-evidence-${{ github.sha }}
+          path: ci-evidence
+      - name: Require staging-only Cloudflare credentials
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+      - name: Rebuild immutable Linux images for publishing
+        run: |
+          docker buildx build --platform linux/amd64 --load --file services/scientific/runtime/Dockerfile --tag olfactoryops-scientific-feature:${IMAGE_TAG} services/scientific/runtime
+          docker buildx build --platform linux/amd64 --load --file services/scientific/model-runtime/Dockerfile --tag olfactoryops-scientific-model:${IMAGE_TAG} services/scientific/model-runtime
+      - name: Publish immutable Cloudflare Container images
+        run: |
+          set -euo pipefail
+          npx wrangler containers push olfactoryops-scientific-feature:${IMAGE_TAG}
+          npx wrangler containers push olfactoryops-scientific-model:${IMAGE_TAG}
+          npx wrangler containers images list --json > cloudflare-container-images.json
+      - name: Record immutable image evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-container-${{ github.sha }}
+          path: |
+            ci-evidence/model-runtime-provenance.json
+            cloudflare-container-images.json

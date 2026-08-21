@@ -10,16 +10,18 @@ function job(name, nextName) {
   return workflow.slice(start, end)
 }
 
-test('candidate dispatcher accepts only the current release branch head', () => {
+test('candidate dispatcher accepts only the immutable RC10 tag', () => {
   const validation = job('validate-candidate-revision', 'deploy-candidate-pages')
 
-  expect(validation).toContain('test "$RELEASE_SHA" = "$release_branch_sha"')
+  expect(workflow).toContain('RC10_TAG: v2-production-rc10')
+  expect(validation).toContain('test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"')
   expect(validation).not.toContain('git merge-base --is-ancestor')
   expect(validation).not.toContain('git tag --contains')
   expect(validation).toContain('candidate_acceptance_mode:')
   expect(validation).toContain('LEGACY_PRE_BOOTSTRAP')
   expect(validation).toContain('POST_BOOTSTRAP')
   expect(validation).toContain('test "$RELEASE_SHA" = "$RC10_SHA"')
+  expect(validation).not.toContain('RELEASE_BRANCH')
   expect(validation).toContain('test "$OPERATION" = "smoke"')
 })
 

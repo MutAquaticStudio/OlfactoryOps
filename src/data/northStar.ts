@@ -9,6 +9,7 @@ export type DomainKey =
   | 'formulas'
   | 'inventory'
   | 'labUsage'
+  | 'trials'
   | 'documents'
   | 'production'
   | 'procurement'
@@ -56,6 +57,9 @@ export interface DomainModule {
 
 export interface Material {
   id: string
+  /** GLOBAL records are curated once and shared read-only across workspaces. */
+  libraryScope?: 'GLOBAL' | 'TENANT'
+  /** Present only for tenant-owned material records. */
   organizationId?: string
   name: string
   cas: string
@@ -69,7 +73,25 @@ export interface Material {
   ifraLimit: number
   costPerGram: number
   odor: string[]
+  /** Curated sensory metadata. It is descriptive only and never compliance evidence. */
+  olfactiveProfile?: MaterialOlfactiveProfile
   provenance: MaterialProvenance[]
+}
+
+export interface MaterialOlfactiveProfile {
+  primaryFamily: string
+  descriptors: string[]
+  facets: string[]
+  description: string
+  strength: 'Soft' | 'Moderate' | 'Strong' | 'Very strong'
+  diffusion: 'Low' | 'Moderate' | 'High' | 'Expansive'
+  tenacity: 'Short' | 'Medium' | 'Long' | 'Very long'
+  volatility: 'Low' | 'Medium' | 'High'
+  formulaRole: string
+  status: 'CURATED' | 'REVIEW_REQUIRED'
+  source: string
+  version: string
+  reviewedAt: string
 }
 
 export interface MaterialProvenance {
@@ -89,6 +111,24 @@ export interface MaterialIngestionRecord {
   extractedFields: string[]
 }
 
+export type MaterialComplianceStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'BLOCKED'
+
+export interface MaterialComplianceProfile {
+  id: string
+  organizationId?: string
+  materialId: string
+  status: MaterialComplianceStatus
+  ifraCategoryLimits: Array<{ category: string; limitPercent: number }>
+  allergens: Array<{ name: string; cas?: string; concentrationPercent?: number }>
+  euUkFlags: string[]
+  sourceDocumentId?: string
+  source: string
+  sourceVersion: string
+  reviewedAt: string
+  reviewedBy: string
+  note?: string
+}
+
 export interface MoleculeComponent {
   id: string
   materialId: string
@@ -105,6 +145,9 @@ export interface FormulaLine {
   grams: number
   materialId?: string
   childFormulaId?: string
+  /** Immutable child snapshot used when a Fine Fragrance composes an Accord. */
+  childFormulaVersionId?: string
+  childFormulaChecksum?: string
   dilution?: number
   concentration?: number
   pyramidNote?: FormulaPyramidNote
@@ -143,6 +186,7 @@ export interface FormulaEvaluationRecord {
 
 export interface FormulaSnapshotMetadata {
   formulaType: FormulaType
+  compositionMode?: 'ACCORD_COMPOSED'
   concentrationType: FormulaConcentrationType
   finalProductConcentrationPercent: number
   targetMarkets: string[]
@@ -156,6 +200,7 @@ export interface FormulaSnapshotMetadata {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  requiresFinalProductContext?: boolean
 }
 
 export interface FormulaIfraRow {
@@ -183,9 +228,16 @@ export interface FormulaIfraEvaluation {
 
 export interface FormulaEvaporationPoint {
   hour: number
-  Top: number
-  Heart: number
-  Base: number
+  materials: FormulaEvaporationMaterialPoint[]
+}
+
+export interface FormulaEvaporationMaterialPoint {
+  materialId: string
+  materialName: string
+  tier: MaterialTier
+  initialPercent: number
+  remainingPercent: number
+  vaporPressure: number
 }
 
 export interface FormulaScaleLine {
@@ -239,6 +291,8 @@ export interface Formula {
   code: string
   name: string
   formulaType: FormulaType
+  /** Set only for Fine Fragrance drafts created from pinned Accord components. */
+  compositionMode?: 'ACCORD_COMPOSED'
   organizationId: string
   brandId: string
   concentrationType: FormulaConcentrationType
@@ -254,6 +308,8 @@ export interface Formula {
   bottleVolumeMl: number
   bottleCount: number
   ifraCategory: string
+  /** Accord drafts can exist before their final-use concentration is known. */
+  requiresFinalProductContext?: boolean
   workflowStatus: FormulaWorkflowStatus
   draftRevision: number
   updatedAt: string
@@ -327,6 +383,10 @@ export interface InventoryLot {
   container?: string
   packaging?: string
   coaDocumentId?: string
+  inTransitFromLocation?: string
+  inTransitToLocation?: string
+  transferStartedAt?: string
+  transferStartedBy?: string
 }
 
 export interface InventoryMovement {
@@ -340,6 +400,8 @@ export interface InventoryMovement {
     | 'FULFILLMENT'
     | 'ADJUSTMENT'
     | 'TRANSFER'
+    | 'WASTE'
+    | 'RETURN_TO_SUPPLIER'
   direction: 'IN' | 'OUT' | 'MOVE'
   materialId: string
   lotId: string
@@ -349,8 +411,63 @@ export interface InventoryMovement {
   actor: string
 }
 
+export interface ProcurementReceiptLine {
+  id: string
+  materialId: string
+  purchaseOrderLineId: string
+  receivedGrams: number
+  acceptedGrams: number
+  rejectedGrams: number
+  unitCost: number
+  lotId: string
+  landedUnitCost?: number
+}
+
+export interface ProcurementDiscrepancy {
+  id: string
+  type: 'SHORT' | 'DAMAGE' | 'QUALITY' | 'DOCUMENT' | 'OTHER'
+  action: 'ACCEPT' | 'QUARANTINE' | 'RETURN'
+  note: string
+  status: 'OPEN' | 'RESOLVED'
+  createdAt: string
+  resolvedAt?: string
+  resolvedBy?: string
+}
+
+export interface ProcurementReceiptRecord {
+  id: string
+  organizationId?: string
+  purchaseOrderId: string
+  supplierId: string
+  status: 'QUARANTINE' | 'INSPECTED' | 'ACCEPTED' | 'RETURNED'
+  receivedAt: string
+  receivedBy: string
+  lines: ProcurementReceiptLine[]
+  discrepancies: ProcurementDiscrepancy[]
+  documentIds: string[]
+  inspectionNote?: string
+  inspectedAt?: string
+  inspectedBy?: string
+}
+
+export interface LandedCostAllocationRecord {
+  id: string
+  organizationId?: string
+  receiptId: string
+  currency: string
+  freightCost: number
+  dutyCost: number
+  insuranceCost: number
+  totalLandedCost: number
+  allocationMethod: 'EXTENDED_VALUE'
+  allocations: Array<{ receiptLineId: string; lotId: string; allocatedCost: number; landedUnitCost: number }>
+  postedAt: string
+  postedBy: string
+}
+
 export interface StorageLocation {
   id: string
+  organizationId?: string
   name: string
   zone: string
   condition: string
@@ -360,6 +477,20 @@ export interface StorageLocation {
   light?: 'Dark' | 'Amber' | 'Ambient'
   temperatureRange?: string
   status?: 'ACTIVE' | 'IN_TRANSIT'
+}
+
+export interface InventoryAgingRecord {
+  lotId: string
+  lotNumber: string
+  materialId: string
+  materialName: string
+  location: string
+  quantityGrams: number
+  value: number
+  agingDays: number
+  lastMovementAt?: string
+  status: 'FRESH' | 'AGING' | 'DEAD_STOCK' | 'EXPIRED' | 'RETEST_DUE' | 'IN_TRANSIT'
+  reason: string
 }
 
 export interface StockTakeRecord {
@@ -409,10 +540,21 @@ export type DocumentType =
   | 'Formula Spec Sheet'
   | 'Finished Product SDS'
 
-export type DocumentStatus = 'APPROVED' | 'REVIEW_REQUIRED' | 'EXPIRING' | 'EXPIRED' | 'SHARED'
+export type DocumentStatus =
+  | 'QUARANTINED'
+  | 'REVIEW_REQUIRED'
+  | 'APPROVED'
+  | 'EXPIRING'
+  | 'EXPIRED'
+  | 'SHARED'
+  | 'ARCHIVED'
+
+export type DocumentScanStatus = 'PENDING' | 'CLEAN' | 'INFECTED' | 'ERROR' | 'NOT_REQUIRED'
+export type DocumentOcrStatus = 'NOT_REQUESTED' | 'PENDING' | 'COMPLETE' | 'FAILED'
 
 export interface DocumentRecord {
   id: string
+  organizationId?: string
   type: DocumentType
   title: string
   linkedTo: string
@@ -429,6 +571,17 @@ export interface DocumentRecord {
   checksum: string
   owner: string
   generatedFrom?: string
+  fileName?: string
+  versionGroupId?: string
+  supersedesDocumentId?: string
+  tags?: string[]
+  scanStatus?: DocumentScanStatus
+  scannedAt?: string
+  scanProvider?: string
+  ocrStatus?: DocumentOcrStatus
+  extractedTextPreview?: string
+  retentionUntil?: string
+  archivedAt?: string
 }
 
 export interface DocumentComplianceRequirement {
@@ -472,6 +625,9 @@ export interface DocumentShareLink {
 
 export interface AuditEvent {
   id: string
+  /** Tenant events must carry an organization id. Platform events are redacted and never appear in a tenant feed. */
+  organizationId?: string
+  scope?: 'tenant' | 'platform'
   at: string
   actor: string
   action: string
@@ -484,11 +640,32 @@ export interface OrganizationRecord {
   id: string
   name: string
   slug: string
+  /** Deterministic, read-only system address derived from the workspace slug. */
+  systemHostname?: string
   customDomain?: string
   plan: 'Free' | 'Pro' | 'Team' | 'Enterprise'
   status: 'ACTIVE' | 'FROZEN' | 'SUSPENDED'
   primaryContact: string
   createdAt: string
+}
+
+export type CustomDomainProvisioningStatus = 'pending_validation' | 'active' | 'failed'
+
+export interface SaasCustomDomainRecord {
+  id: string
+  organizationId: string
+  hostname: string
+  providerId: string
+  status: CustomDomainProvisioningStatus
+  providerStatus?: string
+  sslStatus?: string
+  validation: Record<string, string>
+  verificationErrors: string[]
+  requestedBy: string
+  createdAt: string
+  updatedAt: string
+  lastCheckedAt?: string
+  activatedAt?: string
 }
 
 export interface BrandRecord {
@@ -514,6 +691,8 @@ export interface MembershipRecord {
 }
 
 export interface RolePolicy {
+  /** Organization policies are scoped to one tenant; platform policies deliberately omit this value. */
+  organizationId?: string
   role: string
   scope: 'organization' | 'platform'
   mfaRequired: boolean
@@ -574,7 +753,40 @@ export interface UserSettingsRecord {
   reduceMotion: boolean
   emailDigest: 'off' | 'daily' | 'weekly'
   accentColor: string
+  formulaWorkspace: FormulaWorkspacePreferences
   updatedAt: string
+}
+
+export interface FormulaWorkspacePreferences {
+  library: boolean
+  summary: boolean
+  ifra: boolean
+  evaporation: boolean
+}
+
+export function createDefaultFormulaWorkspacePreferences(): FormulaWorkspacePreferences {
+  return {
+    library: true,
+    summary: true,
+    ifra: true,
+    evaporation: true,
+  }
+}
+
+export function normalizeFormulaWorkspacePreferences(
+  value: unknown,
+  fallback: FormulaWorkspacePreferences = createDefaultFormulaWorkspacePreferences(),
+): FormulaWorkspacePreferences {
+  const candidate = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+
+  return {
+    library: typeof candidate?.library === 'boolean' ? candidate.library : fallback.library,
+    summary: typeof candidate?.summary === 'boolean' ? candidate.summary : fallback.summary,
+    ifra: typeof candidate?.ifra === 'boolean' ? candidate.ifra : fallback.ifra,
+    evaporation: typeof candidate?.evaporation === 'boolean' ? candidate.evaporation : fallback.evaporation,
+  }
 }
 
 export interface TenantSettingsRecord {
@@ -587,6 +799,7 @@ export interface TenantSettingsRecord {
 }
 
 export interface FeatureFlagRecord {
+  organizationId?: string
   key: string
   label: string
   enabled: boolean
@@ -594,6 +807,7 @@ export interface FeatureFlagRecord {
 }
 
 export interface NumberingSequenceRecord {
+  organizationId?: string
   key: string
   pattern: string
   nextValue: number
@@ -601,6 +815,7 @@ export interface NumberingSequenceRecord {
 }
 
 export interface CustomFieldDefinition {
+  organizationId?: string
   id: string
   entity: 'material' | 'formula' | 'lot' | 'document' | 'supplier' | 'order'
   key: string
@@ -617,7 +832,8 @@ export interface BrandingConfig {
   accentColor: string
   documentFooter: string
   labelTemplate: string
-  logoMode: 'wordmark' | 'monogram'
+  logoMode: 'wordmark' | 'monogram' | 'image'
+  logoImageUrl?: string
 }
 
 export interface ProductionWorkOrderStep {
@@ -637,6 +853,59 @@ export interface ProductionQcCheck {
   note?: string
 }
 
+export interface ProductionQcTemplateRecord {
+  id: string
+  organizationId?: string
+  formulaId?: string
+  name: string
+  status: 'ACTIVE' | 'ARCHIVED'
+  checks: Array<{
+    id: string
+    label: string
+    kind: 'NUMERIC' | 'TEXT' | 'BOOLEAN'
+    required: boolean
+    min?: number
+    max?: number
+    expectedText?: string
+    unit?: string
+  }>
+  updatedAt: string
+  updatedBy: string
+}
+
+export interface ProductionQcResultRecord {
+  id: string
+  organizationId?: string
+  batchId: string
+  templateCheckId: string
+  label: string
+  status: 'PENDING' | 'PASSED' | 'FAILED' | 'NOT_APPLICABLE'
+  observedValue?: string
+  note?: string
+  documentIds: string[]
+  recordedAt: string
+  recordedBy: string
+  approvedAt?: string
+  approvedBy?: string
+}
+
+export interface ProductionYieldRecord {
+  id: string
+  organizationId?: string
+  batchId: string
+  yieldGrams: number
+  wasteGrams: number
+  laborCost: number
+  overheadCost: number
+  currency: string
+  status: 'RECORDED' | 'RECONCILED'
+  recordedAt: string
+  recordedBy: string
+  reconciledAt?: string
+  reconciledBy?: string
+  note?: string
+}
+
 export interface ProductionOutputLot {
   id: string
   lotNumber: string
@@ -644,6 +913,39 @@ export interface ProductionOutputLot {
   quantityGrams: number
   qualityStatus: 'RELEASED' | 'HOLD'
   releasedAt?: string
+}
+
+export interface FinishedGoodLotRecord {
+  id: string
+  organizationId: string
+  batchId: string
+  formulaId: string
+  formulaCode: string
+  lotNumber: string
+  quantityGrams: number
+  reservedGrams: number
+  qualityStatus: 'RELEASED' | 'HOLD'
+  releasedAt: string
+  costPerGram: number
+  currency: string
+  location: string
+}
+
+export interface FinishedGoodMovementRecord {
+  id: string
+  organizationId: string
+  finishedGoodLotId: string
+  batchId: string
+  formulaId: string
+  orderId?: string
+  type: 'PRODUCTION_OUTPUT' | 'RESERVATION' | 'RESERVATION_RELEASE' | 'FULFILLMENT'
+  direction: 'IN' | 'HOLD' | 'RELEASE' | 'OUT'
+  quantityGrams: number
+  balanceAfter: number
+  costPerGram: number
+  cogsAmount?: number
+  at: string
+  actor: string
 }
 
 export interface ProductionBatchRecord {
@@ -655,6 +957,11 @@ export interface ProductionBatchRecord {
   consumedGrams: number
   qcStatus: 'PENDING' | 'PASSED' | 'FAILED'
   owner: string
+  qcTemplateId?: string
+  qcApprovedAt?: string
+  qcApprovedBy?: string
+  yieldRecordId?: string
+  coaDocumentId?: string
   workOrder: {
     id: string
     scheduledStartAt: string
@@ -675,6 +982,7 @@ export interface ProductionBatchRecord {
 
 export interface SupplierRecord {
   id: string
+  organizationId?: string
   name: string
   status: DomainStatus
   country: string
@@ -686,6 +994,7 @@ export interface SupplierRecord {
 
 export interface PurchaseOrderRecord {
   id: string
+  organizationId?: string
   supplierId: string
   materialId: string
   quantityGrams: number
@@ -695,10 +1004,21 @@ export interface PurchaseOrderRecord {
   unitCost: number
   currency: string
   createdAt: string
+  /** Legacy primary-line fields remain populated so existing purchase orders stay readable. */
+  lines?: PurchaseOrderLineItem[]
+}
+
+export interface PurchaseOrderLineItem {
+  id: string
+  materialId: string
+  quantityGrams: number
+  receivedGrams: number
+  unitCost: number
 }
 
 export interface PriceHistoryRecord {
   id: string
+  organizationId?: string
   materialId: string
   supplierId: string
   purchaseOrderId: string
@@ -707,6 +1027,27 @@ export interface PriceHistoryRecord {
   quantityGrams: number
   capturedAt: string
   source: 'PO_RECEIPT' | 'QUOTE'
+}
+
+export interface RfqComparisonOption {
+  supplierId: string
+  supplierName: string
+  country: string
+  leadTimeDays: number
+  unitCost: number
+  currency: string
+  totalCost: number
+  source: 'PRICE_HISTORY' | 'MATERIAL_REFERENCE'
+  isRecommended: boolean
+}
+
+export interface RfqComparison {
+  materialId: string
+  materialName: string
+  quantityGrams: number
+  options: RfqComparisonOption[]
+  recommendedSupplierId?: string
+  invariant: string
 }
 
 export type CostMethod = 'FIFO' | 'LIFO' | 'WEIGHTED_AVERAGE' | 'STANDARD'
@@ -755,6 +1096,10 @@ export interface BatchCostReport {
   batchId: string
   formulaId: string
   targetGrams: number
+  outputGrams: number
+  yieldVariancePercent: number
+  costingBasis: 'RELEASED_OUTPUT' | 'TARGET_ESTIMATE'
+  materialCostBasis: 'ACTUAL_LOT_CONSUMPTION' | 'FORMULA_ESTIMATE'
   materialCost: number
   laborCost: number
   overheadCost: number
@@ -887,6 +1232,7 @@ export interface RoleDashboardWidget {
 
 export interface ScheduledReportRecord {
   id: string
+  organizationId?: string
   name: string
   cadence: 'DAILY' | 'WEEKLY' | 'MONTHLY'
   audience: string
@@ -906,9 +1252,24 @@ export interface AnalyticsDashboardReport {
   invariant: string
 }
 
+export interface OperationalAnalyticsReport {
+  quarantineLots: number
+  openReceiptDiscrepancies: number
+  qcFailures: number
+  receiptsByStatus: Array<{ status: ProcurementReceiptRecord['status']; count: number }>
+  supplierPerformance: Array<{ supplierId: string; receipts: number; accepted: number; returned: number; acceptanceRatePercent: number }>
+  yieldVariance: Array<{ batchId: string; yieldVariancePercent: number; wasteGrams: number; status: ProductionYieldRecord['status'] }>
+  landedCostVariance: Array<{ receiptId: string; totalLandedCost: number; materialValue: number; landedPercent: number }>
+  actualBatchMargins: Array<{ batchId: string; formulaId: string; unitCost: number; price: number; marginPercent: number }>
+  invariant: string
+}
+
 export interface CommercialSkuRecord {
   id: string
+  organizationId?: string
   materialId: string
+  formulaId?: string
+  productKind?: 'MATERIAL' | 'FORMULA'
   name: string
   description: string
   packSizeGrams: number
@@ -922,6 +1283,7 @@ export interface CommercialSkuRecord {
 
 export interface PriceListRecord {
   id: string
+  organizationId?: string
   name: string
   customerGroup: 'Studio' | 'Lab' | 'Bulk' | 'Contract'
   currency: string
@@ -932,6 +1294,7 @@ export interface PriceListRecord {
 
 export interface QuoteRecord {
   id: string
+  organizationId?: string
   skuId: string
   customer: string
   customerGroup: PriceListRecord['customerGroup']
@@ -939,16 +1302,25 @@ export interface QuoteRecord {
   unitPrice: number
   total: number
   currency: string
-  status: 'DRAFT' | 'REVIEW' | 'SENT'
+  status: 'DRAFT' | 'REVIEW' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CONVERTED'
   createdAt: string
+  lines?: QuoteLineItem[]
+}
+
+export interface QuoteLineItem {
+  skuId: string
+  quantityPacks: number
+  unitPrice: number
+  lineTotal: number
 }
 
 export interface SampleRequestRecord {
   id: string
+  organizationId?: string
   skuId: string
   customer: string
   packs: number
-  status: 'REQUESTED' | 'APPROVED' | 'CONVERTED'
+  status: 'REQUESTED' | 'APPROVED' | 'DECLINED' | 'CONVERTED'
   createdAt: string
 }
 
@@ -962,6 +1334,7 @@ export interface CustomerAddress {
 
 export interface CustomerRecord {
   id: string
+  organizationId?: string
   name: string
   group: PriceListRecord['customerGroup']
   creditLimit: number
@@ -972,10 +1345,50 @@ export interface CustomerRecord {
   status: 'ACTIVE' | 'CREDIT_HOLD' | 'ARCHIVED'
 }
 
+export type ShipmentCarrier =
+  | 'DHL'
+  | 'FedEx'
+  | 'UPS'
+  | 'GHN'
+  | 'GHTK'
+  | 'VIETTEL_POST'
+  | 'VNPOST'
+  | 'JNT'
+  | 'AHAMOVE'
+  | 'LOCAL_COURIER'
+  | 'Pickup'
+
+export const shipmentCarrierOptions: ReadonlyArray<{
+  value: ShipmentCarrier
+  label: string
+  scope: 'INTERNATIONAL' | 'VIETNAM' | 'PICKUP'
+}> = [
+  { value: 'GHN', label: 'GHN', scope: 'VIETNAM' },
+  { value: 'GHTK', label: 'Giao Hang Tiet Kiem', scope: 'VIETNAM' },
+  { value: 'VIETTEL_POST', label: 'Viettel Post', scope: 'VIETNAM' },
+  { value: 'VNPOST', label: 'VNPost', scope: 'VIETNAM' },
+  { value: 'JNT', label: 'J&T Express', scope: 'VIETNAM' },
+  { value: 'AHAMOVE', label: 'Ahamove', scope: 'VIETNAM' },
+  { value: 'LOCAL_COURIER', label: 'Local courier', scope: 'VIETNAM' },
+  { value: 'DHL', label: 'DHL', scope: 'INTERNATIONAL' },
+  { value: 'FedEx', label: 'FedEx', scope: 'INTERNATIONAL' },
+  { value: 'UPS', label: 'UPS', scope: 'INTERNATIONAL' },
+  { value: 'Pickup', label: 'Customer pickup', scope: 'PICKUP' },
+]
+
+export function isShipmentCarrier(value: unknown): value is ShipmentCarrier {
+  return typeof value === 'string' && shipmentCarrierOptions.some((option) => option.value === value)
+}
+
+export function shipmentCarrierLabel(value: ShipmentCarrier) {
+  return shipmentCarrierOptions.find((option) => option.value === value)?.label ?? value
+}
+
 export interface ShipmentRecord {
   id: string
+  organizationId?: string
   orderId: string
-  carrier: 'DHL' | 'FedEx' | 'UPS' | 'Pickup'
+  carrier: ShipmentCarrier
   trackingNumber: string
   status: 'PICKING' | 'PACKED' | 'SHIPPED' | 'DELIVERED'
   shippedAt?: string
@@ -986,6 +1399,7 @@ export interface ShipmentRecord {
 
 export interface OrderDocumentRecord {
   id: string
+  organizationId?: string
   orderId: string
   type: 'PICK_LIST' | 'PACKING_SLIP' | 'INVOICE' | 'COA'
   status: 'DRAFT' | 'READY' | 'SENT'
@@ -995,6 +1409,7 @@ export interface OrderDocumentRecord {
 
 export interface SalesOrderRecord {
   id: string
+  organizationId?: string
   skuId: string
   customerId: string
   customer: string
@@ -1027,6 +1442,23 @@ export interface SalesOrderRecord {
   shipmentId?: string
   documentIds?: string[]
   createdAt: string
+  updatedAt?: string
+  lines?: SalesOrderLineItem[]
+  contactEmail?: string
+  shippingAddress?: CustomerAddress
+  customerReference?: string
+  deliveryInstructions?: string
+  cancellationReason?: string
+  cancelledAt?: string
+}
+
+export interface SalesOrderLineItem {
+  skuId: string
+  quantity: number
+  unitPrice: number
+  lineTotal: number
+  reservedGrams?: number
+  fulfilledGrams?: number
 }
 
 export interface BillingPlanRecord {
@@ -1139,7 +1571,78 @@ export interface BillingActionResponse {
   invariant: string
 }
 
+export type NotificationCategory = 'security' | 'billing' | 'inventory' | 'workspace' | 'system'
+export type NotificationDeliveryStatus = 'in_app' | 'queued' | 'sent' | 'failed'
+
+export type BillingMode = 'managed_beta' | 'self_service'
+
+export type IntegrationReadinessStatus = 'ready' | 'not_configured' | 'blocked'
+
+export interface IntegrationReadinessCheck {
+  key: 'billing' | 'documents' | 'email' | 'cloudflare_saas' | 'beta_hostname' | 'workers_ai' | 'vectorize_rag'
+  label: string
+  status: IntegrationReadinessStatus
+  detail: string
+}
+
+export interface IntegrationReadinessResponse {
+  billingMode: BillingMode
+  checks: IntegrationReadinessCheck[]
+  checkedAt: string
+  invariant: string
+}
+
+export interface AppNotificationRecord {
+  id: string
+  organizationId: string
+  recipientEmail: string
+  category: NotificationCategory
+  title: string
+  body: string
+  href?: string
+  createdAt: string
+  readAt?: string
+  emailStatus: NotificationDeliveryStatus
+  emailError?: string
+  emailAttempts?: number
+  emailLastAttemptAt?: string
+  emailNextAttemptAt?: string
+  emailSentAt?: string
+}
+
+export type LegalDocumentKind = 'terms' | 'privacy' | 'cookies'
+
+export interface LegalAcceptanceRecord {
+  id: string
+  organizationId: string
+  userId: string
+  email: string
+  document: LegalDocumentKind
+  version: string
+  acceptedAt: string
+}
+
+export interface PrivacyRequestRecord {
+  id: string
+  organizationId: string
+  requestedBy: string
+  subjectEmail: string
+  type: 'EXPORT' | 'ERASURE'
+  status: 'REQUESTED' | 'PROCESSING' | 'COMPLETED' | 'REJECTED'
+  createdAt: string
+  completedAt?: string
+}
+
+export interface GlobalSearchResult {
+  id: string
+  kind: 'material' | 'formula' | 'lot' | 'document' | 'supplier'
+  title: string
+  subtitle: string
+  href: string
+}
+
 export interface BillingConsoleResponse {
+  billingMode: BillingMode
   plans: BillingPlanRecord[]
   plan: BillingPlanRecord
   subscription: BillingSubscriptionRecord
@@ -1239,6 +1742,8 @@ export interface BusinessRecord {
 export interface Allocation {
   materialId: string
   materialName: string
+  sourceType?: 'MATERIAL' | 'FINISHED_GOOD'
+  formulaId?: string
   requiredGrams: number
   lotId: string
   lotNumber: string
@@ -1288,11 +1793,12 @@ export interface LabUsageRecord {
   formulaCode: string
   grams: number
   batchGrams: number
-  status: 'COMMITTED' | 'REVERSED'
+  status: 'COMMITTED' | 'PARTIALLY_REVERSED' | 'REVERSED'
   purpose: LabUsagePurpose
   projectCode?: string
   sampleCode?: string
   qcLink?: string
+  trialId?: string
   allocations: Allocation[]
   weighingSession?: LabWeighingSession
   createdAt: string
@@ -1300,13 +1806,235 @@ export interface LabUsageRecord {
   reversalMovements?: InventoryMovement[]
 }
 
+export type TrialLifecycle =
+  | 'PLANNED'
+  | 'RELEASED_FOR_TRIAL'
+  | 'MIXED'
+  | 'CONDITIONING'
+  | 'EVALUATING'
+  | 'DECIDED'
+  | 'CANCELLED'
+
+export type SensoryTimepoint = 'OPENING' | 'HEART' | 'DRYDOWN' | 'LONGEVITY' | 'OVERALL'
+
+export type SensoryStabilityStatus = 'STABLE' | 'WATCH' | 'UNSTABLE'
+
+export type TrialDecisionOutcome = 'ACCEPT' | 'REVISE' | 'REJECT'
+
+export interface TrialFormulaSnapshot {
+  formulaId: string
+  formulaCode: string
+  formulaName: string
+  formulaVersion: string
+  checksum: string
+  formulaType: FormulaType
+  concentrationType: FormulaConcentrationType
+  finalProductConcentrationPercent: number
+  ifraCategory: string
+  brief: string
+  pyramidSummary: string
+  targetGrams: number
+  totalCost: number
+  lineCount: number
+  /** Private composition-family signal used only for deterministic trial comparison. */
+  materialFamilies: string[]
+}
+
+export interface TrialReleaseRecord {
+  id: string
+  releasedAt: string
+  releasedBy: string
+  complianceStatus: 'PASS' | 'REVIEW_REQUIRED'
+  ifraBlockerCount: number
+  formulaChecksum: string
+  note?: string
+}
+
+export interface TrialUsageLinkRecord {
+  id: string
+  trialId: string
+  usageId: string
+  formulaChecksum: string
+  movementIds: string[]
+  allocations: Allocation[]
+  actualWeights: LabWeighingSession['lines']
+  costSnapshot: number
+  linkedAt: string
+  reversedAt?: string
+}
+
+export interface SensorySessionRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  status: 'OPEN' | 'CLOSED'
+  evaluatorMode: 'INTERNAL' | 'PUBLIC'
+  presentationMode: 'BLIND' | 'BRAND_REVIEW'
+  opensAt: string
+  closesAt?: string
+  createdBy: string
+  createdAt: string
+}
+
+export interface SensoryObservationRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  sessionId: string
+  evaluatorRef: string
+  timepoint: SensoryTimepoint
+  scores: Record<SensoryTimepoint, number>
+  descriptors: string[]
+  observation: string
+  stability: SensoryStabilityStatus
+  submittedAt: string
+  updatedAt: string
+  source: 'INTERNAL' | 'PUBLIC'
+  /** Stores the public feedback request key so repeated submissions remain idempotent. */
+  idempotencyKey?: string
+}
+
+export interface TrialPublicLinkRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  sessionId: string
+  tokenHash: string
+  presentationMode: 'BLIND' | 'BRAND_REVIEW'
+  expiresAt: string
+  revokedAt?: string
+  createdBy: string
+  createdAt: string
+  lastSubmittedAt?: string
+}
+
+export interface TrialDecisionRecord {
+  id: string
+  organizationId: string
+  trialId: string
+  outcome: TrialDecisionOutcome
+  rationale: string
+  decidedBy: string
+  decidedAt: string
+}
+
+export interface FragranceTrialRecord {
+  id: string
+  organizationId: string
+  sampleCode: string
+  title: string
+  lifecycle: TrialLifecycle
+  formulaSnapshot: TrialFormulaSnapshot
+  release?: TrialReleaseRecord
+  usageLink?: TrialUsageLinkRecord
+  decision?: TrialDecisionRecord
+  conditioningNote?: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  cancelledAt?: string
+  cancelledBy?: string
+}
+
+export interface TrialComparableEvidence {
+  status: 'READY' | 'NOT_ENOUGH_EVIDENCE' | 'NOT_AVAILABLE'
+  sampleCount: number
+  confidence: 'LOW' | 'MODERATE' | 'HIGH' | 'NOT_EVALUATED'
+  averages: Partial<Record<SensoryTimepoint, number>>
+  trialIds: string[]
+  summary: string
+}
+
+/**
+ * A tenant-private, derived projection of a decided trial. It is evidence for
+ * future human decisions, not a model-training record and never crosses the
+ * organization boundary.
+ */
+export interface SensoryMemoryRecord {
+  id: string
+  organizationId: string
+  formulaId: string
+  formulaVersion: string
+  trialId: string
+  briefVersionId?: string
+  candidateId?: string
+  descriptors: string[]
+  timepointScores: Partial<Record<SensoryTimepoint, number>>
+  decision: TrialDecisionOutcome
+  reasonCodes: string[]
+  costSnapshot?: number
+  inventoryReadinessPercent?: number
+  createdAt: string
+}
+
+export interface WorkspacePreferenceProfile {
+  id: string
+  organizationId: string
+  version: number
+  evidenceCount: number
+  confidence: 'INSUFFICIENT' | 'LOW' | 'MEDIUM' | 'HIGH'
+  preferredDescriptors: string[]
+  avoidedDescriptors: string[]
+  recurrentDecisionReasons: string[]
+  derivedFromStart?: string
+  derivedFromEnd?: string
+  createdAt: string
+}
+
+/** Human-reviewed substitution evidence. Research tooling may only use an
+ * APPROVED record; material similarity alone is never enough. */
+export interface ApprovedMaterialSubstitutionRecord {
+  id: string
+  organizationId: string
+  sourceMaterialId: string
+  replacementMaterialId: string
+  status: 'APPROVED' | 'ARCHIVED'
+  reviewer: string
+  evidenceReference: string
+  roleSimilarity: 'LOW' | 'MEDIUM' | 'HIGH'
+  strengthFactor: number
+  complianceCaveat?: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type OperationalLineageNodeType = 'FORMULA' | 'FORMULA_VERSION' | 'MATERIAL' | 'LOT' | 'TRIAL' | 'BATCH' | 'FINISHED_GOOD_LOT' | 'ORDER' | 'DOCUMENT'
+
+export interface OperationalLineageEdge {
+  id: string
+  organizationId: string
+  fromType: OperationalLineageNodeType
+  fromId: string
+  edgeType: 'CONTAINS_MATERIAL' | 'TRIAL_OF' | 'CONSUMED_LOT' | 'PRODUCED_LOT' | 'FULFILLED_BY' | 'SUPPORTED_BY_EVIDENCE' | 'GENERATED_FROM' | 'REVISED_FROM'
+  toType: OperationalLineageNodeType
+  toId: string
+  sourceVersion?: string
+  createdAt: string
+}
+
+export interface OperationalLineageProjection {
+  subject: { type: OperationalLineageNodeType; id: string }
+  edges: OperationalLineageEdge[]
+  impact: {
+    formulas: number
+    trials: number
+    lots: number
+    batches: number
+    finishedGoodLots: number
+    orders: number
+    documents: number
+  }
+  invariant: string
+}
+
 export const statusMeta: Record<DomainStatus, { label: string; color: string }> = {
-  active: { label: 'Active', color: '#4d9bff' },
-  stable: { label: 'Stable', color: '#37d6a0' },
-  testing: { label: 'Testing', color: '#f5b04c' },
-  review: { label: 'Review', color: '#c4a86a' },
+  active: { label: 'Active', color: '#0f766e' },
+  stable: { label: 'Stable', color: '#15803d' },
+  testing: { label: 'Testing', color: '#b45309' },
+  review: { label: 'Review', color: '#9a6700' },
   draft: { label: 'Draft', color: 'rgba(110,118,132,0.72)' },
-  alert: { label: 'Alert', color: '#f2585f' },
+  alert: { label: 'Alert', color: '#b42318' },
 }
 
 export const domains: DomainModule[] = [
@@ -1435,6 +2163,24 @@ export const domains: DomainModule[] = [
     permissions: ['inventory.commitLabUsage', 'inventory.reverseLabUsage'],
     screens: ['Commit flow', 'Actual weighing session', 'Reverse popup', 'History'],
     activity: 'FRM-0421 can commit actual weighed usage via API and reverse the committed record by compensation',
+  },
+  {
+    key: 'trials',
+    phase: '7.5',
+    name: 'Trials & Sensory',
+    shortName: 'Trials',
+    responsibility: 'Immutable formula releases, actual weighing links, sensory scorecards, and evidence-based trial decisions',
+    status: 'active',
+    health: 86,
+    risk: 'Trial release is separate from formula approval; stock moves only through linked Lab Usage commits',
+    owner: 'Perfumer Team',
+    entities: ['Trial', 'TrialRelease', 'LabUsageLink', 'SensorySession', 'SensoryObservation', 'TrialDecision'],
+    features: ['Immutable version snapshot', 'Trial release gate', 'Blind panel scorecards', 'Public feedback link', 'Decision timeline', 'Comparable evidence'],
+    invariants: ['No trial creates stock movement', 'Public feedback is token-scoped and redacted', 'Comparable evidence remains tenant-private'],
+    apis: ['/api/v1/trials', '/api/v1/trials/:id/release', '/api/v1/trials/:id/sensory-sessions', '/api/v1/trials/public/:token'],
+    permissions: ['trials.view', 'trials.create', 'trials.evaluate'],
+    screens: ['Trial workbench', 'Release gate', 'Sensory scorecard', 'Decision timeline'],
+    activity: 'A released trial links actual Lab Usage and retains structured sensory evidence without altering formula approval.',
   },
   {
     key: 'documents',
@@ -2197,7 +2943,7 @@ export const organizations: OrganizationRecord[] = [
     customDomain: 'example.test',
     plan: 'Team',
     status: 'ACTIVE',
-    primaryContact: 'admin@labofscents.org',
+    primaryContact: 'm.thuanwork@gmail.com',
     createdAt: '2026-01-08T03:20:00.000Z',
   },
   {
@@ -2222,7 +2968,7 @@ export const memberships: MembershipRecord[] = [
   {
     id: 'MBR-ADMIN',
     userId: 'usr-admin',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     name: 'Thuan Le Minh',
     organizationId: 'org-nxl',
     brandIds: ['brand-nxl', 'brand-atelier'],
@@ -2274,6 +3020,7 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'platform.view', label: 'View platform shell', category: 'Platform', scope: 'organization', risk: 'low', description: 'Open the workspace-scoped OlfactoryOps console.' },
   { key: 'audit.view', label: 'View audit trail', category: 'Audit', scope: 'organization', risk: 'medium', description: 'Read tenant audit events and security evidence.' },
   { key: 'audit.export', label: 'Export audit evidence', category: 'Audit', scope: 'organization', risk: 'high', description: 'Export regulated tenant audit data.' },
+  { key: 'security.viewMembers', label: 'View member summary', category: 'Security', scope: 'organization', risk: 'medium', description: 'View workspace member totals, role distribution, and active session count without member identities.' },
   { key: 'security.manageUsers', label: 'Manage members', category: 'Security', scope: 'organization', risk: 'critical', description: 'Invite, activate, deactivate, and assign tenant roles.' },
   { key: 'security.viewAuditLog', label: 'View security audit', category: 'Security', scope: 'organization', risk: 'high', description: 'Inspect security-sensitive tenant events.' },
   { key: 'security.policy.manage', label: 'Manage security policy', category: 'Security', scope: 'organization', risk: 'critical', description: 'Change MFA, session timeout, and IP allowlist policy.' },
@@ -2290,6 +3037,11 @@ export const permissionCatalog: PermissionDefinition[] = [
   { key: 'formulas.edit', label: 'Edit formula drafts', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Create, edit, fork, and submit formula drafts without consuming stock.' },
   { key: 'formulas.approve', label: 'Approve formulas', category: 'Formulas', scope: 'organization', risk: 'critical', description: 'Approve immutable formula versions after compliance review.' },
   { key: 'formulas.export', label: 'Export formulas', category: 'Formulas', scope: 'organization', risk: 'high', description: 'Export formula data outside the application.' },
+  { key: 'trials.view', label: 'View trials', category: 'Trials', scope: 'organization', risk: 'medium', description: 'Read tenant-private trial timelines and comparable sensory evidence.' },
+  { key: 'trials.create', label: 'Create trials', category: 'Trials', scope: 'organization', risk: 'medium', description: 'Create planned trials from immutable formula snapshots.' },
+  { key: 'trials.release', label: 'Release trials', category: 'Trials', scope: 'organization', risk: 'high', description: 'Release trial snapshots after deterministic formula and compliance review.' },
+  { key: 'trials.evaluate', label: 'Submit sensory observations', category: 'Trials', scope: 'organization', risk: 'low', description: 'Submit blinded sensory scorecards without formula composition access.' },
+  { key: 'trials.managePublic', label: 'Manage public panel links', category: 'Trials', scope: 'organization', risk: 'high', description: 'Issue and revoke time-limited public sensory links.' },
   { key: 'inventory.view', label: 'View inventory', category: 'Inventory', scope: 'organization', risk: 'low', description: 'Read stock summaries, lots, and movements.' },
   { key: 'inventory.receive', label: 'Receive inventory', category: 'Inventory', scope: 'organization', risk: 'medium', description: 'Create receipt movements and approved lots.' },
   { key: 'inventory.adjust', label: 'Adjust inventory', category: 'Inventory', scope: 'organization', risk: 'high', description: 'Create manual stock adjustments.' },
@@ -2344,7 +3096,9 @@ export const rolePolicies: RolePolicy[] = [
     role: 'Owner',
     scope: 'organization',
     mfaRequired: true,
-    permissions: customerOwnerPermissions,
+    // Workspace owners need read-only audit evidence to fulfill their
+    // stewardship obligations without becoming internal platform operators.
+    permissions: [...customerOwnerPermissions, 'audit.view'],
   },
   {
     role: 'Admin',
@@ -2366,6 +3120,11 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.approve',
+      'trials.view',
+      'trials.create',
+      'trials.release',
+      'trials.evaluate',
+      'trials.managePublic',
       'inventory.view',
       'inventory.adjust',
       'inventory.commitLabUsage',
@@ -2391,6 +3150,11 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.approve',
+      'trials.view',
+      'trials.create',
+      'trials.release',
+      'trials.evaluate',
+      'trials.managePublic',
       'inventory.view',
       'inventory.adjust',
       'inventory.commitLabUsage',
@@ -2412,6 +3176,8 @@ export const rolePolicies: RolePolicy[] = [
       'formulas.viewSensitive',
       'formulas.edit',
       'formulas.export',
+      'trials.view',
+      'trials.create',
       'documents.view',
       'documents.download',
       'costing.view',
@@ -2498,12 +3264,23 @@ export const rolePolicies: RolePolicy[] = [
     ],
   },
   {
+    role: 'SENSORY_PANELIST',
+    scope: 'organization',
+    mfaRequired: false,
+    permissions: ['trials.view', 'trials.evaluate'],
+  },
+  {
     role: 'Platform Admin',
     scope: 'platform',
     mfaRequired: true,
     permissions: ['platform.tenants.manage', 'platform.flags.manage', 'platform.impersonation.audit'],
   },
-]
+].map((policy) => {
+  const typedPolicy = policy as RolePolicy
+  return typedPolicy.scope === 'organization'
+    ? { ...typedPolicy, organizationId: 'org-nxl' }
+    : typedPolicy
+})
 
 export const tenantSecurityPolicy: TenantSecurityPolicy = {
   organizationId: 'org-nxl',
@@ -2530,7 +3307,7 @@ export const authSessions: AuthSession[] = [
   {
     id: 'SES-0000',
     userId: 'usr-admin',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     organizationId: 'org-nxl',
     brandId: 'brand-nxl',
     role: 'Admin',
@@ -2587,14 +3364,15 @@ export const userSettings: UserSettingsRecord[] = [
   {
     userId: 'usr-admin',
     organizationId: 'org-nxl',
-    email: 'admin@labofscents.org',
+    email: 'm.thuanwork@gmail.com',
     displayName: 'Thuan Le Minh',
     preferredLanding: 'dashboard',
     uiDensity: 'comfortable',
     sidebarMode: 'expanded',
     reduceMotion: false,
     emailDigest: 'weekly',
-    accentColor: '#4d9bff',
+    accentColor: '#0f766e',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2607,7 +3385,8 @@ export const userSettings: UserSettingsRecord[] = [
     sidebarMode: 'expanded',
     reduceMotion: false,
     emailDigest: 'weekly',
-    accentColor: '#4d9bff',
+    accentColor: '#0f766e',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
   {
@@ -2620,26 +3399,28 @@ export const userSettings: UserSettingsRecord[] = [
     sidebarMode: 'rail',
     reduceMotion: false,
     emailDigest: 'daily',
-    accentColor: '#37d6a0',
+    accentColor: '#15803d',
+    formulaWorkspace: createDefaultFormulaWorkspacePreferences(),
     updatedAt: '2026-07-10T00:00:00.000Z',
   },
 ]
 
 export const featureFlags: FeatureFlagRecord[] = [
-  { key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
-  { key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
-  { key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
+  { organizationId: 'org-nxl', key: 'formulaCostVisibility', label: 'Hide costing for perfumer role', enabled: true, phase: 3 },
+  { organizationId: 'org-nxl', key: 'sdsIngestionReviewOnly', label: 'SDS AI extract requires human approval', enabled: true, phase: 4 },
+  { organizationId: 'org-nxl', key: 'enterpriseAuditExport', label: 'Tenant audit export', enabled: true, phase: 15 },
 ]
 
 export const numberingSequences: NumberingSequenceRecord[] = [
-  { key: 'formula', pattern: 'FRM-####', nextValue: 422, scope: 'brand' },
-  { key: 'batch', pattern: 'BTH-YYYY-###', nextValue: 119, scope: 'brand' },
-  { key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
-  { key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
+  { organizationId: 'org-nxl', key: 'formula', pattern: 'FRM-####', nextValue: 422, scope: 'brand' },
+  { organizationId: 'org-nxl', key: 'batch', pattern: 'BTH-YYYY-###', nextValue: 119, scope: 'brand' },
+  { organizationId: 'org-nxl', key: 'purchaseOrder', pattern: 'PO-YYYY-###', nextValue: 15, scope: 'organization' },
+  { organizationId: 'org-nxl', key: 'salesOrder', pattern: 'SO-YYYY-###', nextValue: 93, scope: 'organization' },
 ]
 
 export const customFields: CustomFieldDefinition[] = [
   {
+    organizationId: 'org-nxl',
     id: 'CF-MAT-ODOUR-FAMILY',
     entity: 'material',
     key: 'odorFamily',
@@ -2650,6 +3431,7 @@ export const customFields: CustomFieldDefinition[] = [
     status: 'ACTIVE',
   },
   {
+    organizationId: 'org-nxl',
     id: 'CF-FRM-BRIEF',
     entity: 'formula',
     key: 'creativeBrief',
@@ -2660,6 +3442,7 @@ export const customFields: CustomFieldDefinition[] = [
     status: 'ACTIVE',
   },
   {
+    organizationId: 'org-nxl',
     id: 'CF-LOT-QC-DATE',
     entity: 'lot',
     key: 'qcReleaseDate',
@@ -2674,7 +3457,7 @@ export const customFields: CustomFieldDefinition[] = [
 export const brandingConfig: BrandingConfig = {
   organizationId: 'org-nxl',
   displayName: 'NOXELIS Lab',
-  accentColor: '#4d9bff',
+  accentColor: '#0f766e',
   documentFooter: 'Confidential formula and inventory record - NOXELIS',
   labelTemplate: 'NOX-{brand}-{sequence}',
   logoMode: 'wordmark',
@@ -3263,6 +4046,9 @@ export const records: Record<DomainKey, BusinessRecord[]> = {
     { id: 'LAB-2026-088', label: 'FRM-0421 trial usage', status: 'stable', amount: '1.5g OUT', owner: 'Perfumer' },
     { id: 'LAB-PLAN', label: '12.5g usage preview', status: 'testing', amount: 'FEFO', owner: 'Lab Ops' },
   ],
+  trials: [
+    { id: 'TRL-0001', label: 'Released fragrance trial', status: 'active', amount: 'Sensory pending', owner: 'Lab Ops' },
+  ],
   documents: [
     { id: 'DOC-121', label: 'FRM-0421 export', status: 'review', amount: 'Highly Confidential', owner: 'Compliance' },
     { id: 'DOC-118', label: 'Iso E Super SDS', status: 'stable', amount: 'v3', owner: 'Lab Data' },
@@ -3338,8 +4124,13 @@ export function skuAvailability(
 }
 
 export function orderRequiredGrams(order: SalesOrderRecord, skus: CommercialSkuRecord[] = commercialSkus) {
-  const sku = skus.find((item) => item.id === order.skuId)
-  return sku ? sku.packSizeGrams * order.quantity : 0
+  const lines = order.lines?.length
+    ? order.lines
+    : [{ skuId: order.skuId, quantity: order.quantity, unitPrice: order.unitPrice, lineTotal: order.unitPrice * order.quantity }]
+  return lines.reduce((total, line) => {
+    const sku = skus.find((item) => item.id === line.skuId)
+    return total + (sku ? sku.packSizeGrams * line.quantity : 0)
+  }, 0)
 }
 
 export const documentSignedUrlTtlSeconds = 300
@@ -3354,7 +4145,8 @@ export function documentRequiredPermissions(document: DocumentRecord) {
 
 export function canDownloadDocument(document: DocumentRecord, permissions: string[]) {
   const permissionSet = new Set(permissions)
-  return documentRequiredPermissions(document).every((permission) => permissionSet.has(permission))
+  const contentReady = document.status !== 'QUARANTINED' && document.status !== 'ARCHIVED'
+  return contentReady && documentRequiredPermissions(document).every((permission) => permissionSet.has(permission))
 }
 
 export function createSignedDocumentUrl(
@@ -3421,10 +4213,10 @@ function documentRequirementStatus(
   if (!document) {
     return 'missing'
   }
-  if (document.status === 'REVIEW_REQUIRED') {
+  if (document.status === 'QUARANTINED' || document.status === 'REVIEW_REQUIRED') {
     return 'review'
   }
-  if (document.status === 'EXPIRED' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) < 0)) {
+  if (document.status === 'ARCHIVED' || document.status === 'EXPIRED' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) < 0)) {
     return 'missing'
   }
   if (document.status === 'EXPIRING' || (document.expiresAt && daysUntil(document.expiresAt, asOfDate) <= 90)) {
@@ -3518,9 +4310,11 @@ export function resolveFormulaWithCatalog(
   formulaId: string,
   formulaCatalog: Formula[] = formulas,
   materialCatalog: Material[] = materials,
+  formulaVersionCatalog: FormulaVersionRecord[] = [],
 ): ResolvedLeaf[] {
   const formulaLookup = new Map(formulaCatalog.map((formula) => [formula.id, formula]))
   const materialLookup = new Map(materialCatalog.map((material) => [material.id, material]))
+  const formulaVersionLookup = new Map(formulaVersionCatalog.map((version) => [version.id, version]))
   const root = formulaLookup.get(formulaId)
   if (!root) {
     return []
@@ -3570,10 +4364,27 @@ export function resolveFormulaWithCatalog(
         if (!child) {
           return
         }
+        const pinnedVersion = line.childFormulaVersionId
+          ? formulaVersionLookup.get(line.childFormulaVersionId)
+          : undefined
+        // Legacy child-formula lines retain their live-reference behavior. New
+        // Fine Fragrance components carry a snapshot id, so later Accord edits
+        // cannot silently alter downstream compliance, cost, or inventory math.
+        const resolvedChild = pinnedVersion
+          ? {
+              ...child,
+              lines: pinnedVersion.lines,
+              targetGrams: pinnedVersion.totalGrams,
+              concentrationType: pinnedVersion.metadata.concentrationType,
+              finalProductConcentrationPercent: pinnedVersion.metadata.finalProductConcentrationPercent,
+              ifraCategory: pinnedVersion.metadata.ifraCategory,
+              requiresFinalProductContext: pinnedVersion.metadata.requiresFinalProductContext,
+            }
+          : child
         walk(
-          child,
-          lineGrams / child.targetGrams,
-          activeGrams / child.targetGrams,
+          resolvedChild,
+          lineGrams / resolvedChild.targetGrams,
+          activeGrams / resolvedChild.targetGrams,
           [...path, line.label],
           nextTrail,
         )
@@ -3608,6 +4419,7 @@ export function resolveFormula(formulaId: string): ResolvedLeaf[] {
 export function formulaSnapshotMetadata(formula: Formula): FormulaSnapshotMetadata {
   return {
     formulaType: formula.formulaType,
+    compositionMode: formula.compositionMode,
     concentrationType: formula.concentrationType,
     finalProductConcentrationPercent: formula.finalProductConcentrationPercent,
     targetMarkets: [...formula.targetMarkets],
@@ -3621,6 +4433,7 @@ export function formulaSnapshotMetadata(formula: Formula): FormulaSnapshotMetada
     bottleVolumeMl: formula.bottleVolumeMl,
     bottleCount: formula.bottleCount,
     ifraCategory: formula.ifraCategory,
+    requiresFinalProductContext: formula.requiresFinalProductContext,
   }
 }
 
@@ -3731,7 +4544,11 @@ export function scaleFormula(formula: Formula, targetGrams: number, incrementGra
 }
 
 function formulaVersionLineKey(line: FormulaLine) {
-  return line.materialId ? `material:${line.materialId}` : line.childFormulaId ? `formula:${line.childFormulaId}` : `line:${line.id}`
+  return line.materialId
+    ? `material:${line.materialId}`
+    : line.childFormulaId
+      ? `formula:${line.childFormulaId}:${line.childFormulaVersionId ?? 'live'}`
+      : `line:${line.id}`
 }
 
 export function diffFormulaVersions(before: FormulaVersionRecord, after: FormulaVersionRecord): FormulaVersionDiff {
@@ -3767,8 +4584,24 @@ export function diffFormulaVersions(before: FormulaVersionRecord, after: Formula
       change,
     }
   })
-  const beforeEvaporation = before.evaporation[before.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
-  const afterEvaporation = after.evaporation[after.evaporation.length - 1] ?? { Top: 0, Heart: 0, Base: 0 }
+  const evaporationByTier = (point: FormulaEvaporationPoint | undefined): Record<MaterialTier, number> => {
+    const totals: Record<MaterialTier, { initial: number; remaining: number }> = {
+      Top: { initial: 0, remaining: 0 },
+      Heart: { initial: 0, remaining: 0 },
+      Base: { initial: 0, remaining: 0 },
+    }
+    point?.materials.forEach((material) => {
+      totals[material.tier].initial += material.initialPercent
+      totals[material.tier].remaining += material.initialPercent * material.remainingPercent
+    })
+    return {
+      Top: totals.Top.initial ? Number((totals.Top.remaining / totals.Top.initial).toFixed(1)) : 0,
+      Heart: totals.Heart.initial ? Number((totals.Heart.remaining / totals.Heart.initial).toFixed(1)) : 0,
+      Base: totals.Base.initial ? Number((totals.Base.remaining / totals.Base.initial).toFixed(1)) : 0,
+    }
+  }
+  const beforeEvaporation = evaporationByTier(before.evaporation[before.evaporation.length - 1])
+  const afterEvaporation = evaporationByTier(after.evaporation[after.evaporation.length - 1])
   return {
     formulaId: after.formulaId,
     beforeVersion: before.version,
@@ -3919,27 +4752,56 @@ export function batchCostReport(
   materialCatalog: Material[] = materials,
   lots: InventoryLot[] = initialLots,
   history: PriceHistoryRecord[] = priceHistory,
+  movements: InventoryMovement[] = initialMovements,
 ): BatchCostReport {
   const batch = batchCatalog.find((item) => item.id === batchId)
   const sourceFormulaCost = formulaCostReport(batch?.formulaId ?? formulaCatalog[0]?.id ?? '', formulaCatalog, materialCatalog, lots, history)
   const formula = formulaCatalog.find((item) => item.id === sourceFormulaCost.formulaId)
   const targetGrams = batch?.targetGrams ?? formula?.targetGrams ?? sourceFormulaCost.totalGrams
   const scale = formula && formula.targetGrams > 0 ? targetGrams / formula.targetGrams : 1
-  const materialCost = sourceFormulaCost.totalCost * scale
+  const inputMovements = batch
+    ? movements.filter((movement) => movement.type === 'PRODUCTION_CONSUMPTION' && movement.ref === batch.id)
+    : []
+  const materialById = new Map(materialCatalog.map((material) => [material.id, material]))
+  const lotById = new Map(lots.map((lot) => [lot.id, lot]))
+  const actualMaterialCost = inputMovements.reduce((sum, movement) => {
+    const material = materialById.get(movement.materialId)
+    const lot = lotById.get(movement.lotId)
+    const policy = material ? costPolicyForMaterial(material.id) : undefined
+    const landed = material ? landedCostForMaterial(material.id) : undefined
+    const landedMultiplier = landed ? 1 + (landed.freightPercent + landed.dutyPercent + landed.insurancePercent) / 100 : 1
+    const overheadMultiplier = policy ? 1 + policy.overheadPercent / 100 : 1
+    const unitCost = lot?.unitCost ?? material?.costPerGram ?? 0
+    return sum + movement.quantityGrams * unitCost * landedMultiplier * overheadMultiplier
+  }, 0)
+  const materialCostBasis = inputMovements.length > 0 ? 'ACTUAL_LOT_CONSUMPTION' as const : 'FORMULA_ESTIMATE' as const
+  const materialCost = materialCostBasis === 'ACTUAL_LOT_CONSUMPTION' ? actualMaterialCost : sourceFormulaCost.totalCost * scale
   const laborCost = targetGrams * 0.018
   const overheadCost = materialCost * 0.12
   const totalCost = materialCost + laborCost + overheadCost
+  const releasedOutput = batch?.status === 'RELEASED'
+    ? batch.outputLot?.quantityGrams ?? batch.yieldGrams ?? targetGrams
+    : targetGrams
+  const costingBasis = batch?.status === 'RELEASED' && Boolean(batch.outputLot) ? 'RELEASED_OUTPUT' as const : 'TARGET_ESTIMATE' as const
+  const roundedTotalCost = Number(totalCost.toFixed(2))
   return {
     batchId,
     formulaId: sourceFormulaCost.formulaId,
     targetGrams,
+    outputGrams: Number(releasedOutput.toFixed(3)),
+    yieldVariancePercent: Number((batch?.yieldVariancePercent ?? 0).toFixed(2)),
+    costingBasis,
+    materialCostBasis,
     materialCost: Number(materialCost.toFixed(2)),
     laborCost: Number(laborCost.toFixed(2)),
     overheadCost: Number(overheadCost.toFixed(2)),
-    totalCost: Number(totalCost.toFixed(2)),
-    costPerGram: targetGrams > 0 ? Number((totalCost / targetGrams).toFixed(4)) : 0,
+    totalCost: roundedTotalCost,
+    costPerGram: releasedOutput > 0 ? Number((roundedTotalCost / releasedOutput).toFixed(4)) : 0,
     sourceFormulaCost,
-    invariant: 'batch cost scales resolved formula cost and adds labor plus overhead without mutating production',
+    invariant:
+      costingBasis === 'RELEASED_OUTPUT'
+        ? 'released cost sheet uses consumed lot costs and finished output yield without mutating production'
+        : 'batch cost is a target estimate until the production batch is released',
   }
 }
 
@@ -4302,24 +5164,29 @@ export function analyticsDashboardReport(
 
 export function evaporationCurve(leaves: ResolvedLeaf[]) {
   const timepoints = [0, 1, 2, 4, 8, 12, 18, 24]
-  const initialByTier: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
+  const materialsById = new Map<string, Omit<FormulaEvaporationMaterialPoint, 'remainingPercent'>>()
   leaves.forEach((leaf) => {
-    initialByTier[leaf.tier] += leaf.activePercent
+    const existing = materialsById.get(leaf.materialId)
+    materialsById.set(leaf.materialId, {
+      materialId: leaf.materialId,
+      materialName: leaf.materialName,
+      tier: leaf.tier,
+      initialPercent: Number(((existing?.initialPercent ?? 0) + leaf.activePercent).toFixed(4)),
+      vaporPressure: leaf.vaporPressure,
+    })
   })
+  const materialSeries = Array.from(materialsById.values()).sort((left, right) => right.initialPercent - left.initialPercent)
 
   return timepoints.map((hour) => {
-    const remaining: Record<MaterialTier, number> = { Top: 0, Heart: 0, Base: 0 }
-    leaves.forEach((leaf) => {
-      const tau = Math.max(0.7, 7 / Math.sqrt(Math.max(leaf.vaporPressure, 0.0001)))
-      const amount = leaf.activePercent * Math.exp(-hour / tau)
-      remaining[leaf.tier] += amount
-    })
-
     return {
       hour,
-      Top: initialByTier.Top ? Math.round((remaining.Top / initialByTier.Top) * 100) : 0,
-      Heart: initialByTier.Heart ? Math.round((remaining.Heart / initialByTier.Heart) * 100) : 0,
-      Base: initialByTier.Base ? Math.round((remaining.Base / initialByTier.Base) * 100) : 0,
+      materials: materialSeries.map((material) => {
+        const tau = Math.max(0.7, 7 / Math.sqrt(Math.max(material.vaporPressure, 0.0001)))
+        return {
+          ...material,
+          remainingPercent: Number((100 * Math.exp(-hour / tau)).toFixed(1)),
+        }
+      }),
     }
   })
 }
@@ -4335,7 +5202,8 @@ export function isLotEligibleForInventory(lot: InventoryLot, asOfDate = inventor
 }
 
 export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] = materials) {
-  return materialCatalog.map((material) => {
+  return materialCatalog
+    .map((material) => {
     const materialLots = lots.filter((lot) => lot.materialId === material.id)
     const current = materialLots.reduce((sum, lot) => sum + lot.quantityGrams, 0)
     const reserved = materialLots.reduce((sum, lot) => sum + lot.reservedGrams, 0)
@@ -4343,7 +5211,7 @@ export function stockSummary(lots: InventoryLot[], materialCatalog: Material[] =
       .filter((lot) => isLotEligibleForInventory(lot))
       .reduce((sum, lot) => sum + Math.max(0, lot.quantityGrams - lot.reservedGrams), 0)
     return { material, current, reserved, available }
-  })
+    })
 }
 
 export function planLabUsage(leaves: ResolvedLeaf[], lots: InventoryLot[], batchGrams: number, formulaTargetGrams: number): LabUsagePlan {

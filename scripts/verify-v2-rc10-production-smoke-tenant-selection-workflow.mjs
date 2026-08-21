@@ -46,7 +46,7 @@ const installStart = workflow.indexOf(
   '- name: Install exact RC10 dependencies without provider credentials',
 )
 const validationFetchStart = workflow.indexOf(
-  'git fetch --no-tags origin "$RELEASE_BRANCH"',
+  'git fetch --force --tags origin',
 )
 const validationCredentialStart = workflow.indexOf('persist-credentials: true')
 

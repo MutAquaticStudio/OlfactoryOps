@@ -1,15 +1,103 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   formulaVersions,
   formulas,
+  materials,
   type Formula,
   type FormulaVersionRecord,
+  type Material,
 } from '../src/data/northStar'
+import { NorthStarService } from '../server/src/services/northstar.service'
 import {
+  auditChainHash,
+  canonicalAuditChainPayload,
+  canonicalOperationPayload,
+  buildCorsHeaders,
+  resolveWorkspaceCorsHeaders,
+  createSessionCredential,
+  hashSessionCredential,
+  isOpaqueSessionCredential,
   normalizeFormulaPersistenceRecord,
   normalizeFormulaVersionPersistenceRecord,
+  normalizeMaterialPersistenceRecord,
+  operationRequestHash,
+  requiresIdempotency,
+  resolveSeededAdminCredentialState,
+  resolveActiveSessionCredential,
   isSingleRecoveryCodeConsumption,
+  hydrateLoginState,
+  apiReleaseMetadata,
+  withReleaseHeaders,
 } from './index'
+
+describe('Worker mutation protocol', () => {
+  it('requires idempotency for protected mutations and excludes public callbacks', () => {
+    expect(requiresIdempotency({ mutates: true })).toBe(true)
+    expect(requiresIdempotency({ mutates: true, public: true })).toBe(false)
+    expect(requiresIdempotency({ mutates: true, idempotent: false })).toBe(false)
+    expect(requiresIdempotency({ mutates: false, idempotent: true })).toBe(true)
+  })
+
+  it('canonicalizes JSON payloads before hashing an operation', async () => {
+    const first = { filter: { status: 'DRAFT', tags: ['citrus', 'marine'] }, name: 'Citrus Lift' }
+    const reordered = { name: 'Citrus Lift', filter: { tags: ['citrus', 'marine'], status: 'DRAFT' } }
+
+    expect(canonicalOperationPayload(first)).toEqual(canonicalOperationPayload(reordered))
+    await expect(operationRequestHash('PATCH', '/formulas/F-001', first)).resolves.toBe(
+      await operationRequestHash('PATCH', '/formulas/F-001', reordered),
+    )
+    await expect(operationRequestHash('PATCH', '/formulas/F-001', first)).resolves.not.toBe(
+      await operationRequestHash('PATCH', '/formulas/F-001', { ...first, name: 'Different formula' }),
+    )
+  })
+})
+
+describe('Worker release provenance', () => {
+  it('projects safe build provenance into API response headers', async () => {
+    const metadata = apiReleaseMetadata({
+      RELEASE_GIT_SHA: '356b4e078247dcb6bed6a8a7a9b6e64de6afa141',
+      RELEASE_BUILD_TIMESTAMP_UTC: '2026-08-05T00:00:00Z',
+      RELEASE_ENVIRONMENT: 'test',
+    })
+    const response = withReleaseHeaders(new Response('{}'), metadata)
+
+    expect(response.headers.get('X-OlfactoryOps-Version')).toBe('0.1.0-rc.1')
+    expect(response.headers.get('X-OlfactoryOps-Git-SHA')).toBe('356b4e078247dcb6bed6a8a7a9b6e64de6afa141')
+    expect(response.headers.get('X-OlfactoryOps-Environment')).toBe('test')
+  })
+})
+
+describe('Material D1 scope normalization', () => {
+  it('keeps curated records global and strips legacy tenant metadata', () => {
+    const normalized = normalizeMaterialPersistenceRecord(
+      { ...materials[0]!, organizationId: 'legacy-org' },
+      'GLOBAL',
+      null,
+    )
+
+    expect(normalized.libraryScope).toBe('GLOBAL')
+    expect(normalized.organizationId).toBeUndefined()
+  })
+
+  it('requires and preserves organization ownership for tenant records', () => {
+    const privateMaterial = {
+      ...materials[0]!,
+      id: 'mat-private-a',
+      libraryScope: 'TENANT' as const,
+      organizationId: 'org-a',
+    }
+
+    expect(normalizeMaterialPersistenceRecord(privateMaterial)).toMatchObject({
+      id: 'mat-private-a',
+      libraryScope: 'TENANT',
+      organizationId: 'org-a',
+    })
+    expect(() => normalizeMaterialPersistenceRecord({
+      ...privateMaterial,
+      organizationId: undefined,
+    } as Material)).toThrow('missing organization metadata')
+  })
+})
 
 describe('Formula D1 persistence normalization', () => {
   it('backfills tenant and workflow metadata on legacy Formula snapshots', () => {
@@ -76,5 +164,215 @@ describe('MFA recovery-code persistence', () => {
     expect(
       isSingleRecoveryCodeConsumption(['sha256:a', 'sha256:a'], ['sha256:a']),
     ).toBe(false)
+  })
+})
+
+describe('Worker session credentials', () => {
+  it('uses an opaque random secret instead of the predictable audit session ID', async () => {
+    const sessionSecret = createSessionCredential()
+    const secretHash = await hashSessionCredential(sessionSecret)
+
+    expect(isOpaqueSessionCredential(sessionSecret)).toBe(true)
+    expect(sessionSecret).not.toContain('SES-')
+    expect(secretHash).toMatch(/^sha256:v1:[a-f0-9]{64}$/)
+    expect(secretHash).not.toContain(sessionSecret)
+    expect(isOpaqueSessionCredential('SES-0001')).toBe(false)
+  })
+
+  it('resolves only a hashed opaque credential and rejects a legacy session ID', async () => {
+    const sessionSecret = createSessionCredential()
+    const secretHash = await hashSessionCredential(sessionSecret)
+    const first = vi.fn().mockResolvedValue({
+      id: 'SES-0007',
+      status: 'ACTIVE',
+      idle_expires_at: '2099-01-01T00:00:00.000Z',
+      expires_at: '2099-01-01T00:00:00.000Z',
+    })
+    const bind = vi.fn().mockReturnValue({ first })
+    const prepare = vi.fn().mockReturnValue({ bind })
+    const db = { prepare } as unknown as D1Database
+
+    await expect(
+      resolveActiveSessionCredential(db, { sessionSecret, source: 'bearer' }),
+    ).resolves.toMatchObject({ sessionId: 'SES-0007', source: 'bearer' })
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining('auth_session_credentials'))
+    expect(bind).toHaveBeenCalledWith(secretHash)
+    expect(JSON.stringify(prepare.mock.calls)).not.toContain(sessionSecret)
+
+    const legacyPrepare = vi.fn()
+    const legacyDb = { prepare: legacyPrepare } as unknown as D1Database
+    await expect(
+      resolveActiveSessionCredential(legacyDb, { sessionSecret: 'SES-0007', source: 'bearer' }),
+    ).rejects.toMatchObject({ statusCode: 401 })
+    expect(legacyPrepare).not.toHaveBeenCalled()
+  })
+})
+
+describe('Seeded administrator credential migration', () => {
+  const passwordHash = `pbkdf2:v1:sha256:100000:${'a'.repeat(22)}:${'b'.repeat(43)}`
+
+  it('cleans a legacy credential without repeatedly rotating the canonical account', () => {
+    const state = resolveSeededAdminCredentialState([
+      { email: 'm.thuanwork@gmail.com', passwordHash },
+      { email: 'admin@labofscents.org', passwordHash: 'legacy-verifier' },
+    ], passwordHash)
+
+    expect(state.needsCanonicalUpsert).toBe(false)
+    expect(state.legacyCredentialEmails).toEqual(['admin@labofscents.org'])
+  })
+
+  it('migrates a legacy-only credential to the canonical administrator email once', () => {
+    const state = resolveSeededAdminCredentialState([
+      { email: 'admin@labofscents.org', passwordHash: 'legacy-verifier' },
+    ], passwordHash)
+
+    expect(state.needsCanonicalUpsert).toBe(true)
+    expect(state.legacyCredentialEmails).toEqual(['admin@labofscents.org'])
+  })
+})
+
+describe('Worker login tenant hydration', () => {
+  it('loads the membership organization and brand before resolving a canonical workspace', async () => {
+    const organization = {
+      id: 'org-qa-login',
+      name: 'QA Login Workspace',
+      slug: 'qa-login',
+      custom_domain: null,
+      plan: 'BETA',
+      status: 'ACTIVE',
+      primary_contact: 'owner@qa.test',
+      created_at: '2026-08-05T00:00:00.000Z',
+    }
+    const brand = {
+      id: 'brand-qa-login',
+      organization_id: organization.id,
+      name: 'QA Brand',
+      status: 'ACTIVE',
+      default_currency: 'USD',
+    }
+    const membership = {
+      id: 'mem-qa-login',
+      user_id: 'usr-qa-login',
+      email: 'owner@qa.test',
+      name: 'QA Owner',
+      organization_id: organization.id,
+      brand_ids_json: JSON.stringify([brand.id]),
+      role: 'Owner',
+      status: 'ACTIVE',
+      mfa_enabled: 0,
+      last_active_at: '2026-08-05T00:00:00.000Z',
+      invited_at: null,
+    }
+    const statement = (result: unknown, kind: 'first' | 'all') => ({
+      bind: vi.fn().mockReturnValue({
+        first: vi.fn().mockResolvedValue(kind === 'first' ? result : null),
+        all: vi.fn().mockResolvedValue(kind === 'all' ? result : { results: [] }),
+      }),
+      all: vi.fn().mockResolvedValue(kind === 'all' ? result : { results: [] }),
+    })
+    const db = {
+      prepare: vi.fn((sql: string) => {
+        if (sql.includes('FROM auth_credentials')) {
+          return statement({ email: membership.email, password_hash: 'hash', password_set_at: organization.created_at }, 'first')
+        }
+        if (sql.includes('FROM tenant_memberships')) {
+          return statement(membership, 'first')
+        }
+        if (sql.includes('FROM auth_sessions')) {
+          return statement({ results: [] }, 'all')
+        }
+        if (sql.includes('FROM tenant_organizations')) {
+          return statement(organization, 'first')
+        }
+        if (sql.includes('FROM tenant_brands')) {
+          return statement({ results: [brand] }, 'all')
+        }
+        if (sql.includes('FROM tenant_role_policies')) {
+          return statement({ results: [] }, 'all')
+        }
+        return statement({ results: [] }, 'all')
+      }),
+    } as unknown as D1Database
+    const service = new NorthStarService()
+
+    await hydrateLoginState(db, service, membership.email)
+
+    expect(service.workspaceAccessForOrganization(organization.id)).toMatchObject({
+      systemHostname: 'qa-login.labofscents.org',
+      workspaceUrl: 'https://qa-login.labofscents.org',
+    })
+  })
+})
+
+describe('credentialed CORS', () => {
+  it('allows only exact configured origins and rejects wildcard Pages origins', () => {
+    const exact = buildCorsHeaders(
+      'https://test.labofscents.pages.dev',
+      'https://test.labofscents.pages.dev,https://olfactoryops-beta.pages.dev',
+    )
+    expect(exact['Access-Control-Allow-Origin']).toBe('https://test.labofscents.pages.dev')
+    expect(exact['Access-Control-Allow-Credentials']).toBe('true')
+    expect(exact['Access-Control-Allow-Headers']).toContain('Idempotency-Key')
+
+    const wildcard = buildCorsHeaders(
+      'https://preview.labofscents.pages.dev',
+      'https://*.labofscents.pages.dev',
+    )
+    expect(wildcard['Access-Control-Allow-Origin']).toBeUndefined()
+    expect(wildcard['Access-Control-Allow-Credentials']).toBeUndefined()
+  })
+
+  it('permits an active workspace host only after an exact D1 lookup', async () => {
+    const first = vi.fn().mockResolvedValue({ organization_id: 'org-atelier' })
+    const bind = vi.fn().mockReturnValue({ first })
+    const prepare = vi.fn().mockReturnValue({ bind })
+    const db = { prepare } as unknown as D1Database
+
+    await expect(
+      resolveWorkspaceCorsHeaders(db, 'https://atelier.labofscents.org', 'https://labofscents.org'),
+    ).resolves.toMatchObject({
+      organizationId: 'org-atelier',
+      headers: { 'Access-Control-Allow-Origin': 'https://atelier.labofscents.org' },
+    })
+    expect(bind).toHaveBeenCalledWith('atelier.labofscents.org')
+  })
+
+  it('fails closed when a hostname is absent or the registry is unavailable', async () => {
+    const db = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(null) }),
+      }),
+    } as unknown as D1Database
+    const result = await resolveWorkspaceCorsHeaders(db, 'https://unknown.labofscents.org', undefined)
+    expect(result.organizationId).toBeUndefined()
+    expect(result.headers['Access-Control-Allow-Origin']).toBeUndefined()
+  })
+})
+
+describe('Audit-chain evidence', () => {
+  const event = {
+    id: 'AUD-200',
+    at: '2026-07-27T10:00:00.000Z',
+    actor: 'usr-owner',
+    action: 'production.batch.release',
+    entity: 'BTH-200',
+    requestId: 'req_200',
+    outcome: 'allowed' as const,
+  }
+
+  it('serializes a stable, versioned payload before hashing', () => {
+    expect(canonicalAuditChainPayload('org-nxl', 2, 'abc123', event)).toBe(
+      '["olfactoryops.audit-chain.v1","org-nxl",2,"abc123","AUD-200","2026-07-27T10:00:00.000Z","usr-owner","production.batch.release","BTH-200","req_200","allowed"]',
+    )
+  })
+
+  it('changes the evidence hash when an audited field or predecessor changes', async () => {
+    const original = await auditChainHash('org-nxl', 2, 'abc123', event)
+    const alteredOutcome = await auditChainHash('org-nxl', 2, 'abc123', { ...event, outcome: 'blocked' })
+    const alteredPredecessor = await auditChainHash('org-nxl', 2, 'def456', event)
+
+    expect(original).toMatch(/^[a-f0-9]{64}$/)
+    expect(alteredOutcome).not.toBe(original)
+    expect(alteredPredecessor).not.toBe(original)
   })
 })

@@ -33,7 +33,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_BRANCH: codex/v2-production-go-live
   ACTIVE_RC_TAG: v2-production-rc10
   ACTIVE_RC_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   READINESS_TAG: v2-production-ready
@@ -72,10 +71,7 @@ jobs:
             *) exit 1 ;;
           esac
           test "$CONFIRM_PRODUCTION" = "$expected_confirmation"
-          git fetch --no-tags origin "$RELEASE_BRANCH"
-          release_branch_sha="$(git rev-parse FETCH_HEAD)"
-          git fetch --tags origin
-          test "$RELEASE_SHA" = "$release_branch_sha"
+          git fetch --force --tags origin
           test "$(git rev-list -n 1 "$ACTIVE_RC_TAG")" = "$ACTIVE_RC_SHA"
           test "$(git rev-list -n 1 "$READINESS_TAG")" = "$ACTIVE_RC_SHA"
           git cat-file -e "${RELEASE_SHA}^{commit}"

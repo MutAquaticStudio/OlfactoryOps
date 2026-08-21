@@ -26,7 +26,6 @@ concurrency:
 env:
   TARGET_RELEASE_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
   TARGET_RELEASE_TAG: v2-production-rc10
-  TARGET_RELEASE_BRANCH: codex/v2-production-go-live
   TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
   TARGET_PAGES_ORIGIN: https://6fceca39.olfactoryops-v2-production-candidate.pages.dev
   TARGET_PAGES_PROJECT: olfactoryops-v2-production-candidate
@@ -56,8 +55,6 @@ jobs:
           test "$CONFIRM_RECONCILIATION" = "RECONCILE_RC10_CANDIDATE_PAGES_ORIGIN"
           test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
           test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
-          git fetch --no-tags origin "refs/heads/$TARGET_RELEASE_BRANCH"
-          test "$(git rev-parse FETCH_HEAD)" = "$TARGET_RELEASE_SHA"
           git fetch --tags origin "refs/tags/$TARGET_RELEASE_TAG"
           test "$(git rev-parse "$TARGET_RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
           printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"

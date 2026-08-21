@@ -1,4 +1,13 @@
 import { Controller, Get } from '@nestjs/common'
+import { releaseMetadata } from '../../../src/data/release.js'
+
+function localReleaseMetadata() {
+  return releaseMetadata({
+    fullGitSha: process.env.RELEASE_GIT_SHA,
+    buildTimestampUtc: process.env.RELEASE_BUILD_TIMESTAMP_UTC,
+    environment: process.env.RELEASE_ENVIRONMENT ?? 'local',
+  })
+}
 
 @Controller()
 export class HealthController {
@@ -7,7 +16,7 @@ export class HealthController {
     return {
       ok: true,
       service: 'olfactoryops-api',
-      version: '0.1.0-olfactoryops',
+      release: localReleaseMetadata(),
       timestamp: new Date().toISOString(),
     }
   }
@@ -18,6 +27,7 @@ export class HealthController {
       name: 'OlfactoryOps API',
       stack: ['NestJS', 'Fastify', 'TypeScript'],
       api: '/api/v1',
+      release: localReleaseMetadata(),
     }
   }
 }

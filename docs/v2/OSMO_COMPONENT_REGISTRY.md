@@ -1,0 +1,25 @@
+# Osmo Component Registry
+
+Phase 3 supplies the scientific feature runtime. Phase 4 adds a separate
+model/dataset registry and compatibility image. All components
+are accessed through the private Scientific Runtime; React, Workers, and
+business-domain services do not import upstream code directly.
+
+| Key | Repository | License | Immutable source | Adapter | Runtime | Patch status | Compatibility state |
+|---|---|---|---|---|---|---|---|
+| `RDKIT` | `rdkit/rdkit` | BSD-3-Clause | `Release_2026_03_5` / `de8add1e32ff6d3c4e4e406f64b703b662dff1d6` | `structure-adapter/1.0.0` | `rdkit=2026.3.5` | None | PASS locally |
+| `RDKIT_PYPI` | `osmoai/rdkit-pypi` | BSD-3-Clause upstream | `7893ac5053c9db20761767d02085a13594778eee` | `wheel-reference/1.0.0` | `rdkit=2026.3.5` | None | PASS locally |
+| `BCFP` | `osmoai/bcfp` | BSD-3-Clause | `4753262e2ae6eb231be318c40623c8ab166d8ec5` | `bcfp-adapter/1.0.0` | primary conda-forge RDKit 2026.03 | None | PASS native build and adapter test |
+| `MOLFTP` | `osmoai/molftp` | BSD-3-Clause | `98ffcb67ccfae9a0407f85f20cc76da49c784568` | `molftp-adapter/1.0.0` | primary conda-forge RDKit 2026.03 | None | PASS native build and guarded artifact test |
+| `OSMORDRED` | `osmoai/osmordred` | BSD-3-Clause | `07b8d22f570712c6ab3527dde195aad42fef4679` | `osmordred-adapter/1.0.0` | isolated RDKit 2023.09.3 | README copy only for upstream packaging | PASS isolated native build and descriptor test |
+| `KGCNN_KERAS_UNLOCKED` | `osmoai/kgcnn-keras-unlocked` | MIT | `24d8b61214405f855d8a893469dfc59c0ea6c075` | `kgcnn-adapter/1.0.0` | TensorFlow 2.15.1 / Keras Core 0.1.7 | `KERAS_CORE_0_1_7_SYMBOLIC_COMPAT_PATCH` in compatibility image only | PASS model load, synthetic inference, checkpoint round-trip, and metric smoke |
+| `TRANSFORMER_CNN` | `osmoai/transformer-CNN` | MIT declared in project metadata; source license file requires review | `4db725b5e549af7697215d8cc7a6e8a2a952dca5` | `transformer-cnn-adapter/1.0.0` | TensorFlow 2.15.1 | None | PASS preprocessing/layer smoke; BLOCKED for activation pending license review |
+| `OSMO_PUBLICATIONS` | `osmoai/publications` | Apache-2.0 code; CC-BY-4.0 datasets | `5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8` | `publication-dataset-adapter/1.0.0` | Registry only | None | PASS provenance registry; no source dataset imported |
+
+`osmoai/taxonomy` is explicitly excluded. No ODbL taxonomy data is used.
+
+The runtime record is [`services/scientific/runtime/component-pins.json`](../../services/scientific/runtime/component-pins.json). The PostgreSQL migration persists the same pin data in `v2_scientific_component_pins`; source ref, commit SHA, adapter version, runtime version, patch status, and test identity must be updated together.
+
+The Phase 4 records are registry/provenance controls, not a serving path. No
+tenant data, checkpoint, embedding, odor prediction, similarity index, or
+external LLM is activated by this registry.

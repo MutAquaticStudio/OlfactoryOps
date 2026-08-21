@@ -2,12 +2,37 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
-    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  verify:
+  source-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Release identity
+        run: npm run release:identity:check
+
+      - name: Migration inventory
+        run: npm run release:migrations:verify
+
+      - name: Release documentation
+        run: npm run release:docs:check
+
+  static-quality:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,12 +59,56 @@ jobs:
       - name: API build
         run: npm run build:api
 
-      - name: Prisma schema validation
+      - name: Legacy Prisma schema validation
         env:
           DATABASE_URL: postgresql://schema_check:schema_check@127.0.0.1:5432/schema_check
         run: npm run prisma:validate
 
-      - name: Dependency audit
+      - name: Worker typecheck
+        run: npm run typecheck:worker
+
+      - name: Worker dry build
+        run: npm run build:worker
+
+      - name: Tenant router dry build
+        run: npm run build:tenant-router
+
+      - name: Cloud runtime dry build
+        run: npm run build:cloud-runtime
+
+      - name: Release manifest schema
+        run: npm run release:manifest:generate && npm run release:manifest:validate
+
+      - name: Client bundle secret scan
+        run: npm run security:client-bundle
+
+      - name: V2 Prisma schema validation
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/olfactoryops_ci
+        run: npm run prisma:validate:v2
+
+      - name: Production dependency audit
         # Prisma's optional CLI/config chain is not shipped by the application.
         # Keep the gate focused on production and non-optional dependencies.
         run: npm audit --audit-level=high --omit=dev --omit=optional
+
+  d1-router-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Fresh local D1 migration chain
+        run: npx wrangler d1 migrations apply olfactoryops-test --local --config wrangler.test.toml --persist-to .qa/ci-d1
+
+      - name: Tenant router dry build
+        run: npm run build:tenant-router

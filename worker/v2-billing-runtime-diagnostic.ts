@@ -249,8 +249,11 @@ export default {
 
     let organizationId: string | undefined;
     try {
+      const payload: unknown = await request.json();
       organizationId = safeOrganizationId(
-        (await request.json()).organizationId,
+        payload && typeof payload === "object" && !Array.isArray(payload)
+          ? (payload as { organizationId?: unknown }).organizationId
+          : undefined,
       );
     } catch {
       return response(404, { billingRuntimeDiagnostic: "NOT_FOUND" });

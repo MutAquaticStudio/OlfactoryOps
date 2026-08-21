@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 const workflowPath = resolve(
   ".github/workflows/v2-production-candidate-edge-reconciliation.yml",
 );
-const workflow = readFileSync(workflowPath, "utf8");
+const workflow = readFileSync(workflowPath, "utf8").replaceAll("\r\n", "\n");
 const reconciliation = readFileSync(
   resolve("scripts/reconcile-v2-production-candidate-edge.mjs"),
   "utf8",
@@ -23,8 +23,6 @@ const requiredWorkflow = [
   "TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739",
   'test "$CONFIRM_RECONCILIATION" = "RECONCILE_RC9_CANDIDATE_EDGE"',
   'test "$(git rev-parse "$RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"',
-  'release_branch_sha="$(git rev-parse FETCH_HEAD)"',
-  'test "$release_branch_sha" = "$TARGET_RELEASE_SHA"',
   "npm ci --ignore-scripts",
   "node scripts/reconcile-v2-production-candidate-edge.mjs pages-inventory",
   "node scripts/reconcile-v2-production-candidate-edge.mjs domain-preflight",
@@ -63,6 +61,7 @@ const forbiddenWorkflow = [
   "DELETE FROM",
   "--keep-vars",
   "continue-on-error: true",
+  "RELEASE_BRANCH",
 ];
 
 for (const value of requiredWorkflow)

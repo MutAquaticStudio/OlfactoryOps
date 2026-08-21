@@ -29,7 +29,7 @@ describe("RC9 route-free runtime diagnostic dispatcher", () => {
     expect(workflow).not.toContain("DIAGNOSTIC_SOURCE_SHA");
     expect(workflow).not.toContain("prisma:generate:v2");
     expect(workflow).not.toContain("generate:v2-worker-transport");
-    expect(workflow).toContain("origin/$RELEASE_BRANCH");
+    expect(workflow).not.toContain("RELEASE_BRANCH");
     expect(workflow).not.toContain("${{ env.EXPECTED_");
     expect(workflow).toContain("ref: ${{ github.sha }}");
   });

@@ -1,0 +1,15 @@
+flowchart TB
+R[Reviews] --> I[Feedback Ingestion]
+F[Brand Feedback] --> I
+S[Surveys] --> I
+I --> L[Language EN/VI]
+L --> SA[Sentiment]
+SA --> AS[Aspect Sentiment]
+AS --> EP[Emotion / Perception]
+EP --> OL[Olfactory Descriptor Mapping]
+OL --> PV[Consumer Preference Vector]
+PV --> FI[Formula Intelligence]
+PV --> DS[Design Studio]
+PV --> IN[Consumer Insights]
+MEM[Private Sensory Memory] --> FI
+SCI[Molecular / Olfactory Intelligence] --> FI

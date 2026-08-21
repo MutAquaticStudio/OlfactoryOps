@@ -5,9 +5,11 @@ OlfactoryOps now has a Cloudflare-native commercial deployment path:
 - Frontend: Cloudflare Pages.
 - API: Cloudflare Workers.
 - Persistent commercial state: Cloudflare D1.
-- Future document binaries: Cloudflare R2.
+- Private beta document binaries: Cloudflare Workers KV; document metadata and audit evidence: Cloudflare D1.
 
-The Worker reuses the existing OlfactoryOps domain service. Formula drafts and immutable version evidence now persist in normalized D1 tables, alongside tenant, auth, audit, material master, tenant-owned inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state. The hybrid snapshot adapter remains only for the smaller approval-request and bootstrap metadata set that has not yet been normalized.
+The Worker reuses the existing OlfactoryOps domain service. Formula drafts and immutable version evidence now persist in normalized D1 tables, alongside tenant, auth, audit, material master, tenant-owned inventory, lab usage, document, production, procurement, catalog, customer, order, analytics scheduling, billing, invoice, and webhook delivery state. `0025_enterprise_persistence_audit_chain.sql` completes the remaining bootstrap and approval persistence cutover and adds append-only hash-chain evidence. The legacy snapshot table is read only during one short cutover path and is not used for new mutations.
+
+`0026_finished_goods_operational_trace.sql` adds finished-good lots and immutable finished-good ledger events. A released batch creates a workspace-scoped lot only after formula-version approval, input consumption, QC pass, and lifecycle release. Formula SKUs allocate released finished goods by FEFO; reservation/release/fulfillment events retain source lot and COGS evidence. The same migration adds organization scope to catalog, price list, quote, customer, order, shipment, document, and scheduled-report records.
 
 ## 1. Create D1
 
@@ -68,9 +70,12 @@ Do not place the verifier in `[vars]`, `.env`, source files, or deployment logs.
 
 On the first API request after a changed secret is deployed, the Worker persists the new verifier, revokes every active administrator session, and records an audit event. The administrator must log in again with the new password.
 
-### Configure Formula Approval MFA Encryption
+### Configure MFA Security Features
 
-Formula approval requires a per-session TOTP step-up. Store the server-side encryption key as a Worker secret before deploying code that uses `mfa_enrollments`:
+Formula approval does not require MFA. Approval is authorized server-side by the
+existing Owner, Admin, Manager, or `production.qc` role policy. TOTP remains an
+optional account-security feature; it can be configured independently when the
+workspace enables MFA:
 
 ```bash
 npx wrangler secret put MFA_ENCRYPTION_KEY --config wrangler.test.toml
@@ -84,7 +89,61 @@ npx wrangler secret put MFA_ENCRYPTION_KEY --config wrangler.toml
 
 Use a cryptographically random value of at least 32 bytes. Never place this key in `[vars]`, frontend environment variables, source control, reports, or logs. Local Worker development may use an ignored `.dev.vars` file.
 
-Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP secrets are stored as AES-256-GCM ciphertext and recovery codes are stored only as hashes. A recovery code can verify a fresh session only after TOTP enrollment is complete, and its hash is removed atomically after the first successful use.
+Apply `migrations/0015_mfa_enrollments.sql` before enabling the optional MFA
+feature. TOTP secrets are stored as AES-256-GCM ciphertext and recovery codes
+are stored only as hashes. A recovery code can verify a fresh session only
+after TOTP enrollment is complete, and its hash is removed atomically after the
+first successful use.
+
+### Configure Billing, Transactional Email, And Cloudflare For SaaS
+
+Apply the complete ordered migration chain from `0001_northstar_snapshots.sql`
+through `0044_email_verification.sql` before enabling Worker capabilities. The
+release gate verifies this repository head automatically; never pick a subset
+from this list. For the test Worker:
+
+```bash
+npx wrangler d1 migrations apply olfactoryops-test --remote --config wrangler.test.toml
+```
+
+Set provider values as Worker secrets. Never add them to Pages, Vercel, a `VITE_` variable, or a committed environment file:
+
+```bash
+npx wrangler secret put STRIPE_SECRET_KEY --config wrangler.test.toml
+npx wrangler secret put STRIPE_WEBHOOK_SECRET --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_ARTISAN --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_ATELIER --config wrangler.test.toml
+npx wrangler secret put STRIPE_PRICE_MAISON --config wrangler.test.toml
+npx wrangler secret put BILLING_RETURN_URL --config wrangler.test.toml
+npx wrangler secret put RESEND_API_KEY --config wrangler.test.toml
+npx wrangler secret put EMAIL_FROM --config wrangler.test.toml
+npx wrangler secret put SENTRY_DSN --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_API_TOKEN --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_SAAS_ZONE_ID --config wrangler.test.toml
+npx wrangler secret put CLOUDFLARE_SAAS_ORIGIN --config wrangler.test.toml
+```
+
+Configure Stripe's webhook endpoint as:
+
+```text
+https://<worker-host>/api/v1/billing/stripe/webhook
+```
+
+Keep `BILLING_MODE = "managed_beta"` until Stripe is ready. In this mode no customer can open Checkout, a billing portal, select a plan, or apply a Stripe webhook. When Stripe is configured, set `BILLING_MODE = "self_service"` in the Worker environment before enabling the webhook.
+
+Subscribe it to at least `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, and `invoice.payment_failed`. The Worker verifies the signed raw payload, rejects signatures older than five minutes, and atomically claims each provider event ID in D1 before applying a subscription or invoice change.
+
+The Worker creates Stripe Checkout Sessions in subscription mode, uses Stripe Price IDs instead of client-provided amounts, passes tenant metadata only from server state, enables Stripe automatic tax, and opens the Customer Portal from the stored Stripe customer ID. Upgrade/downgrade proration and retry/dunning behavior are configured in the Stripe Billing Dashboard and reflected through the same verified webhook flow.
+
+Set `BILLING_RETURN_URL` to the deployed frontend origin, not the Worker hostname, so Checkout and the Customer Portal return the user to the application. `SENTRY_DSN` is optional; when it is present, the Worker sends only route, HTTP status, and duration for 5xx events. It never sends request bodies, credentials, cookies, or tenant data. The public health endpoint is `GET /api/v1/status`; it reports D1 availability and the last 15-minute error/slow-request counters after `migrations/0020_runtime_observability.sql` has been applied.
+
+For Cloudflare for SaaS, the token needs the zone permission `SSL and Certificates Write`. The custom-domain endpoint posts to Cloudflare Custom Hostnames only after an Owner or Admin request. It returns the required TXT/DCV record to the caller; use the Custom Domain panel's **Refresh** action after DNS changes. The Worker reads the provider's hostname and SSL state from Cloudflare and changes the workspace hostname only when both are active. Pending or failed validation stays visible to the requester instead of being treated as live.
+
+For Resend, verify the sending domain that is used in `EMAIL_FROM`. Delivery failures are recorded in the normalized `notification_outbox` table, retried at 2, 10, 30, and 120 minute intervals, and marked failed after the fifth attempt. A provider failure never rolls back a business mutation. The current outbox covers workspace invitations, new-device security events, billing payment alerts, and privacy requests.
+
+Password reset is a separate transactional flow: `POST /api/v1/auth/password-reset/request` always returns a generic result, hashes the one-time token in D1 snapshot persistence, and sends the only raw token in the Resend email. `POST /api/v1/auth/password-reset/confirm` accepts the link token and a strong new password, expires tokens after 30 minutes, and revokes all active sessions for that account.
+
+The Worker runs its analytics scheduler hourly through the `crons` trigger in `wrangler.toml`. It evaluates daily, weekly, and monthly report cadences, drains due transactional email retry records, persists only report/email evidence, and never mutates inventory, costing inputs, or order state.
 
 ## 3. Deploy Worker API
 
@@ -92,7 +151,7 @@ Apply `migrations/0015_mfa_enrollments.sql` before deploying the Worker. TOTP se
 
 ```toml
 [vars]
-CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev,https://*.labofscents.pages.dev"
+CORS_ORIGINS = "http://127.0.0.1:5173,http://localhost:5173,https://labofscents.org,https://www.labofscents.org,https://app.labofscents.org,https://labofscents.pages.dev,https://test.labofscents.pages.dev,https://olfactoryops-beta.pages.dev,https://beta.labofscents.org"
 
 [[routes]]
 pattern = "api.labofscents.org"
@@ -116,6 +175,48 @@ Optional custom API hostname:
 
 - The Worker custom domain is configured as `api.labofscents.org`.
 - Use `https://api.labofscents.org/api/v1` as the frontend API base.
+
+### Tenant system hostnames
+
+System workspace addresses use `https://<workspace-slug>.labofscents.org`.
+They are not Cloudflare for SaaS hostnames and do not require DCV. Apply the
+hostname migration, deploy the API and deploy the dedicated router:
+
+```bash
+npm run d1:migrate:remote
+npm run deploy:worker
+npm run deploy:tenant-router
+```
+
+In the Cloudflare dashboard for `labofscents.org`:
+
+1. Add proxied wildcard DNS `CNAME * -> labofscents.pages.dev` (or the current Pages origin).
+2. Attach `*.labofscents.org/*` to Worker `olfactoryops-tenant-router`.
+3. Create the explicit more-specific Worker route
+   `api.labofscents.org/* -> olfactoryops-api` and keep the existing
+   `api.labofscents.org` custom-domain mapping. A wildcard Worker route runs
+   before a Custom Domain, so the explicit API Worker route is required to
+   prevent the tenant router from returning `404` for API requests. Add
+   more-specific **no Worker** routes for `beta.labofscents.org/*`,
+   `www.labofscents.org/*`,
+   `customers.labofscents.org/*`, `saas-origin.labofscents.org/*`, and
+   `saas-origin-beta.labofscents.org/*`. Cloudflare uses the most specific
+   matching route, so these exclusions preserve beta Pages and SaaS fallback
+   paths while the exact API mapping continues serving the API.
+4. Confirm an existing controlled tenant's hostname returns Pages with
+   `X-OlfactoryOps-Workspace-Router: active`; an unknown hostname must return
+   `404`. Do not create QA tenants in production.
+
+The API dynamically grants credentialed CORS only after an exact active entry
+in `workspace_hostnames`. The session cookie remains host-only at
+  `api.labofscents.org`; it is never copied to tenant subdomains.
+
+For local parity, keep the default single-host development flow unless testing
+tenant-host behavior explicitly. Set `LOCAL_WORKSPACE_HOSTS=true` for the Nest
+API and `VITE_LOCAL_WORKSPACE_HOSTS=true` for Vite; a workspace then resolves
+to `http://<slug>.localhost:5173`. Modern browsers map `*.localhost` to
+loopback, so no DNS record is required. The local API accepts only eligible
+single-label localhost origins and returns the same host-mismatch envelope.
 
 ## 4. Deploy Frontend On Cloudflare Pages
 
@@ -142,6 +243,28 @@ Recommended Pages custom domains:
 - `www.labofscents.org`
 - Optional admin app domain: `app.labofscents.org`
 
+### Beta Release Gate
+
+Use an isolated Pages project for beta rather than changing the existing preview branch. Build with the test API origin and deploy that artifact to the dedicated project:
+
+```bash
+npm run build:test
+npx wrangler pages project create olfactoryops-beta --production-branch beta
+npx wrangler pages deploy dist --project-name olfactoryops-beta --branch beta
+```
+
+Then add `beta.labofscents.org` as a custom domain for the `olfactoryops-beta` Pages project and create the DNS record Cloudflare requests. Set `BETA_APP_ORIGIN=https://beta.labofscents.org` in the test Worker configuration. The owner-only **Integration Readiness** panel must show the hostname as reachable before beta is announced. Until DNS resolves and Cloudflare has issued HTTPS, Integration Readiness must remain `Not configured` or `Pending`; a successful Pages deployment is not a hostname activation signal.
+
+Before deploying the Worker, create the private Workers KV namespace used only for beta SDS/CoA and generated documents:
+
+```bash
+npx wrangler kv namespace create DOCUMENTS --config wrangler.test.toml
+```
+
+Copy the returned namespace ID into `[[kv_namespaces]]` with binding `DOCUMENTS` in `wrangler.test.toml`. Do not deploy the Worker if the namespace binding check fails. The Worker requires D1 migrations to be applied first and document uploads must not silently fall back to browser-only storage.
+
+Workers KV is used only for immutable beta document blobs. It supports values up to 25 MiB, matching the upload limit. D1 remains the source of truth for tenant isolation, document metadata, approval, audit, and signed-access authorization. Do not use KV for inventory, audit, approvals, or other transactional state because KV is eventually consistent.
+
 The repo includes:
 
 - `public/_redirects` for SPA fallback.
@@ -153,7 +276,56 @@ Run before pushing or deploying:
 
 ```bash
 npm run deploy:check
+npm run release:identity:check
+npm run release:migrations:verify
+npm run release:docs:check
+npm run release:manifest:generate
+npm run release:manifest:validate
 ```
+
+## 6. Release Candidate And Provenance
+
+The current candidate is `0.1.0-rc.1`. It is not a production release and must
+not be tagged or promoted until the release gate is complete. The authoritative
+identity is `src/data/release.ts`; `package.json`, API `/api/v1/version`, API
+response headers, tenant-router response headers, and Pages `release.json` are
+checked against it.
+
+Each build writes a non-sensitive Pages `release.json`. API and router deploys
+must receive `RELEASE_GIT_SHA`, `RELEASE_BUILD_TIMESTAMP_UTC`, and
+`RELEASE_ENVIRONMENT` through Wrangler deployment variables. Do not put a
+secret in any release metadata. The required commands are:
+
+```bash
+npm run release:manifest:generate
+npm run release:manifest:validate
+npm run release:provenance:verify
+```
+
+`release:provenance:verify` is intentionally strict in release mode: it
+requires a clean checkout, tag `v<version>`, artifact hashes, component
+deployment IDs, a test-candidate deployment ID, and a rollback target. A dirty
+checkout or placeholder deployment evidence is a release blocker.
+
+The manual GitHub Action `Release candidate` deploys only to the isolated test
+Worker/D1/Pages/router configuration. It requires protected environment secrets
+`CLOUDFLARE_API_TOKEN` and `QA_ROLE_STORAGE_STATES`. It does not run from a
+normal push or pull request and must never point at production D1 or customer
+data. The workflow deliberately fails before promotion until reviewed deploy
+outputs are bound into its manifest step.
+
+## 7. Rollback And Production Smoke
+
+Record the previous approved Pages, API Worker, and tenant-router deployment IDs
+in the release manifest before promotion. Prefer a rollback deployment over a
+schema rollback: migrations may be irreversible and must be assessed before
+release. Take an approved D1 backup/export before a production migration.
+
+Production smoke is read-only and requires an untracked dedicated QA account,
+an explicit hostname allowlist, and mutation mode disabled. It may check login,
+session restore, `/api/v1/health`, `/api/v1/status`, `/api/v1/version`,
+workspace navigation, global material reads, and logout. It must not create a
+tenant, send mail, create a domain, or change operational data.
 
 This validates:
 
@@ -178,7 +350,9 @@ The harness fails closed when `FUNCTIONAL_LOGIN_PASSWORD` is absent. Keep that v
 
 The functional report verifies API security headers and CORS denial, protected D1 persistence status, cookie auth, authentication throttling with `Retry-After`, CSRF rejection on missing write token, tenant permission probes, core read models, signed document URLs, and the customer-facing Production lifecycle UI.
 
-For the complete Formula workflow, including inventory-linked materials, final-product IFRA, evaporation, centered approval dialog, TOTP setup, fresh-session recovery-code redemption, immutable approval, reload persistence, and mobile overflow checks:
+For the complete Formula workflow, including inventory-linked materials,
+final-product IFRA, evaporation, centered approval dialog, role-authorized
+immutable approval, reload persistence, and mobile overflow checks:
 
 ```powershell
 $credential = Get-Credential -Message 'OlfactoryOps Formula test account'
@@ -191,13 +365,33 @@ Remove-Item Env:FORMULA_TEST_PASSWORD
 Remove-Item Env:FORMULA_TEST_URL
 ```
 
-Use a disposable test-tenant owner with MFA not yet enrolled. The harness never writes the TOTP setup key or recovery codes to its JSON report.
+Use a disposable test-tenant owner. The harness never writes an account secret,
+session credential, or password verifier to its JSON report.
+
+## Beta: Pages Frontend With Cloudflare API
+
+The beta uses a dedicated Cloudflare Pages project while Cloudflare remains the API and persistence boundary:
+
+- `olfactoryops-beta`: isolated Pages beta project, built with `npm run build:test` and deployed from the `beta` branch.
+- `https://olfactoryops-api-test.m-thuanwork.workers.dev/api/v1`: Cloudflare Worker test API backed by the isolated `olfactoryops-test` D1 database.
+- `https://beta.labofscents.org`: customer-facing beta hostname after it is added to the dedicated Pages project and its Cloudflare DNS record is created.
+
+The test Worker allowlists only the named Pages origins (`labofscents.pages.dev`, `test.labofscents.pages.dev`, and `olfactoryops-beta.pages.dev`) and `beta.labofscents.org`. Do not add wildcard Pages or third-party preview origins, because credentialed CORS uses exact trusted frontend hosts only.
+
+Keep the beta hostname under `labofscents.org` when possible. It is same-site with `api.labofscents.org`, which makes the secure session cookie more reliable than using an unrelated `vercel.app` hostname.
+
+After the Pages project is deployed, add `beta.labofscents.org` in the Pages custom-domain settings and create the DNS record Cloudflare requests. Verify the hostname over HTTPS, then set `BETA_APP_ORIGIN=https://beta.labofscents.org` for `olfactoryops-api-test` and redeploy that Worker.
+
+### Supabase Boundary
+
+Supabase is not connected to the live beta write path yet. Cloudflare D1 is the canonical store for tenant, formula, inventory, approval, and audit state. Do not configure a second live writer or a duplicate authentication system without a reviewed migration and cutover plan. A Supabase project can be provisioned later for a defined purpose such as Postgres reporting or document storage, then linked with `supabase link` and migrated with `supabase db push`.
 
 ## Notes
 
 - D1 is SQLite-compatible, not Postgres. Sell-ready Formula and operational state use normalized D1 tables including `formula_records`, `formula_version_records`, `mfa_enrollments`, `tenant_organizations`, `tenant_brands`, `tenant_memberships`, `role_policies`, `auth_sessions`, `audit_events`, `security_rate_limits`, `material_records`, `molecule_components`, `storage_locations`, `stock_take_records`, `tenant_settings`, `feature_flags`, `numbering_sequences`, `custom_fields`, `tenant_branding`, `document_records`, `production_batches`, `suppliers`, `purchase_orders`, `price_history`, `commercial_skus`, `price_lists`, `quotes`, `sample_requests`, `customers`, `sales_orders`, `order_shipments`, `order_documents`, `scheduled_reports`, `billing_subscriptions`, `billing_invoices`, `sso_configs`, `api_keys`, `webhooks`, `webhook_deliveries`, `audit_export_jobs`, `inventory_lots`, `inventory_movements`, and `lab_usage_records`.
 - Apply D1 migrations before deploying Worker code that depends on new normalized tables.
-- Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only.
-- Keep document binaries and generated PDFs out of D1. Store files in R2 and keep only metadata/signed URL evidence in D1.
+- `0028_auth_session_credentials.sql` revokes every legacy session whose cookie previously contained an audit session ID. The Worker stores only a SHA-256 hash of a new opaque credential, so users must sign in again after the migration.
+- Cookie-authenticated mutating API requests require `X-CSRF-Token`. The frontend obtains the token from `login`, `signup`, or `me` and keeps it in memory only. Bearer credentials are the same opaque values used for automation; audit session IDs are never accepted as credentials.
+- Keep document binaries and generated PDFs out of D1. During beta, store them in the private Workers KV namespace and keep only metadata/signed URL evidence in D1. Move these immutable blobs to R2 before high-volume production usage.
 - The next persistence hardening target is the remaining approval-request and bootstrap metadata still served by the hybrid snapshot adapter.
 

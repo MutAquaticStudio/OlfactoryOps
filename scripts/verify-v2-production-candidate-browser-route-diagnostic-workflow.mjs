@@ -23,7 +23,7 @@ for (const fragment of [
   "EXPECTED_PAGES_ORIGIN: https://production-candidate.olfactoryops-v2-production-candidate.pages.dev",
   "DIAGNOSE_RC9_CANDIDATE_BROWSER_ROUTES",
   "v2-production-rc9^{}",
-  "codex/v2-production-go-live",
+  "v2-production-rc9^{}",
   "verify-v2-production-candidate-browser-route-diagnostic.mjs",
   "CANDIDATE_BROWSER_ROUTE_DIAGNOSTIC_PAGES_ORIGIN",
 ]) {
@@ -39,6 +39,9 @@ if (
   throw new Error(
     "browser route workflow must remain read-only without credentials, deployment, or mutation commands",
   );
+
+if (workflow.includes(["codex", "v2-production-go-live"].join("/")))
+  throw new Error("browser route workflow must use immutable tag validation");
 
 for (const fragment of [
   '"/login"',

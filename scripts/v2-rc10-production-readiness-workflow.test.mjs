@@ -76,7 +76,8 @@ describe('RC10 readiness workflow', () => {
     const readinessTag = workflow.slice(workflow.indexOf('  publish-readiness-tag:'))
 
     expect(validation).toContain('persist-credentials: true')
-    expect(validation).toContain('git fetch --no-tags origin "$RELEASE_BRANCH"')
+    expect(validation).toContain('git fetch --force --tags origin')
+    expect(validation).not.toContain('RELEASE_BRANCH')
     expect(readinessTag).toContain('persist-credentials: true')
     expect(readinessTag).toContain('git push origin refs/tags/v2-production-ready')
     expect(workflow.match(/persist-credentials: true/g)).toHaveLength(2)

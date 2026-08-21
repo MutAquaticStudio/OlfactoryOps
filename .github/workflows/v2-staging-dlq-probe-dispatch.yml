@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       staging_sha:
-        description: Exact deployed SHA of codex/cloudflare-cloud-native-runtime.
+        description: Exact deployed SHA of main.
         required: true
         type: string
       confirm_staging:
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STAGING_BRANCH: codex/cloudflare-cloud-native-runtime
+  STAGING_BRANCH: main
   STAGING_SCIENTIFIC_QUEUE_ID: 27cfb24e0ec44399a499c60d4d39623b
   STAGING_SCIENTIFIC_DLQ_ID: e951f2834df84f3890d3021fdac21884
 

@@ -1,0 +1,35 @@
+# Production candidate template. Rendering requires a dedicated production
+# Hyperdrive binding and production-only secrets; this file is not deployable.
+name = "olfactoryops-v2-api-production"
+main = "worker/v2-api/index.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+routes = [{ pattern = "api.labofscents.org/*", zone_name = "labofscents.org" }]
+
+[vars]
+RELEASE_ENVIRONMENT = "production"
+RELEASE_GIT_SHA = "REPLACE_WITH_VERIFIED_RELEASE_SHA"
+V2_API_PUBLIC_HOSTNAME = "api.labofscents.org"
+V2_PUBLIC_PAGES_HOSTNAME = "labofscents.org"
+V2_PLATFORM_ADMIN_HOSTNAME = "admin.labofscents.org"
+V2_WORKSPACE_BASE_DOMAIN = "labofscents.org"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"
+
+[[r2_buckets]]
+binding = "R2_ARTIFACTS"
+bucket_name = "olfactoryops-v2-artifacts-production"
+
+[[services]]
+binding = "CLOUD_RUNTIME"
+service = "olfactoryops-v2-cloud-runtime-production"
+
+# Production-only Cloudflare secret bindings:
+# V2_SESSION_PEPPER
+# V2_PASSWORD_PEPPER
+# V2_INVITATION_ENCRYPTION_KEY
+# V2_PLATFORM_MFA_ENCRYPTION_KEY

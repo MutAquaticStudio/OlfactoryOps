@@ -4,10 +4,14 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy: default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://api.labofscents.org https://olfactoryops-api.m-thuanwork.workers.dev https://olfactoryops-api-test.m-thuanwork.workers.dev;
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://api.labofscents.org https://api-beta.labofscents.org https://api-next.labofscents.org https://olfactoryops-api.m-thuanwork.workers.dev https://olfactoryops-api-test.m-thuanwork.workers.dev;
+  Cache-Control: no-cache, no-store, must-revalidate, no-transform
 
 /
-  Cache-Control: no-cache, no-store, must-revalidate
+  Cache-Control: no-cache, no-store, must-revalidate, no-transform
 
 /index.html
-  Cache-Control: no-cache, no-store, must-revalidate
+  Cache-Control: no-cache, no-store, must-revalidate, no-transform
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

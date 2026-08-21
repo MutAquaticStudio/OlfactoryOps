@@ -1,0 +1,18 @@
+name = "olfactoryops-tenant-router-test"
+main = "worker/tenant-app-router.ts"
+compatibility_date = "2026-07-10"
+compatibility_flags = ["nodejs_compat"]
+minify = true
+workers_dev = true
+
+[vars]
+PAGES_ORIGIN = "https://test.labofscents.pages.dev"
+SYSTEM_WORKSPACE_DOMAIN = "labofscents.org"
+V2_WORKSPACE_DOMAIN = "olfactoryops.com"
+RELEASE_ENVIRONMENT = "test"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "olfactoryops-test"
+database_id = "a5144134-3f58-4f6b-b516-05789ef05fbc"
+migrations_dir = "migrations"

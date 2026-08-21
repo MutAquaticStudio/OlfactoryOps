@@ -1,0 +1,39 @@
+name: V2 Staging PostgreSQL Migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_staging:
+        description: Type APPLY_STAGING to run the approved V2 migration chain and restrict the existing Hyperdrive role.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-postgres-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate-staging:
+    if: ${{ inputs.confirm_staging == 'APPLY_STAGING' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      V2_STAGING_MIGRATION_APPROVED: APPLY_STAGING
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require staging-only database secret
+        run: test -n "$STAGING_DATABASE_URL"
+      - name: Apply immutable V2 PostgreSQL migration chain
+        run: node scripts/apply-v2-staging-migrations.mjs
+      - name: Restrict existing Hyperdrive runtime role
+        run: node scripts/configure-v2-runtime-role.mjs

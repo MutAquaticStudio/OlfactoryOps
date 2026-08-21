@@ -1,0 +1,19 @@
+# Production candidate template. It must be rendered only after the dedicated
+# production Hyperdrive and wildcard certificate preflight pass.
+name = "olfactoryops-v2-tenant-router-production"
+main = "worker/v2-tenant-router.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+routes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]
+
+[vars]
+PAGES_ORIGIN = "https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN"
+V2_WORKSPACE_BASE_DOMAIN = "labofscents.org"
+RELEASE_ENVIRONMENT = "production"
+RELEASE_GIT_SHA = "REPLACE_WITH_VERIFIED_RELEASE_SHA"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"

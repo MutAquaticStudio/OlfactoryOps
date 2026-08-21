@@ -8,7 +8,7 @@ describe('production RC staging deployment dispatcher', () => {
     expect(workflow).toContain('workflow_dispatch:')
     expect(workflow).toContain('environment: staging')
     expect(workflow).toContain('DEPLOY_TAGGED_PRODUCTION_RC_TO_STAGING')
-    expect(workflow).toContain('test "$RELEASE_SHA" = "$(git rev-parse FETCH_HEAD)"')
+    expect(workflow).toContain('git fetch --tags --force origin')
     expect(workflow).toContain("git tag --points-at \"$RELEASE_SHA\" -l 'v2-production-rc*' | grep -qx 'v2-production-rc[0-9][0-9]*'")
     expect(workflow).toContain('cancel-in-progress: false')
   })

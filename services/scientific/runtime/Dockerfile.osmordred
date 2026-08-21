@@ -1,0 +1,28 @@
+# Osmordred is isolated because its pinned upstream build requires
+# RDKit 2023.09.3 and C++17, while the BCFP/MolFTP runtime uses RDKit 2026.
+FROM mambaorg/micromamba:2.0.8-ubuntu22.04
+
+USER root
+RUN apt-get update && apt-get install --yes --no-install-recommends build-essential git ninja-build liblapacke-dev && rm -rf /var/lib/apt/lists/*
+RUN micromamba install --yes --name base --channel conda-forge python=3.11 rdkit=2023.09.3 libboost-devel libboost-python-devel cmake>=3.28 eigen numpy pybind11 scikit-build lapack liblapacke && micromamba clean --all --yes
+
+ENV CONDA_PREFIX=/opt/conda
+ENV RDKIT_PREFIX=/opt/conda
+ENV PATH=/opt/conda/bin:${PATH}
+ENV CC=/usr/bin/gcc
+ENV CXX=/usr/bin/g++
+ENV CMAKE_INCLUDE_PATH=/opt/conda/include/eigen3
+
+RUN git clone https://github.com/osmoai/osmordred.git /opt/osmo/osmordred && git -C /opt/osmo/osmordred checkout 07b8d22f570712c6ab3527dde195aad42fef4679
+# Upstream reads README.md relative to skbuild despite storing it at the
+# repository root. This is a packaging-only compatibility patch.
+RUN cp /opt/osmo/osmordred/README.md /opt/osmo/osmordred/skbuild/README.md && pip install --no-build-isolation --no-deps /opt/osmo/osmordred/skbuild
+
+WORKDIR /app
+COPY scientific_runtime ./scientific_runtime
+COPY tests ./tests
+COPY component-pins.json ./component-pins.json
+ENV PYTHONPATH=/app
+ENV SCIENTIFIC_REQUIRE_OSMORDRED=1
+EXPOSE 8099
+CMD ["python", "-m", "scientific_runtime.server"]

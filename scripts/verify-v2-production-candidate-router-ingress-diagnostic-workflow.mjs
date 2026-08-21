@@ -47,7 +47,6 @@ requireFragments(workflow, "router ingress workflow", [
   "TARGET_PAGES_ORIGIN: https://57b7300b.olfactoryops-v2-production-candidate.pages.dev",
   "TARGET_WORKSPACE_BASE_DOMAIN: next.labofscents.org",
   "TARGET_HYPERDRIVE_ID: b415b7572d9f45058ebb4ec4166b8739",
-  "RELEASE_BRANCH: codex/v2-production-go-live",
   "RELEASE_TAG: v2-production-rc9",
   "DIAGNOSE_RC9_ROUTER_INGRESS",
   "$RELEASE_TAG^{}",
@@ -90,6 +89,11 @@ requireAbsent(
   workflow,
   "router ingress workflow",
   /(?:\bwrangler\s+(?:deploy|delete|secret|pages)\b|workers\/(?:domains|routes)|\[\[routes\]\]|custom_domain\s*=|routes\s*=|--keep-vars|\b(?:psql|prisma)\b|\b(?:INSERT\s+INTO|UPDATE\s+[A-Za-z_]|ALTER\s+(?:TABLE|ROLE)|CREATE\s+(?:TABLE|ROLE|SCHEMA)|DROP\s+(?:TABLE|ROLE|SCHEMA))\b|git\s+worktree\s+(?:add|remove)|\bgh\s+(?:api|workflow|secret|variable)\b|PRODUCTION_DATABASE_URL|DATABASE_URL|V2_[A-Z_]*PEPPER|SCIENTIFIC_)/i,
+);
+requireAbsent(
+  workflow,
+  "router ingress workflow",
+  /codex\/v2-production-go-live/,
 );
 requireAbsent(
   workflow,

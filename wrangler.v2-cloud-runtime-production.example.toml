@@ -1,0 +1,84 @@
+# Production candidate template. It is deliberately non-deployable until the
+# release dispatcher renders every production-only resource identifier and
+# immutable scientific image digest.
+name = "olfactoryops-v2-cloud-runtime-production"
+main = "worker/cloud-runtime/index.ts"
+compatibility_date = "2026-08-11"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+[vars]
+RELEASE_ENVIRONMENT = "production"
+RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
+SCIENTIFIC_RUNTIME_IMAGE_DIGEST = "REPLACE_WITH_FEATURE_IMAGE_DIGEST"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_HYPERDRIVE_ID"
+
+[[r2_buckets]]
+binding = "R2_ARTIFACTS"
+bucket_name = "olfactoryops-v2-artifacts-production"
+
+[[vectorize]]
+binding = "MATERIAL_EVIDENCE_VECTORS"
+index_name = "olfactoryops-v2-material-evidence-production"
+
+[[queues.producers]]
+binding = "SCIENTIFIC_JOBS"
+queue = "olfactoryops-v2-scientific-production"
+
+[[queues.producers]]
+binding = "RAG_INGESTION_JOBS"
+queue = "olfactoryops-v2-rag-production"
+
+[[queues.producers]]
+binding = "NOTIFICATION_DELIVERY_JOBS"
+queue = "olfactoryops-v2-notifications-production"
+
+[[queues.consumers]]
+queue = "olfactoryops-v2-scientific-production"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "olfactoryops-v2-scientific-dlq-production"
+
+[[queues.consumers]]
+queue = "olfactoryops-v2-rag-production"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "olfactoryops-v2-rag-dlq-production"
+
+[[queues.consumers]]
+queue = "olfactoryops-v2-notifications-production"
+max_batch_size = 10
+max_retries = 3
+dead_letter_queue = "olfactoryops-v2-notifications-dlq-production"
+
+[[workflows]]
+name = "olfactoryops-v2-scientific-production"
+binding = "SCIENTIFIC_WORKFLOW"
+class_name = "ScientificJobWorkflow"
+
+[[durable_objects.bindings]]
+name = "SCIENTIFIC_FEATURE_CONTAINER"
+class_name = "ScientificFeatureContainer"
+
+[[durable_objects.bindings]]
+name = "SCIENTIFIC_MODEL_CONTAINER"
+class_name = "ScientificModelContainer"
+
+[[containers]]
+class_name = "ScientificFeatureContainer"
+image = "REPLACE_WITH_FEATURE_IMAGE"
+instance_type = "standard-2"
+max_instances = 2
+
+[[containers]]
+class_name = "ScientificModelContainer"
+image = "REPLACE_WITH_MODEL_IMAGE"
+instance_type = "standard-2"
+max_instances = 2
+
+[[migrations]]
+tag = "v2-cloud-runtime-1"
+new_sqlite_classes = ["ScientificFeatureContainer", "ScientificModelContainer"]

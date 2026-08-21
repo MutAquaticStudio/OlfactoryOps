@@ -46,6 +46,12 @@ export class UnprocessableEntityException extends AppHttpError {
   }
 }
 
+export class ConflictException extends AppHttpError {
+  constructor(payload: ErrorPayload = 'Conflict') {
+    super(409, payload, 'Conflict')
+  }
+}
+
 export class TooManyRequestsException extends AppHttpError {
   constructor(payload: ErrorPayload = 'Too many requests') {
     super(429, payload, 'Too Many Requests')

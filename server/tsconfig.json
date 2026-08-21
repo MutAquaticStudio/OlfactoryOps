@@ -11,6 +11,6 @@
     "outDir": "../dist-api",
     "rootDir": ".."
   },
-  "include": ["src/**/*.ts", "../src/data/northStar.ts"],
+  "include": ["src/**/*.ts", "../src/data/northStar.ts", "../src/data/agentRuntime.ts", "../src/data/workspaceHostnames.ts"],
   "exclude": ["src/**/*.test.ts"]
 }
