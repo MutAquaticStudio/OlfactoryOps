@@ -48,6 +48,16 @@ const stableJson = (value: unknown): string => {
 const digest = (value: unknown) => createHash('sha256').update(stableJson(value)).digest('hex')
 const tokenHash = (value: string) => createHash('sha256').update(value).digest('hex')
 const identifier = (prefix: string) => `${prefix}_${randomUUID().replaceAll('-', '')}`
+const bytesToBase64Url = (value: Uint8Array) => {
+  let binary = ''
+  for (const byte of value) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+const bytesToHex = (value: Uint8Array) => {
+  let output = ''
+  for (const byte of value) output += byte.toString(16).padStart(2, '0')
+  return output
+}
 const asNumber = (value: Prisma.Decimal | number | string | null | undefined) => Number(value ?? 0)
 const iso = (value: Date | null | undefined) => value?.toISOString() ?? null
 
@@ -464,7 +474,7 @@ export class TrialSensoryService {
       const duplicate = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_trial_samples WHERE organization_id = ${context.organizationId} AND sample_code = ${parsed.data.sampleCode} LIMIT 1`
       if (duplicate[0]) throw new PlatformError('TRIAL_SAMPLE_CODE_EXISTS', 'This controlled sample code is already in use in the workspace.', 409)
       const id = identifier('sample')
-      const blindCode = randomBytes(5).toString('hex').toUpperCase()
+      const blindCode = bytesToHex(randomBytes(5)).toUpperCase()
       await tx.$executeRaw`
         INSERT INTO v2_trial_samples (id, organization_id, trial_id, trial_preparation_id, sample_code, blind_code, blind_code_hash, concentration_percent, carrier, storage_location, expires_at, status, prepared_by, prepared_at, notes)
         VALUES (${id}, ${context.organizationId}, ${trialId}, ${preparation[0].id}, ${parsed.data.sampleCode}, ${blindCode}, ${tokenHash(blindCode)}, ${parsed.data.concentrationPercent ?? null}, ${parsed.data.carrier ?? null}, ${parsed.data.storageLocation ?? null}, ${parsed.data.expiresAt ? new Date(parsed.data.expiresAt) : null}, 'AVAILABLE', ${context.userId}, now(), ${parsed.data.notes ?? null})
@@ -891,7 +901,7 @@ export class TrialSensoryService {
           AND a.panel_assignment_id IS NULL AND s.status IN ('DRAFT','SCHEDULED','OPEN','IN_PROGRESS')
       `
       if (!assignment[0]) throw new PlatformError('SENSORY_SAMPLE_ASSIGNMENT_INVALID', 'The selected sensory sample is not eligible for a public link.', 409)
-      const token = randomBytes(32).toString('base64url')
+      const token = bytesToBase64Url(randomBytes(32))
       const id = identifier('spublic')
       await tx.$executeRaw`
         INSERT INTO v2_sensory_public_links (id, organization_id, sensory_session_id, sample_assignment_id, token_hash, presentation_mode, allowed_timepoints, expires_at, max_submissions, submission_count, issued_by)

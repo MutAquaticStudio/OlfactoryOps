@@ -7,6 +7,7 @@ const temporaryBranches = [
 ];
 
 const packageLock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+const packageManifest = JSON.parse(readFileSync("package.json", "utf8"));
 const localPackageLinks = Object.entries(packageLock.packages ?? {}).filter(
   ([path, entry]) =>
     path.startsWith("../") ||
@@ -15,6 +16,20 @@ const localPackageLinks = Object.entries(packageLock.packages ?? {}).filter(
 
 if (localPackageLinks.length > 0) {
   throw new Error("package lock must not contain local worktree package links");
+}
+
+const requiredToolchainVersions = {
+  "@cloudflare/workers-types": "5.20260804.1",
+  wrangler: "4.120.1",
+};
+
+for (const [name, version] of Object.entries(requiredToolchainVersions)) {
+  if (packageManifest.devDependencies?.[name] !== version) {
+    throw new Error(`package manifest must pin ${name} to ${version}`);
+  }
+  if (packageLock.packages?.[`node_modules/${name}`]?.version !== version) {
+    throw new Error(`package lock must resolve ${name} to ${version}`);
+  }
 }
 
 function sourceFiles(root) {

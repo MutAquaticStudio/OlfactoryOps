@@ -10,7 +10,7 @@ export class PasswordCryptoError extends Error {
 }
 
 export function randomSecret(prefix = '') {
-  return `${prefix}${randomBytes(32).toString('base64url')}`
+  return `${prefix}${bytesToBase64Url(randomBytes(32))}`
 }
 
 export function hashSecret(value: string, pepper = '') {
@@ -49,7 +49,7 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array) {
 // Keeping the existing encoded format makes pre-cutover credentials verifiable.
 export async function hashPassword(email: string, password: string, pepper = '') {
   try {
-    const salt = randomBytes(16).toString('base64url')
+    const salt = bytesToBase64Url(randomBytes(16))
     const digest = await passwordDigest(email, password, salt, PASSWORD_ITERATIONS, pepper)
     return `pbkdf2:v2:sha256:${PASSWORD_ITERATIONS}:${salt}:${bytesToBase64Url(digest)}`
   } catch (error) {
@@ -86,7 +86,7 @@ export function sealSecret(value: string, key: string) {
   const cipher = createCipheriv('aes-256-gcm', derived, iv)
   const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  return `v1.${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`
+  return `v1.${bytesToBase64Url(iv)}.${bytesToBase64Url(tag)}.${bytesToBase64Url(encrypted)}`
 }
 
 export function openSecret(payload: string, key: string) {

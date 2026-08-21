@@ -6,6 +6,19 @@ import {
   UnprocessableEntityException,
 } from '../shared/http-error.js'
 import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto'
+
+function bytesToBase64Url(value: Uint8Array) {
+  let binary = ''
+  for (const byte of value) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function bytesToHex(value: Uint8Array) {
+  let output = ''
+  for (const byte of value) output += byte.toString(16).padStart(2, '0')
+  return output
+}
+
 import {
   auditEvents,
   auditExportJobs,
@@ -4144,7 +4157,7 @@ export class NorthStarService {
     }
 
     const now = new Date()
-    const token = randomBytes(32).toString('base64url')
+    const token = bytesToBase64Url(randomBytes(32))
     const reset: PasswordResetRecord = {
       id: `RESET-${this.shortId()}`,
       email: normalizedEmail,
@@ -4228,7 +4241,7 @@ export class NorthStarService {
   }
 
   private issueEmailVerification(membership: MembershipRecord, issuedAt = new Date().toISOString()) {
-    const token = randomBytes(32).toString('base64url')
+    const token = bytesToBase64Url(randomBytes(32))
     const record: EmailVerificationRecord = {
       id: `EMAIL-${this.shortId()}`,
       organizationId: membership.organizationId,
@@ -5365,7 +5378,7 @@ export class NorthStarService {
     const existing = this.approvedMaterialSubstitutionRecords.find((item) => item.organizationId === session.organizationId && item.sourceMaterialId === sourceMaterialId && item.replacementMaterialId === replacementMaterialId)
     const timestamp = new Date().toISOString()
     const record: ApprovedMaterialSubstitutionRecord = {
-      id: existing?.id ?? `SUB-${randomBytes(8).toString('hex').toUpperCase()}`,
+      id: existing?.id ?? `SUB-${bytesToHex(randomBytes(8)).toUpperCase()}`,
       organizationId: session.organizationId,
       sourceMaterialId,
       replacementMaterialId,
@@ -5448,7 +5461,7 @@ export class NorthStarService {
     }
     const now = new Date().toISOString()
     const next = this.fragranceTrialRecords.filter((item) => item.organizationId === session.organizationId).length + 1
-    const nonce = randomBytes(3).toString('hex').toUpperCase()
+    const nonce = bytesToHex(randomBytes(3)).toUpperCase()
     const sampleCode = (body.sampleCode?.trim() || `TRL-${formula.code}-${nonce}`).slice(0, 80)
     if (this.fragranceTrialRecords.some((item) => item.organizationId === session.organizationId && item.sampleCode.toLowerCase() === sampleCode.toLowerCase())) {
       throw new UnprocessableEntityException(`Sample code ${sampleCode} already exists in this workspace`)
@@ -5536,7 +5549,7 @@ export class NorthStarService {
     }
     const now = new Date().toISOString()
     const sessionRecord: SensorySessionRecord = {
-      id: `SNS-${trial.id}-${randomBytes(3).toString('hex').toUpperCase()}`,
+      id: `SNS-${trial.id}-${bytesToHex(randomBytes(3)).toUpperCase()}`,
       organizationId: session.organizationId,
       trialId: id,
       status: 'OPEN',
@@ -5579,9 +5592,9 @@ export class NorthStarService {
       throw new UnprocessableEntityException('Open a sensory session before issuing a public feedback link')
     }
     const now = new Date().toISOString()
-    const token = `trl_${randomBytes(24).toString('base64url')}`
+    const token = `trl_${bytesToBase64Url(randomBytes(24))}`
     const link: TrialPublicLinkRecord = {
-      id: `TPL-${trial.id}-${randomBytes(3).toString('hex').toUpperCase()}`,
+      id: `TPL-${trial.id}-${bytesToHex(randomBytes(3)).toUpperCase()}`,
       organizationId: session.organizationId,
       trialId: trial.id,
       sessionId: sensorySession.id,
@@ -5712,7 +5725,7 @@ export class NorthStarService {
     }, {})
     const reasonCodes = this.preferenceTerms(trial.decision.rationale)
     const record: SensoryMemoryRecord = {
-      id: `SMR-${randomBytes(8).toString('hex').toUpperCase()}`,
+      id: `SMR-${bytesToHex(randomBytes(8)).toUpperCase()}`,
       organizationId: trial.organizationId,
       formulaId: trial.formulaSnapshot.formulaId,
       formulaVersion: trial.formulaSnapshot.formulaVersion,
@@ -5742,7 +5755,7 @@ export class NorthStarService {
     const recurrentDecisionReasons = frequency(records.flatMap((item) => item.reasonCodes))
     const evidenceCount = records.filter((item) => Number.isFinite(item.timepointScores.OVERALL)).length
     const profile: WorkspacePreferenceProfile = {
-      id: `SPP-${randomBytes(8).toString('hex').toUpperCase()}`,
+      id: `SPP-${bytesToHex(randomBytes(8)).toUpperCase()}`,
       organizationId,
       version: (this.workspacePreferenceProfiles.filter((item) => item.organizationId === organizationId).reduce((highest, item) => Math.max(highest, item.version), 0)) + 1,
       evidenceCount,
@@ -11142,7 +11155,7 @@ export class NorthStarService {
   }
 
   private createSecret(prefix: 'oo_live' | 'whsec' | 'scim_oo') {
-    return `${prefix}_${randomBytes(24).toString('base64url')}`
+    return `${prefix}_${bytesToBase64Url(randomBytes(24))}`
   }
 
   private mfaEnrollmentForSession(session: Pick<AuthSession, 'userId' | 'organizationId'>) {
@@ -11185,9 +11198,9 @@ export class NorthStarService {
     return [
       'aes256gcm',
       'v1',
-      iv.toString('base64url'),
-      tag.toString('base64url'),
-      ciphertext.toString('base64url'),
+      bytesToBase64Url(iv),
+      bytesToBase64Url(tag),
+      bytesToBase64Url(ciphertext),
     ].join(':')
   }
 
@@ -11279,7 +11292,7 @@ export class NorthStarService {
   }
 
   private createMfaRecoveryCode() {
-    const compact = randomBytes(mfaRecoveryCodeBytes).toString('hex').toUpperCase()
+    const compact = bytesToHex(randomBytes(mfaRecoveryCodeBytes)).toUpperCase()
     return compact.match(/.{1,4}/g)?.join('-') ?? compact
   }
 
@@ -11297,7 +11310,7 @@ export class NorthStarService {
   }
 
   private passwordHashForEmail(email: string, password: string) {
-    const salt = randomBytes(passwordHashSaltBytes).toString('base64url')
+    const salt = bytesToBase64Url(randomBytes(passwordHashSaltBytes))
     const digest = this.pbkdf2PasswordDigest(email, password, salt, passwordHashIterations, passwordHashKeyLength)
     return `pbkdf2:v1:${passwordHashAlgorithm}:${passwordHashIterations}:${salt}:${digest}`
   }
@@ -11305,7 +11318,7 @@ export class NorthStarService {
   private createSessionId() {
     let id = ''
     do {
-      id = `SES-${randomBytes(16).toString('hex')}`
+      id = `SES-${bytesToHex(randomBytes(16))}`
     } while (this.sessions.some((session) => session.id === id))
     return id
   }
@@ -11351,13 +11364,15 @@ export class NorthStarService {
     iterations: number,
     keyLength: number,
   ) {
-    return pbkdf2Sync(
-      `auth:v2:${email.trim().toLowerCase()}:${password}`,
-      salt,
-      iterations,
-      keyLength,
-      passwordHashAlgorithm,
-    ).toString('base64url')
+    return bytesToBase64Url(
+      pbkdf2Sync(
+        `auth:v2:${email.trim().toLowerCase()}:${password}`,
+        salt,
+        iterations,
+        keyLength,
+        passwordHashAlgorithm,
+      ),
+    )
   }
 
   private legacyPasswordHashForEmail(email: string, password: string) {
@@ -11390,7 +11405,7 @@ export class NorthStarService {
   }
 
   private shortId() {
-    return randomBytes(5).toString('hex').toUpperCase()
+    return bytesToHex(randomBytes(5)).toUpperCase()
   }
 
   private invoicesForSubscription(subscriptionId: string) {

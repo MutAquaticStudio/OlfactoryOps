@@ -25,6 +25,11 @@ type IdempotencyRow = { requestHash: string; response: unknown }
 type ConfirmationRow = { id: string; status: string; actionKey: string; expiresAt: Date; resultRef: string | null; decidedBy: string | null }
 const identifier = (prefix: string) => `${prefix}_${randomUUID().replaceAll('-', '')}`
 const digest = (value: unknown) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex')
+const bytesToBase64Url = (value: Uint8Array) => {
+  let binary = ''
+  for (const byte of value) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
 const confirmationAction = 'RESEARCH_REVIEW'
 const p9Protocol = 'agent-runtime/v1'
 const p9SchemaVersion = '1.0.0'
@@ -415,7 +420,7 @@ export class DurableAgentService {
         const run = runRows[0]
         if (!run) throw new PlatformError('AGENT_RUN_NOT_FOUND', 'The agent run is not available.', 404)
         if (!['QUEUED', 'RUNNING'].includes(run.status)) throw new PlatformError('AGENT_RUN_STATE_INVALID', 'This agent run cannot be executed from its current state.', 409)
-        const leaseHash = digest(randomBytes(32).toString('base64url'))
+        const leaseHash = digest(bytesToBase64Url(randomBytes(32)))
         const jobs = await tx.$queryRaw<Array<{ id: string }>>`WITH claim AS (SELECT id FROM v2_agent_jobs WHERE organization_id = ${context.organizationId} AND run_id = ${runId} AND (status = 'QUEUED' OR (status = 'LEASED' AND lease_expires_at <= now())) ORDER BY available_at ASC FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE v2_agent_jobs j SET status = 'LEASED', lease_token_hash = ${leaseHash}, lease_expires_at = now() + interval '60 seconds', updated_at = now() FROM claim WHERE j.id = claim.id RETURNING j.id`
         if (!jobs[0]) throw new PlatformError('AGENT_JOB_UNAVAILABLE', 'Another worker owns this agent run or no job is ready.', 409)
         await tx.$executeRaw`UPDATE v2_agent_runs SET status = 'RUNNING', lease_token_hash = ${leaseHash}, lease_expires_at = now() + interval '60 seconds', updated_at = now() WHERE organization_id = ${context.organizationId} AND id = ${runId}`
@@ -565,7 +570,7 @@ export class DurableAgentService {
       const run = await tx.$queryRaw<Array<{ status: string; workflowKey: string; correlationId: string }>>`SELECT status, workflow_key AS "workflowKey", correlation_id AS "correlationId" FROM v2_agent_runs WHERE organization_id = ${context.organizationId} AND id = ${runId} AND creator_user_id = ${context.userId} FOR UPDATE`
       if (!run[0]) throw new PlatformError('AGENT_RUN_NOT_FOUND', 'The research run is not available.', 404)
       if (run[0].status !== 'QUEUED') throw new PlatformError('AGENT_RUN_STATE_INVALID', 'This research run cannot be executed from its current state.', 409)
-      const leaseHash = digest(randomBytes(32).toString('base64url'))
+      const leaseHash = digest(bytesToBase64Url(randomBytes(32)))
       const job = await tx.$queryRaw<Array<{ id: string }>>`UPDATE v2_agent_jobs SET status = 'LEASED', attempts = attempts + 1, lease_token_hash = ${leaseHash}, lease_expires_at = now() + interval '60 seconds', updated_at = now() WHERE organization_id = ${context.organizationId} AND run_id = ${runId} AND status = 'QUEUED' AND attempts < 3 RETURNING id`
       if (!job[0]) throw new PlatformError('AGENT_JOB_UNAVAILABLE', 'No executable job is available for this research run.', 409)
       await tx.$executeRaw`UPDATE v2_agent_runs SET status = 'RUNNING', lease_token_hash = ${leaseHash}, lease_expires_at = now() + interval '60 seconds', updated_at = now() WHERE organization_id = ${context.organizationId} AND id = ${runId} AND creator_user_id = ${context.userId}`
@@ -664,7 +669,7 @@ export class DurableAgentService {
       const effectKey = `effect_${digest({ confirmationId, intentId: confirmation.intentId, action: confirmation.actionPayload })}`
       await tx.$executeRaw`INSERT INTO v2_agent_confirmation_effects (id, organization_id, run_id, confirmation_id, confirmation_intent_id, effect_key, status, correlation_id) SELECT ${identifier('agent_effect')}, organization_id, ${runId}, ${confirmationId}, ${confirmation.intentId}, ${effectKey}, 'PENDING', correlation_id FROM v2_agent_runs WHERE organization_id = ${context.organizationId} AND id = ${runId} ON CONFLICT (organization_id, confirmation_id) DO NOTHING`
       await tx.$executeRaw`UPDATE v2_agent_confirmations SET status = 'PROCESSING', decided_by = COALESCE(decided_by, ${context.userId}), decision_rationale_hash = COALESCE(decision_rationale_hash, ${parsed.data.rationale ? digest(parsed.data.rationale) : null}) WHERE organization_id = ${context.organizationId} AND id = ${confirmationId} AND status = 'PENDING'`
-      const effectClaimHash = digest(randomBytes(32).toString('base64url'))
+      const effectClaimHash = digest(bytesToBase64Url(randomBytes(32)))
       const effect = await tx.$queryRaw<Array<{ id: string }>>`UPDATE v2_agent_confirmation_effects
         SET status = 'APPLYING', attempts = attempts + 1, claim_token_hash = ${effectClaimHash}, claim_expires_at = now() + interval '5 minutes', started_at = now(), completed_at = NULL, error_code = NULL, updated_at = now()
         WHERE organization_id = ${context.organizationId} AND confirmation_id = ${confirmationId}

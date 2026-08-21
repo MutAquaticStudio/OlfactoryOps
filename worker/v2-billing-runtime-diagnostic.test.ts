@@ -46,6 +46,27 @@ describe("v2 billing runtime diagnostic", () => {
     });
   });
 
+  it("rejects a non-record probe payload before loading Prisma", async () => {
+    const response = await worker.fetch(
+      new Request("https://temporary.workers.dev/probe", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-olfactoryops-billing-runtime-diagnostic": "private-token",
+        },
+        body: "[]",
+      }),
+      {
+        HYPERDRIVE: { connectionString: "postgresql://private" },
+        BILLING_RUNTIME_DIAGNOSTIC_TOKEN: "private-token",
+      },
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      billingRuntimeDiagnostic: "NOT_FOUND",
+    });
+  });
+
   it("runs the exact include query and every independent read without returning tenant data", async () => {
     const matrix = await runBillingRuntimeMatrix(
       prisma(),

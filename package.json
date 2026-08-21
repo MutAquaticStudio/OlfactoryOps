@@ -92,7 +92,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@cloudflare/workers-types": "^5.20260722.1",
+    "@cloudflare/workers-types": "5.20260804.1",
     "@playwright/test": "^1.61.1",
     "@types/node": "^24.13.2",
     "@types/pg": "8.11.11",
@@ -112,7 +112,7 @@
     "typescript": "~6.0.2",
     "vite": "^8.1.1",
     "vitest": "^4.1.9",
-    "wrangler": "^4.120.1"
+    "wrangler": "4.120.1"
   },
   "overrides": {
     "find-my-way": "9.7.0",
