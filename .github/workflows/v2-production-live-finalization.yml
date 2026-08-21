@@ -102,28 +102,27 @@ jobs:
           fi
           chmod 600 "$PUBLIC_ACCEPTANCE_RUN_FILE"
           node scripts/verify-v2-production-live-finalization.mjs
-      - name: Revalidate read-only rollback capability
+      - name: Revalidate post-cutover first-release route rollback capability
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
           RELEASE_SHA: ${{ inputs.release_sha }}
-          PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
-          ROLLBACK_EVIDENCE_FILE: ${{ runner.temp }}/v2-production-live-finalization-${{ github.run_id }}/rollback.txt
+          ROLLBACK_EVIDENCE_FILE: ${{ runner.temp }}/v2-production-live-finalization-${{ github.run_id }}/postcutover-route-rollback.txt
         shell: bash
         run: |
           set -euo pipefail
           umask 077
           mkdir -p "$(dirname "$ROLLBACK_EVIDENCE_FILE")"
           set +e
-          node scripts/verify-v2-production-rollback-readiness.mjs | tee "$ROLLBACK_EVIDENCE_FILE"
+          node scripts/verify-v2-production-postcutover-route-rollback.mjs | tee "$ROLLBACK_EVIDENCE_FILE"
           rollback_status=${PIPESTATUS[0]}
           set -e
-          grep -E '^(ROLLBACK_(CLOUDRUNTIME|API|ROUTER)_(API_HTTP_STATUS|API_CF_ERROR_CODE|DEPLOYMENT_STATE|READY)|ROLLBACK_PAGES_(BASELINE|READY)|ROLLBACK_BASELINE_TYPE|PRECUTOVER_ROUTE_BASELINE|PREVIOUS_(API|TENANT_ROUTER)_ROUTE_TARGET_PROVEN|FIRST_RELEASE_ROLLBACK_POLICY|ROLLBACK_TO_(EXISTING_ROUTE_TARGET|ABSENCE)_READY|PRODUCTION_ROLLBACK_READY)=' "$ROLLBACK_EVIDENCE_FILE"
+          grep -E '^(POSTCUTOVER_ROUTE_HANDOFF_STATE|PREVIOUS_(API|TENANT_ROUTER)_ROUTE_TARGET_PROVEN|FIRST_RELEASE_ROUTE_ROLLBACK_POLICY|ROLLBACK_TO_(EXISTING_ROUTE_TARGET|ABSENCE)_READY|PRODUCTION_ROUTE_ROLLBACK_READY|POSTCUTOVER_ROUTE_ROLLBACK_FAILURE)=' "$ROLLBACK_EVIDENCE_FILE"
           test "$rollback_status" -eq 0
-          grep -Fx 'ROLLBACK_PAGES_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
-          grep -Fx 'PRODUCTION_ROLLBACK_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
+          grep -Fx 'POSTCUTOVER_ROUTE_HANDOFF_STATE=PASS' "$ROLLBACK_EVIDENCE_FILE"
+          grep -Fx 'ROLLBACK_TO_ABSENCE_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
+          grep -Fx 'PRODUCTION_ROUTE_ROLLBACK_READY=PASS' "$ROLLBACK_EVIDENCE_FILE"
           rm -f -- "$ROLLBACK_EVIDENCE_FILE"
       - name: Create or verify the exact immutable live tag
         env:

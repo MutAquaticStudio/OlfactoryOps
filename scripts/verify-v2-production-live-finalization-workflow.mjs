@@ -15,12 +15,12 @@ const required = [
   'v2-production-rc9',
   'v2-production-rc11',
   'verify-v2-production-live-finalization.mjs',
-  'verify-v2-production-rollback-readiness.mjs',
+  'verify-v2-production-postcutover-route-rollback.mjs',
   'rollback_status=${PIPESTATUS[0]}',
-  'ROLLBACK_PAGES_(BASELINE|READY)',
-  'CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}',
+  'POSTCUTOVER_ROUTE_HANDOFF_STATE',
   'PUBLIC_ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}',
-  'PRODUCTION_ROLLBACK_READY=PASS',
+  'ROLLBACK_TO_ABSENCE_READY=PASS',
+  'PRODUCTION_ROUTE_ROLLBACK_READY=PASS',
   'refs/tags/$LIVE_TAG',
   'V2_PRODUCTION_LIVE_TAG=$RC10_SHA',
   'GO_LIVE=YES',
@@ -32,6 +32,10 @@ for (const fragment of required) {
 
 if (!/^on:\s*\n\s+workflow_dispatch:/m.test(workflow) || /\n\s*(?:push|pull_request|pull_request_target|schedule|workflow_call|workflow_run):/m.test(workflow)) {
   throw new Error('LIVE_FINALIZATION_TRIGGER_CONTRACT_FAIL')
+}
+
+if (/verify-v2-production-rollback-readiness\.mjs|CLOUDFLARE_PAGES_READ_TOKEN|ROLLBACK_PAGES_|PRODUCTION_ROLLBACK_READY=PASS/.test(workflow)) {
+  throw new Error('LIVE_FINALIZATION_POSTCUTOVER_ROLLBACK_CONTRACT_FAIL')
 }
 
 if (/gh\s+secret|gh\s+variable|git\s+push[^\n]*--force|git\s+tag\s+-[df]|wrangler\s+(?:deploy|pages)|workers\/(?:routes|domains)|curl\s+[^\n]*(?:-X|--request)\s*(?:POST|PUT|PATCH|DELETE)/i.test(workflow)) {
