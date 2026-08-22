@@ -1,0 +1,2114 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "name": "RC12 verified main auth runtime candidate source",
+    "sourceBranch": "main",
+    "sourceSha": "331c1a6054fe1420b063a2e1fe9e5cef4f043ff8",
+    "sourceTag": "v2-production-rc12",
+    "previousReleaseTag": "v2-production-rc11",
+    "previousReleaseSha": "98cfac77853ffb0b6b69235bb3483117dc3b6961"
+  },
+  "includedPullRequests": [
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    27,
+    35,
+    40,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100,
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    136,
+    137,
+    138,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    145,
+    146,
+    147,
+    148,
+    149,
+    150,
+    151,
+    152,
+    153,
+    154,
+    155,
+    156,
+    157,
+    158,
+    159,
+    160,
+    161,
+    162,
+    163,
+    164,
+    165,
+    166
+  ],
+  "classificationCounts": {
+    "DOCUMENTATION": 3,
+    "FRONTEND_RUNTIME": 5,
+    "PRODUCT_RUNTIME": 8,
+    "RELEASE_TOOLING": 145,
+    "TEST_ONLY": 91,
+    "UNRELATED": 68
+  },
+  "runtimeImpactingChanges": [
+    {
+      "commit": "63411c1",
+      "classification": "PRODUCT_RUNTIME",
+      "summary": "Portable Worker toolchain compatibility: preserve base64url and hex behavior without Node-only Buffer APIs."
+    },
+    {
+      "commit": "9785ce1",
+      "classification": "PRODUCT_RUNTIME",
+      "summary": "PR160 feature-route and trusted CORS error-path contract."
+    },
+    {
+      "commit": "474f04e",
+      "classification": "FRONTEND_RUNTIME",
+      "summary": "PR166 browser auth runtime-domain routing and session-read preflight correction."
+    }
+  ],
+  "releaseToolingChanges": [
+    "RC11 candidate isolation renderer and workflow",
+    "RC12 source manifest and lifecycle preparation are main-owned only"
+  ],
+  "authBrowserChanges": [
+    "Configurable browser workspace base domain",
+    "Trusted workspace redirects",
+    "GET session reads omit mutation-only CSRF headers"
+  ],
+  "changedFiles": [
+    {
+      "path": ".agents/skills/ui-ux-pro-max/SKILL.md",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e5baf9400d4347e5ed3eb1f6b99cd0b9ba545b8b0e507aabb2b87397bbf73ea1"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/app-interface.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "331e7cf2c0b222d80c566c5f255c63cb339f65bfd02e471a720f28e4864a9f08"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/catalog-summary.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "65fe0b64480a8a827738297d0a64ca55c627d4afcb774fe4555c59cea8dd6905"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/charts.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "4115cf1120680f2cedef0676cb648f30c7ef4699e2a947535d4113e71ed3b12a"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/colors.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "8162429222bce22df62b564085946a30d07cc9722c58d0a3a494bd0d1d00841c"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/data-provenance.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e82fb33ed49375a300e93d9c11ccd1c1493c999e84ee7ee295e527634786e2e0"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/google-font-licenses.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "35688523f2955795caa1a47c53b83099e60c1708461476f9cc3a050cf3b0148a"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/google-fonts.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "1c8c3b2ea1faf6a1012da463756def8b3889db33f2226f0343bb4daa80307d03"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/icons.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "50816c6012030178195a16ee481ebf58b47bd985d70e8ec58886cc83f6eddafc"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/landing.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "9a2edd3bb676c2a58f00ade7a062e285222d4297bfd847c8d5b056f0dbbf52d0"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/motion.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "381affe8df8ea1f66fbbda2598827f9f54299107bbe6a1b4e9b68f6b62091ceb"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/phosphor-icons-upstream.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "2399325233b277b5c97a80e6a5e8941154f5d057beee4e7613db87c87d700236"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/products.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "42473f75e8dde5987bdf89ce55d8c168091b80a356cae691dd60247d80720b70"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/react-performance.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "3d925802539abac5afeb63ae8aa1960b7229ad271b3a47caed40ab2d97ad0734"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/angular.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "704be83f2bad30c7e6de01afb113ffa01e0c458762f48b7102f31ba2367b5553"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/astro.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "2c2f55fadaafc05e04cc321c8194a1a28b656e6757fe2ba316f41b16428299c6"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/avalonia.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "442fca14675a020683473e7e49f08abb27b9df0765c80efe54aef61f1a4ac258"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/flutter.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "64dba0ac17349f28bce517a0f5f48c54d9ed2e487ec0c0258303463b382f41a0"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/html-tailwind.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "d05a581d20af57b8ca0104a6d31d90a07c437d500662a96c3029fc2f9a4678ee"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/javafx.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "2e819b8d5abdd23ad4dae0991650fdb57af497aabd68b37463aa9c442944c869"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/jetpack-compose.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "699de218b286948eaec7d15767b6e1350ee299167e49bf476d82e3ff58724e0a"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/laravel.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "854ea4daa5fc61292d22235ad33b49ba3fe22423c3de8d3cb03758ffed3b59f9"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/nextjs.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "ecd2c27b2ea0127d203ae726060efcdd7335b5e83f96b99e4f3befbbfeebd5a4"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/nuxt-ui.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "c36ee8470926b4a0748d241363c71664c9969c2edbc62f7f72de0db73880fac6"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/nuxtjs.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "3d9b54ed2d151bd9c86e9e5609b8a6f88a00c4c52fa601a30af96c49b2c4d176"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/react-native.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "ba31dd9c0c04da6bc02a74448bf121f9c0728ae5ba3b4d47b487778b0a1135b5"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/react.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "2d2b9c198e875106a30f7ee68341a9ee0033cad60a7e130cf23152783e08aeda"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/shadcn.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e56cfde5b74907836ac3582a4779d5b7f3d206a702ab81b8669a1b668c3eeb51"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/svelte.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "f6e379ba802941ba26b01d4ffbe3cd39120f2587659a1d93851c707f66bc13db"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/swiftui.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "bdd9231ff3ad658f4e7c063e1eb49df2fd09ac8d90631a86df899b39833b9623"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/threejs.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "97542e0ba34915a0ff7578be20e1619495df47c95c8c1c39b83e3785e1de771f"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/uno.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "a0474363e4225b5367214d5675fd3e075f137026f9500f0d04357882ef4f6d48"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/uwp.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "c409f08c1fbba1f1029f1acaa554e7b4471cc85517a5751c9f2e62465badcd5c"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/vue.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "b655f1ebb9dff2652d15981f31b1784c8a6d4759efd2815a14f3088257569f95"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/winui.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e676dc1c13ee6c205c40b0746f1335150a346c7a49a0616d2545bc3d2c930c85"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/stacks/wpf.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "9781a9950b20333637b30a02e498b7efca21b618a3eeb8665836f3ac6e974da7"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/styles.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "a93a4d9d7025856575d7b7583bda020be9043013432c5af7c58af9dbdfb206b7"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/typography.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "321fc446e89024488ebae96dda93efc4d2307bd8bddb240857ad51364f6782c8"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/ui-reasoning.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "f0774dd741cecdad5eec842034bd6d5e9ea50e9f220a1910069748daa0bb8e9a"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/data/ux-guidelines.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "ff81ec613f70ba9fc3fcce52dbe4ae35d44b2079dbe6dc066d2d6e38c28facd5"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/core.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e544826963efefce3c59b65e18d83d92a5baf571f05458025bf1fa9021eced42"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/design_system.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "6a94743c3362c9c7e6d1450b94f4014d9ea752e7b4e151f6f0bdb217e0544bf7"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/reasoning_contract.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "b8bac1af82aa280d3e06f00aabaeac4337e632996b07fed874e2b6ee6e9c5913"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/search.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "8373e2dd2d560d9853ec116140de0e0d5bee45a6abe5e041173c84e1c36a7f87"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/google-api.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "22d8dc81a7d6827b7e8b64b53e7d184210fb9759e8e294e0d5133c81cc460176"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/google-catalog.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "c608ad5c4084ebc50a4bbbfb69ea2456c01fd5519c457e18410fffd250ae948f"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/google-existing.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "4e0761b839dc6b2187a370e82eddc0aed8a7ff10c09e28dd814bb3656dac595b"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/google-metadata.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "30bffc29ae348416a2de2f9c6c418e768e4578f136b0f4bac5d2f70124f2e9ba"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/google-overrides.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "6243a48a4619986768c4628e2d0c98ff195beba71ba9be5df8f0c52fc6d90c0b"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/icons-curated.csv",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "68362c9a700c13b96f000784a0198c1c7e117a7088a01c85744e44233038fe9d"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-core.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "ae4d0bb076240824e1b643c2270d1f8cc0952a69502ec1e622b7dedd85b930bb"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-package.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "500588c757d6de03e3d7e69b27a8b8b1f88ccf6bb0333e4c1e9b0d6a4f112475"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-exports.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "d79f2ee0afdbc2f87776733e145df3538a16a25d7c2fba0056bb48295dad0ded"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/catalogs/phosphor-react-package.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "1c57a1d76bcc0cdd3632d4c18b9c0e79576b4591df39831c9607e5d0eb4f2cec"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/relevance-baseline.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "38398452985116e74e31bd6bccca0f4decd1bbfe4eebc1ac99f7a1836baaf77f"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/relevance-cases.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "e77d36eebbf6ddc2860946a02cdb659351da6c09f2688f1ed30939a418099646"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/fixtures/relevance-thresholds.json",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "9d738e11c6b82fecc8d0946e7b38515518ded5ed3294a7eb19a021c4edb5b57d"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_catalog_refresh.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "3e2ca5d12702318f641ae62d0c14f22a3bcc84d84e79b863c0e947d475604adb"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_core.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "3527fe2f4b852f69f07c17ddc0d615d9a6e025c924e45a33985579a94a8d2118"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_core_data_quality.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "3ffc6b4905c9ea26d7ac4527ab154d153584231aee71b2ae4bd017977fa09cc5"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_data_contracts.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "0360d6e10080c0bca214f2b0bbad582ba50702a542ce21013351aca54938df3a"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_design_system_mode.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "517ba1ba6195c94811126d1162139c51aff77fc68c3e320c7bb6c1e89e76bc9b"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_native_desktop_stack_freshness.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "904f90bc6d364763673fa6067d98a4227d535760fa8b6d26abe22208176997ca"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_relevance_evaluator.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "2fe56a4d6fe5fff15ff592274b0eeaba925146cefea6c0fa29d8f1b77c9aca1f"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_style_taxonomy.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "cd14d0092e8a454d213aa104b53e4e70ba698491fa00fde9fdec5ca8a3d70011"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_text_layout_resilience.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "b51d32ee8a15505b87cb81957fb2d1b385e041e8beb4463c311d236bfd29ebd4"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/tests/test_web_stack_freshness.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "becc5fa40e7516613d4e9930f226aa483e3796090c17cb16542c93d1927e680d"
+    },
+    {
+      "path": ".agents/skills/ui-ux-pro-max/scripts/validate_data.py",
+      "classification": "UNRELATED",
+      "provenance": "0c9886c349facb410e45c94568f131993e582046",
+      "sha256": "718ad4cbb227436015c9c2bc80fc583d6ed738b01c1a940ef85e350780d99f58"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9109020c681051f40da94cafb871b182f31c98e3",
+      "sha256": "24014fe445e180c49001bccd50ef595997e7c045ef371d9fc3a85a7eaf3b38df"
+    },
+    {
+      "path": ".github/workflows/scientific-container.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "6c4251372556a9a92f5671fff0e2d252f2afd468b6a9b06fe3ef6b15bd59f8ec"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-billing-runtime-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "b574fe4bf481b5d5c8340613e688545dc9547d79cd805d6dd675d24388658b67"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-browser-route-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "b962633408c30cff0b9153126d0b8d10f8d78cf1d8f4e1decf5047d9de336abf"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-browser-runtime-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "b480aa6d19568e7de52ff5bb60364831dec2c65e01360b0d146a0ba4b0ebe8b9"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-custom-domain-precedence-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "deab6ef7ab9f24afbc7a66aabf03cbffd7ac7482b09fdb20c5bc0e672e3fbbaa"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-custom-domain-reset.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "c58f2420a31001a381ab032937083a70d274642df87ee45c9102f15306941812"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "27a8a389de74baea31e3fdd34b64dbe7ca91956361c09a3c5f81866ea5daf050"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-edge-reconciliation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "1d9f3c5a3b6d79a8113927616f22213ae2a6f0f52708246a92056ed952b47262"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-exact-billing-path-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "6b16def620f9bd8e399e5a208e919f8a900f63975d93274fb3d344ff8982206e"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-exact-route-override.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "abf700c2a88b320b8f2bc6c177ed87340e30b9fe5bb829f213a4ca5d9673e05f"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-generated-login-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "b27feaa4a17d215645e06dcec31c8c058b6f6c1d5110141b3b66b30f86c49912"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-rc10-pages-origin-reconciliation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "8c26f900bc72de69c8ccb77083d66389a99b65721395b48db320d4a5f223937c"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-resolver-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "5ef8eefc91ebe4e7e0aa2118dcb13424c3ee2492a4c343ca9ef6e285f1dff18f"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-router-ingress-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "066bf431a3a6d48c7d078758189c5f878000fd0b26b0de572b84969c71d96fff"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-router-request-path-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "92e97b4a6b9c8c6e0f2a33c2c273eae5a2b44c2d78221bb3beaac174d81e6942"
+    },
+    {
+      "path": ".github/workflows/v2-production-candidate-runtime-path-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "a097312c24514ad98fd8bba412b57af411f47591906057a015b63e14f8635244"
+    },
+    {
+      "path": ".github/workflows/v2-production-environment-revalidation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "d0be9035a75527ad70de0e5ae948078d61b8b31d62d5365aa354f397dca61935"
+    },
+    {
+      "path": ".github/workflows/v2-production-first-release-rollback.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "17198dd9f42f2e100453a08daf583b539e83ce47a26c9361224bacb4a9c2af85"
+    },
+    {
+      "path": ".github/workflows/v2-production-live-finalization.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "ae2c9ad66760cd36989b2060c7c63ad29300ae576ffe3e80f52216190b9e3a72"
+    },
+    {
+      "path": ".github/workflows/v2-production-platform-owner-bootstrap.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "d85ae29b46e4af9a1b7fcfc5469acac0b519bbdbe975e2f0913ea3211cf65919"
+    },
+    {
+      "path": ".github/workflows/v2-production-postgres-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "001da37eeff7ca7df963dd6ed91a77ff1fa40c67e6eea711143ae8b15d3e23a0"
+    },
+    {
+      "path": ".github/workflows/v2-production-public-acceptance.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "c190bb34b6f98f0e07de34da7df8e1c193f99c83fa93d98661313e6fca3f3a8b"
+    },
+    {
+      "path": ".github/workflows/v2-production-rc-staging-deploy.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "d09805f9282d66a779be53279e21e7c783dec536a27fdc8305d0641ffb01165e"
+    },
+    {
+      "path": ".github/workflows/v2-production-rc-staging-revalidation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "bb231132f9cf968fff0db3f3b567e3c22aa8db616365b194b0921c2fe704c6a8"
+    },
+    {
+      "path": ".github/workflows/v2-production-release-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "fcee3b6ad1c03636fa1fac6486c96e7721480485fe96203598a96798e50e6cd2"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-backup-snapshot.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "917a5ad74d50db2dd83faaca1e9fe4273f0b28f413aa2593f523fe0d5a76fef4"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-pages-project-preparation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "7bdc320fd90ababc5271363b7791c56181890238a6e632219595cefb4ffad318"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-platform-owner-diagnostic.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "e3090fa114271e29aea004b2113d488b4edaae0c2a1de85a5ba5da376bca0f71"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-platform-owner-onboarding.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "a3673fb9b522924ef94d0786297475f7386c88a9f07b7dccc29273896668214f"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-postcutover-route-rollback-preflight.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "fccb621fb242c98624c7794e39c3876a03dcea1741bd3786b3cea8464120e02f"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-readiness.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "b22b402d31ee1bfc764a422201fea1fb42db98080ad28f49dd2647fd47cb5eff"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-smoke-identity-inventory.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "19aec1e868d2ae6da7d9e4b96421f14923ee50bf06ace5badb001318c6133703"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-smoke-identity-provisioning.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "3f5ea0277a3d3f8d3afb57cb075fa64ba39fba1af197fbe8bda9945a4792c7fa"
+    },
+    {
+      "path": ".github/workflows/v2-rc10-production-smoke-tenant-selection.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "66156ee7027ef10da9543c0064e66298ef761dd97769395503b5e53b0c12f8eb"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-isolated-production-candidate.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b02e2f2db4a4decd611da0f75a869e22c51e0534",
+      "sha256": "f9d4bd55b93cb09b4df82c02563da18303b2e69748f2059f4e10bb34b0dfcebd"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-backup-snapshot.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "d37614e859a05a5c0a1fcaafe5b5f9366a656ae197efa84df876fdb275b19e5a"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-environment-revalidation.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "57c87016846874b03e8aa824a7b688efb6e32bad175d903be4c0a4dea93bbe12"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-live-finalization.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "8abd9e7d441c2244afe91b1ec48306db74fe62b551de133059d418da88b26b99"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-public-acceptance.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "992e219d7803bdddb7971496d8d4c88afee31e0d7b9f92c7a7ed0760b0e64781"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-readiness.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "a3b0dc2d29ab2369298a2cd23d797a2076ab09724fe88734ce1026d647f5f86e"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-upgrade-dispatcher.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "40eb8058ab2abe44bd2ad685059b5d1618e0b664bb44f233290c5b720ec18e67"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-production-upgrade-rollback.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "201dbaac0486268ac8bd32dbb5f4932f9688a8cbcc424b660c5fad0ce6c1b490"
+    },
+    {
+      "path": ".github/workflows/v2-rc11-release-source-finalization.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "bb91b2958b3f26eec783748221e4025c9897037b55567997dd0bd92cb819a727"
+    },
+    {
+      "path": ".github/workflows/v2-staging-api-worker-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "91d459ffe62a1c7d6349124a7ae82114c401a5e9b5e292fe4e74337936f82873"
+    },
+    {
+      "path": ".github/workflows/v2-staging-cloud-runtime-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "753e376b61d68b4e49cbe517de7382d82f1ea0409d01c17b345fa13a7b364d8c"
+    },
+    {
+      "path": ".github/workflows/v2-staging-dlq-probe-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "c93c5c9886d9600324d42cdf4fce22f4b98bd977292b22deccee1b4c45c4abcd"
+    },
+    {
+      "path": ".github/workflows/v2-staging-feature-recovery.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b4a0a8813f3afc77c08ab2febbf52be002363d45",
+      "sha256": "778b498f3ae357f383a62b63dbb8a2641c53a262e733280f2740811f52228488"
+    },
+    {
+      "path": ".github/workflows/v2-staging-pages-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "033510764130f71faf1201672a1d4133477fd62b105314674343ddcaee673fd4"
+    },
+    {
+      "path": ".github/workflows/v2-staging-postgres-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "a9bc22f0a5778354bed15d832acf856907417398baec7657596b0adc4c717a48"
+    },
+    {
+      "path": ".github/workflows/v2-staging-remote-e2e-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "04e99338655e37fe5f1124a9e62285233cd9af5f4c792b90ad90b967f11b83b7"
+    },
+    {
+      "path": ".github/workflows/v2-staging-route-parity-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "c873ed71e0b8ede9c3377794831ba5581f56de150508c748ed294898b463a4d5"
+    },
+    {
+      "path": ".github/workflows/v2-staging-scientific-canary-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "bd2ba8c039a7f103bb5e95d99dd316646d149c72e48594a55e0e250e28f3fe2c"
+    },
+    {
+      "path": ".github/workflows/v2-staging-scientific-e2e-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "7fbc817f17b76b7eb4843ff3a6603f3790ac239eb33ea69a5a9b6f5c6f1c6bda"
+    },
+    {
+      "path": ".github/workflows/v2-staging-scientific-publish-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "a89380c6fa4166229549f08ad902f52de115a53cbb7fd033dcc6360bacad726f"
+    },
+    {
+      "path": ".github/workflows/v2-staging-tenant-host-e2e-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "ab3cbda913855726a0174d4b461b04edef0f836f3d0845f81a4a44619738d370"
+    },
+    {
+      "path": ".github/workflows/v2-staging-tenant-router-dispatch.yml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "56691ec6e807422798f16beef04b9c288f52a8f2c3aa8d7213aeecf84c7ffa28"
+    },
+    {
+      "path": "README.md",
+      "classification": "DOCUMENTATION",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "41217163f7830e54fcd7f9d812d0a9e796016f1375847f9ca6389acfc777d036"
+    },
+    {
+      "path": "docs/v2/cloudflare/PRODUCTION_DISPATCHERS.md",
+      "classification": "DOCUMENTATION",
+      "provenance": "4aee56ce1e2a9acb346b71171e6096294c188c7b",
+      "sha256": "d4cbb356ba5411df24f5a9e39d4e1457df9cc5fe18098c1c59f6273f3ae4c629"
+    },
+    {
+      "path": "infra/cloudflare/README.md",
+      "classification": "DOCUMENTATION",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "372e1677c1ad47a73f49e0be6586040269241ff08801421e549649e5675d4387"
+    },
+    {
+      "path": "package-lock.json",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "6341fcd9c8102bdb93110aa9b0365abd9431f0f5d3d8496da005387c7311bc51"
+    },
+    {
+      "path": "package.json",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "03be0f8e06912176246b28c5ea3f28ffbb805cb15763599b797496d5ea918dcd"
+    },
+    {
+      "path": "releases/v2-production-rc11.json",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "9b0799f5ce3397039b6176cadd168173bf018915f3a482a75de8468777039e10"
+    },
+    {
+      "path": "scripts/bootstrap-v2-production-platform-owner-pg.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "65e7a4494a6a8ed43bf06e663c94b0ae67fb89d4",
+      "sha256": "9a9144a472db080cafa6ab8d20616d8f4c480ea93c9d04ca80fbf0d242ec00a3"
+    },
+    {
+      "path": "scripts/bootstrap-v2-production-platform-owner-pg.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "65e7a4494a6a8ed43bf06e663c94b0ae67fb89d4",
+      "sha256": "f292ef7298ef37f7af96d51a18dcd4d932dcfc5ad4473f8c3ce5a86538e1fd24"
+    },
+    {
+      "path": "scripts/capture-v2-rc11-upgrade-state.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "84e8a31596a60ae1cc75becb2b22b9c9109ff94ab61c4b9358f79adcece20e76"
+    },
+    {
+      "path": "scripts/capture-v2-rc11-upgrade-state.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "ad8bd52836ee8adfd49b2a1217f2c48983879d94ffcbbc2b85fcb92327d79765"
+    },
+    {
+      "path": "scripts/classify-v2-production-candidate-route-override-tail.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "49e09b58d7f20b370dff0fc13ae5b9b2b8880bed40586a2603e578cb38158337"
+    },
+    {
+      "path": "scripts/classify-v2-production-candidate-route-override-tail.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "7a8a04ff69e782ed94bedcfd87de6776e7df4113317687bef402a34bf4f43729"
+    },
+    {
+      "path": "scripts/classify-v2-production-candidate-router-ingress.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "c5774557293f4223fe6b5896a2335b77e8bf71d5",
+      "sha256": "0a9730f501eb6df8d8c8c734d58c134bc9737b170a2034b04a8311f1abad3254"
+    },
+    {
+      "path": "scripts/classify-v2-production-candidate-router-ingress.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "c5774557293f4223fe6b5896a2335b77e8bf71d5",
+      "sha256": "073209357d3bf77215204126d680ee02a6da96416ca875132d5355553806b2eb"
+    },
+    {
+      "path": "scripts/classify-v2-router-request-path-diagnostic.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "256efe27523b5718799a47e71437bf290d3ec02d184591c8871bf887896138f2"
+    },
+    {
+      "path": "scripts/classify-v2-router-request-path-diagnostic.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "3c80ce21f397943ab69347037247568c4c5a1c1184b422ef828174a206e52c9f"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-billing-runtime.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "d01a44a9d199c15149ad6bd5326995818c3cdd5d",
+      "sha256": "88c44f6a14ac52bc38e3d0a747c8508cb3a7008829e9c52bba5e19ba60d0996f"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-billing-runtime.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "d01a44a9d199c15149ad6bd5326995818c3cdd5d",
+      "sha256": "c408c166c1249ebe26d073bf4be7abeb6ffdc157f7ad71678fbe9dd59c2e1db6"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-browser-runtime.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "cde064743d7858cbdefb9dfd0c8df44e9c6d0db0",
+      "sha256": "cb53d52a55cb3640c8f7403bb5f2e4a1041ff600603c3356079db2fb453930f4"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-browser-runtime.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "cde064743d7858cbdefb9dfd0c8df44e9c6d0db0",
+      "sha256": "dfdf06e9f3764025baceb4bf81dc301be6b025225782e7431d6d983ad62f9f83"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-custom-domain-precedence.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "158e70b5639ad34aa9a0b2630e98917268085919",
+      "sha256": "7ba0aaaf52868dc3f5a76bbc1e991cb99e7410c163d688d171ec2204336b5ad6"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-custom-domain-precedence.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "158e70b5639ad34aa9a0b2630e98917268085919",
+      "sha256": "aaf6af354520d8361638e5e12da2e60b2bd3e4479c9d8c62f623256701253593"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-exact-billing-path.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "25e30f11515e825530a2bc495f8d8835cbd7a060",
+      "sha256": "5fbfbb51925b1b0da959a8fcb423e22c1daca3b40c07b6516e0586fdacdab9ad"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-exact-billing-path.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "25e30f11515e825530a2bc495f8d8835cbd7a060",
+      "sha256": "00d7e02940e1bfd1be012af14aa5d1a38c83b5534f914ed8b3c475a4c9f02899"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-generated-login.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6a5558d10657fa3bafcc87f44cf14dcc3da2d180",
+      "sha256": "23b1fc4a9911b22d2142132f2d377174e0215be00bb6681fb05708a558fdfec9"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-candidate-generated-login.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "6a5558d10657fa3bafcc87f44cf14dcc3da2d180",
+      "sha256": "a92518790cf25231155119a10043818e82019a896889503f0c022e9d997ec69e"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-platform-owner-bootstrap.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "1da2201da48f3fb409845a687a71373f03906be8",
+      "sha256": "4a0578a25c432ed2e07f285d0591518c739f1801768dc8c9224a686212c53f6a"
+    },
+    {
+      "path": "scripts/diagnose-v2-production-platform-owner-bootstrap.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "1da2201da48f3fb409845a687a71373f03906be8",
+      "sha256": "d7e836ac02dd74034fea26834b62a6407800e14b5c3ac35175f24066eba53df5"
+    },
+    {
+      "path": "scripts/execute-v2-first-release-route-handoff.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "cb3cc1c5fcca8d3e137f827d1c0d96a4350b1fd7",
+      "sha256": "a405f37c98b7f6354d70ebe74bcf3300ff690f3ac830a64acabfd5eefd499b73"
+    },
+    {
+      "path": "scripts/execute-v2-first-release-route-rollback.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4773c7964429dd7526da72391ac8dd6cf86e6cdd",
+      "sha256": "5c9485be72c5ef33499fa8d243c6073c66b1cd2e3e9957c756e7d66e14cb52d6"
+    },
+    {
+      "path": "scripts/handoff-v2-production-cloud-runtime-queue-consumers.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "13285d213a9c287ee3757a8b55a7dec71f07c312",
+      "sha256": "c69e52276a37128e18008965628df0c01afbe02a9d9e3428b6647af04c7c4f9c"
+    },
+    {
+      "path": "scripts/handoff-v2-production-cloud-runtime-queue-consumers.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "13285d213a9c287ee3757a8b55a7dec71f07c312",
+      "sha256": "43ad219e2a4fd2d45c17d06e941008e646e8dd2e6a3f94a7cd25a1118d4d27c1"
+    },
+    {
+      "path": "scripts/handoff-v2-rc10-production-pages-domain.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "466d7453e03268bf5a6896b1b864d3ac4ebcd765",
+      "sha256": "ff9fa483d2fa7ae79ebe3d94e049426b5802f2c56428bec13595119dcd2aecfe"
+    },
+    {
+      "path": "scripts/handoff-v2-rc10-production-pages-domain.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "466d7453e03268bf5a6896b1b864d3ac4ebcd765",
+      "sha256": "e247ba6c33ac7031fe3a29f0aa02384bc3e493b567b338316bbb00f624dcb2fa"
+    },
+    {
+      "path": "scripts/inspect-v2-production-candidate-router-ingress.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "ac215e1dd195682dafed0c474435a98961805ee5",
+      "sha256": "627f00ed91dc3a9a3c8400a5d225d374ddb393830aff289b399b89b0541209ea"
+    },
+    {
+      "path": "scripts/inspect-v2-production-candidate-router-ingress.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ac215e1dd195682dafed0c474435a98961805ee5",
+      "sha256": "bb7c7a0ad828293d6ac1fc4f625a87e98e003f308a29558a63eae4eb7fd5c8fb"
+    },
+    {
+      "path": "scripts/inspect-v2-rc10-production-smoke-identity.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "5bc0a753a7b92afebc5bce588bc06c156b1969b0",
+      "sha256": "ce3b07f2c8c8777b8b738fd70303df25612ea8ce39b6b39b93a229136b58dd03"
+    },
+    {
+      "path": "scripts/inspect-v2-rc10-production-smoke-identity.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "5bc0a753a7b92afebc5bce588bc06c156b1969b0",
+      "sha256": "3424a49eeaeccaa3724b3919579dbaf23e0ec778aed47fffee1e544cc5a16a92"
+    },
+    {
+      "path": "scripts/inspect-v2-rc10-production-smoke-tenant-selection.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "f9ad09e029ba0c273934eecb8d64f522af2a31e873cb3d72e352cd9838d61c62"
+    },
+    {
+      "path": "scripts/inspect-v2-rc10-production-smoke-tenant-selection.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "237a1fc8f5486cd524deac94bd85f5347dd5f0d50700d8c11af939220745911c"
+    },
+    {
+      "path": "scripts/override-v2-production-candidate-exact-route.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "63d1959a6326c2a6764748c791a97416f573f76a",
+      "sha256": "6375f18ee0d07961e4969353eae2b01a8b1cbad92578dfd51c64da03bacafb7c"
+    },
+    {
+      "path": "scripts/override-v2-production-candidate-exact-route.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "63d1959a6326c2a6764748c791a97416f573f76a",
+      "sha256": "e5411e8a6b6a146c80dbe1153c70c1db3fc17065bd3dbc4a639850cf7f329b53"
+    },
+    {
+      "path": "scripts/persist-v2-first-release-route-baseline.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4aee56ce1e2a9acb346b71171e6096294c188c7b",
+      "sha256": "dfae77990dd3e5ece0358ad962ddd065dbdcc4b79cbc2db8c5f9bebdb03ea40b"
+    },
+    {
+      "path": "scripts/persist-v2-first-release-route-baseline.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4aee56ce1e2a9acb346b71171e6096294c188c7b",
+      "sha256": "e3797cfd89b8375db2efceed5d8a0422f59b8ebebd79e2d7329a57a359dbc900"
+    },
+    {
+      "path": "scripts/prepare-v2-cloud-runtime-trigger-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "13285d213a9c287ee3757a8b55a7dec71f07c312",
+      "sha256": "f5d5309a375680a748498d1e7347c46e19989baa8f6600a678136ec987c70d53"
+    },
+    {
+      "path": "scripts/prepare-v2-cloud-runtime-trigger-config.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "13285d213a9c287ee3757a8b55a7dec71f07c312",
+      "sha256": "fbbd91c7a8be27d97235bb965d6585ef281932a5b2b3f89e22fefd71ad1b37b0"
+    },
+    {
+      "path": "scripts/prepare-v2-first-release-unrouted-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4773c7964429dd7526da72391ac8dd6cf86e6cdd",
+      "sha256": "3bb0b75ff72a805a2dda811a870e3c0be259474bb234ca285fb28b0dd1aeafaf"
+    },
+    {
+      "path": "scripts/prepare-v2-first-release-unrouted-config.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4773c7964429dd7526da72391ac8dd6cf86e6cdd",
+      "sha256": "ba72d32913470dad15721ec561cf46afebf0a1e639d80fa9c815b27d8cdce5bd"
+    },
+    {
+      "path": "scripts/prepare-v2-production-candidate-post-bootstrap-acceptance.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "7ead053964186a2bbecdb158c1e7ade0bf5da413",
+      "sha256": "e892f26ecf2138dce22cbe31c15474ee8611b3ca8f189ae921a0f31f17615d28"
+    },
+    {
+      "path": "scripts/prepare-v2-production-candidate-post-bootstrap-acceptance.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7ead053964186a2bbecdb158c1e7ade0bf5da413",
+      "sha256": "f9f58cc7bf1d90e0f1b1318fba33f301f390529f2440bf46dde1005b884f20ca"
+    },
+    {
+      "path": "scripts/production-candidate-api-router-render.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "77613beafd75d0678309cf2707e5bab14354068e",
+      "sha256": "9e5edef0b758bdd9d2a242e6cc1e0b62a662964c92e1a2f1951aee7c16a5717f"
+    },
+    {
+      "path": "scripts/production-candidate-cloud-runtime-render.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "880a565578344ce4b2e38898216f58abb3cae093",
+      "sha256": "be6eef469e58328e10e219b25c9c010cbbb7ce5c2d03e003312979935dd5e4c9"
+    },
+    {
+      "path": "scripts/production-candidate-dispatch-contract.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "a502f8135a980111f8e029ab9f89dfea41b54670",
+      "sha256": "1eadc7d2bab12d20180b8d58189bd4670d5e332c8954c41f5a84803d656a2f6d"
+    },
+    {
+      "path": "scripts/provision-v2-rc10-production-smoke-identity.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "7ea96ba3d609c2bbff127d1ecea62ad356f27884",
+      "sha256": "cf77fd1c0229d2d05fea7a49d4ef345fec39f75ef5d363a587b86bad07ebd9fb"
+    },
+    {
+      "path": "scripts/provision-v2-rc10-production-smoke-identity.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7ea96ba3d609c2bbff127d1ecea62ad356f27884",
+      "sha256": "3f679feeeeeb08177acec2a66c4590aa828a77e9ea68fdfd21d9dcbe4db6df4f"
+    },
+    {
+      "path": "scripts/reconcile-v2-production-candidate-edge.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "63d1959a6326c2a6764748c791a97416f573f76a",
+      "sha256": "ee4f53f75cdf18416a08bd6aa7f1ecf1b808d360f6ea8fb2f63deb1a32e2fa7a"
+    },
+    {
+      "path": "scripts/reconcile-v2-production-candidate-edge.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "560e52bf57fdba96f8761273af4186220f8521cc1fc197514e9adb4e7347ceea"
+    },
+    {
+      "path": "scripts/render-v2-production-candidate-edge-router-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "f52502ebdf1e32329d2dfa71fc86a24b584b204a",
+      "sha256": "0e51d9a90d688e25d65d3934832056a1a18323e6cb5049157245da5c2600773f"
+    },
+    {
+      "path": "scripts/render-v2-production-platform-owner-onboarding.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "1f90b329fecf1238b33c23bc562ee6eed7746328",
+      "sha256": "bd11c537417f3e506d90a9113dd9256d7a5347b42f39bec09667a8bee28f05bf"
+    },
+    {
+      "path": "scripts/render-v2-production-platform-owner-onboarding.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "1f90b329fecf1238b33c23bc562ee6eed7746328",
+      "sha256": "6fb332719a75a8e78480ffc133b55f7c9e6000e9a18d691cc1d8ec0172734671"
+    },
+    {
+      "path": "scripts/render-v2-rc11-cloud-runtime-candidate-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b02e2f2db4a4decd611da0f75a869e22c51e0534",
+      "sha256": "ea8a9a864febbafd656de541ba748bc1a695e02fbb334013bd013eeed7aa6cac"
+    },
+    {
+      "path": "scripts/render-v2-rc11-cloud-runtime-candidate-config.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "b02e2f2db4a4decd611da0f75a869e22c51e0534",
+      "sha256": "8f1e3dc35c1e730febc6a0d38b41e0322d9af7a88f2ed19466b1f000d16f3b45"
+    },
+    {
+      "path": "scripts/render-v2-tenant-router-request-path-diagnostic-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "e71aca459e989b217e41357509f1369dc3be04763d2adb5cf704f00a82bd43f7"
+    },
+    {
+      "path": "scripts/render-v2-tenant-router-request-path-shadow-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "0044bd80ffc1506f00681d9084a28dfc5799015989da4a55827d0e7b5c2656bf"
+    },
+    {
+      "path": "scripts/render-v2-tenant-router-request-path-shadow-config.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "c306495d1138b2e8e0dab95d1d9b436bc0231a8ffae4f5301a02e8486ebf636b"
+    },
+    {
+      "path": "scripts/render-v2-tenant-router-runtime-diagnostic-config.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "c576e90956d0d87f71d72e784849e8e7349cc8f3",
+      "sha256": "e633e9dab10f432e5ab2379c86841e7a74b2ff6b955c9ebe62bda83c111a58b2"
+    },
+    {
+      "path": "scripts/reset-v2-production-candidate-custom-domain.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "0973c7537f7fcd2c6ec916369721a7922fc67635",
+      "sha256": "adbdd7197ba3ea941362764f84b93b355fe9ef641b14ae7c2e8c0613bd76dde1"
+    },
+    {
+      "path": "scripts/reset-v2-production-candidate-custom-domain.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "0973c7537f7fcd2c6ec916369721a7922fc67635",
+      "sha256": "3a08c3f96e8644279a108dba5f5096da558e2bf6540cfe919341cd4fbe6451eb"
+    },
+    {
+      "path": "scripts/resolve-v2-production-pages-origin.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "ae8e98e8b8c827cbdd145b353aaa1c6db8667629",
+      "sha256": "d54aea5b903e58c277088143dd11ef57e934a6e45ef04e385ff41b954658c9df"
+    },
+    {
+      "path": "scripts/resolve-v2-production-pages-project.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b9bfcd0e3e3118b44f4829710cf4f7dc366e1c97",
+      "sha256": "bebe160dd48f7ee3fb8c5ff44d6b94d5a285fa55f44c4880e46999335f69c0e4"
+    },
+    {
+      "path": "scripts/resolve-v2-production-pages-project.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "b9bfcd0e3e3118b44f4829710cf4f7dc366e1c97",
+      "sha256": "8b30347dc9802568ccdd788df4876b3ed98c87e9fa75724006f1860bbbb67b3f"
+    },
+    {
+      "path": "scripts/staging-feature-recovery-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "b4a0a8813f3afc77c08ab2febbf52be002363d45",
+      "sha256": "37477491428b3172f8374ef06926c65e8c4e9defa3d30ab83ccda4939b93945f"
+    },
+    {
+      "path": "scripts/v2-exact-billing-path-diagnostic.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "6296b95a332df7eaf61d4cca94d4c16cf2e600e8",
+      "sha256": "34ae4e5f61bed4229b1d3a019e37a528bbeb3fb668509ffa70eed095dcf6c977"
+    },
+    {
+      "path": "scripts/v2-first-release-route-policy-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "cb3cc1c5fcca8d3e137f827d1c0d96a4350b1fd7",
+      "sha256": "9136e03195c30cd878b55deb7d08f9a1a25dea25745a2bf42af86847ba6af14b"
+    },
+    {
+      "path": "scripts/v2-first-release-route-policy.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "facbd0b4c8c883958d13f08a90979488fc093f9d",
+      "sha256": "c36cb409e7cc017b372cb9843d16c4e870582e979183af5f6483c6b6b681e834"
+    },
+    {
+      "path": "scripts/v2-first-release-route-policy.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "9213db25bc66abd642c34adf0967c9b1050dc6de163938c862bec7051404bba4"
+    },
+    {
+      "path": "scripts/v2-production-environment-revalidation-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "e967cccd2c23e9d7993dc09f010d475f04040e77",
+      "sha256": "650eb1eefde5bbb4e5736bb751ab86e47510804165e058855011d350a9f56c40"
+    },
+    {
+      "path": "scripts/v2-production-platform-owner-bootstrap-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "1497e6293576859d66501055f58328eb043c7fcb342e041a0d964101fdb6666e"
+    },
+    {
+      "path": "scripts/v2-production-public-acceptance-classification.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "83ff73110d2ac4cd32bae0b7885dbe042da050d0",
+      "sha256": "9473b1596a17ab538ba177376e884ea0b9fdb440a063d6f0ad27735de6513185"
+    },
+    {
+      "path": "scripts/v2-production-public-acceptance-classification.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "83ff73110d2ac4cd32bae0b7885dbe042da050d0",
+      "sha256": "5a6e02303923f6c9bb092a6973dc651ce5ad222820b7f0bb8198c5a958cf306a"
+    },
+    {
+      "path": "scripts/v2-production-rc-staging-deploy-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "a502f8135a980111f8e029ab9f89dfea41b54670",
+      "sha256": "b45cd61f9c056b3f9dbf5bf55d2bc414d9766294cb773e30ccfd86624fceafb6"
+    },
+    {
+      "path": "scripts/v2-production-release-dispatch-hardening.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "466d7453e03268bf5a6896b1b864d3ac4ebcd765",
+      "sha256": "b31cb34ee158d40d1ef1a7d877881ed239ec257ba74cb87b1b3c34988508e075"
+    },
+    {
+      "path": "scripts/v2-rc10-final-readiness-workflows.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "71615b20c8e9325636f53a39f25911562ee99d20",
+      "sha256": "947718348af036530d1f75b7ad1bdaaefa47ddfa2056bdd99d49304d2b62afd6"
+    },
+    {
+      "path": "scripts/v2-rc10-production-readiness-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "d508cd31dcdc83b883f8b6bd20afeaba50499135e74082799058a3300781e1f6"
+    },
+    {
+      "path": "scripts/v2-rc10-production-smoke-identity-inventory-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7f81afc72531fc861ab842fb04b77a0369b9f619",
+      "sha256": "2afdc99674a7a6a57ac91ff6c53b486f5bc575eb053e11dbfb376db6e937a697"
+    },
+    {
+      "path": "scripts/v2-rc10-production-smoke-identity-provisioning-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "5bc0a753a7b92afebc5bce588bc06c156b1969b0",
+      "sha256": "edb447eb121154e4bc32c27719dedd9b27ee7d6ed79912cd7c3df763468f7a9c"
+    },
+    {
+      "path": "scripts/v2-rc10-production-smoke-tenant-selection-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9fcf99158f95d4b36587cc354d7e0cd59074a806",
+      "sha256": "60e6dd37f61d85eb0dca41211d91998af051e1cc657104ab4be04bd20f9f41c6"
+    },
+    {
+      "path": "scripts/v2-rc11-release-policy.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "d0d0683c7b032faeede6b1163b9d95e7327aea58b47fe7f5d5f34b6c1c5852fb"
+    },
+    {
+      "path": "scripts/v2-rc11-release-policy.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "e424ee9e201601469b80eecdd1075c8d115ed1a450511457bbd941c5ee668bdd"
+    },
+    {
+      "path": "scripts/verify-cloudflare-production-token.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4a52e4bd359453738e338e6d56f9bbb6122e2f42",
+      "sha256": "6a4b07159d941a08183e09ec1e5dd4f5e996cc1c81dbb64989ec4a03e4c96e5d"
+    },
+    {
+      "path": "scripts/verify-cloudflare-production-token.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4a52e4bd359453738e338e6d56f9bbb6122e2f42",
+      "sha256": "aae64bb950e56a6f1cb60bf0548fdc348dbfd57386523564b6ddadfc97537d11"
+    },
+    {
+      "path": "scripts/verify-production-database-connectivity.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "66ffc47c3e8cffc4d3f47c2ded91a29c467f543e",
+      "sha256": "ffda8d68a503e46e87ddd404d8d8a38eaa655c252424458a956cf3409b912590"
+    },
+    {
+      "path": "scripts/verify-production-database-connectivity.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "967daf1a072aeaceedc44509ef48e61099437cb2",
+      "sha256": "8ce687cb18f6f607adcafba744472ab5c7cc85563baa7ccd00b6377087abd381"
+    },
+    {
+      "path": "scripts/verify-v2-main-canonical-release-source.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "1683a924c16e98b8f2e353fc95ae53c37914c6cf1a0e060fd565a89f257d9fc3"
+    },
+    {
+      "path": "scripts/verify-v2-main-canonical-release-source.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "cd67f32c7be109badcf5adcb125f26893bde5434",
+      "sha256": "8559c426c787f5e3af47abace90663a073237e582f0b1d168ed6d365dfbf1629"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-billing-runtime-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "d01a44a9d199c15149ad6bd5326995818c3cdd5d",
+      "sha256": "bb9bb5c07324e4393172489964768df1e2aed2c256f140d9cb329951adae23e9"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-billing-runtime-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "d01a44a9d199c15149ad6bd5326995818c3cdd5d",
+      "sha256": "0fe052c0f64d3042eb46bfeb78b0f5b4d64fbdef26cc688b9f0283290a73fb9e"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-acceptance-contract.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "0c6d33b4fb49af887dff8a50aa02a892157686e7",
+      "sha256": "505b26fb0aed1835bb625cd9b70e39eb005a83f7b76a702e2cbcbf143e6ea081"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-acceptance.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "0c6d33b4fb49af887dff8a50aa02a892157686e7",
+      "sha256": "edb8249b4ae3f48d197d642345ef0f56fbaa8cf84031d735c7a5367bcd7e1e7d"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-route-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "a18c8e894f34acdad8baa3e0ae2c1493782f52137359f99f4d2f5337c97034ba"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-route-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "94c07abf01619d997d3f5967f621bdc3a30a0584",
+      "sha256": "db187a9549d83dcf0188e39b248d84c5f55b7facb402601aad76bbd7f0d0462e"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-route-diagnostic.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "2b4ebaf3372e37dd3fe1c063dcd580a4ec7bf806",
+      "sha256": "b04978a50d2f196ece951c062499ba40d194d5dcbb65894f76ca8056e2210c87"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-route-diagnostic.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "2b4ebaf3372e37dd3fe1c063dcd580a4ec7bf806",
+      "sha256": "ace83c4c510820a2c407f958a7696bae5799a2819e0f028f8306adb58d1422f7"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-runtime-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "cde064743d7858cbdefb9dfd0c8df44e9c6d0db0",
+      "sha256": "0345e27256339626fe2784f7cfffd31232d29e638797e2cf17e5a3d2b69b6955"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-browser-runtime-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "165f638a442400271ace1b8815fa37b090d39484",
+      "sha256": "e99dd67c2ff644c4292ca1b772962cc29b0e091e85ad102b22c1a1f13a4a487f"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-custom-domain-precedence-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "883547065e9347fc2b48f539a19054fad687ce8ee5441e777f629651a21d074a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-custom-domain-precedence-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "b94f0672655cdb56b55ee338d01ae1addac3493a",
+      "sha256": "f378f5f5fb57f53ada6358b1195a703a46d42eb15aeffb85d3e98197ecc356e1"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-custom-domain-reset-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "9ba09670516d551989cd19877d4e09d4e5af39f29beaa6b21e81b4aa036ac610"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-custom-domain-reset-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "6911ce953642e56774e8b539c3d28a51fa59ca03",
+      "sha256": "17c4b9be336d802499f01de909e1b14f88508905f5962b720d2a6ee93a6a09a7"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-edge-reconciliation-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "d2961877ab6cefb3edb76186754420e5ec7ca26000bafe00f17077ae36caf9f4"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-edge-reconciliation-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "eb7a429a8f2c8c5e635cf5f105451589f2fb8dfb",
+      "sha256": "705872c6de31d1f8058b9b17ca2f4f256b280f722f9afe71db11581a2230c30a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-exact-billing-path-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "e2b28c308c1d401eb96d2dd1ba83b460dcd20cd5",
+      "sha256": "9dc7b2047fc97671a59d5cf5ce3540feedad8cb981bd4cd0498138a2d701d907"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-exact-billing-path-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "25e30f11515e825530a2bc495f8d8835cbd7a060",
+      "sha256": "aa996c0f29395b8f319bea2c6cac16a65d69a203c17b5ebe0e2b5c3d920cca27"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-exact-route-override-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "5f8f7f0c58ad9e64f93762e105e278d0e7b06dc87dbc88b5574204e7a580a8ac"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-exact-route-override-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "63d1959a6326c2a6764748c791a97416f573f76a",
+      "sha256": "0b07a49659046664f96f5f8778077d20f1c26ef09a85fbd87832cbcb8119c7fa"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-generated-login-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6a5558d10657fa3bafcc87f44cf14dcc3da2d180",
+      "sha256": "ceb9ca62efc55fb3f0532af3b9666e70a090ed5a54e6ed8be400585d2278aac6"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-generated-login-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "b8f9b9b61dd25004347fe1f386c1bf7332066d63",
+      "sha256": "b4ba617d784de260e76b2554ae964e4d52ecaef62ca9ef2c5c0df02ee622382a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-rc10-pages-origin-reconciliation.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "a2aa7abe4a79b4bef9dc58545571dc70a8348a25",
+      "sha256": "90f3384ade7795d9f5d7a68b82df5b5c489ee0c21f7c80e8339ac75b16af8e11"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-identity.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "89d357a53a2d4154fb29b8e5f43871aeb2d8addfd4e42d439198f1bb9c4be087"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-identity.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4d3b5838fb49f8664d0b65d92862d02a7afe2962",
+      "sha256": "118bfa241502694228a111c0687b927013971326742d31d992deee6124d7130a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-ingress-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "be8942157b0c5014f0470c9e4fdf36cc5d1a65e010c8360418040edbf616de6a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-ingress-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ac215e1dd195682dafed0c474435a98961805ee5",
+      "sha256": "1fc71af9e5cf81af612eb3685b305a182a2c4a82ee5a38a51253bcfc2bfb29e8"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-ingress-tail.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "c5774557293f4223fe6b5896a2335b77e8bf71d5",
+      "sha256": "116e9b1169f7c1c860d1d928fad66821b0c722232bdba40fc2e1b1905fa5cc7a"
+    },
+    {
+      "path": "scripts/verify-v2-production-candidate-router-ingress-tail.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "c5774557293f4223fe6b5896a2335b77e8bf71d5",
+      "sha256": "705306755093f10ebfd72710289268e6377896011daace812ffb6ba4f3229813"
+    },
+    {
+      "path": "scripts/verify-v2-production-live-finalization-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "facbd0b4c8c883958d13f08a90979488fc093f9d",
+      "sha256": "905e9b1ac23c23c42978a221060b5506d17e2340c520b8b2667d9f20bbca8895"
+    },
+    {
+      "path": "scripts/verify-v2-production-live-finalization-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "51c71be577aaf6d36f752f2c9156bd7d944c258a",
+      "sha256": "f6cc1aeb13173aa60756265fb80d9643cb58697c8ef0d8474381838aa3d1c1b9"
+    },
+    {
+      "path": "scripts/verify-v2-production-live-finalization.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "51c71be577aaf6d36f752f2c9156bd7d944c258a",
+      "sha256": "3ff682da4bc347334e9216840153aefbd4f57cd7383cf97e66c9dee97c09b32c"
+    },
+    {
+      "path": "scripts/verify-v2-production-live-finalization.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "51c71be577aaf6d36f752f2c9156bd7d944c258a",
+      "sha256": "0428ce896cf8dc8b3aad1be10987226abbf67e80879b209759747ba3969c837c"
+    },
+    {
+      "path": "scripts/verify-v2-production-owner-readiness.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b38fd346cb8ff930f69ea32d5066e4a5012d2140",
+      "sha256": "a4b6765a9c34be2cb864d36e15d55cde90089b5183cce59fcb42fe2977669469"
+    },
+    {
+      "path": "scripts/verify-v2-production-owner-readiness.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7ead053964186a2bbecdb158c1e7ade0bf5da413",
+      "sha256": "a6b530a68b9f90698baafae83d5f3093cf92219ba4737c257e7aeffd7cdf97de"
+    },
+    {
+      "path": "scripts/verify-v2-production-postcutover-route-rollback.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "facbd0b4c8c883958d13f08a90979488fc093f9d",
+      "sha256": "71f65d96a52d3ccba1fb3975da9a78bbe438bc3b19d2fce18299e00057fbbb18"
+    },
+    {
+      "path": "scripts/verify-v2-production-postcutover-route-rollback.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "facbd0b4c8c883958d13f08a90979488fc093f9d",
+      "sha256": "0fb91db34c3600e7c3c0738c85a791cee13f22295543fc805bd9a8248efc6166"
+    },
+    {
+      "path": "scripts/verify-v2-production-public-acceptance.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "71615b20c8e9325636f53a39f25911562ee99d20",
+      "sha256": "58bffe6066b185613b48a4018bb12183bae278f39546fe0379c3f42865136821"
+    },
+    {
+      "path": "scripts/verify-v2-production-public-smoke.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "2c0542f873f30c7dfca8101195d7cb2d15205513a9f8c6b285a7983098230472"
+    },
+    {
+      "path": "scripts/verify-v2-production-public-smoke.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "0c4ddd727d923d33155a3133950f02359496808831b68538bb074180371258c4"
+    },
+    {
+      "path": "scripts/verify-v2-production-rollback-readiness.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4773c7964429dd7526da72391ac8dd6cf86e6cdd",
+      "sha256": "d2230aa25af759fc8d822c33efae60ea4646529db53bcd2ea40727fd868c54dc"
+    },
+    {
+      "path": "scripts/verify-v2-production-rollback-readiness.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "23d7383dca4b471fb63082de8b0e8207a3f105cd",
+      "sha256": "4b127ebda09d62f3ae94c7c5af755e4a272b939c6bef3f8a2672dd170c7118f0"
+    },
+    {
+      "path": "scripts/verify-v2-production-runtime-privileges.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "d45c76cc3ca395e9314735f53d146d6fba64e8ec",
+      "sha256": "cc9ccf650fdb92e1015667db14303c2bee48e75bdfe628c515797e579adafa6d"
+    },
+    {
+      "path": "scripts/verify-v2-production-smoke-tenant-readiness.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "9d40215dd5f1e79520c77b2c1a366df24b10861c3bc776e4830c2f985ead6abb"
+    },
+    {
+      "path": "scripts/verify-v2-production-smoke-tenant-readiness.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "ceeba94dce8c2f569f232cd63a799f266056dcd0",
+      "sha256": "717166d5e00e63eb901316c01e1541ead6bdfde3ecdf72016ee008e534884d47"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-backup-r2-private.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "97c148bed8ad12a4632e91459719c266fccf3545",
+      "sha256": "433f5833c65d11ac83acb490046fa1245ae17fb0de3e09cbe70de9a962e95605"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-platform-owner-diagnostic-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "1da2201da48f3fb409845a687a71373f03906be8",
+      "sha256": "e11da775f13361455886e905f42c09d291dd4d9e856b4081c195d1cd1ab96596"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-platform-owner-diagnostic-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7b76ae3268896f4677809262cca9d8b95f8f43bd",
+      "sha256": "3830b144b0342d2146b53c603fa937ba8ea604a44c2bdb6af72e5774273afac6"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-platform-owner-onboarding-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "4dc49eb25bee55d0dab35fedf31dca063d0dc25c",
+      "sha256": "78811e4b8ca1032b4622b38f806b5e44c35a74cccb3a5000a0244c7edb9590a5"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-platform-owner-onboarding-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "4dc49eb25bee55d0dab35fedf31dca063d0dc25c",
+      "sha256": "d94f64d24f22ed775a384f7a3b9729e2fa61010583c4e0852551398b42f92bb2"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-postcutover-route-rollback-preflight-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "bb809a1445bb4e6c25483e939cae06449a18f9e6",
+      "sha256": "5125b41388105edc049899aa44dcdb10d6cfb72c950807b293bc5036ff32ffac"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-postcutover-route-rollback-preflight-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "bb809a1445bb4e6c25483e939cae06449a18f9e6",
+      "sha256": "c417e37e1760032716f9e027d6d8b1036d0e69de2fd935be30d7699cf1893b7e"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-smoke-identity-provisioning-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "f76818a71bec339eb93ddd228deda133fde024dca209fc3ba4d13c8eedf5c265"
+    },
+    {
+      "path": "scripts/verify-v2-rc10-production-smoke-tenant-selection-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "9f0b4e3ad56a911c5aa6b5a8a3a6a333c4e3a3c9b82b2dd96021f7d95cc1aa4b"
+    },
+    {
+      "path": "scripts/verify-v2-rc11-release-source-finalization-workflow.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "898b330a0f4fc4a5ab2ba3b981f63ccc5b245912f9b1cbb1bcf521088eace792"
+    },
+    {
+      "path": "scripts/verify-v2-rc11-release-source-finalization-workflow.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "6e0d3a98da751bee00befddc21a0f5847df4b929",
+      "sha256": "7d715c8043ecfb0d3b3c68d59d629efe3fb0e3a2a5ba65fd7ba38cda7b9b6763"
+    },
+    {
+      "path": "scripts/verify-v2-rc11-release-workflows.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b02e2f2db4a4decd611da0f75a869e22c51e0534",
+      "sha256": "a84dde06b75cc452bf31e802682640b3ee5c27558bf88135560959fed01e65ef"
+    },
+    {
+      "path": "scripts/verify-v2-rc11-release-workflows.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "bc0d032e40151737f452c56aa2a533c7f8918b1f",
+      "sha256": "e3e43772801afd41cc133b9af82a4d07098ca5507e998a3c3464885a9b4b14e2"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-active-deployment.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "c19abcb021653ce5e37e40c6ef4a225e31160b88f2e19a01fda3a631ff5a8028"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-active-deployment.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "f3baace0411c4395ed7b8186b026810308dafd39bfc9b9cc34f97079ff388ca3"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-diagnostic-dispatcher.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "65eb6a924a3bf1eda22dae25d5c2ce940fbe633f4d81a3d63e127f31abfcad32"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-diagnostic-dispatcher.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "1d4aeab45e20d92cdf68f89f8a4548950d25a5dd44e9ca0bbcd9c56198e95854"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-diagnostic-response.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "caf50732c2dc5921e1b6b4d8af3e28ae40edf9d9b1f235c68c853b9b76a92e2b"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-diagnostic-response.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "b18a780f99be682f3454164354c351059865f00b1d8daaf607dfb4464880ffd7"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-tail.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "993f4171001d43f2ac897b53b7f82a571f8f0e4c31e8613e435b9becfe2fa38b"
+    },
+    {
+      "path": "scripts/verify-v2-router-request-path-tail.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "f32a995f1b69d3e6c70cac21af3022399581ef59a5874a86307710d34043a1d4"
+    },
+    {
+      "path": "scripts/verify-v2-runtime-diagnostic-dispatcher.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "069aad955b42f5b8eeca730c0f1e99b7bda02786f6ccc412d2c5964071facff1"
+    },
+    {
+      "path": "scripts/verify-v2-runtime-diagnostic-dispatcher.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "46374846d6606a670ddea3b64c9d587d0dc2bc10",
+      "sha256": "ef680ac16aa93221edb644dadc6ddfb20c9432449b0087bd0f73a792543db047"
+    },
+    {
+      "path": "scripts/verify-v2-runtime-diagnostic-response.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "7da107ebf293f8cff44b405aed07cbf9ca07b618",
+      "sha256": "0cf0ab17b91352c033338b7009908206f7ab005559395d17f961dff3d1545545"
+    },
+    {
+      "path": "scripts/verify-v2-runtime-diagnostic-response.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "7da107ebf293f8cff44b405aed07cbf9ca07b618",
+      "sha256": "ef07d1527794058349273b7786a4b77a74e9fcfd96616ca7415c49782695de8f"
+    },
+    {
+      "path": "scripts/verify-v2-staging-scientific-canary.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "eb6b18b98ecac829766a534ebdf439022afa6c84",
+      "sha256": "b4d95accc19b6753950c358ba59264b8875f68ceaf56d538494c30c9725d1488"
+    },
+    {
+      "path": "scripts/verify-v2-staging-scientific-canary.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "53a2b3c461636cc6c6cef597d0211662eebd39a0",
+      "sha256": "204e63a5d28ccd54e7c41966bbaf0d0359ff64c54b66cd9cbd316e24fd40f7a5"
+    },
+    {
+      "path": "server/src/services/northstar.service.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "a9d04c40ab2bc10c7270020f1c6d4ef9714d723b2bbf4a921aa29db59fef3c9e"
+    },
+    {
+      "path": "services/agent-runtime/src/durable-agent-service.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "622a048fb6895d5721532497fa3e1090270ea6dc416535575657b3f6208f49c7"
+    },
+    {
+      "path": "services/platform/src/crypto.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "fbe1a21d08fc33ec70f0c8eabc84e2128237ca9aa6ed2b56b2665c285dec7a2a"
+    },
+    {
+      "path": "services/trials-sensory/src/service.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "b877df1f7143b64b6e3050933b5c47806c6fa40c428e3606c1ddb3513fcbe258"
+    },
+    {
+      "path": "src/App.tsx",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "474f04e981a7778825e538686bb81f702078d2a1",
+      "sha256": "a4da3abe5bc2392d99354e5c6eaf4d743d0aab0b53657b17b04c9e219379fe1d"
+    },
+    {
+      "path": "src/data/workspaceHostnames.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "433b1f7a9322e27897ecb868077a4e2827ef8f9a",
+      "sha256": "c60a22e5a0d26eb8067bdb0599a768579eab8cdd0015d266189fa9056f3d3f4a"
+    },
+    {
+      "path": "src/data/workspaceHostnames.ts",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "433b1f7a9322e27897ecb868077a4e2827ef8f9a",
+      "sha256": "ee90a0621280ab64fbf50f046b5eb2a4cdf4297c5d7d60200dc8919355327aec"
+    },
+    {
+      "path": "src/features/v2-platform/V2PlatformApp.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "97839b95478f25e0dd0550546e58d497c24b625b",
+      "sha256": "1b4db8f4c09c4bc13a7893c97aa1b6a8d789916428230104ebf589ecda5b8e6d"
+    },
+    {
+      "path": "src/features/v2-platform/V2PlatformApp.tsx",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "474f04e981a7778825e538686bb81f702078d2a1",
+      "sha256": "1cc2e8679dff171b4a93a125d755333e72dc5cd2f81fed78aea61056223c4476"
+    },
+    {
+      "path": "src/features/v2-platform/feature-route-contract.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "9785ce12009badd3861a202fd3316c758925274c",
+      "sha256": "eb40ec72b30266249228ba588c21cc8264859964abcd42ae1a143be9897dda0b"
+    },
+    {
+      "path": "src/features/v2-platform/feature-route-contract.ts",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "9785ce12009badd3861a202fd3316c758925274c",
+      "sha256": "b0c482ac59da37aff002ef57bf6c1246dfb39d35ecc21f812f58a6470ecfeb45"
+    },
+    {
+      "path": "src/features/v2-platform/workspaceHostnameRuntime.ts",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "474f04e981a7778825e538686bb81f702078d2a1",
+      "sha256": "f28b8fc739205d1f5127fa232a31c02b8e72911c9a2372295918caa4938cc28b"
+    },
+    {
+      "path": "worker/staging-feature-recovery.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "b4a0a8813f3afc77c08ab2febbf52be002363d45",
+      "sha256": "a3725d7fe8d1a1e59e1d0e413d01e4b7a89e1d38b477b52ea3cd58b61c6252f3"
+    },
+    {
+      "path": "worker/staging-feature-recovery.ts",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b4a0a8813f3afc77c08ab2febbf52be002363d45",
+      "sha256": "b1f0ee606d2468728bc32ecd81c502a19d2343f9eacbe31e43fa8142d279a78e"
+    },
+    {
+      "path": "worker/v2-api/index.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "9785ce12009badd3861a202fd3316c758925274c",
+      "sha256": "28b3ced196df16dc7530d54248a750423962ffbc08523d7c2dcb45a93a04ed90"
+    },
+    {
+      "path": "worker/v2-api/transport.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "9785ce12009badd3861a202fd3316c758925274c",
+      "sha256": "969a720577202550a4427a93f4abdad748bcf229c971243defe932845bc9a542"
+    },
+    {
+      "path": "worker/v2-api/transport.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "9785ce12009badd3861a202fd3316c758925274c",
+      "sha256": "47abeb7dcd5d8177503c4891a7060998d15a08e84ea956b2b1894523c96953b1"
+    },
+    {
+      "path": "worker/v2-billing-runtime-diagnostic.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "b7aa110b683275ed912d43d736d41fc90cd28f45322f9ab2f4a9b7ae04183389"
+    },
+    {
+      "path": "worker/v2-billing-runtime-diagnostic.ts",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "63411c1e1ee35a7aff41b2bbf4bedeb4c7410ad1",
+      "sha256": "442b3c7777f7df1c0099fc75d62eeb5492800556988d6b607f76bf17a247ed60"
+    },
+    {
+      "path": "worker/v2-exact-billing-path-diagnostic.ts",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "780681ee28569b8fd8861a8ee1e170f99e85fd4e",
+      "sha256": "93f623eabfb1d95a0abbc6fe390efbfc6d97480a16d3dd04cb8c0745a12d6464"
+    },
+    {
+      "path": "worker/v2-platform-owner-onboarding.ts.template",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "aa56f9f8e6d7ff7bc2f725b49d191babcbe21b76",
+      "sha256": "7d345da253b1ab7ba5a5914b38e7ab9efacf5796c653a00309cefdb49b1473ce"
+    },
+    {
+      "path": "worker/v2-tenant-router-request-path-diagnostic.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "667a987026252008c41b6723be38114ec76f77877bf8bd0ed95f29854d00bb73"
+    },
+    {
+      "path": "worker/v2-tenant-router-request-path-diagnostic.ts",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "76aa0c8401d1a748c0d5c918b1ddd59b5eb2275ae09e92f1ae8294ceab44fc88"
+    },
+    {
+      "path": "worker/v2-tenant-router-runtime-diagnostic.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "7da107ebf293f8cff44b405aed07cbf9ca07b618",
+      "sha256": "9058d4d0fac1becaeb1c0fe6e17c9c64b7f9de2e218fab8401bdbca3606b43c9"
+    },
+    {
+      "path": "worker/v2-tenant-router-runtime-diagnostic.ts",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "7da107ebf293f8cff44b405aed07cbf9ca07b618",
+      "sha256": "d07e4a2eb623ba7338470b779f3605938826ec3ebf039a8c0bfafc9dd87f77e0"
+    },
+    {
+      "path": "wrangler.staging-feature-recovery.toml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "b4a0a8813f3afc77c08ab2febbf52be002363d45",
+      "sha256": "59ad40f6ec4636787cc4c8dd72d61574f141473d5c1e3a0cd055a0760088fc85"
+    },
+    {
+      "path": "wrangler.v2-tenant-router-request-path-diagnostic.example.toml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "9caa7df6cf4c5576627bce1593ff9774037eef5e",
+      "sha256": "436c8466c43c449a0b6c346e7eb5c8847c05e1cbea24e3afdf7f4739ba13da07"
+    },
+    {
+      "path": "wrangler.v2-tenant-router-runtime-diagnostic.example.toml",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "c576e90956d0d87f71d72e784849e8e7349cc8f3",
+      "sha256": "2dcf8571222d70b948869b3dd4ad3edd6c2107d719aa8bbd617289a529c7dacd"
+    }
+  ],
+  "invariants": {
+    "databaseSchemaChange": false,
+    "migrationDelta": false,
+    "productionRouteMutation": false,
+    "productionDeployment": false,
+    "candidateDeployment": false,
+    "unrelatedRuntimeChangeCount": 0
+  }
+}

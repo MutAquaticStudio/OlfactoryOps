@@ -1,0 +1,86 @@
+name: V2 RC12 Release Source Finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact verified-main RC12 source SHA.
+        required: true
+        type: string
+      confirm_finalization:
+        description: Type FINALIZE_RC12_RELEASE_SOURCE to verify the immutable RC12 source tag.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v2-rc12-release-source-finalization
+  cancel-in-progress: false
+
+env:
+  RC12_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  RC12_TAG: v2-production-rc12
+
+jobs:
+  verify-source:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+          path: ops
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: release
+      - name: Verify the immutable annotated RC12 source tag and complete manifest
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRM_FINALIZATION: ${{ inputs.confirm_finalization }}
+          RC12_RELEASE_MANIFEST_PATH: ${{ github.workspace }}/ops/releases/v2-production-rc12.json
+          RC12_SOURCE_WORKTREE: ${{ github.workspace }}/release
+          RC12_SOURCE_TAG_REQUIRED: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_FINALIZATION" = FINALIZE_RC12_RELEASE_SOURCE
+          test "$RELEASE_SHA" = "$RC12_SHA"
+          git -C ops fetch --force --tags origin
+          if git -C ops show-ref --verify --quiet "refs/tags/$RC12_TAG"; then
+            test "$(git -C ops rev-parse "$RC12_TAG^{commit}")" = "$RC12_SHA"
+            test "$(git -C ops cat-file -t "refs/tags/$RC12_TAG")" = tag
+          fi
+          node ops/scripts/v2-rc12-release-policy.mjs
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: true
+          path: tagger
+      - name: Create the immutable annotated RC12 source tag once
+        working-directory: tagger
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/$RC12_TAG"; then
+            test "$(git rev-parse "$RC12_TAG^{commit}")" = "$RC12_SHA"
+            test "$(git cat-file -t "refs/tags/$RC12_TAG")" = tag
+          else
+            git config user.name github-actions
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$RC12_TAG" "$RC12_SHA" -m 'RC12 verified main release source'
+            git push origin "refs/tags/$RC12_TAG"
+          fi
+          echo 'RC12_RELEASE_SOURCE_FINALIZATION=PASS'
+          echo 'RC12_RELEASE_TAG=v2-production-rc12'
+          echo 'RC12_SOURCE_DEPLOYED=NO'

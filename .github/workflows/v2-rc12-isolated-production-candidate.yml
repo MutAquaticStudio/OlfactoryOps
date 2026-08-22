@@ -1,0 +1,472 @@
+name: V2 RC12 Isolated Production Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC12 SHA from v2-production-rc12.
+        required: true
+        type: string
+      operation:
+        description: Isolated candidate operation.
+        required: true
+        type: choice
+        options:
+          - pages
+          - cloud-runtime
+          - api
+          - tenant-router
+          - smoke
+      candidate_fixture_hostname:
+        description: API-derived exact fixture host, required only for the tenant-router operation.
+        required: false
+        type: string
+      confirm_candidate:
+        description: Type DEPLOY_ISOLATED_PRODUCTION_CANDIDATE to deploy an isolated candidate only.
+        required: true
+        type: string
+      candidate_acceptance_mode:
+        description: RC12 smoke requires the post-bootstrap, real-owner-preserving candidate acceptance contract.
+        required: false
+        default: POST_BOOTSTRAP
+        type: choice
+        options:
+          - POST_BOOTSTRAP
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-${{ inputs.operation }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_API_HOSTNAME: api-next.labofscents.org
+  CANDIDATE_ADMIN_HOSTNAME: admin-next.labofscents.org
+  CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+  RC12_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  RC12_TAG: v2-production-rc12
+  RC10_RUNTIME_BASE_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+
+jobs:
+  validate-candidate-revision:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.revision.outputs.release_sha }}
+      operation: ${{ steps.revision.outputs.operation }}
+      candidate_fixture_hostname: ${{ steps.revision.outputs.candidate_fixture_hostname }}
+      candidate_acceptance_mode: ${{ steps.revision.outputs.candidate_acceptance_mode }}
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      OPERATION: ${{ inputs.operation }}
+      CANDIDATE_FIXTURE_HOSTNAME: ${{ inputs.candidate_fixture_hostname }}
+      CONFIRM_CANDIDATE: ${{ inputs.confirm_candidate }}
+      CANDIDATE_ACCEPTANCE_MODE: ${{ inputs.candidate_acceptance_mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: revision
+        name: Validate the isolated candidate revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_CANDIDATE" = "DEPLOY_ISOLATED_PRODUCTION_CANDIDATE"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          case "$OPERATION" in pages|cloud-runtime|api|tenant-router|smoke) ;; *) exit 2 ;; esac
+          test "$CANDIDATE_ACCEPTANCE_MODE" = "POST_BOOTSTRAP"
+          git fetch --force --tags origin
+          git cat-file -e "${RELEASE_SHA}^{commit}"
+          test "$(git rev-list -n 1 "$RC12_TAG")" = "$RC12_SHA"
+          test "$RELEASE_SHA" = "$RC12_SHA"
+          if [ "$OPERATION" = "smoke" ]; then test "$RELEASE_SHA" = "$RC12_SHA"; fi
+          if [ "$OPERATION" = "tenant-router" ]; then
+            fixture_suffix=".${CANDIDATE_WORKSPACE_BASE_DOMAIN}"
+            fixture_slug="${CANDIDATE_FIXTURE_HOSTNAME%"$fixture_suffix"}"
+            test "$fixture_slug" != "$CANDIDATE_FIXTURE_HOSTNAME"
+            test "$CANDIDATE_FIXTURE_HOSTNAME" = "$(printf '%s' "$CANDIDATE_FIXTURE_HOSTNAME" | tr '[:upper:]' '[:lower:]')"
+            [[ "$CANDIDATE_FIXTURE_HOSTNAME" != *'*'* ]]
+            [[ "$fixture_slug" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          elif [ -n "$CANDIDATE_FIXTURE_HOSTNAME" ]; then
+            echo "candidate_fixture_hostname is only accepted for the tenant-router operation" >&2
+            exit 2
+          fi
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "operation=$OPERATION" >> "$GITHUB_OUTPUT"
+          echo "candidate_fixture_hostname=$CANDIDATE_FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+          echo "candidate_acceptance_mode=$CANDIDATE_ACCEPTANCE_MODE" >> "$GITHUB_OUTPUT"
+
+  deploy-candidate-pages:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'pages' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      VITE_API_BASE_URL: https://api-next.labofscents.org/api/v1
+      VITE_V2_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require isolated candidate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+      - name: Deploy the non-public Pages candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          npx wrangler pages deploy dist --project-name "$PRODUCTION_CANDIDATE_PAGES_PROJECT" --branch production-candidate --commit-hash "$RELEASE_SHA" --commit-message "isolated production candidate $RELEASE_SHA" --commit-dirty=false
+
+  deploy-candidate-cloud-runtime:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'cloud-runtime' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      SCIENTIFIC_CONTAINER_SHARED_SECRET: ${{ secrets.SCIENTIFIC_CONTAINER_SHARED_SECRET }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
+      PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
+      PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - name: Check out trusted main-owned release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: release-tooling
+      - name: Check out immutable RC12 source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          path: release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - run: npm ci
+        working-directory: release
+      - name: Render only an isolated Cloud Runtime service
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          test -n "$SCIENTIFIC_CONTAINER_SHARED_SECRET"
+          for value in "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE" "$PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST" "$PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST"; do test -n "$value"; done
+          test -f ../release-tooling/scripts/render-v2-rc12-cloud-runtime-candidate-config.mjs
+          node ../release-tooling/scripts/render-v2-rc12-cloud-runtime-candidate-config.mjs render --template wrangler.v2-cloud-runtime-production.example.toml --output wrangler.v2-cloud-runtime.production-candidate.toml
+          node --input-type=module <<'EOF'
+          import { existsSync, readFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-cloud-runtime.production-candidate.toml'
+          const config = readFileSync(configPath, 'utf8')
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate Cloud Runtime config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate Cloud Runtime entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
+          EOF
+          npm run prisma:generate:v2
+          node ../release-tooling/scripts/render-v2-rc12-cloud-runtime-candidate-config.mjs verify --config wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler deploy --config wrangler.v2-cloud-runtime.production-candidate.toml --keep-vars
+      - name: Bind the rotated private runtime secret by name only
+        shell: bash
+        working-directory: release
+        run: |
+          set -euo pipefail
+          printf '%s' "$SCIENTIFIC_CONTAINER_SHARED_SECRET" | npx wrangler secret put SCIENTIFIC_CONTAINER_SHARED_SECRET --config wrangler.v2-cloud-runtime.production-candidate.toml
+          npx wrangler secret list --config wrangler.v2-cloud-runtime.production-candidate.toml | grep -Fq '"SCIENTIFIC_CONTAINER_SHARED_SECRET"'
+
+  deploy-candidate-api:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'api' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      V2_SESSION_PEPPER: ${{ secrets.V2_SESSION_PEPPER }}
+      V2_PASSWORD_PEPPER: ${{ secrets.V2_PASSWORD_PEPPER }}
+      V2_INVITATION_ENCRYPTION_KEY: ${{ secrets.V2_INVITATION_ENCRYPTION_KEY }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Render only the isolated API route
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do test -n "${!secret_name}"; done
+          node --input-type=module <<'EOF'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-api-production-candidate.toml'
+          let config = readFileSync('wrangler.v2-api-production.example.toml', 'utf8')
+          config = config.replace('name = "olfactoryops-v2-api-production"', 'name = "olfactoryops-v2-api-production-candidate"')
+          config = config.replace('api.labofscents.org/*', 'api-next.labofscents.org/*')
+          config = config.replaceAll('REPLACE_WITH_VERIFIED_RELEASE_SHA', process.env.RELEASE_SHA)
+          config = config.replaceAll('REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
+          config = config.replace('V2_API_PUBLIC_HOSTNAME = "api.labofscents.org"', 'V2_API_PUBLIC_HOSTNAME = "api-next.labofscents.org"')
+          config = config.replace('V2_PUBLIC_PAGES_HOSTNAME = "labofscents.org"', 'V2_PUBLIC_PAGES_HOSTNAME = "next.labofscents.org"')
+          config = config.replace('V2_PLATFORM_ADMIN_HOSTNAME = "admin.labofscents.org"', 'V2_PLATFORM_ADMIN_HOSTNAME = "admin-next.labofscents.org"')
+          config = config.replace('V2_WORKSPACE_BASE_DOMAIN = "labofscents.org"', `V2_WORKSPACE_BASE_DOMAIN = "${process.env.CANDIDATE_WORKSPACE_BASE_DOMAIN}"`)
+          config = config.replace('service = "olfactoryops-v2-cloud-runtime-production"', 'service = "olfactoryops-v2-cloud-runtime-production-candidate"')
+          if (config.includes('api.labofscents.org/*') || config.includes('REPLACE_WITH_') || !config.includes(`V2_WORKSPACE_BASE_DOMAIN = "${process.env.CANDIDATE_WORKSPACE_BASE_DOMAIN}"`)) throw new Error('candidate API config could capture a public route or emit a production workspace hostname')
+          writeFileSync(configPath, config)
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate API config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate API entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
+          EOF
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          npx wrangler deploy --config wrangler.v2-api-production-candidate.toml --keep-vars
+      - name: Bind rotated API secrets without logging values
+        shell: bash
+        run: |
+          set -euo pipefail
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do
+            printf '%s' "${!secret_name}" | npx wrangler secret put "$secret_name" --config wrangler.v2-api-production-candidate.toml
+          done
+          secret_names="$(npx wrangler secret list --config wrangler.v2-api-production-candidate.toml)"
+          for secret_name in V2_SESSION_PEPPER V2_PASSWORD_PEPPER V2_INVITATION_ENCRYPTION_KEY; do grep -Fq "\"$secret_name\"" <<< "$secret_names"; done
+
+  deploy-candidate-tenant-router:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'tenant-router' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      CANDIDATE_FIXTURE_HOSTNAME: ${{ needs.validate-candidate-revision.outputs.candidate_fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Render only the exact fixture Custom Domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
+          [[ "$PRODUCTION_CANDIDATE_PAGES_PROJECT" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+          candidate_pages_origin="https://production-candidate.${PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev"
+          export CANDIDATE_PAGES_ORIGIN="$candidate_pages_origin"
+          node --input-type=module <<'EOF'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+          import { dirname, relative, resolve } from 'node:path'
+          const configPath = 'wrangler.v2-tenant-router-production-candidate.toml'
+          let config = readFileSync('wrangler.v2-tenant-router-production.example.toml', 'utf8')
+          const expectedPagesOrigin = `https://production-candidate.${process.env.PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev`
+          if (process.env.CANDIDATE_PAGES_ORIGIN !== expectedPagesOrigin) throw new Error('candidate Pages origin is not the exact isolated Pages branch origin')
+          config = config.replace('name = "olfactoryops-v2-tenant-router-production"', 'name = "olfactoryops-v2-tenant-router-production-candidate"')
+          config = config.replace(
+            'routes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]',
+            `[[routes]]\npattern = "${process.env.CANDIDATE_FIXTURE_HOSTNAME}"\ncustom_domain = true`,
+          )
+          config = config.replaceAll('REPLACE_WITH_VERIFIED_RELEASE_SHA', process.env.RELEASE_SHA)
+          config = config.replaceAll('REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID', process.env.PRODUCTION_HYPERDRIVE_ID)
+          config = config.replace('https://REPLACE_WITH_PRODUCTION_PAGES_ORIGIN', process.env.CANDIDATE_PAGES_ORIGIN)
+          config = config.replace('V2_WORKSPACE_BASE_DOMAIN = "labofscents.org"', `V2_WORKSPACE_BASE_DOMAIN = "${process.env.CANDIDATE_WORKSPACE_BASE_DOMAIN}"`)
+          if (config.includes('*.labofscents.org/*') || config.includes('*.next.labofscents.org/*') || config.includes('REPLACE_WITH_') || !config.includes(`pattern = "${process.env.CANDIDATE_FIXTURE_HOSTNAME}"`) || !config.includes('custom_domain = true') || !config.includes(`V2_WORKSPACE_BASE_DOMAIN = "${process.env.CANDIDATE_WORKSPACE_BASE_DOMAIN}"`)) throw new Error('candidate router config could capture a public route or omit the exact fixture Custom Domain')
+          writeFileSync(configPath, config)
+          const main = config.match(/^main\s*=\s*"([^"]+)"\s*$/m)?.[1]
+          if (!main) throw new Error('candidate router config is missing main')
+          const repositoryRoot = resolve('.')
+          const resolvedMain = resolve(dirname(resolve(configPath)), main)
+          const repositoryRelativeMain = relative(repositoryRoot, resolvedMain).replaceAll('\\\\', '/')
+          if (!repositoryRelativeMain || repositoryRelativeMain === '..' || repositoryRelativeMain.startsWith('../') || !existsSync(resolvedMain)) {
+            throw new Error(`candidate router entrypoint is unavailable: ${repositoryRelativeMain || main}`)
+          }
+          console.log(`CANDIDATE_ENTRYPOINT_CONFIG=${configPath}`)
+          console.log(`CANDIDATE_ENTRYPOINT_MAIN=${main}`)
+          console.log(`CANDIDATE_ENTRYPOINT_RESOLVED=${repositoryRelativeMain}`)
+          console.log('CANDIDATE_ENTRYPOINT_RESOLUTION=PASS')
+          EOF
+          npm run prisma:generate:v2
+          npx wrangler deploy --config wrangler.v2-tenant-router-production-candidate.toml --keep-vars
+
+  smoke-candidate:
+    if: ${{ needs.validate-candidate-revision.outputs.operation == 'smoke' }}
+    needs: validate-candidate-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
+      PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
+      RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ops
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          path: rc12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            ops/package-lock.json
+            rc12/package-lock.json
+      - name: Install main-owned browser acceptance tooling
+        working-directory: ops
+        run: npm ci --ignore-scripts
+      - name: Verify the isolated candidate browser entrypoints
+        shell: bash
+        env:
+          V2_PRODUCTION_CANDIDATE_ACCEPTANCE_APPROVED: RUN_V2_PRODUCTION_CANDIDATE_ACCEPTANCE
+          V2_PRODUCTION_CANDIDATE_PROFILE: production-candidate
+          V2_PRODUCTION_CANDIDATE_API_ORIGIN: https://api-next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}
+          V2_PRODUCTION_CANDIDATE_EXPECTED_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          V2_PRODUCTION_CANDIDATE_FIXTURE_MODE: GENERATED_ISOLATED
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          for name in \
+            V2_PRODUCTION_CANDIDATE_PROFILE \
+            V2_PRODUCTION_CANDIDATE_API_ORIGIN \
+            V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN \
+            V2_PRODUCTION_CANDIDATE_TENANT_URL \
+            V2_PRODUCTION_CANDIDATE_EXPECTED_SHA; do
+            test -n "${!name}"
+          done
+          cd ops
+          npx playwright install --with-deps chromium
+          node scripts/verify-v2-rc12-production-candidate-browser-acceptance.mjs | tee "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'LOGIN_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'SIGNUP_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+      - name: Install exact RC12 release dependencies for read-only owner readiness
+        working-directory: rc12
+        run: npm ci
+      - name: Verify post-bootstrap Platform Owner read-only readiness
+        shell: bash
+        env:
+          PRODUCTION_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          RELEASE_WORKTREE: ${{ github.workspace }}/rc12
+        run: |
+          set -euo pipefail
+          node ops/scripts/verify-v2-production-owner-readiness.mjs | tee "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'ACTIVE_PLATFORM_OWNER_COUNT=ONE' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'PLATFORM_OWNER_ROLE=PASS' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'PLATFORM_OWNER_STATUS_ACTIVE=PASS' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'PLATFORM_OWNER_MFA_REQUIRED=PASS' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'PLATFORM_OWNER_AUDIT_EVENT=PASS' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          grep -Fq 'PLATFORM_OWNER_READY=PASS' "$RUNNER_TEMP/platform-owner-readiness.txt"
+          echo 'REAL_PLATFORM_OWNER_PRESERVED=PASS'
+      - name: Run bounded generated-fixture candidate acceptance
+        shell: bash
+        env:
+          V2_PRODUCTION_CANDIDATE_ACCEPTANCE_APPROVED: RUN_V2_PRODUCTION_CANDIDATE_ACCEPTANCE
+          V2_PRODUCTION_CANDIDATE_PROFILE: production-candidate
+          PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+          V2_PRODUCTION_CANDIDATE_API_ORIGIN: https://api-next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+          V2_PRODUCTION_CANDIDATE_TENANT_URL: ${{ vars.PRODUCTION_CANDIDATE_SMOKE_TENANT_URL }}
+          V2_PRODUCTION_CANDIDATE_EXPECTED_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          V2_PRODUCTION_CANDIDATE_FIXTURE_MODE: GENERATED_ISOLATED
+          CANDIDATE_ACCEPTANCE_MODE: ${{ needs.validate-candidate-revision.outputs.candidate_acceptance_mode }}
+        run: |
+          set -euo pipefail
+          test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          test "$PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
+          for name in \
+            PRODUCTION_CANDIDATE_ACCEPTANCE_DATABASE_URL \
+            V2_PRODUCTION_CANDIDATE_PROFILE \
+            V2_PRODUCTION_CANDIDATE_API_ORIGIN \
+            V2_PRODUCTION_CANDIDATE_WORKSPACE_BASE_DOMAIN \
+            V2_PRODUCTION_CANDIDATE_TENANT_URL \
+            V2_PRODUCTION_CANDIDATE_EXPECTED_SHA; do
+            test -n "${!name}"
+          done
+          test "$CANDIDATE_ACCEPTANCE_MODE" = POST_BOOTSTRAP
+          test "$RELEASE_SHA" = "$RC12_SHA"
+          node ops/scripts/verify-v2-rc12-production-candidate-acceptance.mjs --validate-only
+          node ops/scripts/verify-v2-rc12-production-candidate-acceptance.mjs | tee "$RUNNER_TEMP/rc12-candidate-acceptance.txt"
+          grep -Fxq 'CANDIDATE_ACCEPTANCE_MODE=POST_BOOTSTRAP' "$RUNNER_TEMP/rc12-candidate-acceptance.txt"
+          grep -Fxq 'REAL_PLATFORM_OWNER_PRESERVED=PASS' "$RUNNER_TEMP/rc12-candidate-acceptance.txt"
+          grep -Fxq 'SIGNUP_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-candidate-acceptance.txt"
+          grep -Fxq 'LOGIN_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-candidate-acceptance.txt"
+      - name: Remove RC12 candidate acceptance evidence
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/rc12-browser-acceptance.txt" "$RUNNER_TEMP/rc12-candidate-acceptance.txt" "$RUNNER_TEMP/platform-owner-readiness.txt"
