@@ -1,0 +1,230 @@
+name: V2 RC12 Production Upgrade Dispatcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC12 SHA.
+        required: true
+        type: string
+      operation:
+        description: Bounded RC12 upgrade operation.
+        required: true
+        type: choice
+        options:
+          - upload-inactive
+          - promote
+          - rollback
+      confirm_upgrade:
+        description: Exact confirmation for the selected operation.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-rc12-production-upgrade
+  cancel-in-progress: false
+
+env:
+  RC12_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  RC12_TAG: v2-production-rc12
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_TAG: v2-production-rc10
+  RC10_READY_TAG: v2-production-ready
+  PAGES_PROJECT: olfactoryops-v2-production
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      operation: ${{ steps.validate.outputs.operation }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.release_sha }}" = "$RC12_SHA"
+          case "${{ inputs.operation }}" in
+            upload-inactive) expected=UPLOAD_RC12_INACTIVE_WORKER_VERSIONS ;;
+            promote) expected=PROMOTE_RC12_PRODUCTION_COMPONENTS ;;
+            rollback) expected=ROLLBACK_RC12_TO_RC10_COMPONENTS ;;
+            *) exit 2 ;;
+          esac
+          test "${{ inputs.confirm_upgrade }}" = "$expected"
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC12_TAG")" = "$RC12_SHA"
+          test "$(git rev-list -n 1 "$RC10_TAG")" = "$RC10_SHA"
+          test "$(git rev-list -n 1 "$RC10_READY_TAG")" = "$RC10_SHA"
+          echo "operation=${{ inputs.operation }}" >> "$GITHUB_OUTPUT"
+          echo 'RC12_UPGRADE_INPUTS=PASS'
+
+  upgrade:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/heads/main
+          path: ops
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          path: release
+          persist-credentials: false
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4.3.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: release/package-lock.json
+      - name: Install exact RC12 tooling without provider credentials
+        run: npm ci --prefix release --ignore-scripts
+      - id: capture
+        name: Capture exact active RC10 rollback targets read-only
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          state="$RUNNER_TEMP/rc12-upgrade-${GITHUB_RUN_ID}"
+          mkdir -p "$state"
+          chmod 700 "$state"
+          export RC12_UPGRADE_STATE_DIRECTORY="$state"
+          node ops/scripts/capture-v2-rc12-upgrade-state.mjs capture
+          test -s "$state/rollback-state.json"
+          chmod 600 "$state/rollback-state.json"
+          echo "state_directory=$state" >> "$GITHUB_OUTPUT"
+          echo 'RC10_ROLLBACK_TARGET_CAPTURE=PASS'
+      - name: Render exact RC12 Worker configurations without routes
+        if: ${{ needs.validate.outputs.operation == 'upload-inactive' || needs.validate.outputs.operation == 'promote' }}
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
+          SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
+          SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
+          SCIENTIFIC_MODEL_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE_DIGEST }}
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PRODUCTION_HYPERDRIVE_ID"
+          npm run prisma:generate:v2
+          npm run generate:v2-worker-transport
+          node scripts/render-v2-api-production-config.mjs
+          node scripts/render-v2-tenant-router-production-config.mjs
+          npm run cloud-runtime:render-production
+          for config in .qa/wrangler.v2-api-production.toml .qa/wrangler.v2-tenant-router-production.toml .qa/wrangler.v2-cloud-runtime.production.toml; do
+            test -s "$config"
+            if grep -Eq '(^|[[:space:]])(route|routes|custom_domain)[[:space:]]*=' "$config"; then exit 1; fi
+          done
+          echo 'RC12_ROUTE_FREE_UPLOAD_CONFIGS=PASS'
+      - name: Upload only inactive exact RC12 Worker versions
+        if: ${{ needs.validate.outputs.operation == 'upload-inactive' || needs.validate.outputs.operation == 'promote' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          state="${{ steps.capture.outputs.state_directory }}"
+          for entry in \
+            'api:.qa/wrangler.v2-api-production.toml' \
+            'tenant-router:.qa/wrangler.v2-tenant-router-production.toml' \
+            'cloud-runtime:.qa/wrangler.v2-cloud-runtime.production.toml'; do
+            name="${entry%%:*}"
+            config="${entry#*:}"
+            ./node_modules/.bin/wrangler versions upload --config "$config" --tag "rc12-${RELEASE_SHA:0:12}" --message "RC12 ${RELEASE_SHA}" >"$state/upload-$name.json" 2>"$state/upload-$name.err"
+            ./node_modules/.bin/wrangler versions list --json --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$name")" >"$state/versions-$name.json" 2>"$state/versions-$name.err"
+          done
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs uploaded
+          echo 'RC12_WORKER_VERSIONS_INACTIVE=PASS'
+      - name: Promote exact RC12 Workers then Pages in bounded order
+        if: ${{ needs.validate.outputs.operation == 'promote' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RELEASE_SHA: ${{ inputs.release_sha }}
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          state="${{ steps.capture.outputs.state_directory }}"
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs promote
+          for service in api cloud-runtime tenant-router; do
+            version="$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs version "$service")"
+            ./node_modules/.bin/wrangler versions deploy "$version@100%" --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$service")" --yes >"$state/promote-$service.json" 2>"$state/promote-$service.err"
+            node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs verify-promoted "$service"
+          done
+          npm run build >"$state/pages-build.out" 2>"$state/pages-build.err"
+          ./node_modules/.bin/wrangler pages deploy dist --project-name "$PAGES_PROJECT" --branch production --commit-hash "$RELEASE_SHA" --commit-message "RC12 $RELEASE_SHA" --commit-dirty=false >"$state/pages-promote.json" 2>"$state/pages-promote.err"
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs verify-pages
+          echo 'RC12_WORKER_PROMOTION=PASS'
+          echo 'RC12_PAGES_PROMOTION=PASS'
+      - name: Restore captured RC10 versions and Pages deployment on failed promotion
+        if: ${{ failure() && needs.validate.outputs.operation == 'promote' && steps.capture.outcome == 'success' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          state="${{ steps.capture.outputs.state_directory }}"
+          for service in tenant-router cloud-runtime api; do
+            version="$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs rollback-version "$service")"
+            ./node_modules/.bin/wrangler rollback "$version" --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$service")" --yes >"$state/rollback-$service.json" 2>"$state/rollback-$service.err"
+          done
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs rollback-pages
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs verify-rc10-public
+          echo 'RC12_PARTIAL_PROMOTION_ROLLBACK=PASS'
+      - name: Run an explicit RC10 rollback without route changes
+        if: ${{ needs.validate.outputs.operation == 'rollback' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        working-directory: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
+          state="${{ steps.capture.outputs.state_directory }}"
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs assert-rc10-rollback-targets
+          for service in tenant-router cloud-runtime api; do
+            version="$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs rollback-version "$service")"
+            ./node_modules/.bin/wrangler rollback "$version" --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$service")" --yes >"$state/rollback-$service.json" 2>"$state/rollback-$service.err"
+          done
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs rollback-pages
+          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs verify-rc10-public
+          echo 'RC12_UPGRADE_ROLLBACK=PASS'
+      - name: Remove private upgrade state
+        if: ${{ always() }}
+        env:
+          STATE_DIRECTORY: ${{ steps.capture.outputs.state_directory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$STATE_DIRECTORY"
+          rm -rf -- "$STATE_DIRECTORY"
+          test ! -e "$STATE_DIRECTORY"
+          echo 'RC12_UPGRADE_LOCAL_CLEANUP=PASS'

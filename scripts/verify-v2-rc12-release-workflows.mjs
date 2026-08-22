@@ -1,0 +1,88 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const workflows = join(root, '.github', 'workflows')
+const rc12Sha = '331c1a6054fe1420b063a2e1fe9e5cef4f043ff8'
+const rc10Sha = 'fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd'
+
+function source(name) {
+  return readFileSync(join(workflows, name), 'utf8').replaceAll('\r\n', '\n')
+}
+
+function requireText(value, text, label) {
+  assert.ok(value.includes(text), label)
+}
+
+function forbid(value, pattern, label) {
+  assert.doesNotMatch(value, pattern, label)
+}
+
+function assertMainOnly(value, label) {
+  requireText(value, "github.event_name == 'workflow_dispatch'", `${label}: workflow dispatch only`)
+  requireText(value, "github.ref == 'refs/heads/main'", `${label}: main ref guard`)
+  requireText(value, "github.ref_type == 'branch'", `${label}: branch guard`)
+}
+
+export function verifyRc12ReleaseWorkflows() {
+  const sourceFinalization = source('v2-rc12-release-source-finalization.yml')
+  const candidate = source('v2-rc12-isolated-production-candidate.yml')
+  const revalidation = source('v2-rc12-production-environment-revalidation.yml')
+  const backup = source('v2-rc12-production-backup-snapshot.yml')
+  const readiness = source('v2-rc12-production-readiness.yml')
+  const upgrade = source('v2-rc12-production-upgrade-dispatcher.yml')
+  const rollback = source('v2-rc12-production-upgrade-rollback.yml')
+  const acceptance = source('v2-rc12-production-public-acceptance.yml')
+  const finalizer = source('v2-rc12-production-live-finalization.yml')
+  const renderer = readFileSync(join(root, 'scripts', 'render-v2-rc12-cloud-runtime-candidate-config.mjs'), 'utf8')
+  const browserAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-browser-acceptance.mjs'), 'utf8')
+  const generatedAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-acceptance.mjs'), 'utf8')
+  const all = [sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join('\n')
+
+  for (const [name, value] of Object.entries({ sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer })) {
+    requireText(value, 'on:\n  workflow_dispatch:', `${name}: dispatch trigger`)
+    assertMainOnly(value, name)
+    requireText(value, rc12Sha, `${name}: exact RC12 SHA`)
+    requireText(value, 'environment: production', `${name}: protected environment`)
+    forbid(value, /git tag -f|git push --force/, `${name}: force tag or push forbidden`)
+  }
+  requireText(sourceFinalization, 'contents: write', 'source finalization: annotated tag permission')
+  requireText(sourceFinalization, 'cat-file -t "refs/tags/$RC12_TAG"', 'source finalization: annotated tag required')
+  requireText(sourceFinalization, 'v2-rc12-release-policy.mjs', 'source finalization: manifest policy')
+  requireText(candidate, 'render-v2-rc12-cloud-runtime-candidate-config.mjs render', 'candidate: isolated renderer')
+  requireText(candidate, 'render-v2-rc12-cloud-runtime-candidate-config.mjs verify', 'candidate: isolated renderer verification')
+  requireText(candidate, 'verify-v2-rc12-production-candidate-browser-acceptance.mjs', 'candidate: RC12 browser acceptance')
+  requireText(candidate, 'verify-v2-rc12-production-candidate-acceptance.mjs', 'candidate: RC12 generated acceptance')
+  requireText(candidate, 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS', 'candidate: first-party public auth redirect evidence')
+  requireText(candidate, 'LOGIN_WORKSPACE_REDIRECT=PASS', 'candidate: login workspace redirect evidence')
+  requireText(candidate, 'SIGNUP_WORKSPACE_REDIRECT=PASS', 'candidate: signup workspace redirect evidence')
+  requireText(candidate, 'test "$CANDIDATE_ACCEPTANCE_MODE" = "POST_BOOTSTRAP"', 'candidate: real owner preserving contract')
+  forbid(candidate, /path: rc9|verify-v2-production-candidate-browser-acceptance\.mjs|verify-v2-production-candidate-acceptance\.mjs --validate-only/, 'candidate: historical candidate acceptance is not reused')
+  for (const marker of ['CANDIDATE_WORKER_NAME_ISOLATED=PASS', 'CANDIDATE_WORKFLOW_NAME_ISOLATED=PASS', 'PRODUCTION_WORKFLOW_NAME_ABSENT_FROM_CANDIDATE_OWNERSHIP=PASS', 'PRODUCTION_QUEUE_CONSUMERS_ABSENT=PASS', 'PUBLIC_ROUTES_ABSENT=PASS', 'PUBLIC_CUSTOM_DOMAINS_ABSENT=PASS', 'RC12_SHA_UNCHANGED=PASS']) requireText(renderer, marker, `renderer: ${marker}`)
+  requireText(browserAcceptance, 'CANDIDATE_PUBLIC_AUTH_ORIGIN = "https://next.labofscents.org"', 'browser: first-party candidate auth origin')
+  requireText(browserAcceptance, 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS', 'browser: auth redirect evidence')
+  forbid(browserAcceptance, /pages\.dev/, 'browser: raw Pages origin is not accepted for auth')
+  requireText(generatedAcceptance, 'REAL_PLATFORM_OWNER_PRESERVED=PASS', 'generated acceptance: real owner preserved')
+  requireText(generatedAcceptance, 'generatedWorkspaceRedirectMatches', 'generated acceptance: workspace redirect validation')
+  forbid(generatedAcceptance, /'PLATFORM_OWNER', 'ACTIVE'/, 'generated acceptance: no Platform Owner fixture')
+  requireText(upgrade, 'wrangler versions upload', 'upgrade: inactive version upload')
+  requireText(upgrade, 'wrangler versions deploy', 'upgrade: exact version promotion')
+  requireText(upgrade, 'Restore captured RC10 versions', 'upgrade: automatic RC10 rollback')
+  requireText(upgrade, 'rollback-pages', 'upgrade: exact Pages rollback')
+  requireText(rollback, 'wrangler rollback', 'rollback: Worker version rollback')
+  requireText(rollback, 'rollback-pages', 'rollback: Pages rollback')
+  requireText(finalizer, 'v2-production-live-rc12', 'finalizer: RC12 live tag')
+  requireText(finalizer, 'V2 RC12 Production Public Acceptance', 'finalizer: fresh public acceptance gate')
+  requireText(finalizer, 'verify-live', 'finalizer: active RC12 component recheck')
+  requireText(finalizer, 'verify-rollback-capability', 'finalizer: rollback recheck')
+  requireText(readiness, 'contents: read', 'readiness: no tag write permission')
+  requireText(readiness, `v2-production-live)" = "$RC10_RUNTIME_BASE_SHA`, 'readiness: legacy RC10 live tag preserved')
+  forbid(readiness, /git tag\b|git push\b/, 'readiness: no tag mutation')
+  requireText(acceptance, rc10Sha, 'acceptance: legacy RC10 readiness target preserved')
+  forbid(all, /workers\/routes|workers\/domains|route-handoff|git tag -f|git push --force/, 'RC12: no route handoff or force mutation')
+  console.log('RC12_RELEASE_WORKFLOW_CONTRACT=PASS')
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) verifyRc12ReleaseWorkflows()

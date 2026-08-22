@@ -1,0 +1,118 @@
+name: V2 RC12 Production Live Finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC12 SHA.
+        required: true
+        type: string
+      public_acceptance_run_id:
+        description: Fresh successful V2 RC12 Production Public Acceptance run ID.
+        required: true
+        type: string
+      confirm_finalization:
+        description: Type FINALIZE_RC12_PRODUCTION_LIVE.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: v2-rc12-production-live-finalization
+  cancel-in-progress: false
+
+env:
+  RC12_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  RC12_TAG: v2-production-rc12
+  RC12_LIVE_TAG: v2-production-live-rc12
+  RC10_SHA: fe77c96f9306e3a0ce9622e9f7eef6ee2b5cf6dd
+  RC10_READY_TAG: v2-production-ready
+
+jobs:
+  validate:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: validate
+        name: Validate immutable RC12 source and fresh public acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACCEPTANCE_RUN_ID: ${{ inputs.public_acceptance_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_finalization }}" = FINALIZE_RC12_PRODUCTION_LIVE
+          test "${{ inputs.release_sha }}" = "$RC12_SHA"
+          [[ "$ACCEPTANCE_RUN_ID" =~ ^[0-9]+$ ]]
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC12_TAG")" = "$RC12_SHA"
+          test "$(git rev-list -n 1 "$RC10_READY_TAG")" = "$RC10_SHA"
+          metadata="$RUNNER_TEMP/rc12-public-acceptance-metadata.json"
+          log="$RUNNER_TEMP/rc12-public-acceptance.log"
+          trap 'rm -f "$metadata" "$log"' EXIT
+          gh run view "$ACCEPTANCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,conclusion,event,createdAt > "$metadata"
+          grep -Fq 'V2 RC12 Production Public Acceptance' "$metadata"
+          grep -Fq '"conclusion":"success"' "$metadata"
+          grep -Fq '"event":"workflow_dispatch"' "$metadata"
+          created_at="$(node -e 'const x=JSON.parse(require("fs").readFileSync(process.argv[1]));process.stdout.write(x.createdAt)' "$metadata")"
+          created_epoch="$(date -d "$created_at" +%s)"
+          test "$(( $(date -u +%s) - created_epoch ))" -le 86400
+          gh run view "$ACCEPTANCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log > "$log"
+          grep -Fq "RELEASE_SHA=$RC12_SHA" "$log"
+          grep -Fq 'STAGE_10_PUBLIC_ACCEPTANCE=PASS' "$log"
+          grep -Fq 'PUBLIC_SMOKE=PASS' "$log"
+          echo "release_sha=$RC12_SHA" >> "$GITHUB_OUTPUT"
+          echo 'RC12_LIVE_FINALIZATION_INPUTS=PASS'
+
+  finalize:
+    needs: validate
+    if: ${{ needs.validate.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Recheck exact active RC12 components and rollback capability read-only
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          test "$(git rev-list -n 1 "$RC12_TAG")" = "$RC12_SHA"
+          test "$(git rev-list -n 1 "$RC10_READY_TAG")" = "$RC10_SHA"
+          if git show-ref --verify --quiet "refs/tags/$RC12_LIVE_TAG"; then
+            test "$(git rev-list -n 1 "$RC12_LIVE_TAG")" = "$RC12_SHA"
+          fi
+          node scripts/capture-v2-rc12-upgrade-state.mjs verify-live
+          node scripts/capture-v2-rc12-upgrade-state.mjs verify-rollback-capability
+          echo 'RC12_COMPONENT_IDENTITY_RECHECK=PASS'
+      - name: Create the immutable RC12 live attestation tag once
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/$RC12_LIVE_TAG"; then
+            test "$(git rev-list -n 1 "$RC12_LIVE_TAG")" = "$RC12_SHA"
+          else
+            git config user.name github-actions
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$RC12_LIVE_TAG" "$RC12_SHA" -m 'RC12 production live attestation'
+            git push origin "refs/tags/$RC12_LIVE_TAG"
+          fi
+          echo "V2_PRODUCTION_LIVE_RC12_TAG=$RC12_SHA"
+          echo 'RC12_LIVE_FINALIZATION=PASS'
