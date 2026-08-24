@@ -28,6 +28,7 @@ const migrations = [
   'infra/postgres/migrations/0023_platform_control_plane_operations.sql',
   'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
+  'infra/postgres/migrations/0026_platform_password_resets.sql',
 ]
 
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
@@ -44,8 +45,8 @@ try {
     SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
-  `, [['v2_organizations', 'v2_workspace_hostnames', 'v2_inventory_movements', 'v2_formula_versions', 'v2_cloud_job_dispatches', 'v2_cloud_job_events', 'v2_platform_operators', 'v2_platform_mutation_receipts', 'v2_platform_workspace_requests']])
-  if (rows.length !== 9 || rows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('PRODUCTION_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
+  `, [['v2_organizations', 'v2_workspace_hostnames', 'v2_inventory_movements', 'v2_formula_versions', 'v2_cloud_job_dispatches', 'v2_cloud_job_events', 'v2_platform_operators', 'v2_platform_mutation_receipts', 'v2_platform_workspace_requests', 'v2_password_resets']])
+  if (rows.length !== 10 || rows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('PRODUCTION_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
   console.log(JSON.stringify({ productionMigrations: 'PASS', migrationCount: migrations.length, rlsTablesVerified: rows.length }))
 } finally {
   await client.end().catch(() => undefined)

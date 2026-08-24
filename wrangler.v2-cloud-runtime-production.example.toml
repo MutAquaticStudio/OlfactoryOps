@@ -11,6 +11,8 @@ workers_dev = false
 RELEASE_ENVIRONMENT = "production"
 RELEASE_GIT_SHA = "REPLACE_WITH_GIT_SHA"
 SCIENTIFIC_RUNTIME_IMAGE_DIGEST = "REPLACE_WITH_FEATURE_IMAGE_DIGEST"
+V2_PUBLIC_PAGES_HOSTNAME = "labofscents.org"
+PASSWORD_RESET_DELIVERY_ENABLED = "true"
 
 [[hyperdrive]]
 binding = "HYPERDRIVE"
@@ -51,7 +53,7 @@ dead_letter_queue = "olfactoryops-v2-rag-dlq-production"
 [[queues.consumers]]
 queue = "olfactoryops-v2-notifications-production"
 max_batch_size = 10
-max_retries = 3
+max_retries = 5
 dead_letter_queue = "olfactoryops-v2-notifications-dlq-production"
 
 [[workflows]]
@@ -82,3 +84,8 @@ max_instances = 2
 [[migrations]]
 tag = "v2-cloud-runtime-1"
 new_sqlite_classes = ["ScientificFeatureContainer", "ScientificModelContainer"]
+
+# Production-only Cloudflare secret bindings:
+# V2_PASSWORD_RESET_ENCRYPTION_KEY
+# RESEND_API_KEY
+# EMAIL_FROM

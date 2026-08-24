@@ -14,6 +14,11 @@ export interface CloudRuntimeEnv extends CloudScientificEnv {
   NOTIFICATION_DELIVERY_JOBS: Queue<CloudJobEnvelope>
   SCIENTIFIC_WORKFLOW: Workflow<CloudJobEnvelope>
   RELEASE_ENVIRONMENT?: string
+  PASSWORD_RESET_DELIVERY_ENABLED?: string
+  V2_PASSWORD_RESET_ENCRYPTION_KEY?: string
+  V2_PUBLIC_PAGES_HOSTNAME?: string
+  RESEND_API_KEY?: string
+  EMAIL_FROM?: string
 }
 
 function json(status: number, body: Record<string, unknown>): Response {
@@ -44,6 +49,23 @@ export default {
         if (body.length > 16_384) return json(413, { code: 'DISPATCH_TOO_LARGE' })
         const job = cloudJobEnvelopeSchema.parse(JSON.parse(body))
         if (job.jobType !== 'SCIENTIFIC_FEATURE' && job.jobType !== 'SCIENTIFIC_MODEL') return json(422, { code: 'CLOUD_JOB_HANDLER_NOT_CONFIGURED' })
+        const result = await new CloudQueueDispatcher(new CloudJobLedger(createHyperdrivePrisma(env)), env).dispatch(job)
+        return json(202, result)
+      } catch (error) {
+        return json(500, { code: safeCloudError(error) })
+      }
+    }
+    if (request.method === 'POST' && url.pathname === '/internal/notification-dispatch') {
+      if (env.PASSWORD_RESET_DELIVERY_ENABLED !== 'true' || request.headers.get('x-olfactoryops-internal-dispatch') !== 'cloud-runtime/v1') {
+        return json(503, { code: 'PASSWORD_RESET_DELIVERY_NOT_CONFIGURED' })
+      }
+      try {
+        const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+        if (!contentType.includes('application/json')) return json(415, { code: 'INVALID_CONTENT_TYPE' })
+        const body = await request.text()
+        if (body.length > 16_384) return json(413, { code: 'DISPATCH_TOO_LARGE' })
+        const job = cloudJobEnvelopeSchema.parse(JSON.parse(body))
+        if (job.jobType !== 'NOTIFICATION_DELIVERY') return json(422, { code: 'NOTIFICATION_DELIVERY_REQUIRED' })
         const result = await new CloudQueueDispatcher(new CloudJobLedger(createHyperdrivePrisma(env)), env).dispatch(job)
         return json(202, result)
       } catch (error) {

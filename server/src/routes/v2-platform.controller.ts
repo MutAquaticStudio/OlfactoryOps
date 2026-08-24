@@ -116,6 +116,20 @@ export class V2PlatformController {
   @Post('auth/email-verification/confirm')
   async verifyEmail(@Body() body: { token?: string }) { return this.platform.verifyEmail(body.token ?? '') }
 
+  @Post('auth/password-reset/request')
+  async requestPasswordReset(@Body() body: { email?: string }) {
+    try {
+      return await this.platform.requestPasswordReset(body.email ?? '')
+    } catch (error) { throw this.normalize(error) }
+  }
+
+  @Post('auth/password-reset/confirm')
+  async confirmPasswordReset(@Body() body: { token?: string; password?: string }) {
+    try {
+      return await this.platform.completePasswordReset(body.token ?? '', body.password ?? '')
+    } catch (error) { throw this.normalize(error) }
+  }
+
   @Post('auth/invitations/accept')
   async acceptInvitation(@Body() rawBody: unknown, @Req() request: FastifyRequest, @Res({ passthrough: true }) reply: FastifyReply) {
     try {

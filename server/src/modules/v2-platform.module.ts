@@ -29,6 +29,8 @@ function unavailableRepository(): PlatformRepository {
           baseDomain: process.env.V2_WORKSPACE_BASE_DOMAIN ?? 'olfactoryops.com',
           sessionPepper: process.env.V2_SESSION_PEPPER,
           passwordPepper: process.env.V2_PASSWORD_PEPPER,
+          invitationEncryptionKey: process.env.V2_INVITATION_ENCRYPTION_KEY,
+          passwordResetEncryptionKey: process.env.V2_PASSWORD_RESET_ENCRYPTION_KEY,
         })
       },
     },

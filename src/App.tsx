@@ -129,7 +129,6 @@ import {
   type BrandingConfig,
   type BillingActionResponse,
   type BillingConsoleResponse,
-  type BillingSubscriptionRecord,
   type CommercialSkuRecord,
   type CostingOverview,
   type CustomerRecord,
@@ -461,41 +460,10 @@ type DocumentShareResponse = {
   invariant: string
 }
 
-type LoginResponse = {
-  session: AuthSession
-  csrfToken: string
-  permissions: string[]
-  revokedForLimit: AuthSession[]
-  newDeviceAlert: boolean
-  securityPolicy: TenantSecurityPolicy
-  workspace: WorkspaceAccess
-  invariant: string
-}
-
 type WorkspaceAccess = {
   systemHostname: string
   workspaceUrl: string
   externalDomain?: string
-}
-
-type SignupResponse = {
-  organization: OrganizationRecord
-  brand: BrandRecord
-  membership: MembershipRecord
-  subscription: BillingSubscriptionRecord
-  sso: SsoConfigRecord
-  session: AuthSession
-  csrfToken: string
-  permissions: string[]
-  audit: AuditEvent
-  systemHostname: string
-  workspaceUrl: string
-  emailVerification: EmailVerificationStatus & { delivery?: 'sent' | 'failed' | 'not_configured' | 'not_requested' }
-  customDomain: {
-    status: 'NOT_REQUESTED'
-    nextAction: string
-  }
-  invariant: string
 }
 
 type EmailVerificationStatus = {
@@ -1894,7 +1862,6 @@ function LegacyApp() {
   const [authRestoring, setAuthRestoring] = useState(() => hasStoredAuthMarker())
   const currentSessionId = currentSession?.id
   const currentOrganizationId = currentSession?.organizationId
-  const [authNotice, setAuthNotice] = useState<string | null>(null)
   const [resumePath, setResumePath] = useState<string | null>(() =>
     resumePathForLocation(window.location.pathname, window.location.search, window.location.hash),
   )
@@ -2171,7 +2138,6 @@ function LegacyApp() {
   useEffect(() => {
     function handleAuthExpired() {
       setResumePath((current) => current ?? safeInternalNext(`${window.location.pathname}${window.location.search}${window.location.hash}`) ?? pathForDomainKey(activeKey))
-      setAuthNotice('Your session expired or was revoked. Sign in again to continue where you left off.')
       setCurrentSession(null)
       setWorkspaceAccess(null)
       applyUserSettings(null)
@@ -2231,16 +2197,12 @@ function LegacyApp() {
         }
       } catch {
         if (active) {
-          const sessionWasAlreadyCleared = !hasStoredAuthMarker()
           writeStoredAuthSession(null)
           acceptCsrfToken()
           setCurrentSession(null)
           setWorkspaceAccess(null)
           applyUserSettings(null)
           setSidebarCollapsed(false)
-          if (!sessionWasAlreadyCleared) {
-            setAuthNotice('We could not restore your previous session. Sign in again to continue.')
-          }
         }
       } finally {
         window.clearTimeout(restoreTimeout)
@@ -2797,14 +2759,6 @@ function LegacyApp() {
     }
   }
 
-  function prepareAuthSession(session: AuthSession, token: string, permissions?: string[]) {
-    const sessionWithPermissions = withSessionPermissions(session, permissions)
-    acceptCsrfToken(token)
-
-    writeStoredAuthSession(sessionWithPermissions)
-    return sessionWithPermissions
-  }
-
   function rememberTenantDomain(organizationId: string, domain?: string) {
     if (!domain?.trim()) {
       return
@@ -2851,103 +2805,6 @@ function LegacyApp() {
     }
   }, [currentOrganizationId, currentSession, currentSessionId])
 
-  async function syncUserSettings(session: AuthSession) {
-    try {
-      const settings = await requestApi<UserSettingsRecord>('/user/settings')
-      applyUserSettings(settings)
-      return settings
-    } catch {
-      const fallback = userSettingsForSession(session)
-      applyUserSettings(fallback)
-      return fallback
-    }
-  }
-
-  async function loginToWorkspace(email: string, password?: string) {
-    const payload = await requestApi<LoginResponse>('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: password || undefined }),
-    })
-    const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
-    const settings = await syncUserSettings(session)
-    void syncTenantDomain(session.organizationId)
-    const resumeTarget = resumePath ? domainKeyForPath(new URL(resumePath, window.location.origin).pathname) : settings.preferredLanding
-    const target = safeLandingForSession(resumeTarget, session)
-    const destination = resumePath ?? pathForDomainKey(target)
-    const redirect = workspaceRedirectUrl(payload.workspace?.workspaceUrl, destination)
-    if (redirect) {
-      window.location.assign(redirect)
-      return payload
-    }
-    setActiveKey(target)
-    window.history.replaceState({}, document.title, destination)
-    setPublicRoute(publicRouteForPath(new URL(destination, window.location.origin).pathname))
-    setResumePath(null)
-    setAuthNotice(null)
-    setCurrentSession(session)
-    setWorkspaceAccess(payload.workspace)
-    return payload
-  }
-
-  async function signupWorkspace(input: {
-    organizationName: string
-    workspaceSlug: string
-    email: string
-    name: string
-    password: string
-  }) {
-    const payload = await requestApi<SignupResponse>('/auth/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        organizationName: input.organizationName.trim(),
-        workspaceSlug: toWorkspaceSlug(input.workspaceSlug),
-        email: input.email.trim().toLowerCase(),
-        name: input.name.trim(),
-        password: input.password,
-      }),
-    })
-    const session = prepareAuthSession(payload.session, payload.csrfToken, payload.permissions)
-    const redirect = workspaceRedirectUrl(payload.workspaceUrl, '/')
-    if (redirect) {
-      window.location.assign(redirect)
-      return payload
-    }
-    setCurrentSession(session)
-    setWorkspaceAccess({ systemHostname: payload.systemHostname, workspaceUrl: payload.workspaceUrl })
-    setResumePath(null)
-    setAuthNotice(null)
-    rememberTenantDomain(payload.session.organizationId, payload.systemHostname)
-    void syncUserSettings(session)
-    setBillingOnboarding(true)
-    return payload
-  }
-
-  async function requestPasswordReset(email: string) {
-    await requestApi<{ accepted: boolean }>('/auth/password-reset/request', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: email.trim().toLowerCase() }),
-    })
-  }
-
-  async function completePasswordReset(token: string, password: string) {
-    await requestApi<{ accepted: boolean }>('/auth/password-reset/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, password }),
-    })
-  }
-
-  async function completeEmailVerification(token: string) {
-    await requestApi<{ accepted: boolean; alreadyVerified: boolean }>('/auth/email-verification/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-  }
-
   async function logoutWorkspace() {
     try {
       await requestApi<{ session: AuthSession; audit: AuditEvent; invariant: string }>('/auth/logout', { method: 'POST' })
@@ -2959,7 +2816,6 @@ function LegacyApp() {
       applyUserSettings(null)
       setSidebarCollapsed(false)
       setBillingOnboarding(false)
-      setAuthNotice(null)
       setResumePath(null)
       acceptCsrfToken()
       writeStoredAuthSession(null)
@@ -2997,18 +2853,7 @@ function LegacyApp() {
         </MotionProvider>
       )
     }
-    return (
-      <AuthGateway
-        initialMode={publicRoute === 'signup' ? 'signup' : 'login'}
-        notice={authNotice}
-        onLogin={loginToWorkspace}
-        onSignup={signupWorkspace}
-        onRequestPasswordReset={requestPasswordReset}
-        onCompletePasswordReset={completePasswordReset}
-        onCompleteEmailVerification={completeEmailVerification}
-        onNavigate={navigatePublic}
-      />
-    )
+    return <LegacyUnauthenticatedRedirect />
   }
 
   if (billingOnboarding) {
@@ -4225,10 +4070,6 @@ function UserSettingsForm({
   )
 }
 
-function toWorkspaceSlug(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 48)
-}
-
 function saasHealthTone(status: SaasHealthStatus): DomainStatus {
   if (status === 'blocked') return 'alert'
   if (status === 'warning') return 'review'
@@ -4388,318 +4229,11 @@ function PostSignupWorkspaceReady({
   )
 }
 
-function AuthGateway({
-  initialMode,
-  notice,
-  onLogin,
-  onSignup,
-  onRequestPasswordReset,
-  onCompletePasswordReset,
-  onCompleteEmailVerification,
-  onNavigate,
-}: {
-  initialMode: 'login' | 'signup'
-  notice?: string | null
-  onLogin: (email: string, password?: string) => Promise<LoginResponse>
-  onSignup: (input: {
-    organizationName: string
-    workspaceSlug: string
-    email: string
-    name: string
-    password: string
-  }) => Promise<SignupResponse>
-  onRequestPasswordReset: (email: string) => Promise<void>
-  onCompletePasswordReset: (token: string, password: string) => Promise<void>
-  onCompleteEmailVerification: (token: string) => Promise<void>
-  onNavigate: (path: '/login' | '/signup', replace?: boolean) => void
-}) {
-  const resetToken = new URLSearchParams(window.location.search).get('reset')?.trim() ?? ''
-  const verificationToken = new URLSearchParams(window.location.search).get('verify')?.trim() ?? ''
-  const [mode, setMode] = useState<'login' | 'signup' | 'reset-request' | 'reset-confirm' | 'verify-confirm'>(
-    verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode,
-  )
-  const [email, setEmail] = useState('')
-  const [name, setName] = useState('')
-  const [organizationName, setOrganizationName] = useState('')
-  const [workspaceSlug, setWorkspaceSlug] = useState('')
-  const [workspaceSlugTouched, setWorkspaceSlugTouched] = useState(false)
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState(
-    notice ?? 'Login with an active workspace account, or sign up a new workspace.',
-  )
-  const signupPasswordReady = password.length >= 12 && /[A-Za-z]/.test(password) && /\d/.test(password)
-  const signupReady = Boolean(
-    organizationName.trim() &&
-      workspaceSlug.trim() &&
-      email.trim() &&
-      name.trim() &&
-      signupPasswordReady &&
-      password === confirmPassword,
-  )
-
+function LegacyUnauthenticatedRedirect() {
   useEffect(() => {
-    setMode(verificationToken ? 'verify-confirm' : resetToken ? 'reset-confirm' : initialMode)
-  }, [initialMode, resetToken, verificationToken])
-
-  async function submitAuth() {
-    setBusy(true)
-    setStatus(
-      mode === 'login'
-        ? 'Checking workspace account'
-        : mode === 'signup'
-          ? 'Creating your lab workspace'
-          : mode === 'reset-request'
-            ? 'Requesting password reset'
-            : mode === 'reset-confirm'
-              ? 'Resetting password'
-              : 'Verifying email address',
-    )
-    try {
-      if (mode === 'login') {
-        const result = await onLogin(email, password)
-        setStatus(`${result.session.email} signed in with ${result.session.role} role`)
-      } else if (mode === 'signup') {
-        if (!signupPasswordReady) {
-          setStatus('Password must be at least 12 characters and include letters and numbers.')
-          return
-        }
-        if (password !== confirmPassword) {
-          setStatus('Passwords must match before creating the workspace.')
-          return
-        }
-        const result = await onSignup({ organizationName, workspaceSlug, email, name, password })
-        setStatus(
-          result.emailVerification.delivery === 'not_configured'
-            ? `${result.organization.name} is ready. Email delivery is not configured yet; ask your workspace administrator to enable verification delivery.`
-            : `${result.organization.name} is ready. Check ${result.emailVerification.email} to verify your email address.`,
-        )
-      } else if (mode === 'reset-request') {
-        await onRequestPasswordReset(email)
-        setStatus('If the account exists, a one-time reset link has been sent. Check your inbox.')
-        setMode('login')
-      } else if (mode === 'reset-confirm') {
-        if (!signupPasswordReady || password !== confirmPassword) {
-          setStatus('Use a matching password with at least 12 characters, letters, and numbers.')
-          return
-        }
-        await onCompletePasswordReset(resetToken, password)
-        onNavigate('/login', true)
-        setPassword('')
-        setConfirmPassword('')
-        setMode('login')
-        setStatus('Password reset complete. Sign in with your new password.')
-      } else {
-        await onCompleteEmailVerification(verificationToken)
-        onNavigate('/login', true)
-        setMode('login')
-        setStatus('Email verified. Sign in to continue.')
-      }
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Authentication failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function switchMode(nextMode: 'login' | 'signup') {
-    setMode(nextMode)
-    onNavigate(nextMode === 'signup' ? '/signup' : '/login')
-    setStatus(nextMode === 'login' ? 'Sign in with your active workspace account.' : 'Create a new lab workspace and owner account.')
-    setWorkspaceSlugTouched(false)
-    if (nextMode === 'signup') {
-      setEmail('')
-      setName('')
-      setOrganizationName('')
-      setWorkspaceSlug('')
-      setPassword('')
-      setConfirmPassword('')
-    } else {
-      setEmail('')
-      setName('')
-      setOrganizationName('')
-      setWorkspaceSlug('')
-      setPassword('')
-      setConfirmPassword('')
-    }
-  }
-
-  function updateOrganizationName(value: string) {
-    setOrganizationName(value)
-    if (!workspaceSlugTouched) {
-      setWorkspaceSlug(toWorkspaceSlug(value))
-    }
-  }
-
-  function updateWorkspaceSlug(value: string) {
-    setWorkspaceSlug(toWorkspaceSlug(value))
-    setWorkspaceSlugTouched(true)
-  }
-
-  return (
-    <div className="min-h-screen bg-lab-bg text-[var(--text)]">
-      <LabBackdrop />
-      <main className="auth-shell">
-        <section className="auth-panel glass">
-          <div className="auth-copy">
-            <div className="brand-row">
-              <div className="brand-mark">
-                <Sparkles size={18} />
-              </div>
-              <div>
-                <div className="wordmark">OlfactoryOps</div>
-                <div className="mono-small">Fragrance operations</div>
-              </div>
-            </div>
-            <h1>
-              {uiText(mode === 'login'
-                ? 'Sign in to your lab workspace'
-                : mode === 'signup'
-                  ? 'Create your lab workspace'
-                  : mode === 'reset-request'
-                    ? 'Reset your password'
-                    : mode === 'reset-confirm'
-                      ? 'Choose a new password'
-                      : 'Verify your email')}
-            </h1>
-            <p className="lead">
-              Secure access for your workspace. We confirm your account, role, and workspace settings before you begin.
-            </p>
-            {mode === 'login' || mode === 'signup' ? (
-              <div className="auth-mode-switch" role="group" aria-label="Authentication mode">
-                <button className={mode === 'login' ? 'is-active' : ''} type="button" onClick={() => switchMode('login')}>
-                  {uiText('Login')}
-                </button>
-                <button className={mode === 'signup' ? 'is-active' : ''} type="button" onClick={() => switchMode('signup')}>
-                  {uiText('Sign up')}
-                </button>
-              </div>
-            ) : (
-              <button className="ghost-button small" type="button" onClick={() => switchMode('login')}>
-                {uiText('Back to login')}
-              </button>
-            )}
-          </div>
-
-          <div className="auth-form">
-            {mode === 'verify-confirm' ? (
-              <div className="auth-status" aria-live="polite">
-                <ShieldCheck size={16} />
-                <span>Confirm this secure, single-use link to verify your email address. It expires after 24 hours.</span>
-              </div>
-            ) : null}
-            {mode === 'signup' && (
-              <>
-                <label className="field-row">
-                  <span>Organization</span>
-                  <input
-                    aria-label="Signup organization"
-                    value={organizationName}
-                    onChange={(event) => updateOrganizationName(event.target.value)}
-                  />
-                </label>
-                <label className="field-row">
-                  <span>Workspace slug</span>
-                  <input
-                    aria-label="Signup workspace slug"
-                    value={workspaceSlug}
-                    onChange={(event) => updateWorkspaceSlug(event.target.value)}
-                  />
-                </label>
-                <div className="field-hint auth-signup-domain-note">
-                  Your workspace is isolated immediately. Connect a customer-owned domain after signup; Cloudflare will provide the DNS validation record before it goes live.
-                </div>
-                <label className="field-row">
-                  <span>Owner name</span>
-                  <input
-                    aria-label="Signup owner name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                  />
-                </label>
-              </>
-            )}
-            {mode === 'login' || mode === 'signup' || mode === 'reset-request' ? (
-              <label className="field-row">
-                <span>Email</span>
-                <input
-                  aria-label={mode === 'login' ? 'Login email' : mode === 'signup' ? 'Signup email' : 'Password reset email'}
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </label>
-            ) : null}
-            {mode === 'login' || mode === 'signup' || mode === 'reset-confirm' ? (
-              <label className="field-row">
-              <span>{mode === 'reset-confirm' ? 'New password' : 'Password'}</span>
-              <input
-                aria-label={mode === 'login' ? 'Login password' : mode === 'signup' ? 'Signup password' : 'New password'}
-                type="password"
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                value={password}
-                placeholder={mode === 'login' ? 'Enter your password' : 'At least 12 chars, letters and numbers'}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-              {mode === 'login' ? <small className="field-hint">Admin and workspace accounts require a password.</small> : null}
-              </label>
-            ) : null}
-            {(mode === 'signup' || mode === 'reset-confirm') && (
-              <label className="field-row">
-                <span>Confirm new password</span>
-                <input
-                  aria-label="Confirm password"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                />
-                {!signupPasswordReady ? <small className="field-hint is-danger">Use at least 12 characters with letters and numbers.</small> : null}
-                {signupPasswordReady && password !== confirmPassword ? (
-                  <small className="field-hint is-danger">Passwords must match.</small>
-                ) : null}
-              </label>
-            )}
-            <button
-              className="primary-button full"
-              type="button"
-              onClick={() => void submitAuth()}
-              disabled={
-                busy ||
-                (mode === 'verify-confirm'
-                  ? !verificationToken
-                  : mode === 'reset-confirm'
-                  ? !resetToken || !signupPasswordReady || password !== confirmPassword
-                  : !email.trim() || (mode === 'signup' && !signupReady))
-              }
-            >
-              {busy
-                ? 'Working'
-                : mode === 'login'
-                  ? 'Login'
-                  : mode === 'signup'
-                    ? 'Create workspace'
-                    : mode === 'reset-request'
-                      ? uiText('Send reset link')
-                      : mode === 'reset-confirm'
-                        ? uiText('Reset password')
-                        : uiText('Verify email')}
-            </button>
-            {mode === 'login' ? (
-              <button className="ghost-button small" type="button" onClick={() => setMode('reset-request')}>
-                {uiText('Forgot password?')}
-              </button>
-            ) : null}
-            <div className="auth-status">
-              <ShieldCheck size={16} />
-              <span>{status}</span>
-            </div>
-          </div>
-        </section>
-      </main>
-    </div>
-  )
+    window.location.replace('/login')
+  }, [])
+  return <main className="auth-restore-screen" aria-live="polite"><div><span className="section-eyebrow">OlfactoryOps</span><strong>Redirecting to secure sign in</strong></div></main>
 }
 
 const Dashboard = memo(function Dashboard({
@@ -17958,7 +17492,7 @@ function App() {
   // V2 owns the public authentication entrypoints as well as the workspace.
   // Keeping this decision at the application boundary prevents the legacy
   // shell from taking authority for a direct /login or /signup navigation.
-  return path === '/login' || path === '/signup' || path.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
+  return ['/login', '/signup', '/forgot-password', '/reset-password', '/verify-email'].includes(path) || path.startsWith('/v2/') ? <V2PlatformApp /> : <LegacyApp />
 }
 
 export default App

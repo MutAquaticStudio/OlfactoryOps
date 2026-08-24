@@ -7,7 +7,9 @@ import './styles/components.css'
 import './styles/features.css'
 import App from './App.tsx'
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+const immutableReleaseSha = import.meta.env.VITE_RELEASE_SHA
+
+if (import.meta.env.PROD && /^[a-f0-9]{40}$/.test(immutableReleaseSha ?? '') && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     const reloadKey = 'olfactoryops.service-worker-reloaded'
     const hadExistingController = Boolean(navigator.serviceWorker.controller)
@@ -20,7 +22,7 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
       window.sessionStorage.setItem(reloadKey, '1')
       window.location.reload()
     })
-    void navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+    void navigator.serviceWorker.register(`/sw.js?release=${immutableReleaseSha}`, { updateViaCache: 'none' })
       .then((registration) => registration.update())
   })
 }
