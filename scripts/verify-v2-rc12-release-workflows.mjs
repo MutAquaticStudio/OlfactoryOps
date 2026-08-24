@@ -41,6 +41,7 @@ export function verifyRc12ReleaseWorkflows() {
   const browserAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-browser-acceptance.mjs'), 'utf8')
   const generatedAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-acceptance.mjs'), 'utf8')
   const clientSecretVerifier = readFileSync(join(root, 'scripts', 'verify-v2-rc12-client-secret-references.mjs'), 'utf8')
+  const upgradeState = readFileSync(join(root, 'scripts', 'capture-v2-rc12-upgrade-state.mjs'), 'utf8')
   const all = [sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join('\n')
 
   for (const [name, value] of Object.entries({ sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer })) {
@@ -126,6 +127,8 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(readiness, `v2-production-live)" = "$RC10_RUNTIME_BASE_SHA`, 'readiness: legacy RC10 live tag preserved')
   forbid(readiness, /git tag\b|git push\b/, 'readiness: no tag mutation')
   requireText(acceptance, rc10Sha, 'acceptance: legacy RC10 readiness target preserved')
+  requireText(upgradeState, 'record?.latest_stage?.status === "success"', 'upgrade state: Pages success is determined by stage status')
+  forbid(upgradeState, /latest_stage\?\.name === "success"/, 'upgrade state: stage names are not success evidence')
   requireText(revalidation, 'verify-v2-rc12-client-secret-references.mjs "$RELEASE_WORKTREE"', 'revalidation: scoped client source scan')
   requireText(revalidation, 'npm --prefix "$RELEASE_WORKTREE" run security:client-bundle', 'revalidation: generated bundle scan')
   forbid(revalidation, /git -C "\$RELEASE_WORKTREE" grep/, 'revalidation: repository-wide source scan is forbidden')

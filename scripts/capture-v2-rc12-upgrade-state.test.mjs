@@ -38,12 +38,19 @@ it("requires exact release binding and safe production Pages identity", () => {
     true,
   );
   const pages = inspectPagesProductionDeployment(
-    { success: true, result: [{ id: "opaque_pages_deployment", environment: "production", latest_stage: { name: "success" }, deployment_trigger: { metadata: { commit_hash: RC12_SHA } } }] },
+    { success: true, result: [{ id: "opaque_pages_deployment", environment: "production", latest_stage: { status: "success" }, deployment_trigger: { metadata: { commit_hash: RC12_SHA } } }] },
     RC12_SHA,
   );
   expect(pages.pass).toBe(true);
   assert.equal(
     inspectPagesProductionDeployment({ success: true, result: [] }, RC12_SHA).state,
+    "PRODUCTION_DEPLOYMENT_UNPROVEN",
+  );
+  assert.equal(
+    inspectPagesProductionDeployment(
+      { success: true, result: [{ id: "opaque_pages_deployment", environment: "production", latest_stage: { name: "success" }, deployment_trigger: { metadata: { commit_hash: RC12_SHA } } }] },
+      RC12_SHA,
+    ).state,
     "PRODUCTION_DEPLOYMENT_UNPROVEN",
   );
 });
