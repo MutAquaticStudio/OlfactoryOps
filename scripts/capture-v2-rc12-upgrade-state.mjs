@@ -64,7 +64,7 @@ export function inspectPagesProductionDeployment(envelope, expectedSha) {
     (record) =>
       record?.environment === "production" &&
       record?.deployment_trigger?.metadata?.commit_hash === expectedSha &&
-      record?.latest_stage?.name === "success" &&
+      record?.latest_stage?.status === "success" &&
       opaqueId.test(record?.id ?? ""),
   );
   return matches.length === 1
