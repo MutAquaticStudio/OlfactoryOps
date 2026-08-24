@@ -73,7 +73,6 @@ jobs:
     env:
       RC12_STALE_ROUTE_RELEASE_SHA: ${{ needs.validate-stale-route-cleanup-input.outputs.release_sha }}
       RC12_STALE_ROUTE_FIXTURE_HOSTNAME: ${{ needs.validate-stale-route-cleanup-input.outputs.fixture_hostname }}
-      RC12_STALE_ROUTE_CLEANUP_DIR: ${{ runner.temp }}/oo-v2-rc12-stale-route-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,12 +83,14 @@ jobs:
           set -euo pipefail
           umask 077
           node scripts/verify-v2-rc12-candidate-stale-route-cleanup-workflow.mjs
-          case "$RC12_STALE_ROUTE_CLEANUP_DIR" in
+          evidence_dir="$RUNNER_TEMP/oo-v2-rc12-stale-route-cleanup-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          case "$evidence_dir" in
             "$RUNNER_TEMP"/oo-v2-rc12-stale-route-cleanup-*) ;;
             *) exit 1 ;;
           esac
-          mkdir -p -- "$RC12_STALE_ROUTE_CLEANUP_DIR"
-          chmod 700 "$RC12_STALE_ROUTE_CLEANUP_DIR"
+          mkdir -p -- "$evidence_dir"
+          chmod 700 "$evidence_dir"
+          printf 'RC12_STALE_ROUTE_CLEANUP_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
       - id: preflight
         name: Prove exact candidate-only stale route and capture live preservation baseline
         shell: bash

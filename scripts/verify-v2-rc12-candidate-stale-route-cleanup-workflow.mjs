@@ -41,8 +41,11 @@ requireFragments(workflow, "RC12 stale-route cleanup workflow", [
   "node scripts/cleanup-v2-rc12-candidate-stale-route.mjs delete",
   "node scripts/cleanup-v2-rc12-candidate-stale-route.mjs verify",
   "ROUTE_DELETION_COUNT=(0|1)",
+  "printf 'RC12_STALE_ROUTE_CLEANUP_DIR=%s\\n' \"$evidence_dir\" >> \"$GITHUB_ENV\"",
   "RC12_STALE_ROUTE_CLEANUP_RUNNER_LOCAL_CLEANUP=PASS",
 ]);
+if (workflow.includes("${{ runner.temp }}"))
+  throw new Error("runner context must not be evaluated at job scope");
 
 const triggerBlock = workflow.slice(
   workflow.indexOf("on:"),
