@@ -23,6 +23,10 @@ on:
         description: Successful RC13 production backup snapshot run ID.
         required: true
         type: string
+      migration_run_id:
+        description: Successful RC13 password-reset migration run ID.
+        required: true
+        type: string
       confirm_readiness:
         description: Type ASSESS_RC13_PRODUCTION_READINESS to run read-mostly checks.
         required: true
@@ -65,6 +69,7 @@ jobs:
           [[ "${{ inputs.candidate_run_id }}" =~ ^[0-9]+$ ]]
           [[ "${{ inputs.environment_revalidation_run_id }}" =~ ^[0-9]+$ ]]
           [[ "${{ inputs.backup_run_id }}" =~ ^[0-9]+$ ]]
+          [[ "${{ inputs.migration_run_id }}" =~ ^[0-9]+$ ]]
           git fetch --force --tags origin
           test "$(git rev-list -n 1 "$RC13_TAG")" = "$RC13_SHA"
           test "$(git rev-list -n 1 v2-production-rc9)" = "$RC9_SHA"
@@ -84,6 +89,7 @@ jobs:
       CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
       ENVIRONMENT_REVALIDATION_RUN_ID: ${{ inputs.environment_revalidation_run_id }}
       BACKUP_RUN_ID: ${{ inputs.backup_run_id }}
+      MIGRATION_RUN_ID: ${{ inputs.migration_run_id }}
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
       PRODUCTION_SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
@@ -188,6 +194,26 @@ jobs:
           grep -Fq 'PRODUCTION_BACKUP_READY=PASS' "$log"
           echo "PRODUCTION_BACKUP_RUN=$BACKUP_RUN_ID"
           echo "PRODUCTION_BACKUP_READY=PASS" | tee "$RUNNER_TEMP/backup.txt"
+      - name: Verify the exact RC13 password-reset migration evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$RUNNER_TEMP/migration-metadata.json"
+          log="$RUNNER_TEMP/migration.log"
+          trap 'rm -f "$metadata" "$log"' EXIT
+          gh run view "$MIGRATION_RUN_ID" --repo "${GITHUB_REPOSITORY}" --json workflowName,conclusion,event > "$metadata"
+          grep -Fq 'V2 RC13 Production Password Reset Migration' "$metadata"
+          grep -Fq '"conclusion":"success"' "$metadata"
+          grep -Fq '"event":"workflow_dispatch"' "$metadata"
+          gh run view "$MIGRATION_RUN_ID" --repo "${GITHUB_REPOSITORY}" --log > "$log"
+          grep -Fq 'RC13_PASSWORD_RESET_MIGRATION_SOURCE=PASS' "$log"
+          grep -Fq 'RC13_PASSWORD_RESET_MIGRATION=PASS' "$log"
+          grep -Fq 'RC13_PASSWORD_RESET_RLS=PASS' "$log"
+          grep -Fq "$RELEASE_SHA" "$log"
+          echo "RC13_PASSWORD_RESET_MIGRATION_RUN=$MIGRATION_RUN_ID"
+          echo 'RC13_PASSWORD_RESET_MIGRATION=PASS' | tee "$RUNNER_TEMP/migration.txt"
       - name: Resolve the exact production Pages project
         id: pages-project
         env:
@@ -247,16 +273,14 @@ jobs:
           echo "SCIENTIFIC_FEATURE_IMAGE_IDENTITY=PASS"
           echo "SCIENTIFIC_MODEL_IMAGE_IDENTITY=PASS"
           echo "SCIENTIFIC_RELEASE_IDENTITY=PASS"
-      - name: Verify RC13 has no migration delta
+      - name: Verify the manifest-attested RC13 migration boundary
         shell: bash
         run: |
           set -euo pipefail
-          if git -C release diff --quiet "$RC10_RUNTIME_BASE_SHA" "$RELEASE_SHA" -- infra/postgres/migrations migrations; then
-            echo "MIGRATION_DELTA=NONE"
-          else
-            echo "MIGRATION_DELTA=UNEXPECTED"
-            exit 1
-          fi
+          test -f release/infra/postgres/migrations/0026_platform_password_resets.sql
+          grep -Fq '"migrationDelta": true' ops/releases/v2-production-rc13.json
+          grep -Fq 'infra/postgres/migrations/0026_platform_password_resets.sql' ops/releases/v2-production-rc13.json
+          echo 'RC13_MIGRATION_BOUNDARY=PASS'
       - name: Consolidate the fail-closed readiness attestation
         id: attestation
         shell: bash
@@ -266,9 +290,10 @@ jobs:
           owner_file="$RUNNER_TEMP/platform-owner.txt"
           rollback_file="$RUNNER_TEMP/rollback.txt"
           backup_file="$RUNNER_TEMP/backup.txt"
+          migration_file="$RUNNER_TEMP/migration.txt"
           smoke_file="$RUNNER_TEMP/smoke-tenant.txt"
           pages_file="$RUNNER_TEMP/pages-project.txt"
-          test -s "$runtime_file" && test -s "$owner_file" && test -s "$rollback_file" && test -s "$backup_file" && test -s "$smoke_file" && test -s "$pages_file"
+          test -s "$runtime_file" && test -s "$owner_file" && test -s "$rollback_file" && test -s "$backup_file" && test -s "$migration_file" && test -s "$smoke_file" && test -s "$pages_file"
           grep -Fq 'PRODUCTION_RUNTIME_PRIVILEGES=PASS' "$runtime_file"
           grep -Fq 'PRODUCTION_RLS_RUNTIME_EFFECT=PASS' "$runtime_file"
           grep -Fq 'ACTIVE_PLATFORM_OWNER_COUNT=ONE' "$owner_file"
@@ -279,13 +304,14 @@ jobs:
           grep -Fq 'PLATFORM_OWNER_READY=PASS' "$owner_file"
           grep -Fq 'PRODUCTION_ROLLBACK_READY=PASS' "$rollback_file"
           grep -Fq 'PRODUCTION_BACKUP_READY=PASS' "$backup_file"
+          grep -Fq 'RC13_PASSWORD_RESET_MIGRATION=PASS' "$migration_file"
           grep -Fq 'PRODUCTION_SMOKE_TENANT_HOSTNAME_READY=PASS' "$smoke_file"
           grep -Fq 'PRODUCTION_SMOKE_LOGIN_IDENTITY_READY=PASS' "$smoke_file"
           grep -Fq 'PRODUCTION_PAGES_PROJECT_READY=PASS' "$pages_file"
-          echo '{"releaseSha":"'"$RELEASE_SHA"'","releaseTag":"v2-production-rc13","candidateRunId":"'"$CANDIDATE_RUN_ID"'","productionReadinessAttested":true,"p0":0,"p1":0}' > "$RUNNER_TEMP/rc13-production-readiness.json"
+          echo '{"releaseSha":"'"$RELEASE_SHA"'","releaseTag":"v2-production-rc13","candidateRunId":"'"$CANDIDATE_RUN_ID"'","migrationRunId":"'"$MIGRATION_RUN_ID"'","productionReadinessAttested":true,"p0":0,"p1":0}' > "$RUNNER_TEMP/rc13-production-readiness.json"
           echo "PRODUCTION_READY=YES"
           echo "READINESS_ATTESTATION=$RUNNER_TEMP/rc13-production-readiness.json" >> "$GITHUB_OUTPUT"
       - name: Remove readiness evidence
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP"/candidate-metadata.json "$RUNNER_TEMP"/candidate.log "$RUNNER_TEMP"/revalidation-metadata.json "$RUNNER_TEMP"/revalidation.log "$RUNNER_TEMP"/backup-metadata.json "$RUNNER_TEMP"/backup.log "$RUNNER_TEMP"/runtime-privileges.txt "$RUNNER_TEMP"/platform-owner.txt "$RUNNER_TEMP"/rollback.txt "$RUNNER_TEMP"/backup.txt "$RUNNER_TEMP"/smoke-tenant.txt "$RUNNER_TEMP"/pages-project.txt "$RUNNER_TEMP/rc13-production-readiness.json"
+        run: rm -f "$RUNNER_TEMP"/candidate-metadata.json "$RUNNER_TEMP"/candidate.log "$RUNNER_TEMP"/revalidation-metadata.json "$RUNNER_TEMP"/revalidation.log "$RUNNER_TEMP"/backup-metadata.json "$RUNNER_TEMP"/backup.log "$RUNNER_TEMP"/migration-metadata.json "$RUNNER_TEMP"/migration.log "$RUNNER_TEMP"/runtime-privileges.txt "$RUNNER_TEMP"/platform-owner.txt "$RUNNER_TEMP"/rollback.txt "$RUNNER_TEMP"/backup.txt "$RUNNER_TEMP"/migration.txt "$RUNNER_TEMP"/smoke-tenant.txt "$RUNNER_TEMP"/pages-project.txt "$RUNNER_TEMP/rc13-production-readiness.json"
