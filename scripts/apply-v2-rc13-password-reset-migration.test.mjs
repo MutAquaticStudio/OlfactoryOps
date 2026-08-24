@@ -1,4 +1,6 @@
-import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { expect, test } from 'vitest'
 import {
   PASSWORD_RESET_MIGRATION_PATH,
@@ -7,10 +9,8 @@ import {
 } from './apply-v2-rc13-password-reset-migration.mjs'
 
 function immutableMigration() {
-  return execFileSync('git', ['show', `${RC13_SHA}:${PASSWORD_RESET_MIGRATION_PATH}`], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-  })
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  return readFileSync(join(root, PASSWORD_RESET_MIGRATION_PATH), 'utf8')
 }
 
 test('the RC13 password-reset migration is anchored to the immutable release source', () => {
