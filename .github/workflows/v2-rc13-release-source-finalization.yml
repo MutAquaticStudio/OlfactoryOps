@@ -1,0 +1,88 @@
+name: V2 RC13 Release Source Finalization
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact verified RC13 source SHA from codex/v2-production-rc13.
+        required: true
+        type: string
+      confirm_finalization:
+        description: Type FINALIZE_RC13_RELEASE_SOURCE to create the immutable RC13 source tag.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v2-rc13-release-source-finalization
+  cancel-in-progress: false
+
+env:
+  RC13_SHA: 09e96feacb9db03325683ee329fb269206a21880
+  RC13_TAG: v2-production-rc13
+  RC13_SOURCE_BRANCH: codex/v2-production-rc13
+
+jobs:
+  verify-source:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: false
+          path: ops
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: release
+      - name: Verify the immutable RC13 source branch and complete manifest
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRM_FINALIZATION: ${{ inputs.confirm_finalization }}
+          RC13_RELEASE_MANIFEST_PATH: ${{ github.workspace }}/ops/releases/v2-production-rc13.json
+          RC13_SOURCE_WORKTREE: ${{ github.workspace }}/release
+          RC13_SOURCE_TAG_REQUIRED: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_FINALIZATION" = FINALIZE_RC13_RELEASE_SOURCE
+          test "$RELEASE_SHA" = "$RC13_SHA"
+          git -C ops fetch --force --tags origin "$RC13_SOURCE_BRANCH"
+          test "$(git -C ops rev-parse "origin/$RC13_SOURCE_BRANCH")" = "$RC13_SHA"
+          if git -C ops show-ref --verify --quiet "refs/tags/$RC13_TAG"; then
+            test "$(git -C ops rev-parse "$RC13_TAG^{commit}")" = "$RC13_SHA"
+            test "$(git -C ops cat-file -t "refs/tags/$RC13_TAG")" = tag
+          fi
+          node ops/scripts/v2-rc13-release-policy.mjs
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          persist-credentials: true
+          path: tagger
+      - name: Create the immutable annotated RC13 source tag once
+        working-directory: tagger
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/$RC13_TAG"; then
+            test "$(git rev-parse "$RC13_TAG^{commit}")" = "$RC13_SHA"
+            test "$(git cat-file -t "refs/tags/$RC13_TAG")" = tag
+          else
+            git config user.name github-actions
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$RC13_TAG" "$RC13_SHA" -m 'RC13 verified V2 public auth cutover source'
+            git push origin "refs/tags/$RC13_TAG"
+          fi
+          echo 'RC13_RELEASE_SOURCE_FINALIZATION=PASS'
+          echo 'RC13_RELEASE_TAG=v2-production-rc13'
+          echo 'RC13_SOURCE_DEPLOYED=NO'
