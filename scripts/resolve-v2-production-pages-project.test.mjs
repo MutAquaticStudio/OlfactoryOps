@@ -210,7 +210,8 @@ describe("resolve RC10 production Pages project", () => {
         "PAGES_READ_API_HTTP_STATUS=200",
         "PAGES_READ_API_CF_ERROR_CODE=NONE",
         "PRODUCTION_PAGES_PROJECT_READY=PASS",
-        "PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=NONE",
+        "PRODUCTION_PAGES_BASELINE_POLICY=FIRST_RELEASE_UNROUTED",
+        "PRODUCTION_PAGES_PUBLIC_DOMAIN_BASELINE=NONE",
         "PRODUCTION_PAGES_BASELINE=PASS",
         "PRODUCTION_PAGES_BASELINE_TYPE=EMPTY_UNROUTED",
         "PRODUCTION_PAGES_CANONICAL_DEPLOYMENT=NONE",
@@ -224,6 +225,62 @@ describe("resolve RC10 production Pages project", () => {
     const error = await resolveProductionPagesProject({
       environment: readEnvironment(),
       fetchImpl: successfulFetch({ domains: [{}] }),
+    }).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      classification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+    });
+  });
+
+  it("accepts only the exact active apex for an existing live upgrade baseline", async () => {
+    const canonicalDeployment = productionDeployment();
+    const output = [];
+    const result = await resolveProductionPagesProject({
+      environment: {
+        ...readEnvironment(),
+        PRODUCTION_PAGES_BASELINE_POLICY: "EXISTING_LIVE_UPGRADE",
+      },
+      fetchImpl: successfulFetch({
+        domains: [{ name: "labofscents.org", status: "active" }],
+        canonicalDeployment,
+        deployments: [canonicalDeployment],
+      }),
+      emit: (line) => output.push(line),
+      appendOutput: async () => {},
+    });
+
+    expect(result).toEqual({
+      project,
+      baselineType: "EXISTING_DEPLOYMENT",
+    });
+    expect(output).toEqual(
+      expect.arrayContaining([
+        "PRODUCTION_PAGES_BASELINE_POLICY=EXISTING_LIVE_UPGRADE",
+        "PRODUCTION_PAGES_PUBLIC_DOMAIN_BASELINE=EXACT_APEX_ACTIVE",
+        "PRODUCTION_PAGES_BASELINE=PASS",
+      ]),
+    );
+  });
+
+  it.each([
+    [{ name: "other.example", status: "active" }],
+    [{ name: "labofscents.org", status: "pending" }],
+    [
+      { name: "labofscents.org", status: "active" },
+      { name: "other.example", status: "active" },
+    ],
+  ])("rejects a drifted live-upgrade domain baseline", async (domains) => {
+    const canonicalDeployment = productionDeployment();
+    const error = await resolveProductionPagesProject({
+      environment: {
+        ...readEnvironment(),
+        PRODUCTION_PAGES_BASELINE_POLICY: "EXISTING_LIVE_UPGRADE",
+      },
+      fetchImpl: successfulFetch({
+        domains,
+        canonicalDeployment,
+        deployments: [canonicalDeployment],
+      }),
     }).catch((caught) => caught);
 
     expect(error).toMatchObject({

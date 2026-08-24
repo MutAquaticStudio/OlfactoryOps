@@ -122,6 +122,7 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(finalizer, 'verify-live', 'finalizer: active RC12 component recheck')
   requireText(finalizer, 'verify-rollback-capability', 'finalizer: rollback recheck')
   requireText(readiness, 'contents: read', 'readiness: no tag write permission')
+  assert.equal((readiness.match(/PRODUCTION_PAGES_BASELINE_POLICY: EXISTING_LIVE_UPGRADE/g) ?? []).length, 2, 'readiness: live-upgrade Pages policy guards resolution and rollback')
   requireText(readiness, `v2-production-live)" = "$RC10_RUNTIME_BASE_SHA`, 'readiness: legacy RC10 live tag preserved')
   forbid(readiness, /git tag\b|git push\b/, 'readiness: no tag mutation')
   requireText(acceptance, rc10Sha, 'acceptance: legacy RC10 readiness target preserved')

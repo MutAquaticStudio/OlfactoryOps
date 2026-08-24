@@ -3,6 +3,9 @@ import { pathToFileURL } from "node:url";
 
 const API_BASE = "https://api.cloudflare.com/client/v4";
 const EXPECTED_PROJECT = "olfactoryops-v2-production";
+const EXPECTED_LIVE_DOMAIN = "labofscents.org";
+const FIRST_RELEASE_POLICY = "FIRST_RELEASE_UNROUTED";
+const LIVE_UPGRADE_POLICY = "EXISTING_LIVE_UPGRADE";
 
 export class PagesProjectError extends Error {
   constructor(
@@ -35,6 +38,7 @@ export async function resolveProductionPagesProject({
 } = {}) {
   const account = requiredAccount(environment);
   const credential = pagesCredential(environment);
+  const baselinePolicy = requiredBaselinePolicy(environment);
   if (!credential.token) {
     throw new PagesProjectError(
       credential.dedicated
@@ -109,12 +113,11 @@ export async function resolveProductionPagesProject({
     failureClassification: "PRODUCTION_PAGES_BASELINE_UNPROVEN",
     listEvidence,
   });
-  if (domains.rows.length !== 0) {
-    throw new PagesProjectError(
-      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
-      listEvidence,
-    );
-  }
+  const publicDomainState = verifyPagesDomainBaseline(
+    domains.rows,
+    baselinePolicy,
+    listEvidence,
+  );
 
   const baseline = await verifyCanonicalDeploymentBaseline({
     request,
@@ -132,7 +135,8 @@ export async function resolveProductionPagesProject({
   emit("PRODUCTION_PAGES_PROJECT_MATCH_COUNT=ONE");
   emit("PRODUCTION_PAGES_PROJECT_PRODUCTION_BRANCH=CONFIGURED");
   emit("PRODUCTION_PAGES_PROJECT_READY=PASS");
-  emit("PRODUCTION_PAGES_PUBLIC_DOMAIN_BEFORE_CUTOVER=NONE");
+  emit(`PRODUCTION_PAGES_BASELINE_POLICY=${baselinePolicy}`);
+  emit(`PRODUCTION_PAGES_PUBLIC_DOMAIN_BASELINE=${publicDomainState}`);
   emit("PRODUCTION_PAGES_BASELINE=PASS");
   emit(`PRODUCTION_PAGES_BASELINE_TYPE=${baseline.type}`);
   emit(`PRODUCTION_PAGES_CANONICAL_DEPLOYMENT=${baseline.canonical}`);
@@ -197,6 +201,32 @@ function requiredAccount(environment) {
     throw new PagesProjectError("PRODUCTION_PAGES_PROJECT_API_UNAVAILABLE");
   }
   return account;
+}
+
+function requiredBaselinePolicy(environment) {
+  const value =
+    environment.PRODUCTION_PAGES_BASELINE_POLICY?.trim() ||
+    FIRST_RELEASE_POLICY;
+  if (value !== FIRST_RELEASE_POLICY && value !== LIVE_UPGRADE_POLICY) {
+    throw new PagesProjectError("PRODUCTION_PAGES_BASELINE_UNPROVEN");
+  }
+  return value;
+}
+
+function verifyPagesDomainBaseline(domains, policy, listEvidence) {
+  const valid =
+    policy === FIRST_RELEASE_POLICY
+      ? domains.length === 0
+      : domains.length === 1 &&
+        domains[0]?.name === EXPECTED_LIVE_DOMAIN &&
+        domains[0]?.status === "active";
+  if (!valid) {
+    throw new PagesProjectError(
+      "PRODUCTION_PAGES_BASELINE_UNPROVEN",
+      listEvidence,
+    );
+  }
+  return policy === FIRST_RELEASE_POLICY ? "NONE" : "EXACT_APEX_ACTIVE";
 }
 
 function createRequester({ account, token, fetchImpl }) {
