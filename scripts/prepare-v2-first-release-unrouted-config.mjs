@@ -29,7 +29,7 @@ export function prepareFirstReleaseUnroutedConfig({ content, component }) {
   if (occurrences !== 1) {
     throw new Error("FIRST_RELEASE_UNROUTED_CONFIG_ROUTE_INVALID");
   }
-  const prepared = content.replace(specification.route + "\n", "");
+  const prepared = content.replace(specification.route, "");
   if (prepared.includes("routes =") || prepared.includes("[[routes]]")) {
     throw new Error("FIRST_RELEASE_UNROUTED_CONFIG_ROUTE_REMAINS");
   }

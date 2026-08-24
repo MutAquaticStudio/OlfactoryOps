@@ -114,6 +114,21 @@ export function verifyRc12ReleaseWorkflows() {
   forbid(generatedAcceptance, /'PLATFORM_OWNER', 'ACTIVE'/, 'generated acceptance: no Platform Owner fixture')
   requireText(upgrade, 'wrangler versions upload', 'upgrade: inactive version upload')
   requireText(upgrade, 'wrangler versions deploy', 'upgrade: exact version promotion')
+  requireText(upgrade, 'PAGES_PROJECT_ROOT_ORIGIN: https://olfactoryops-v2-production.pages.dev', 'upgrade: production Pages project-root origin')
+  for (const binding of [
+    'V2_API_PRODUCTION_GIT_SHA: ${{ inputs.release_sha }}',
+    'V2_API_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}',
+    'V2_TENANT_ROUTER_PRODUCTION_GIT_SHA: ${{ inputs.release_sha }}',
+    'V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}',
+    'V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN: ${{ env.PAGES_PROJECT_ROOT_ORIGIN }}',
+    'CLOUD_RUNTIME_GIT_SHA: ${{ inputs.release_sha }}',
+    'CLOUD_RUNTIME_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}',
+  ]) requireText(upgrade, binding, `upgrade: required renderer binding ${binding}`)
+  requireText(upgrade, 'prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-api-production.toml api', 'upgrade: API upload configuration is route-free')
+  requireText(upgrade, 'prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-tenant-router-production.toml tenantRouter', 'upgrade: tenant-router upload configuration is route-free')
+  requireText(upgrade, 'id: promote_components', 'upgrade: promotion step has an outcome identifier')
+  requireText(upgrade, "steps.promote_components.outcome == 'failure'", 'upgrade: rollback only starts after failed promotion')
+  forbid(upgrade, /steps\.capture\.outcome == 'success'/, 'upgrade: capture alone cannot trigger rollback')
   requireText(upgrade, 'Restore captured RC10 versions', 'upgrade: automatic RC10 rollback')
   requireText(upgrade, 'rollback-pages', 'upgrade: exact Pages rollback')
   requireText(rollback, 'wrangler rollback', 'rollback: Worker version rollback')
