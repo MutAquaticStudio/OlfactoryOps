@@ -127,6 +127,8 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(upgrade, 'wrangler versions upload', 'upgrade: inactive version upload')
   const inactiveUpload = stepBlock(upgrade, 'Upload only inactive exact RC12 Worker versions')
   const promotion = stepBlock(upgrade, 'Promote exact RC12 Workers then Pages in bounded order')
+  const automaticRollback = stepBlock(upgrade, 'Restore captured RC10 versions and Pages deployment on failed promotion')
+  const explicitRollback = stepBlock(upgrade, 'Run an explicit RC10 rollback without route changes')
   requireText(inactiveUpload, 'set -euo pipefail', 'upgrade: inactive upload runs fail-closed')
   requireText(inactiveUpload, 'RELEASE_SHA: ${{ inputs.release_sha }}', 'upgrade: inactive upload receives exact release SHA')
   requireText(inactiveUpload, 'rc12-${RELEASE_SHA:0:12}', 'upgrade: inactive upload tag derives from exact release SHA')
@@ -135,8 +137,9 @@ export function verifyRc12ReleaseWorkflows() {
   forbid(inactiveUpload, /wrangler versions list --json/, 'upgrade: unverified Wrangler version-list shape is not used')
   requireText(promotion, 'RELEASE_SHA: ${{ inputs.release_sha }}', 'upgrade: promotion receives exact release SHA')
   requireText(promotion, '--commit-hash "$RELEASE_SHA"', 'upgrade: Pages promotion receives exact release SHA')
-  for (const [name, value] of Object.entries({ inactiveUpload, promotion })) {
+  for (const [name, value] of Object.entries({ inactiveUpload, promotion, automaticRollback, explicitRollback })) {
     requireText(value, 'set -euo pipefail', `upgrade: ${name} uses strict shell mode`)
+    requireText(value, 'RC12_UPGRADE_STATE_DIRECTORY: ${{ steps.capture.outputs.state_directory }}', `upgrade: ${name} receives the captured private state directory`)
   }
   requireText(upgrade, 'classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"', 'upgrade: upload failure has safe classification')
   for (const marker of ['RC12_INACTIVE_UPLOAD_COMPONENT=', 'RC12_INACTIVE_UPLOAD_HTTP_STATUS=', 'RC12_INACTIVE_UPLOAD_CF_ERROR_CODE=', 'RC12_INACTIVE_UPLOAD_FAILURE_CLASS=']) requireText(uploadFailureClassifier, marker, `upgrade: safe upload evidence ${marker}`)
