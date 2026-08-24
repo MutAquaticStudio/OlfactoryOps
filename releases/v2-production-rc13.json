@@ -1,0 +1,254 @@
+{
+  "schemaVersion": 1,
+  "release": {
+    "name": "RC13 V2 public auth cutover source",
+    "sourceBranch": "codex/v2-production-rc13",
+    "sourceSha": "09e96feacb9db03325683ee329fb269206a21880",
+    "sourceTag": "v2-production-rc13",
+    "previousReleaseTag": "v2-production-rc12",
+    "previousReleaseSha": "331c1a6054fe1420b063a2e1fe9e5cef4f043ff8"
+  },
+  "includedPullRequests": [
+    184
+  ],
+  "classificationCounts": {
+    "PRODUCT_RUNTIME": 19,
+    "FRONTEND_RUNTIME": 5,
+    "RELEASE_TOOLING": 4,
+    "TEST_ONLY": 8,
+    "DOCUMENTATION": 1,
+    "UNRELATED": 0
+  },
+  "changedFiles": [
+    {
+      "path": "docs/v2/cloudflare/V2_WORKER_ROUTE_MATRIX.md",
+      "classification": "DOCUMENTATION",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "d112d0d401ffdf8e158df619084009dc629f0e00b41955ec706cbf333d33c71e"
+    },
+    {
+      "path": "e2e/v2-platform.playwright.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "858bc64f98d21ea473026b00ae6a9bd9328597e2d2c47f6d25f0d3ca49c5ced9"
+    },
+    {
+      "path": "infra/postgres/migrations/0026_platform_password_resets.sql",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "851124f6275af657f121d03fd0a5c845fefd36fdf1eaea1451b2a63e5b3ed5ff"
+    },
+    {
+      "path": "infra/postgres/prisma/schema.prisma",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "508ca17e14cab5436473965274393e8b20f494037ced12775a599c4f414813af"
+    },
+    {
+      "path": "public/sw.js",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "239aaede11f980f025cb115a8ae1c9ef7ff8b0ff3347b4534e2d739fa4d2e4d9"
+    },
+    {
+      "path": "scripts/apply-v2-production-migrations.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "7a6486b262f719ad195350f006dcdf61be50d5f495c413ed68a3c30337decf50"
+    },
+    {
+      "path": "scripts/apply-v2-staging-migrations.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "88fc5a59b6a88c75cf665885898b203b2d4a33e8b6beead0d3e8b263de0aa956"
+    },
+    {
+      "path": "scripts/verify-v2-postgres.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "47c2af681aaf9016550a5019776d00dbd0f619c5a4b9eb9cba114102be51bcdd"
+    },
+    {
+      "path": "scripts/verify-v2-production-runtime-privileges.mjs",
+      "classification": "RELEASE_TOOLING",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "8b62b8f7e3da2f002f4d35595d0e90db743e822a1890db3bcb607bc96dd3eafa"
+    },
+    {
+      "path": "scripts/verify-v2-rc13-public-auth-contract.mjs",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "bcbb819ceec78eba45b0ebf01222f40d341201164d145cf697e0331ceaa2ce21"
+    },
+    {
+      "path": "scripts/verify-v2-rc13-public-auth-contract.test.mjs",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "bd6cd9f4384be2a70d9d6b273e99b580d342a324b0ee9261ae9549dd2fe93423"
+    },
+    {
+      "path": "server/src/modules/v2-platform.module.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "4908cf85f335d438b303e896f2536d1f6e4b6bdcc3d4237f8a2daea7e15b3354"
+    },
+    {
+      "path": "server/src/routes/v2-platform.controller.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "1d774820ee082da75e296f2ef77bbd547446f8f56af4900bbcf77b723e5cd005"
+    },
+    {
+      "path": "services/platform/src/memory-repository.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "73e61b62841274a02fdfb57161714db48bd6def90076ff280ce6388d3abd99e3"
+    },
+    {
+      "path": "services/platform/src/notification-worker.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "3cf7327446dbbc293d5f94e17368d640f7b1b1997222bc56a7b2702783e765a9"
+    },
+    {
+      "path": "services/platform/src/prisma-repository.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "34c7257d8580f6fbe4b20310ee41ce17c6f952c14b812b0700d405c347583b97"
+    },
+    {
+      "path": "services/platform/src/repository.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "61caec3d9d221dd64a532fbb7df1cafa0c6a659d81e21beaeb13b443b00bc2a6"
+    },
+    {
+      "path": "services/platform/src/service.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "27fbf489e190032ac77e4000407ba7147de3a66df2e064b2c2aa6c8aa7c096b0"
+    },
+    {
+      "path": "services/platform/src/service.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "852f2d3a16835672ab4453dec5c5e283093daa781cd3690a427470d649bc735a"
+    },
+    {
+      "path": "services/platform/src/types.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "346e431ba2c4caf945eb6f2db7cf79dd8ff2a5f1d774186e5462166864154733"
+    },
+    {
+      "path": "src/App.tsx",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "eadb9b85daeb8707a3e0b443713b417bb2cceb5c18bb184b743f56c0913b5e62"
+    },
+    {
+      "path": "src/features/v2-platform/V2PlatformApp.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "dafeb5462eaaf25314bb43dacb5571b8d5042295ae8cc9c6b8b006ea9c99204d"
+    },
+    {
+      "path": "src/features/v2-platform/V2PlatformApp.tsx",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "fabc0ef9893f740d49d43f067d44ca419b15ba13b5f89e648b0225d1d616f98f"
+    },
+    {
+      "path": "src/main.tsx",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "68e24321f7c5d1f4ece7938a50776695c1c59ba5e55093960e21292a0f57c247"
+    },
+    {
+      "path": "src/styles/features.css",
+      "classification": "FRONTEND_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "f746bd2e2ee4f8f7c840b5537c1a8ba5d8fa43b4076e667e26658ed3d66b1ac2"
+    },
+    {
+      "path": "worker/cloud-runtime/index.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "85d2cff33043b76e6058adee747e0064fb51bc13263fabb6275a3c2ff69b8a19"
+    },
+    {
+      "path": "worker/cloud-runtime/index.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "6eb9e9371acf682b29ff133bd1247f88927bb001113b92790836f8964dcd70f5"
+    },
+    {
+      "path": "worker/cloud-runtime/job-ledger.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "2143d91caab8bc3a99f73d1ca240ab02c15a0633e633186dabe252908f576280"
+    },
+    {
+      "path": "worker/cloud-runtime/password-reset-delivery.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "54fc7b39e7ff5c4fa730357fe68d5ad70f59e17829b9718873929f8004388721"
+    },
+    {
+      "path": "worker/cloud-runtime/password-reset-delivery.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "30f22fbb690c5289391a170da706a4bd1f33785771f14127dbbb18e655e94429"
+    },
+    {
+      "path": "worker/cloud-runtime/queue-consumer.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "0ef5879c4cf3f77da6bf344447a8bcb905e022c1fbaa92d6c3976ba659ae94ba"
+    },
+    {
+      "path": "worker/v2-api/cloud-password-reset-dispatch.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "b6367c781d7c556426a4c56a2f4301a7c45afd48dde13b8852eb1c094e8552e0"
+    },
+    {
+      "path": "worker/v2-api/cloud-password-reset-dispatch.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "709874f771a34d1577b050198e5f523cbe7925b4f3d3a84b9f1b5b3fd05d68af"
+    },
+    {
+      "path": "worker/v2-api/service-container.ts",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "a3cfc076127a95d306aee4302876652efacb01859c3b7775491bb0ae6f496714"
+    },
+    {
+      "path": "worker/v2-api/transport.test.ts",
+      "classification": "TEST_ONLY",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "806482006889352bccb771fc2c7fa5d1e749ba3e045106d2a1cc5c19d71b3c39"
+    },
+    {
+      "path": "wrangler.v2-api-production.example.toml",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "84f323cd549525c9936bd868b0d784aa74b9fc8ce67314d1c83b4866b3a43efc"
+    },
+    {
+      "path": "wrangler.v2-cloud-runtime-production.example.toml",
+      "classification": "PRODUCT_RUNTIME",
+      "provenance": "09e96feacb9db03325683ee329fb269206a21880",
+      "sha256": "3acb3933297f60af0dff54ea029cd4e73bb6d1cf38fac9780da4de1bf0fed203"
+    }
+  ],
+  "invariants": {
+    "databaseSchemaChange": true,
+    "migrationDelta": true,
+    "productionRouteMutation": false,
+    "productionDeployment": false,
+    "candidateDeployment": false,
+    "unrelatedRuntimeChangeCount": 0
+  }
+}
