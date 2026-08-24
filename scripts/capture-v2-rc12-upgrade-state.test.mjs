@@ -58,9 +58,17 @@ it("requires exact release binding and safe production Pages identity", () => {
 it("selects a unique tagged inactive upload and does not serialize provider sentinels", () => {
   const result = inspectUploadedVersion([{ id: activeId, tag: `rc12-${RC12_SHA.slice(0, 12)}` }]);
   expect(result.pass).toBe(true);
+  expect(
+    inspectUploadedVersion({ result: { items: [{ id: activeId, annotations: { "workers/tag": `rc12-${RC12_SHA.slice(0, 12)}` } }] } }).pass,
+  ).toBe(true);
   assert.equal(
     inspectUploadedVersion([{ id: activeId, tag: "other" }]).state,
+    "UPLOADED_VERSION_ABSENT",
+  );
+  assert.equal(
+    inspectUploadedVersion({ result: { items: [{ id: activeId, annotations: { "workers/tag": `rc12-${RC12_SHA.slice(0, 12)}` } }, { id: activeId, annotations: { "workers/tag": `rc12-${RC12_SHA.slice(0, 12)}` } }] } }).state,
     "UPLOADED_VERSION_UNPROVEN",
   );
+  assert.equal(inspectUploadedVersion({ result: {} }).state, "UPLOADED_VERSION_INVENTORY_UNPROVEN");
   expect(JSON.stringify(inspectActiveDeployment({ success: false, secret: "never-print" }))).not.toContain("never-print");
 });
