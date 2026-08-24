@@ -306,16 +306,43 @@ jobs:
       RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
       CANDIDATE_FIXTURE_HOSTNAME: ${{ needs.validate-candidate-revision.outputs.candidate_fixture_hostname }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out trusted main-owned release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release-tooling
+      - name: Check out immutable RC12 source
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate-candidate-revision.outputs.release_sha }}
+          path: release
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: release/package-lock.json
       - run: npm ci
-      - name: Render only the exact fixture Custom Domain
+        working-directory: release
+      - id: pages-root
+        name: Revalidate the mutable candidate Pages project root before Router
+        working-directory: release
         shell: bash
+        env:
+          VITE_API_BASE_URL: https://api-next.labofscents.org/api/v1
+          VITE_V2_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+          PROJECT_ROOT_RECHECK_CHECKPOINT: BEFORE_ROUTER
+        run: |
+          set -euo pipefail
+          npm run build
+          node ../release-tooling/scripts/verify-v2-rc12-candidate-pages-project-root.mjs --dist dist | tee "$RUNNER_TEMP/rc12-pages-root-before-router.txt"
+          grep -Fxq 'CANDIDATE_PROJECT_ROOT_VERIFIED=PASS' "$RUNNER_TEMP/rc12-pages-root-before-router.txt"
+          grep -Fxq 'CANDIDATE_PROJECT_ROOT_RELEASE_SHA=RC12' "$RUNNER_TEMP/rc12-pages-root-before-router.txt"
+          grep -Fxq 'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_ROUTER=PASS' "$RUNNER_TEMP/rc12-pages-root-before-router.txt"
+      - name: Render only the exact fixture Custom Domain
+        working-directory: release
+        shell: bash
+        env:
+          CANDIDATE_PAGES_ORIGIN: ${{ steps.pages-root.outputs.origin }}
         run: |
           set -euo pipefail
           test "$PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA" = "$RC10_RUNTIME_BASE_SHA"
@@ -323,15 +350,13 @@ jobs:
           test -n "$PRODUCTION_HYPERDRIVE_ID"
           test -n "$PRODUCTION_CANDIDATE_PAGES_PROJECT"
           [[ "$PRODUCTION_CANDIDATE_PAGES_PROJECT" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
-          candidate_pages_origin="https://production-candidate.${PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev"
-          export CANDIDATE_PAGES_ORIGIN="$candidate_pages_origin"
           node --input-type=module <<'EOF'
           import { existsSync, readFileSync, writeFileSync } from 'node:fs'
           import { dirname, relative, resolve } from 'node:path'
           const configPath = 'wrangler.v2-tenant-router-production-candidate.toml'
           let config = readFileSync('wrangler.v2-tenant-router-production.example.toml', 'utf8')
-          const expectedPagesOrigin = `https://production-candidate.${process.env.PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev`
-          if (process.env.CANDIDATE_PAGES_ORIGIN !== expectedPagesOrigin) throw new Error('candidate Pages origin is not the exact isolated Pages branch origin')
+          const expectedPagesOrigin = `https://${process.env.PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev`
+          if (process.env.CANDIDATE_PAGES_ORIGIN !== expectedPagesOrigin) throw new Error('candidate Pages origin is not the verified isolated Pages project root')
           config = config.replace('name = "olfactoryops-v2-tenant-router-production"', 'name = "olfactoryops-v2-tenant-router-production-candidate"')
           config = config.replace(
             'routes = [{ pattern = "*.labofscents.org/*", zone_name = "labofscents.org" }]',
@@ -358,6 +383,10 @@ jobs:
           EOF
           npm run prisma:generate:v2
           npx wrangler deploy --config wrangler.v2-tenant-router-production-candidate.toml --keep-vars
+      - name: Remove candidate Pages project-root evidence
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/rc12-pages-root-before-router.txt"
 
   smoke-candidate:
     if: ${{ needs.validate-candidate-revision.outputs.operation == 'smoke' }}
@@ -366,6 +395,7 @@ jobs:
     timeout-minutes: 20
     environment: production
     env:
+      PRODUCTION_CANDIDATE_PAGES_PROJECT: ${{ vars.PRODUCTION_CANDIDATE_PAGES_PROJECT }}
       PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA: ${{ vars.PRODUCTION_RUNTIME_SECRET_ROTATION_RELEASE_SHA }}
       PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA: ${{ vars.PRODUCTION_ENVIRONMENT_REVALIDATED_RELEASE_SHA }}
       RELEASE_SHA: ${{ needs.validate-candidate-revision.outputs.release_sha }}
@@ -387,6 +417,25 @@ jobs:
       - name: Install main-owned browser acceptance tooling
         working-directory: ops
         run: npm ci --ignore-scripts
+      - name: Install exact RC12 release dependencies for artifact and owner verification
+        working-directory: rc12
+        run: npm ci
+      - name: Revalidate the mutable candidate Pages project root before Smoke
+        working-directory: rc12
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VITE_API_BASE_URL: https://api-next.labofscents.org/api/v1
+          VITE_V2_WORKSPACE_BASE_DOMAIN: next.labofscents.org
+          PROJECT_ROOT_RECHECK_CHECKPOINT: BEFORE_SMOKE
+        run: |
+          set -euo pipefail
+          npm run build
+          node ../ops/scripts/verify-v2-rc12-candidate-pages-project-root.mjs --dist dist | tee "$RUNNER_TEMP/rc12-pages-root-before-smoke.txt"
+          grep -Fxq 'CANDIDATE_PROJECT_ROOT_VERIFIED=PASS' "$RUNNER_TEMP/rc12-pages-root-before-smoke.txt"
+          grep -Fxq 'CANDIDATE_PROJECT_ROOT_RELEASE_SHA=RC12' "$RUNNER_TEMP/rc12-pages-root-before-smoke.txt"
+          grep -Fxq 'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_SMOKE=PASS' "$RUNNER_TEMP/rc12-pages-root-before-smoke.txt"
       - name: Verify the isolated candidate browser entrypoints
         shell: bash
         env:
@@ -415,9 +464,6 @@ jobs:
           grep -Fxq 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
           grep -Fxq 'LOGIN_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
           grep -Fxq 'SIGNUP_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
-      - name: Install exact RC12 release dependencies for read-only owner readiness
-        working-directory: rc12
-        run: npm ci
       - name: Verify post-bootstrap Platform Owner read-only readiness
         shell: bash
         env:
@@ -469,4 +515,4 @@ jobs:
       - name: Remove RC12 candidate acceptance evidence
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/rc12-browser-acceptance.txt" "$RUNNER_TEMP/rc12-candidate-acceptance.txt" "$RUNNER_TEMP/platform-owner-readiness.txt"
+        run: rm -f "$RUNNER_TEMP/rc12-pages-root-before-smoke.txt" "$RUNNER_TEMP/rc12-browser-acceptance.txt" "$RUNNER_TEMP/rc12-candidate-acceptance.txt" "$RUNNER_TEMP/platform-owner-readiness.txt"
