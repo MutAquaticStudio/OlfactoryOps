@@ -114,14 +114,17 @@ export async function verifyProductionCandidateAcceptance(environment = process.
     return { ...input, userId: result.body.user.id, organizationId, hostname }
   }
 
-  async function login(identity, hostname) {
-    const origin = `https://${hostname}`
+  async function login(identity, requestHostname, expectedWorkspaceHostname = requestHostname) {
+    const origin = `https://${requestHostname}`
     const result = await expectStatus(config, '/v2/platform/auth/login', {
       method: 'POST', origin, body: { email: identity.email, password: identity.password },
     }, 200, 'login_failed')
     assert(result.cookie.includes('oo_v2_session='), 'session_cookie_missing')
     assert(typeof result.body?.csrfToken === 'string' && result.body.csrfToken.length >= 16, 'csrf_missing')
-    assert(generatedWorkspaceRedirectMatches(hostname, result.body?.workspaceUrl, config.workspaceBaseDomain), 'login_workspace_redirect_invalid')
+    assert(
+      generatedLoginWorkspaceRedirectMatches(expectedWorkspaceHostname, result.body?.hostname?.hostname, result.body?.workspaceUrl, config.workspaceBaseDomain),
+      'login_workspace_redirect_invalid',
+    )
     loginWorkspaceRedirect = true
     return { origin, cookie: result.cookie, csrf: result.body.csrfToken, membership: result.body.membership }
   }
@@ -235,7 +238,7 @@ export async function verifyProductionCandidateAcceptance(environment = process.
       [`pop_candidate_support_${suffix}`, second.userId],
     )
     platformOperatorFixtureIds.push(`pop_candidate_support_${suffix}`)
-    const platformSupport = await login(second, candidateAdminHostname)
+    const platformSupport = await login(second, candidateAdminHostname, second.hostname)
     const supportOverview = await expectStatus(config, '/v2/admin/overview', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 200, 'platform_support_overview_failed')
     assert(Number.isInteger(supportOverview.body?.activeWorkspaces), 'platform_overview_projection_invalid')
     await expectStatus(config, '/v2/admin/audit', { origin: platformSupport.origin, cookie: platformSupport.cookie }, 403, 'platform_support_audit_not_denied')
@@ -360,6 +363,10 @@ function isCandidateWorkspaceHostname(hostname, workspaceBaseDomain = candidateW
 export function generatedWorkspaceRedirectMatches(hostname, workspaceUrl, workspaceBaseDomain = candidateWorkspaceBaseDomain) {
   if (typeof hostname !== 'string' || typeof workspaceUrl !== 'string' || !isCandidateWorkspaceHostname(hostname, workspaceBaseDomain)) return false
   return workspaceUrl === `https://${hostname}/v2/workspace`
+}
+
+export function generatedLoginWorkspaceRedirectMatches(expectedHostname, responseHostname, workspaceUrl, workspaceBaseDomain = candidateWorkspaceBaseDomain) {
+  return responseHostname === expectedHostname && generatedWorkspaceRedirectMatches(responseHostname, workspaceUrl, workspaceBaseDomain)
 }
 
 function parsePostgresUrl(value) {

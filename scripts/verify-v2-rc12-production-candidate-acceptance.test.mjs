@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from 'vitest'
-import { RC12_SHA, candidateAcceptanceConfig, candidateBrowserConfig, generatedWorkspaceRedirectMatches, safeExecutionFailure, verifyProductionCandidateAcceptance } from './verify-v2-rc12-production-candidate-acceptance.mjs'
+import { RC12_SHA, candidateAcceptanceConfig, candidateBrowserConfig, generatedLoginWorkspaceRedirectMatches, generatedWorkspaceRedirectMatches, safeExecutionFailure, verifyProductionCandidateAcceptance } from './verify-v2-rc12-production-candidate-acceptance.mjs'
 
 const validEnvironment = {
   V2_PRODUCTION_CANDIDATE_ACCEPTANCE_APPROVED: 'RUN_V2_PRODUCTION_CANDIDATE_ACCEPTANCE',
@@ -104,4 +104,17 @@ test('generated candidate signup and login must return the exact RC12 first-part
   expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://production-candidate.olfactoryops-v2-production-candidate.pages.dev')).toBe(false)
   expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'http://release-fixture.next.labofscents.org/v2/workspace')).toBe(false)
   expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://release-fixture.next.labofscents.org/v2/workspace?next=production')).toBe(false)
+})
+
+test('admin-host login validates the projected tenant workspace rather than the request host', () => {
+  expect(generatedLoginWorkspaceRedirectMatches(
+    'release-fixture.next.labofscents.org',
+    'release-fixture.next.labofscents.org',
+    'https://release-fixture.next.labofscents.org/v2/workspace',
+  )).toBe(true)
+  expect(generatedLoginWorkspaceRedirectMatches(
+    'release-fixture.next.labofscents.org',
+    'other-fixture.next.labofscents.org',
+    'https://other-fixture.next.labofscents.org/v2/workspace',
+  )).toBe(false)
 })
