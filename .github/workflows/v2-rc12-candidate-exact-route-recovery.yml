@@ -1,0 +1,161 @@
+name: V2 RC12 Candidate Exact Route Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC12 release SHA.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC12 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_recovery:
+        description: Type RESTORE_RC12_EXACT_CANDIDATE_ROUTE to restore only the required exact candidate Route.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  TARGET_RELEASE_TAG: v2-production-rc12
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_EXACT_ROUTE_PATTERN: https://rc9-release-31736285494-469ca8942a.next.labofscents.org/*
+  TARGET_CANDIDATE_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_LIVE_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production
+
+jobs:
+  validate-candidate-exact-route-recovery-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC12 candidate route recovery inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_RECOVERY: ${{ inputs.confirm_recovery }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-rc12-candidate-exact-route-recovery-workflow.mjs
+          test "$CONFIRM_RECOVERY" = "RESTORE_RC12_EXACT_CANDIDATE_ROUTE"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git fetch --tags origin "refs/tags/$TARGET_RELEASE_TAG"
+          test "$(git rev-parse "$TARGET_RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  restore-exact-candidate-route:
+    needs: validate-candidate-exact-route-recovery-input
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      RC12_ROUTE_RECOVERY_RELEASE_SHA: ${{ needs.validate-candidate-exact-route-recovery-input.outputs.release_sha }}
+      RC12_ROUTE_RECOVERY_FIXTURE_HOSTNAME: ${{ needs.validate-candidate-exact-route-recovery-input.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require trusted recovery contract and create protected runner-local state
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          node scripts/verify-v2-rc12-candidate-exact-route-recovery-workflow.mjs
+          evidence_dir="$RUNNER_TEMP/oo-v2-rc12-route-recovery-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          case "$evidence_dir" in
+            "$RUNNER_TEMP"/oo-v2-rc12-route-recovery-*) ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p -- "$evidence_dir"
+          chmod 700 "$evidence_dir"
+          printf 'RC12_ROUTE_RECOVERY_DIR=%s\n' "$evidence_dir" >> "$GITHUB_ENV"
+      - id: preflight
+        name: Prove the exact route is absent and capture immutable recovery boundaries
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/restore-v2-rc12-candidate-exact-route.mjs preflight 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'RC12_ROUTE_RECOVERY_REQUIRED=YES'
+          printf '%s\n' "$output" | grep -qx 'EXACT_CANDIDATE_ZONE_ROUTE_ABSENT=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_CUSTOM_DOMAIN_PRESERVED=PASS'
+          printf '%s\n' "$output" | grep -qx 'CANDIDATE_ROUTER_CONFIGURATION=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_ROUTE_BASELINE_CAPTURED=PASS'
+          printf '%s\n' "$output" | grep -qx 'FIXTURE_PRE_RECOVERY_HTTP=404'
+      - id: create
+        name: Restore exactly one RC12 candidate Route after a fresh ownership recheck
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/restore-v2-rc12-candidate-exact-route.mjs create 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'RC12_EXACT_CANDIDATE_ROUTE_CREATED=PASS'
+          printf '%s\n' "$output" | grep -qx 'ROUTE_CREATION_COUNT=1'
+      - id: verify
+        name: Verify exact RC12 fixture identity and unchanged live routing
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/restore-v2-rc12-candidate-exact-route.mjs verify 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'RC12_EXACT_CANDIDATE_ROUTE_RECOVERY=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_FIVE_ROUTES=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_RELEASE_IDENTITY=PASS'
+          printf '%s\n' "$output" | grep -qx 'CANDIDATE_ROUTER_RELEASE_SHA=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_ROUTE_SET_UNCHANGED=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_TENANT_ROUTER_UNCHANGED=PASS'
+          printf '%s\n' "$output" | grep -qx 'PUBLIC_PRODUCTION_MUTATION=NONE'
+      - name: Roll back only the exact route created by this run when verification is not successful
+        if: always() && steps.preflight.outcome == 'success' && steps.create.outcome != 'skipped' && steps.verify.outcome != 'success'
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/restore-v2-rc12-candidate-exact-route.mjs rollback 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -Eq '^RC12_ROUTE_RECOVERY_ROLLBACK=(PASS|NOT_REQUIRED)$'
+      - name: Remove only runner-local route recovery state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${RC12_ROUTE_RECOVERY_DIR:-}" in
+            "$RUNNER_TEMP"/oo-v2-rc12-route-recovery-*) ;;
+            *) exit 1 ;;
+          esac
+          rm -rf -- "$RC12_ROUTE_RECOVERY_DIR"
+          test ! -e "$RC12_ROUTE_RECOVERY_DIR"
+          echo "RC12_ROUTE_RECOVERY_RUNNER_LOCAL_CLEANUP=PASS"
