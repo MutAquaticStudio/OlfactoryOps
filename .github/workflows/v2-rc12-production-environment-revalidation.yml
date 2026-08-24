@@ -124,10 +124,7 @@ jobs:
             echo "RC12_SECRET_CONSUMER_DELTA=FAIL"
             exit 1
           fi
-          if git -C "$RELEASE_WORKTREE" grep -nE 'VITE_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)|PUBLIC_[A-Z0-9_]*(PEPPER|SECRET|DATABASE|TOKEN)' -- ':!docs' ':!*.test.*'; then
-            echo "PRODUCTION_CLIENT_SECRET_REFERENCE=FAIL"
-            exit 1
-          fi
+          node scripts/verify-v2-rc12-client-secret-references.mjs "$RELEASE_WORKTREE"
           npm --prefix "$RELEASE_WORKTREE" run build
           npm --prefix "$RELEASE_WORKTREE" run security:client-bundle
           echo "PRODUCTION_SECRET_SCAN=PASS"
