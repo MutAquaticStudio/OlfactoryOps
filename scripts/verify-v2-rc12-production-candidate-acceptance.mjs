@@ -359,7 +359,7 @@ function isCandidateWorkspaceHostname(hostname, workspaceBaseDomain = candidateW
 
 export function generatedWorkspaceRedirectMatches(hostname, workspaceUrl, workspaceBaseDomain = candidateWorkspaceBaseDomain) {
   if (typeof hostname !== 'string' || typeof workspaceUrl !== 'string' || !isCandidateWorkspaceHostname(hostname, workspaceBaseDomain)) return false
-  return workspaceUrl === `https://${hostname}` || workspaceUrl === `https://${hostname}/`
+  return workspaceUrl === `https://${hostname}/v2/workspace`
 }
 
 function parsePostgresUrl(value) {

@@ -96,8 +96,12 @@ test('candidate browser configuration pins the candidate API rather than a produ
   expect(() => candidateBrowserConfig({ ...browserEnvironment, V2_PRODUCTION_CANDIDATE_API_ORIGIN: 'https://api.labofscents.org' })).toThrow('PRODUCTION_CANDIDATE_ACCEPTANCE=BLOCKED')
 })
 
-test('generated candidate signup and login must return an exact first-party workspace redirect', () => {
-  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://release-fixture.next.labofscents.org')).toBe(true)
+test('generated candidate signup and login must return the exact RC12 first-party workspace path', () => {
+  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://release-fixture.next.labofscents.org/v2/workspace')).toBe(true)
+  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://release-fixture.next.labofscents.org')).toBe(false)
+  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://other-fixture.next.labofscents.org/v2/workspace')).toBe(false)
   expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://next.labofscents.org')).toBe(false)
   expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://production-candidate.olfactoryops-v2-production-candidate.pages.dev')).toBe(false)
+  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'http://release-fixture.next.labofscents.org/v2/workspace')).toBe(false)
+  expect(generatedWorkspaceRedirectMatches('release-fixture.next.labofscents.org', 'https://release-fixture.next.labofscents.org/v2/workspace?next=production')).toBe(false)
 })
