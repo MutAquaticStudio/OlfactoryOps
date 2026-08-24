@@ -1,0 +1,152 @@
+name: V2 RC12 Candidate Stale Route Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact immutable RC12 release SHA.
+        required: true
+        type: string
+      fixture_hostname:
+        description: Exact isolated RC12 candidate fixture hostname.
+        required: true
+        type: string
+      confirm_cleanup:
+        description: Type DELETE_RC12_STALE_CANDIDATE_ROUTE to remove only the proven stale candidate Zone Route.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-isolated-production-candidate-tenant-router
+  cancel-in-progress: false
+
+env:
+  TARGET_RELEASE_SHA: 331c1a6054fe1420b063a2e1fe9e5cef4f043ff8
+  TARGET_RELEASE_TAG: v2-production-rc12
+  TARGET_FIXTURE_HOSTNAME: rc9-release-31736285494-469ca8942a.next.labofscents.org
+  TARGET_STALE_ROUTE_PATTERN: https://rc9-release-31736285494-469ca8942a.next.labofscents.org/*
+  TARGET_CANDIDATE_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production-candidate
+  TARGET_LIVE_ROUTER_SERVICE: olfactoryops-v2-tenant-router-production
+
+jobs:
+  validate-stale-route-cleanup-input:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_sha: ${{ steps.validate.outputs.release_sha }}
+      fixture_hostname: ${{ steps.validate.outputs.fixture_hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: validate
+        name: Validate exact RC12 candidate stale-route cleanup inputs
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          FIXTURE_HOSTNAME: ${{ inputs.fixture_hostname }}
+          CONFIRM_CLEANUP: ${{ inputs.confirm_cleanup }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-v2-rc12-candidate-stale-route-cleanup-workflow.mjs
+          test "$CONFIRM_CLEANUP" = "DELETE_RC12_STALE_CANDIDATE_ROUTE"
+          test "$RELEASE_SHA" = "$TARGET_RELEASE_SHA"
+          test "$FIXTURE_HOSTNAME" = "$TARGET_FIXTURE_HOSTNAME"
+          [[ "$FIXTURE_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.next\.labofscents\.org$ ]]
+          [[ "$FIXTURE_HOSTNAME" != *"*"* ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git fetch --tags origin "refs/tags/$TARGET_RELEASE_TAG"
+          test "$(git rev-parse "$TARGET_RELEASE_TAG^{}")" = "$TARGET_RELEASE_SHA"
+          printf 'release_sha=%s\n' "$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'fixture_hostname=%s\n' "$FIXTURE_HOSTNAME" >> "$GITHUB_OUTPUT"
+
+  delete-exact-stale-candidate-route:
+    needs: validate-stale-route-cleanup-input
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      RC12_STALE_ROUTE_RELEASE_SHA: ${{ needs.validate-stale-route-cleanup-input.outputs.release_sha }}
+      RC12_STALE_ROUTE_FIXTURE_HOSTNAME: ${{ needs.validate-stale-route-cleanup-input.outputs.fixture_hostname }}
+      RC12_STALE_ROUTE_CLEANUP_DIR: ${{ runner.temp }}/oo-v2-rc12-stale-route-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Require trusted cleanup contract and create protected runner-local state
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          node scripts/verify-v2-rc12-candidate-stale-route-cleanup-workflow.mjs
+          case "$RC12_STALE_ROUTE_CLEANUP_DIR" in
+            "$RUNNER_TEMP"/oo-v2-rc12-stale-route-cleanup-*) ;;
+            *) exit 1 ;;
+          esac
+          mkdir -p -- "$RC12_STALE_ROUTE_CLEANUP_DIR"
+          chmod 700 "$RC12_STALE_ROUTE_CLEANUP_DIR"
+      - id: preflight
+        name: Prove exact candidate-only stale route and capture live preservation baseline
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/cleanup-v2-rc12-candidate-stale-route.mjs preflight 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'STALE_ROUTE_IDENTIFIED=PASS'
+          printf '%s\n' "$output" | grep -qx 'STALE_ROUTE_CANDIDATE_ONLY=PASS'
+          printf '%s\n' "$output" | grep -qx 'STALE_ROUTE_NOT_LIVE=PASS'
+          printf '%s\n' "$output" | grep -qx 'STALE_ROUTE_NOT_CURRENT_RC12_CONTRACT=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_ROUTE_PRESENT=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_ROUTE_TARGET=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_ROUTE_BASELINE_CAPTURED=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_TENANT_ROUTER_BASELINE_CAPTURED=PASS'
+      - id: delete
+        name: Delete at most one freshly proven candidate-only stale route by exact ID
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/cleanup-v2-rc12-candidate-stale-route.mjs delete 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -Eq '^ROUTE_DELETION_COUNT=(0|1)$'
+      - name: Verify stale route absence, exact Custom Domain, RC12 fixture, and unchanged live routing
+        if: always() && steps.preflight.outcome == 'success' && steps.delete.outcome != 'skipped'
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          output="$(node scripts/cleanup-v2-rc12-candidate-stale-route.mjs verify 2>/dev/null)"
+          printf '%s\n' "$output"
+          printf '%s\n' "$output" | grep -qx 'WILDCARD_ROUTE_COUNT=0'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_ROUTE_PRESENT=PASS'
+          printf '%s\n' "$output" | grep -qx 'EXACT_FIXTURE_ROUTE_TARGET=PASS'
+          printf '%s\n' "$output" | grep -qx 'TENANT_ROUTER_EXACT_ROUTE=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_ROUTE_SET_UNCHANGED=PASS'
+          printf '%s\n' "$output" | grep -qx 'LIVE_TENANT_ROUTER_UNCHANGED=PASS'
+          printf '%s\n' "$output" | grep -qx 'CANDIDATE_ROUTER_RELEASE_SHA=PASS'
+          printf '%s\n' "$output" | grep -qx 'FIXTURE_FIVE_ROUTES=PASS'
+          printf '%s\n' "$output" | grep -qx 'PUBLIC_PRODUCTION_MUTATION=NONE'
+      - name: Remove only runner-local stale-route cleanup state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${RC12_STALE_ROUTE_CLEANUP_DIR:-}" in
+            "$RUNNER_TEMP"/oo-v2-rc12-stale-route-cleanup-*) ;;
+            *) exit 1 ;;
+          esac
+          rm -rf -- "$RC12_STALE_ROUTE_CLEANUP_DIR"
+          test ! -e "$RC12_STALE_ROUTE_CLEANUP_DIR"
+          echo "RC12_STALE_ROUTE_CLEANUP_RUNNER_LOCAL_CLEANUP=PASS"
