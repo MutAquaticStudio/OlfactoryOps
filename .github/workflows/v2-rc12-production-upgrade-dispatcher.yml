@@ -154,19 +154,24 @@ jobs:
           umask 077
           export WRANGLER_WRITE_LOGS=false WRANGLER_SEND_METRICS=false WRANGLER_SEND_ERROR_REPORTS=false NO_COLOR=1
           state="${{ steps.capture.outputs.state_directory }}"
-          for entry in \
-            'api:.qa/wrangler.v2-api-production.toml' \
-            'tenant-router:.qa/wrangler.v2-tenant-router-production.toml' \
-            'cloud-runtime:.qa/wrangler.v2-cloud-runtime.production.toml'; do
-            name="${entry%%:*}"
-            config="${entry#*:}"
-            if ! ./node_modules/.bin/wrangler versions upload --config "$config" --tag "rc12-${RELEASE_SHA:0:12}" --message "RC12 ${RELEASE_SHA}" >"$state/upload-$name.json" 2>"$state/upload-$name.err"; then
-              node ../ops/scripts/classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"
-              exit 1
-            fi
-            ./node_modules/.bin/wrangler versions list --json --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$name")" >"$state/versions-$name.json" 2>"$state/versions-$name.err"
-          done
-          node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs uploaded
+          if node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs prepare-uploads; then
+            echo 'RC12_INACTIVE_UPLOAD_REUSED=PASS'
+          else
+            status=$?
+            test "$status" -eq 2
+            for entry in \
+              'api:.qa/wrangler.v2-api-production.toml' \
+              'tenant-router:.qa/wrangler.v2-tenant-router-production.toml' \
+              'cloud-runtime:.qa/wrangler.v2-cloud-runtime.production.toml'; do
+              name="${entry%%:*}"
+              config="${entry#*:}"
+              if ! ./node_modules/.bin/wrangler versions upload --config "$config" --tag "rc12-${RELEASE_SHA:0:12}" --message "RC12 ${RELEASE_SHA}" >"$state/upload-$name.json" 2>"$state/upload-$name.err"; then
+                node ../ops/scripts/classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"
+                exit 1
+              fi
+            done
+            node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs prepare-uploads
+          fi
           echo 'RC12_WORKER_VERSIONS_INACTIVE=PASS'
       - id: promote_components
         name: Promote exact RC12 Workers then Pages in bounded order

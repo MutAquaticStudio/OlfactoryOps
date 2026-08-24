@@ -73,12 +73,24 @@ export function inspectPagesProductionDeployment(envelope, expectedSha) {
 }
 
 export function inspectUploadedVersion(list, tag = RC12_VERSION_TAG) {
-  const records = Array.isArray(list) ? list : Array.isArray(list?.result) ? list.result : [];
-  const matches = records.filter(
-    (record) => record?.tag === tag && uuid.test(record?.id ?? record?.version_id ?? ""),
+  const records = Array.isArray(list)
+    ? list
+    : Array.isArray(list?.result)
+      ? list.result
+      : Array.isArray(list?.items)
+        ? list.items
+        : Array.isArray(list?.result?.items)
+          ? list.result.items
+          : null;
+  if (!records) return { pass: false, state: "UPLOADED_VERSION_INVENTORY_UNPROVEN" };
+  const tagged = records.filter(
+    (record) => record?.tag === tag || record?.annotations?.["workers/tag"] === tag,
   );
-  if (matches.length !== 1) return { pass: false, state: "UPLOADED_VERSION_UNPROVEN" };
-  return { pass: true, state: "UPLOADED_VERSION_READY", versionId: matches[0].id ?? matches[0].version_id };
+  if (tagged.length === 0) return { pass: false, state: "UPLOADED_VERSION_ABSENT" };
+  if (tagged.length !== 1 || !uuid.test(tagged[0]?.id ?? tagged[0]?.version_id ?? "")) {
+    return { pass: false, state: "UPLOADED_VERSION_UNPROVEN" };
+  }
+  return { pass: true, state: "UPLOADED_VERSION_READY", versionId: tagged[0].id ?? tagged[0].version_id };
 }
 
 async function request(path, { method = "GET", environment = process.env } = {}) {
@@ -153,18 +165,42 @@ async function capture(environment = process.env) {
   console.log("RC10_PAGES_ROLLBACK_TARGET=PASS");
 }
 
-function uploaded(environment = process.env) {
+async function prepareUploads(environment = process.env) {
   const directory = stateDirectory(environment);
   const state = readState(directory);
   const uploads = {};
+  const states = [];
   for (const key of Object.keys(SERVICES)) {
-    let json;
-    try { json = JSON.parse(readFileSync(join(directory, `versions-${key}.json`), "utf8")); } catch { throw new Error("UPLOADED_VERSION_UNPROVEN"); }
-    const inspected = inspectUploadedVersion(json);
+    const service = SERVICES[key];
+    const versions = await request(
+      `/accounts/${encodeURIComponent(environment.CLOUDFLARE_ACCOUNT_ID ?? "")}/workers/scripts/${encodeURIComponent(service)}/versions?per_page=100`,
+      { environment },
+    );
+    if (!versions.ok) throw new Error("UPLOADED_VERSION_INVENTORY_UNPROVEN");
+    const inspected = inspectUploadedVersion(versions.body);
+    states.push(inspected.state);
+    if (inspected.state === "UPLOADED_VERSION_ABSENT") continue;
     if (!inspected.pass) throw new Error("UPLOADED_VERSION_UNPROVEN");
+    const detail = await request(
+      `/accounts/${encodeURIComponent(environment.CLOUDFLARE_ACCOUNT_ID ?? "")}/workers/scripts/${encodeURIComponent(service)}/versions/${encodeURIComponent(inspected.versionId)}`,
+      { environment },
+    );
+    if (!detail.ok || !inspectVersionIdentity(detail.body, inspected.versionId, RC12_SHA).pass) {
+      throw new Error("UPLOADED_VERSION_IDENTITY_UNPROVEN");
+    }
     uploads[key] = inspected.versionId;
   }
+  if (states.every((value) => value === "UPLOADED_VERSION_ABSENT")) {
+    console.log("RC12_INACTIVE_UPLOAD_REUSE=ABSENT");
+    const error = new Error("UPLOADED_VERSION_ABSENT");
+    error.exitCode = 2;
+    throw error;
+  }
+  if (states.some((value) => value === "UPLOADED_VERSION_ABSENT")) {
+    throw new Error("UPLOADED_VERSION_STATE_INCONSISTENT");
+  }
   writeState(directory, { ...state, uploads });
+  console.log("RC12_INACTIVE_UPLOAD_REUSE=PASS");
   console.log("RC12_INACTIVE_VERSION_UPLOADS=PASS");
 }
 
@@ -277,7 +313,7 @@ async function main() {
   const [mode, argument] = process.argv.slice(2);
   try {
     if (mode === "capture") await capture();
-    else if (mode === "uploaded") uploaded();
+    else if (mode === "prepare-uploads") await prepareUploads();
     else if (mode === "version") versionFor(argument);
     else if (mode === "rollback-version") versionFor(argument, process.env, true);
     else if (mode === "service") serviceFor(argument);
@@ -288,9 +324,9 @@ async function main() {
     else if (mode === "verify-rollback-capability") await verifyRollbackCapability();
     else if (mode === "promote" || mode === "assert-rc10-rollback-targets" || mode === "verify-rc10-public") console.log("RC12_UPGRADE_STATE=PASS");
     else throw new Error("INVALID_MODE");
-  } catch {
+  } catch (error) {
     console.log("RC12_UPGRADE_STATE=FAIL");
-    process.exitCode = 1;
+    process.exitCode = error?.exitCode === 2 ? 2 : 1;
   }
 }
 
