@@ -10,6 +10,7 @@ const tables = [
   ['v2_memberships', 'SELECT'],
   ['v2_workspace_hostnames', 'SELECT'],
   ['v2_sessions', 'SELECT,INSERT,UPDATE'],
+  ['v2_password_resets', 'SELECT,INSERT,UPDATE'],
   ['v2_audit_events', 'INSERT'],
 ]
 
@@ -27,13 +28,13 @@ try {
   }
 
   const rls = await client.query(`
-    SELECT count(*) FILTER (WHERE relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_audit_events') AND relrowsecurity) AS enabled,
-           count(*) FILTER (WHERE relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_audit_events') AND relforcerowsecurity) AS forced
+    SELECT count(*) FILTER (WHERE relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_password_resets','v2_audit_events') AND relrowsecurity) AS enabled,
+           count(*) FILTER (WHERE relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_password_resets','v2_audit_events') AND relforcerowsecurity) AS forced
     FROM pg_class
     WHERE relnamespace = 'public'::regnamespace
-      AND relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_audit_events')
+      AND relname IN ('v2_organizations','v2_users','v2_memberships','v2_workspace_hostnames','v2_sessions','v2_password_resets','v2_audit_events')
   `)
-  if (Number(rls.rows[0]?.enabled) !== 6 || Number(rls.rows[0]?.forced) !== 6) fail('PRODUCTION_RLS_RUNTIME_EFFECT=FAIL')
+  if (Number(rls.rows[0]?.enabled) !== 7 || Number(rls.rows[0]?.forced) !== 7) fail('PRODUCTION_RLS_RUNTIME_EFFECT=FAIL')
   await client.query("SELECT set_config('app.organization_id', 'readiness-probe', true), set_config('app.user_id', 'readiness-probe', true)")
   const context = await client.query("SELECT current_setting('app.organization_id', true) = 'readiness-probe' AS organization_context, current_setting('app.user_id', true) = 'readiness-probe' AS user_context")
   if (context.rows[0]?.organization_context !== true || context.rows[0]?.user_context !== true) fail('PRODUCTION_RLS_RUNTIME_EFFECT=FAIL')

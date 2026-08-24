@@ -36,17 +36,25 @@ describe('V2 scientific creative workspace shell', () => {
     expect(platformRequestHeaders('PATCH', undefined)).toEqual({ 'Content-Type': 'application/json' })
   })
 
-  it('keeps direct public login and signup routes, including V2 aliases, refreshable', () => {
+  it('keeps the complete V2 public-auth route family refreshable', () => {
     expect(platformPathMode('/login')).toBe('login')
     expect(platformPathMode('/signup')).toBe('signup')
     expect(platformPathMode('/v2/login')).toBe('login')
     expect(platformPathMode('/v2/signup')).toBe('signup')
+    expect(platformPathMode('/forgot-password')).toBe('reset-request')
+    expect(platformPathMode('/v2/forgot-password')).toBe('reset-request')
+    expect(platformPathMode('/v2/reset-password')).toBe('reset-confirm')
+    expect(platformPathMode('/v2/verify-email')).toBe('verify-confirm')
+    expect(platformPathMode('/reset-password')).toBe('legacy-recovery')
+    expect(platformPathMode('/verify-email')).toBe('legacy-recovery')
+    expect(platformPathMode('/login', '?reset=legacy-token')).toBe('legacy-recovery')
   })
 
   it('keeps only safe V2 return paths when protected workspace bootstrap redirects to login', () => {
 
     expect(safeV2ReturnPath('/v2/workspace?tab=billing#usage')).toBe('/v2/workspace?tab=billing#usage')
     expect(safeV2ReturnPath('/v2/login')).toBeUndefined()
+    expect(safeV2ReturnPath('/v2/reset-password')).toBeUndefined()
     expect(safeV2ReturnPath('https://untrusted.example.test/v2/workspace')).toBeUndefined()
     expect(safeV2ReturnPath('javascript:alert(1)')).toBeUndefined()
     expect(v2LoginPathForLocation('/v2/workspace', '?tab=billing', '#usage')).toBe('/login?next=%2Fv2%2Fworkspace%3Ftab%3Dbilling%23usage')

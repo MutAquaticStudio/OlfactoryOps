@@ -12,6 +12,8 @@ describe('V2 Worker transport', () => {
   it('uses the generated Phase 1-6 route matrix and excludes later public modules', () => {
     expect(generatedRouteSpecs.length).toBeGreaterThan(100)
     expect(generatedRouteSpecs).toContainEqual(expect.objectContaining({ method: 'POST', path: '/v2/platform/auth/login' }))
+    expect(generatedRouteSpecs).toContainEqual(expect.objectContaining({ method: 'POST', path: '/v2/platform/auth/password-reset/request' }))
+    expect(generatedRouteSpecs).toContainEqual(expect.objectContaining({ method: 'POST', path: '/v2/platform/auth/password-reset/confirm' }))
     expect(generatedRouteSpecs).toContainEqual(expect.objectContaining({ method: 'POST', path: '/v2/lab/materials' }))
     expect(generatedRouteSpecs.some((route) => /\/v2\/(trials|production|commerce|advanced)(\/|$)/.test(route.path))).toBe(false)
   })

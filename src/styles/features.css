@@ -960,6 +960,7 @@
 .v2-auth-card p { color: var(--v2-text-secondary); line-height: 1.5; }
 .v2-auth-card form { display: grid; gap: 13px; margin-top: 22px; }
 .v2-auth-card label { display: grid; gap: 6px; color: var(--v2-text-secondary); font-size: 12px; }
+.v2-auth-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .v2-platform-topbar { display: flex; align-items: center; justify-content: space-between; max-width: 1160px; margin: 0 auto; padding: 18px 0; }
 .v2-platform-topbar > div { display: flex; align-items: center; gap: 7px; }
 .v2-loading { display: grid; min-height: 60vh; place-items: center; color: var(--v2-text-secondary); }

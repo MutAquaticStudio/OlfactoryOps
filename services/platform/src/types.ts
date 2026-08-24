@@ -55,6 +55,21 @@ export type VerificationRecord = {
   revokedAt?: string
 }
 
+/**
+ * Opaque password-reset state. Only the verifier hash is persisted; the
+ * delivery token remains encrypted inside the notification outbox payload.
+ */
+export type PasswordResetRecord = {
+  id: string
+  userId: string
+  organizationId: string
+  tokenHash: string
+  expiresAt: string
+  createdAt: string
+  usedAt?: string
+  revokedAt?: string
+}
+
 export type InvitationRepositoryRecord = InvitationRecord & { tokenHash: string; invitedBy: string; acceptedUserId?: string }
 
 export type BillingRecord = BillingCapabilityProjection

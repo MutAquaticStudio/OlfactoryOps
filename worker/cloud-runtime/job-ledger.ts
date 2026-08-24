@@ -43,13 +43,14 @@ export class CloudJobLedger {
 
   async claim(input: CloudJobEnvelope): Promise<boolean> {
     const job = cloudJobEnvelopeSchema.parse(input)
+    const maxAttempts = job.jobType === 'NOTIFICATION_DELIVERY' ? 5 : 3
     return withTenantTransaction(this.prisma, { organizationId: job.organizationId, actorUserId: job.actorUserId }, async (tx) => {
       const updated = await tx.$queryRawUnsafe<DispatchRow[]>(
         `UPDATE v2_cloud_job_dispatches
          SET status = 'PROCESSING', attempts = attempts + 1, updated_at = now()
-         WHERE organization_id = $1 AND id = $2 AND status IN ('QUEUED','RETRY') AND attempts < 3
+         WHERE organization_id = $1 AND id = $2 AND status IN ('QUEUED','RETRY') AND attempts < $3
          RETURNING id, status, attempts, workflow_instance_id, input_hash, artifact_ref`,
-        job.organizationId, job.jobId,
+        job.organizationId, job.jobId, maxAttempts,
       )
       if (!updated[0]) return false
       await this.recordEvent(tx, job, 'CLAIMED', { attempt: updated[0].attempts })
@@ -118,13 +119,14 @@ export class CloudJobLedger {
   async fail(input: CloudJobEnvelope, error: unknown): Promise<void> {
     const job = cloudJobEnvelopeSchema.parse(input)
     const code = safeCloudError(error)
+    const maxAttempts = job.jobType === 'NOTIFICATION_DELIVERY' ? 5 : 3
     await withTenantTransaction(this.prisma, { organizationId: job.organizationId, actorUserId: job.actorUserId }, async (tx) => {
       const failed = await tx.$queryRawUnsafe<DispatchRow[]>(
         `UPDATE v2_cloud_job_dispatches
-         SET status = CASE WHEN attempts >= 3 THEN 'DLQ' ELSE 'RETRY' END, failure_code = $3, updated_at = now()
+         SET status = CASE WHEN attempts >= $3 THEN 'DLQ' ELSE 'RETRY' END, failure_code = $4, updated_at = now()
          WHERE organization_id = $1 AND id = $2 AND status = 'PROCESSING'
          RETURNING id, status, attempts, workflow_instance_id, input_hash, artifact_ref`,
-        job.organizationId, job.jobId, code,
+        job.organizationId, job.jobId, maxAttempts, code,
       )
       if (failed[0]) await this.recordEvent(tx, job, failed[0].status === 'DLQ' ? 'DLQ' : 'RETRY_SCHEDULED', { attempt: failed[0].attempts, code })
     })

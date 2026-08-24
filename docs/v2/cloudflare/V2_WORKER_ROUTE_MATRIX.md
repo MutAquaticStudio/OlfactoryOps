@@ -11,6 +11,8 @@ The Worker imports generated decorator-free controller delegates; all business l
 | platform | POST | `/api/v1/v2/platform/auth/logout` |
 | platform | POST | `/api/v1/v2/platform/auth/csrf/bootstrap` |
 | platform | POST | `/api/v1/v2/platform/auth/email-verification/confirm` |
+| platform | POST | `/api/v1/v2/platform/auth/password-reset/request` |
+| platform | POST | `/api/v1/v2/platform/auth/password-reset/confirm` |
 | platform | POST | `/api/v1/v2/platform/auth/invitations/accept` |
 | platform | POST | `/api/v1/v2/platform/auth/email-verification/resend` |
 | platform | GET | `/api/v1/v2/platform/auth/email-verification/status` |

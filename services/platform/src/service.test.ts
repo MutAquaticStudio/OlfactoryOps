@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { pbkdf2Sync } from 'node:crypto'
 import { MemoryPlatformRepository } from './memory-repository.js'
 import { hashPassword, hashSecret, openSecret, verifyPassword } from './crypto.js'
 import { PlatformError, PlatformService } from './service.js'
 
-function makeService() { const repository = new MemoryPlatformRepository(); return { repository, service: new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'test-session', passwordPepper: 'test-password' }) } }
+function makeService(overrides: ConstructorParameters<typeof PlatformService>[1] = {}) { const repository = new MemoryPlatformRepository(); return { repository, service: new PlatformService(repository, { baseDomain: 'olfactoryops.com', sessionPepper: 'test-session', passwordPepper: 'test-password', passwordResetEncryptionKey: 'test-password-reset-key', ...overrides }) } }
 async function verifySignup(service: PlatformService, signup: Awaited<ReturnType<PlatformService['signup']>>) { await service.verifyEmail(signup.verificationToken); return service.contextFromToken(signup.rawSessionToken, signup.hostname.hostname) }
 
 describe('V2 platform security core', () => {
@@ -135,6 +135,69 @@ describe('V2 platform security core', () => {
     expect(repository.pushSubscriptions).toHaveLength(1)
     await service.unsubscribePush(resolved.context, 'https://push.example.test/endpoint')
     expect(repository.pushSubscriptions).toHaveLength(0)
+  })
+
+  it('uses an encrypted, single-use V2 reset token and revokes every V2 session', async () => {
+    const { service, repository } = makeService()
+    const signup = await service.signup({ organizationName: 'Recovery', workspaceSlug: 'recovery', email: 'recovery@example.test', displayName: 'Recovery', password: 'Correct Horse Battery 12!' })
+    await service.verifyEmail(signup.verificationToken)
+    const additionalSession = await service.login({ email: 'recovery@example.test', password: 'Correct Horse Battery 12!', hostname: signup.hostname.hostname })
+
+    await expect(service.requestPasswordReset('missing@example.test')).resolves.toEqual({ accepted: true })
+    expect(repository.passwordResets).toHaveLength(0)
+    await expect(service.requestPasswordReset('recovery@example.test')).resolves.toEqual({ accepted: true })
+    expect(repository.passwordResets).toHaveLength(1)
+    const reset = repository.passwordResets[0]!
+    const outbox = repository.notifications.at(-1)!
+    const payload = repository.notificationPayloads.get(outbox.id)!
+    const serializedPayload = JSON.stringify(payload)
+    expect(serializedPayload).not.toContain('recovery@example.test')
+    const decrypted = JSON.parse(openSecret(String(payload.payloadCiphertext), 'test-password-reset-key')) as { email: string; token: string; resetPath: string }
+    expect(decrypted).toMatchObject({ email: 'recovery@example.test', resetPath: '/v2/reset-password' })
+    expect(reset.tokenHash).not.toContain(decrypted.token)
+
+    await expect(service.completePasswordReset(decrypted.token, 'Reset Correct Horse Battery 99!')).resolves.toEqual({ accepted: true })
+    expect(repository.passwordResets[0]?.usedAt).toBeTruthy()
+    expect(repository.sessions.filter((item) => item.userId === signup.user.id && !item.revokedAt)).toHaveLength(0)
+    await expect(service.contextFromToken(signup.rawSessionToken, signup.hostname.hostname)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
+    await expect(service.contextFromToken(additionalSession.rawSessionToken, signup.hostname.hostname)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
+    await expect(service.login({ email: 'recovery@example.test', password: 'Reset Correct Horse Battery 99!', hostname: signup.hostname.hostname })).resolves.toMatchObject({ user: { email: 'recovery@example.test' } })
+    await expect(service.completePasswordReset(decrypted.token, 'Another Correct Horse Battery 99!')).rejects.toMatchObject({ code: 'PASSWORD_RESET_INVALID' })
+  })
+
+  it('keeps reset responses generic while rejecting expiry and rate-limiting delivery creation', async () => {
+    const { service, repository } = makeService()
+    const signup = await service.signup({ organizationName: 'Reset expiry', workspaceSlug: 'reset-expiry', email: 'expiry@example.test', displayName: 'Expiry', password: 'Correct Horse Battery 12!' })
+    const initial = await service.requestPasswordReset('expiry@example.test')
+    const repeated = await service.requestPasswordReset('expiry@example.test')
+    expect(initial).toEqual(repeated)
+    expect(repository.passwordResets).toHaveLength(1)
+    const payload = repository.notificationPayloads.get(repository.notifications.at(-1)!.id)!
+    const token = (JSON.parse(openSecret(String(payload.payloadCiphertext), 'test-password-reset-key')) as { token: string }).token
+    repository.passwordResets[0]!.expiresAt = new Date(Date.now() - 1_000).toISOString()
+    await expect(service.completePasswordReset(token, 'Expired Correct Horse Battery 99!')).rejects.toMatchObject({ code: 'PASSWORD_RESET_INVALID' })
+    expect(repository.users.find((user) => user.id === signup.user.id)?.passwordHash).not.toContain('Expired Correct Horse Battery 99!')
+  })
+
+  it('keeps an outbox delivery failure indistinguishable from an unknown account', async () => {
+    const { service, repository } = makeService()
+    await service.signup({ organizationName: 'Delivery failure', workspaceSlug: 'delivery-failure', email: 'delivery@example.test', displayName: 'Delivery', password: 'Correct Horse Battery 12!' })
+    repository.enqueueNotification = async () => { throw new Error('PROVIDER_DETAIL_MUST_NOT_ESCAPE') }
+
+    await expect(service.requestPasswordReset('delivery@example.test')).resolves.toEqual({ accepted: true })
+    await expect(service.requestPasswordReset('unknown@example.test')).resolves.toEqual({ accepted: true })
+  })
+
+  it('dispatches only an opaque committed reset reference to the internal delivery adapter', async () => {
+    const dispatchPasswordReset = vi.fn().mockResolvedValue(undefined)
+    const { service } = makeService({ passwordResetDispatcher: { dispatchPasswordReset } })
+    await service.signup({ organizationName: 'Dispatch', workspaceSlug: 'dispatch', email: 'dispatch@example.test', displayName: 'Dispatch', password: 'Correct Horse Battery 12!' })
+
+    await expect(service.requestPasswordReset('dispatch@example.test')).resolves.toEqual({ accepted: true })
+    expect(dispatchPasswordReset).toHaveBeenCalledTimes(1)
+    const input = dispatchPasswordReset.mock.calls[0]?.[0]
+    expect(JSON.stringify(input)).not.toContain('dispatch@example.test')
+    expect(input).toEqual(expect.objectContaining({ outboxRef: expect.stringMatching(/^reset_/), idempotencyKey: expect.stringMatching(/^password-reset:reset_/) }))
   })
 
   it('materializes independent role policies without cross-tenant defaults', async () => {

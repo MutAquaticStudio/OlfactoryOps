@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
+import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PasswordResetRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
 import type { HostnameRecord, InvitationRecord, MemberProjection, NotificationDelivery, NotificationPreference, ObservabilityProjection, ConsentRecord, ExportRequest, PushSubscriptionInput, PlatformRole } from '../../../packages/contracts/src/index.js'
 import type { PlatformRepository, SessionCreate, SignupSeed } from './repository.js'
 
@@ -15,6 +15,7 @@ export class MemoryPlatformRepository implements PlatformRepository {
   branding = new Map<string, { displayName: string; logoObjectRef?: string; faviconObjectRef?: string; accentColor?: string; footerText?: string; locale: string }>()
   sessions: SessionRecord[] = []
   verifications: VerificationRecord[] = []
+  passwordResets: PasswordResetRecord[] = []
   rolePolicies = new Map<string, string[]>()
   billing = new Map<string, BillingRecord>()
   notificationPreferences: Array<NotificationPreference & { userId: string; organizationId: string }> = []
@@ -52,6 +53,7 @@ export class MemoryPlatformRepository implements PlatformRepository {
   async listSessions(userId: string, organizationId: string) { return clone(this.sessions.filter((item) => item.userId === userId && item.organizationId === organizationId && !item.revokedAt)) }
   async revokeSession(sessionId: string, organizationId: string, reason: string) { this.sessions = this.sessions.map((item) => item.id === sessionId && item.organizationId === organizationId ? { ...item, revokedAt: now(), revokeReason: reason } : item) }
   async revokeAllSessions(userId: string, organizationId: string, keepSessionId?: string, reason = 'revoke-all') { this.sessions = this.sessions.map((item) => item.userId === userId && item.organizationId === organizationId && item.id !== keepSessionId && !item.revokedAt ? { ...item, revokedAt: now(), revokeReason: reason } : item) }
+  async revokeAllUserSessions(userId: string, reason: string) { this.sessions = this.sessions.map((item) => item.userId === userId && !item.revokedAt ? { ...item, revokedAt: now(), revokeReason: reason } : item) }
   async touchSession(sessionId: string, organizationId: string, lastSeenAt: string, idleExpiresAt: string) { this.sessions = this.sessions.map((item) => item.id === sessionId && item.organizationId === organizationId ? { ...item, lastSeenAt, idleExpiresAt } : item) }
   async saveVerification(record: VerificationRecord) { this.verifications.push(clone(record)) }
   async findLatestVerification(userId: string, organizationId: string) { const rows = this.verifications.filter((item) => item.userId === userId && item.organizationId === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); return clone(rows[0] ?? null) }
@@ -62,6 +64,16 @@ export class MemoryPlatformRepository implements PlatformRepository {
   async markUserUnverified(userId: string) { this.users = this.users.map((item) => item.id === userId ? { ...item, verifiedAt: undefined } : item) }
   async updateEmail(userId: string, email: string) { this.users = this.users.map((item) => item.id === userId ? { ...item, email } : item) }
   async updatePassword(userId: string, passwordHash: string) { this.users = this.users.map((item) => item.id === userId ? { ...item, passwordHash } : item) }
+  async savePasswordReset(record: PasswordResetRecord) { if (this.passwordResets.some((item) => item.id === record.id || item.tokenHash === record.tokenHash)) throw new Error('PASSWORD_RESET_CONFLICT'); this.passwordResets.push(clone(record)) }
+  async findLatestPasswordReset(userId: string, organizationId: string) { const rows = this.passwordResets.filter((item) => item.userId === userId && item.organizationId === organizationId).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); return clone(rows[0] ?? null) }
+  async findPasswordReset(tokenHash: string) { return clone(this.passwordResets.find((item) => item.tokenHash === tokenHash) ?? null) }
+  async revokePasswordResets(userId: string) { this.passwordResets = this.passwordResets.map((item) => item.userId === userId && !item.usedAt && !item.revokedAt ? { ...item, revokedAt: now() } : item) }
+  async markPasswordResetUsed(id: string, userId: string, tokenHash: string, usedAt: string) {
+    const record = this.passwordResets.find((item) => item.id === id && item.userId === userId && item.tokenHash === tokenHash && !item.usedAt && !item.revokedAt && new Date(item.expiresAt).getTime() > Date.now())
+    if (!record) return false
+    record.usedAt = usedAt
+    return true
+  }
   async getRolePermissions(organizationId: string, role: string) { return [...(this.rolePolicies.get(`${organizationId}:${role}`) ?? [])] }
   async setRolePermissions(organizationId: string, role: string, permissions: string[], _actorId: string) { this.rolePolicies.set(`${organizationId}:${role}`, [...permissions]); return 1 }
   async countActiveOwners(organizationId: string) { return this.memberships.filter((item) => item.organizationId === organizationId && item.role === 'Owner' && item.status === 'ACTIVE').length }

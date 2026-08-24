@@ -58,7 +58,18 @@ export type PlatformServiceConfig = {
   sessionPepper?: string
   passwordPepper?: string
   invitationEncryptionKey?: string
+  passwordResetEncryptionKey?: string
+  passwordResetDispatcher?: PasswordResetDispatcher
   cookieName?: string
+}
+
+/**
+ * The Platform service owns password-reset state. Runtime-specific queue
+ * delivery stays behind this narrow adapter so the database transaction never
+ * depends on a provider request.
+ */
+export type PasswordResetDispatcher = {
+  dispatchPasswordReset(input: { organizationId: string; userId: string; outboxRef: string; idempotencyKey: string }): Promise<void>
 }
 
 export type SignupInput = { organizationName: string; workspaceSlug?: string; email: string; displayName: string; password: string; hostname?: string }
@@ -69,6 +80,8 @@ export class PlatformService {
   private readonly sessionPepper: string
   private readonly passwordPepper: string
   private readonly invitationEncryptionKey: string
+  private readonly passwordResetEncryptionKey: string
+  private readonly passwordResetDispatcher?: PasswordResetDispatcher
   private readonly publicHostnames: ReadonlySet<string>
   readonly cookieName: string
 
@@ -77,6 +90,8 @@ export class PlatformService {
     this.sessionPepper = config.sessionPepper ?? 'local-v2-session-pepper'
     this.passwordPepper = config.passwordPepper ?? 'local-v2-password-pepper'
     this.invitationEncryptionKey = config.invitationEncryptionKey ?? 'local-v2-invitation-key'
+    this.passwordResetEncryptionKey = config.passwordResetEncryptionKey ?? 'local-v2-password-reset-key'
+    this.passwordResetDispatcher = config.passwordResetDispatcher
     this.cookieName = config.cookieName ?? 'oo_v2_session'
     this.publicHostnames = new Set([
       this.baseDomain,
@@ -223,6 +238,88 @@ export class PlatformService {
     const createdAt = iso()
     await this.scoped(resolved.context, async (tx) => { await tx.saveVerification({ id: `verify_${randomUUID().slice(0, 12)}`, userId: resolved.user.id, organizationId: resolved.context.organizationId, email: resolved.user.email, tokenHash: hashSecret(token, this.sessionPepper), expiresAt: iso(addDays(new Date(), 1)), createdAt }); await tx.enqueueNotification({ userId: resolved.user.id, organizationId: resolved.context.organizationId, eventType: 'EMAIL_VERIFICATION', channel: 'EMAIL', idempotencyKey: `email-verification:${resolved.user.id}:${createdAt}`, payload: { email: resolved.user.email, verificationRequired: true } }); await tx.appendAudit({ organizationId: resolved.context.organizationId, actorUserId: resolved.user.id, action: 'platform.email.verify.resend', outcome: 'allowed', subjectType: 'user', subjectId: resolved.user.id, correlationId: correlationId() }) })
     return { sent: true }
+  }
+
+  /**
+   * This always acknowledges the request. The outbox write is restricted to an
+   * active V2 identity, and the reset payload is encrypted before persistence.
+   */
+  async requestPasswordReset(emailValue: string) {
+    try {
+      const email = normalizeEmail(emailValue)
+      if (!email.includes('@') || email.length > 320) return { accepted: true }
+      const user = await this.repository.findUserByEmail(email)
+      if (!user || user.status !== 'ACTIVE') return { accepted: true }
+      const memberships = await this.repository.transaction((tx) => tx.listMemberships(user.id), { userId: user.id })
+      const membership = [...memberships].sort((left, right) => left.organizationId.localeCompare(right.organizationId))[0]
+      if (!membership) return { accepted: true }
+      const hostname = await this.repository.transaction((tx) => tx.findDefaultHostname(membership.organizationId), { organizationId: membership.organizationId, userId: user.id })
+      if (!hostname || hostname.status !== 'ACTIVE') return { accepted: true }
+      const latest = await this.repository.transaction((tx) => tx.findLatestPasswordReset(user.id, membership.organizationId), { organizationId: membership.organizationId, userId: user.id })
+      if (latest && Date.now() - new Date(latest.createdAt).getTime() < 60_000) return { accepted: true }
+      const token = randomSecret('reset_')
+      const createdAt = iso()
+      const reset = {
+        id: `reset_${randomUUID().slice(0, 12)}`,
+        userId: user.id,
+        organizationId: membership.organizationId,
+        tokenHash: hashSecret(token, this.sessionPepper),
+        expiresAt: iso(addMinutes(new Date(), 30)),
+        createdAt,
+      }
+      const idempotencyKey = `password-reset:${reset.id}`
+      await this.repository.transaction(async (tx) => {
+        await tx.revokePasswordResets(user.id)
+        await tx.savePasswordReset(reset)
+        await tx.enqueueNotification({
+          userId: user.id,
+          organizationId: membership.organizationId,
+          eventType: 'PASSWORD_RESET',
+          channel: 'EMAIL',
+          idempotencyKey,
+          payload: {
+            payloadCiphertext: sealSecret(JSON.stringify({ email, token, resetPath: '/v2/reset-password' }), this.passwordResetEncryptionKey),
+            payloadVersion: 'v2-password-reset',
+          },
+        })
+        await tx.appendAudit({ organizationId: membership.organizationId, actorUserId: user.id, action: 'platform.password.reset.request', outcome: 'accepted', subjectType: 'user', subjectId: user.id, correlationId: correlationId() })
+      }, { organizationId: membership.organizationId, userId: user.id })
+      // Queue failure is intentionally indistinguishable from an unknown
+      // address. The durable outbox is already committed and a later reset
+      // request can safely re-attempt dispatch without exposing identity.
+      await this.passwordResetDispatcher?.dispatchPasswordReset({ organizationId: membership.organizationId, userId: user.id, outboxRef: reset.id, idempotencyKey })
+      return { accepted: true }
+    } catch {
+      // A delivery/outbox failure must not disclose whether a supplied address
+      // belongs to an active V2 identity.
+      return { accepted: true }
+    }
+  }
+
+  async completePasswordReset(tokenValue: string, nextPassword: string) {
+    if (!tokenValue || nextPassword.length < 12) throw new PlatformError('PASSWORD_RESET_INVALID', 'This password reset link is no longer valid.', 400)
+    const tokenHash = hashSecret(tokenValue, this.sessionPepper)
+    const reset = await this.repository.findPasswordReset(tokenHash)
+    if (!reset || reset.usedAt || reset.revokedAt || new Date(reset.expiresAt).getTime() <= Date.now()) throw new PlatformError('PASSWORD_RESET_INVALID', 'This password reset link is no longer valid.', 400)
+    const user = await this.repository.transaction((tx) => tx.findUserById(reset.userId), { organizationId: reset.organizationId, userId: reset.userId, passwordResetHash: tokenHash })
+    if (!user || user.status !== 'ACTIVE') throw new PlatformError('PASSWORD_RESET_INVALID', 'This password reset link is no longer valid.', 400)
+    let passwordHash: string
+    try {
+      passwordHash = await hashPassword(user.email, nextPassword, this.passwordPepper)
+    } catch (error) {
+      if (error instanceof PasswordCryptoError) throw new PlatformRuntimeFailure(`PASSWORD_RESET_${error.code}`)
+      throw new PlatformRuntimeFailure('PASSWORD_RESET_HASH_FAILED')
+    }
+    const completedAt = iso()
+    await this.repository.transaction(async (tx) => {
+      const consumed = await tx.markPasswordResetUsed(reset.id, reset.userId, tokenHash, completedAt)
+      if (!consumed) throw new PlatformError('PASSWORD_RESET_INVALID', 'This password reset link is no longer valid.', 400)
+      await tx.updatePassword(reset.userId, passwordHash)
+      await tx.revokePasswordResets(reset.userId)
+      await tx.revokeAllUserSessions(reset.userId, 'password_reset')
+      await tx.appendAudit({ organizationId: reset.organizationId, actorUserId: reset.userId, action: 'platform.password.reset.complete', outcome: 'allowed', subjectType: 'user', subjectId: reset.userId, correlationId: correlationId() })
+    }, { organizationId: reset.organizationId, userId: reset.userId, passwordResetHash: tokenHash })
+    return { accepted: true }
   }
 
   async changePassword(context: PlatformContext, rawToken: string, currentPassword: string, nextPassword: string) {

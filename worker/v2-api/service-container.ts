@@ -13,6 +13,7 @@ import { ModelDatasetService } from '../../services/scientific/src/model-dataset
 import { OlfactoryIntelligenceService } from '../../services/scientific/src/olfactory-intelligence-service.js'
 import { ScientificFeatureService, ScientificRuntimeUnavailable } from '../../services/scientific/src/service.js'
 import { CloudflareScientificDispatcher } from './cloud-scientific-dispatch.js'
+import { CloudflarePasswordResetDispatcher } from './cloud-password-reset-dispatch.js'
 
 export type V2ApiServiceEnv = {
   HYPERDRIVE: Hyperdrive
@@ -25,6 +26,7 @@ export type V2ApiServiceEnv = {
   V2_SESSION_PEPPER: string
   V2_PASSWORD_PEPPER: string
   V2_INVITATION_ENCRYPTION_KEY: string
+  V2_PASSWORD_RESET_ENCRYPTION_KEY: string
 }
 
 export type V2ApiServices = {
@@ -62,6 +64,8 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
     sessionPepper: required(env.V2_SESSION_PEPPER, 'V2_SESSION_PEPPER'),
     passwordPepper: required(env.V2_PASSWORD_PEPPER, 'V2_PASSWORD_PEPPER'),
     invitationEncryptionKey: required(env.V2_INVITATION_ENCRYPTION_KEY, 'V2_INVITATION_ENCRYPTION_KEY'),
+    passwordResetEncryptionKey: required(env.V2_PASSWORD_RESET_ENCRYPTION_KEY, 'V2_PASSWORD_RESET_ENCRYPTION_KEY'),
+    passwordResetDispatcher: new CloudflarePasswordResetDispatcher(env),
   })
   const lab = new LabOperationsService(prisma, platform)
   const formula = new FormulaService(prisma, platform)

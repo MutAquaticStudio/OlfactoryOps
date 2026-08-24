@@ -1,14 +1,14 @@
 import { cloudJobEnvelopeSchema, isStagingDlqTerminalFailureProbe, type CloudJobEnvelope } from './contracts.js'
 import { createHyperdrivePrisma } from './hyperdrive.js'
 import { CloudJobLedger } from './job-ledger.js'
+import { processPasswordResetDeliveries, type PasswordResetDeliveryEnv } from './password-reset-delivery.js'
 
-export type CloudQueueConsumerEnv = {
-  HYPERDRIVE: Hyperdrive
+export type CloudQueueConsumerEnv = PasswordResetDeliveryEnv & {
   SCIENTIFIC_WORKFLOW: Workflow<CloudJobEnvelope>
   RELEASE_ENVIRONMENT?: string
 }
 
-type QueueLedger = Pick<CloudJobLedger, 'recordStagingDlqProbeFailure' | 'reserveWorkflow' | 'fail' | 'attachWorkflow'>
+type QueueLedger = Pick<CloudJobLedger, 'recordStagingDlqProbeFailure' | 'reserveWorkflow' | 'claim' | 'complete' | 'fail' | 'attachWorkflow'>
 
 export async function handleCloudQueueMessage(
   env: CloudQueueConsumerEnv,
@@ -31,6 +31,28 @@ export async function handleCloudQueueMessage(
     // Do not acknowledge. Cloudflare Queue owns retry/DLQ delivery semantics.
     message.retry({ delaySeconds: 5 })
     return
+  }
+  if (job.jobType === 'NOTIFICATION_DELIVERY') {
+    const claimed = await ledger.claim(job)
+    if (!claimed) {
+      message.ack()
+      return
+    }
+    try {
+      const delivery = await processPasswordResetDeliveries(env, job.organizationId)
+      if (delivery.retry) {
+        await ledger.fail(job, new Error('PASSWORD_RESET_DELIVERY_RETRY'))
+        message.retry({ delaySeconds: 30 })
+        return
+      }
+      await ledger.complete(job, job.artifactRef)
+      message.ack()
+      return
+    } catch {
+      await ledger.fail(job, new Error('PASSWORD_RESET_DELIVERY_RETRY'))
+      message.retry({ delaySeconds: 30 })
+      return
+    }
   }
   const reservation = await ledger.reserveWorkflow(job)
   if (!reservation.shouldCreate) {

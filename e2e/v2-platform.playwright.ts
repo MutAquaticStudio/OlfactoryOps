@@ -14,10 +14,18 @@ test('V2 login is isolated, keyboard reachable, and responsive', async ({ page }
   await expectNoHorizontalOverflow(page)
 })
 
-test('canonical public auth aliases render the same V2 authority', async ({ page }) => {
-  for (const path of ['/login', '/signup', '/v2/login', '/v2/signup']) {
+test('canonical public auth routes render only V2 authority', async ({ page }) => {
+  for (const path of ['/login', '/signup', '/forgot-password', '/reset-password', '/verify-email', '/v2/login', '/v2/signup', '/v2/forgot-password', '/v2/reset-password', '/v2/verify-email']) {
+    const legacyAuthRequests: string[] = []
+    const captureLegacyAuthRequest = (request: import('@playwright/test').Request) => {
+      if (new URL(request.url()).pathname.startsWith('/api/v1/auth/')) legacyAuthRequests.push(request.url())
+    }
+    page.on('request', captureLegacyAuthRequest)
     await page.goto(path)
-    await expect(page.getByTestId('v2-auth-card')).toBeVisible()
+    await expect(page.locator('[data-testid^="v2-"]')).toBeVisible()
+    await expect(page.locator('.auth-shell')).toHaveCount(0)
+    expect(legacyAuthRequests).toEqual([])
+    page.off('request', captureLegacyAuthRequest)
   }
 })
 

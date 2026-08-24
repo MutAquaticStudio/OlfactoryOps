@@ -1,4 +1,4 @@
-import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
+import type { BillingRecord, InvitationRepositoryRecord, MembershipRecord, OrganizationRecord, PasswordResetRecord, PlatformUser, SessionRecord, VerificationRecord } from './types.js'
 import type { HostnameRecord, InvitationRecord, MemberProjection, NotificationDelivery, NotificationPreference, ObservabilityProjection, ConsentRecord, ExportRequest, PushSubscriptionInput, PlatformRole } from '../../../packages/contracts/src/index.js'
 
 export type SignupSeed = {
@@ -9,7 +9,7 @@ export type SignupSeed = {
 }
 
 export type SessionCreate = Omit<SessionRecord, 'revokedAt' | 'revokeReason' | 'lastSeenAt'> & { lastSeenAt?: string }
-export type RepositoryContext = { organizationId?: string; userId?: string }
+export type RepositoryContext = { organizationId?: string; userId?: string; passwordResetHash?: string }
 
 export class SignupWriteError extends Error {
   constructor(readonly code: `SIGNUP_WRITE_${string}`) { super(code) }
@@ -42,6 +42,7 @@ export interface PlatformRepository {
   listSessions(userId: string, organizationId: string): Promise<SessionRecord[]>
   revokeSession(sessionId: string, organizationId: string, reason: string): Promise<void>
   revokeAllSessions(userId: string, organizationId: string, keepSessionId?: string, reason?: string): Promise<void>
+  revokeAllUserSessions(userId: string, reason: string): Promise<void>
   touchSession(sessionId: string, organizationId: string, lastSeenAt: string, idleExpiresAt: string): Promise<void>
   saveVerification(record: VerificationRecord): Promise<void>
   findLatestVerification(userId: string, organizationId: string): Promise<VerificationRecord | null>
@@ -52,6 +53,11 @@ export interface PlatformRepository {
   markUserUnverified(userId: string): Promise<void>
   updateEmail(userId: string, email: string): Promise<void>
   updatePassword(userId: string, passwordHash: string): Promise<void>
+  savePasswordReset(record: PasswordResetRecord): Promise<void>
+  findLatestPasswordReset(userId: string, organizationId: string): Promise<PasswordResetRecord | null>
+  findPasswordReset(tokenHash: string): Promise<PasswordResetRecord | null>
+  revokePasswordResets(userId: string): Promise<void>
+  markPasswordResetUsed(id: string, userId: string, tokenHash: string, usedAt: string): Promise<boolean>
   getRolePermissions(organizationId: string, role: string): Promise<string[]>
   setRolePermissions(organizationId: string, role: string, permissions: string[], actorId: string): Promise<number>
   countActiveOwners(organizationId: string): Promise<number>

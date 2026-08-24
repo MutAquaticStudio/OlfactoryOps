@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleCloudQueueMessage, type CloudQueueConsumerEnv } from './queue-consumer.js'
 
+const { processPasswordResetDeliveries } = vi.hoisted(() => ({ processPasswordResetDeliveries: vi.fn() }))
+vi.mock('./password-reset-delivery.js', () => ({ processPasswordResetDeliveries }))
+
 const probe = {
   protocolVersion: 'cloud-runtime/v1' as const,
   jobId: 'job_dlq_probe_1',
@@ -32,6 +35,25 @@ describe('staging terminal DLQ probe consumer', () => {
     const ledger = { recordStagingDlqProbeFailure: vi.fn() }
     await handleCloudQueueMessage({ RELEASE_ENVIRONMENT: 'production' } as CloudQueueConsumerEnv, queued as never, () => ledger as never)
     expect(ledger.recordStagingDlqProbeFailure).not.toHaveBeenCalled()
+    expect(queued.ack).toHaveBeenCalledTimes(1)
+    expect(queued.retry).not.toHaveBeenCalled()
+  })
+})
+
+describe('password reset queue consumer', () => {
+  it('acks a completed password reset delivery without entering a Workflow path', async () => {
+    processPasswordResetDeliveries.mockResolvedValueOnce({ retry: false })
+    const queued = {
+      body: { ...probe, jobType: 'NOTIFICATION_DELIVERY' as const, jobId: 'job_password_reset_1', idempotencyKey: 'password-reset-idempotency-key-0001' },
+      ack: vi.fn(),
+      retry: vi.fn(),
+    }
+    const ledger = { claim: vi.fn().mockResolvedValue(true), complete: vi.fn(), fail: vi.fn(), reserveWorkflow: vi.fn(), attachWorkflow: vi.fn() }
+
+    await handleCloudQueueMessage({ PASSWORD_RESET_DELIVERY_ENABLED: 'true' } as CloudQueueConsumerEnv, queued as never, () => ledger as never)
+    expect(ledger.claim).toHaveBeenCalledTimes(1)
+    expect(ledger.reserveWorkflow).not.toHaveBeenCalled()
+    expect(ledger.complete).toHaveBeenCalledTimes(1)
     expect(queued.ack).toHaveBeenCalledTimes(1)
     expect(queued.retry).not.toHaveBeenCalled()
   })

@@ -25,7 +25,7 @@ export interface NotificationChannelAdapter {
 }
 
 export interface NotificationDeliveryStore {
-  claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number): Promise<DeliveryJob[]>
+  claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number, eventTypes?: readonly string[]): Promise<DeliveryJob[]>
   isEnabled(organizationId: string, userId: string | undefined, eventType: string, channel: DeliveryChannel): Promise<boolean>
   markSent(job: DeliveryJob, leaseToken: string): Promise<void>
   markRetry(job: DeliveryJob, leaseToken: string, code: string, nextAttemptAt: Date): Promise<void>
@@ -38,6 +38,8 @@ export type NotificationWorkerOptions = {
   leaseMs?: number
   batchSize?: number
   now?: () => Date
+  eventTypes?: readonly string[]
+  respectPreferences?: boolean
   adapters: Record<DeliveryChannel, NotificationChannelAdapter>
 }
 
@@ -57,10 +59,10 @@ export class NotificationDeliveryWorker {
 
   async processOrganization(organizationId: string) {
     const leaseToken = randomUUID()
-    const jobs = await this.store.claimDue(organizationId, leaseToken, this.now(), this.leaseMs, this.batchSize)
+    const jobs = await this.store.claimDue(organizationId, leaseToken, this.now(), this.leaseMs, this.batchSize, this.options.eventTypes)
     const results: Array<{ id: string; status: 'SENT' | 'RETRYING' | 'FAILED' | 'DISABLED' }> = []
     for (const job of jobs) {
-      const enabled = await this.store.isEnabled(job.organizationId, job.recipientUserId, job.eventType, job.channel)
+      const enabled = this.options.respectPreferences === false || await this.store.isEnabled(job.organizationId, job.recipientUserId, job.eventType, job.channel)
       if (!enabled) {
         await this.store.markDisabled(job, leaseToken)
         results.push({ id: job.id, status: 'DISABLED' })
@@ -107,8 +109,8 @@ export class MemoryNotificationDeliveryStore implements NotificationDeliveryStor
     return record
   }
 
-  async claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number) {
-    return this.jobs.filter((job) => job.organizationId === organizationId && ['QUEUED', 'RETRYING'].includes(job.status) && job.nextAttemptAt <= now && (!job.leaseExpiresAt || job.leaseExpiresAt <= now)).slice(0, limit).map((job) => { job.status = 'SENDING'; job.leaseToken = leaseToken; job.leaseExpiresAt = new Date(now.getTime() + leaseMs); job.attempts += 1; job.deliveryAttempts.push(job.attempts); return structuredClone({ ...job, leaseToken }) })
+  async claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number, eventTypes?: readonly string[]) {
+    return this.jobs.filter((job) => job.organizationId === organizationId && (!eventTypes?.length || eventTypes.includes(job.eventType)) && ['QUEUED', 'RETRYING'].includes(job.status) && job.nextAttemptAt <= now && (!job.leaseExpiresAt || job.leaseExpiresAt <= now)).slice(0, limit).map((job) => { job.status = 'SENDING'; job.leaseToken = leaseToken; job.leaseExpiresAt = new Date(now.getTime() + leaseMs); job.attempts += 1; job.deliveryAttempts.push(job.attempts); return structuredClone({ ...job, leaseToken }) })
   }
   async isEnabled(organizationId: string, userId: string | undefined, eventType: string, channel: DeliveryChannel) { return this.preferences.get(`${organizationId}:${userId ?? '*'}:${eventType}:${channel}`) ?? true }
   private assertLease(job: DeliveryJob, token: string) { const current = this.jobs.find((item) => item.id === job.id); if (!current || current.status !== 'SENDING' || current.leaseToken !== token) throw new Error('NOTIFICATION_LEASE_FENCED'); return current }
@@ -124,8 +126,8 @@ type RawOutbox = { id: string; organization_id: string; recipient_user_id: strin
 export class PrismaNotificationDeliveryStore implements NotificationDeliveryStore {
   constructor(private readonly client: PrismaClient) {}
   private async scoped<T>(organizationId: string, callback: (client: PrismaClient) => Promise<T>) { return this.client.$transaction(async (tx) => { await tx.$executeRawUnsafe(`SELECT set_config('app.organization_id', $1, true)`, organizationId); return callback(tx as unknown as PrismaClient) }) }
-  async claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number) {
-    const rows = await this.scoped(organizationId, (client) => client.$queryRawUnsafe<RawOutbox[]>(`WITH candidate AS (SELECT id FROM v2_notification_outbox WHERE organization_id = $1 AND status IN ('QUEUED','RETRYING') AND next_attempt_at <= $2 AND attempts < max_attempts AND (lease_expires_at IS NULL OR lease_expires_at <= $2) ORDER BY next_attempt_at, created_at LIMIT $3 FOR UPDATE SKIP LOCKED) UPDATE v2_notification_outbox AS o SET status = 'SENDING', attempts = o.attempts + 1, lease_token = $4, lease_expires_at = $2 + ($5 * interval '1 millisecond'), updated_at = $2 FROM candidate WHERE o.id = candidate.id RETURNING o.id, o.organization_id, o.recipient_user_id, o.event_type, o.channel, o.payload, o.attempts, o.max_attempts, o.lease_token`, organizationId, now, limit, leaseToken, leaseMs))
+  async claimDue(organizationId: string, leaseToken: string, now: Date, leaseMs: number, limit: number, eventTypes?: readonly string[]) {
+    const rows = await this.scoped(organizationId, (client) => client.$queryRawUnsafe<RawOutbox[]>(`WITH candidate AS (SELECT id FROM v2_notification_outbox WHERE organization_id = $1 AND status IN ('QUEUED','RETRYING') AND next_attempt_at <= $2 AND attempts < max_attempts AND (lease_expires_at IS NULL OR lease_expires_at <= $2) AND ($6::text[] IS NULL OR event_type = ANY($6::text[])) ORDER BY next_attempt_at, created_at LIMIT $3 FOR UPDATE SKIP LOCKED) UPDATE v2_notification_outbox AS o SET status = 'SENDING', attempts = o.attempts + 1, lease_token = $4, lease_expires_at = $2 + ($5 * interval '1 millisecond'), updated_at = $2 FROM candidate WHERE o.id = candidate.id RETURNING o.id, o.organization_id, o.recipient_user_id, o.event_type, o.channel, o.payload, o.attempts, o.max_attempts, o.lease_token`, organizationId, now, limit, leaseToken, leaseMs, eventTypes?.length ? [...eventTypes] : null))
     return rows.map((row) => ({ id: row.id, organizationId: row.organization_id, recipientUserId: row.recipient_user_id ?? undefined, eventType: row.event_type, channel: row.channel as DeliveryChannel, payload: (row.payload ?? {}) as Record<string, unknown>, attempts: row.attempts, maxAttempts: row.max_attempts, leaseToken: row.lease_token }))
   }
   async isEnabled(organizationId: string, userId: string | undefined, eventType: string, channel: DeliveryChannel) { return this.scoped(organizationId, async (client) => { if (!userId) return true; const preference = await client.notificationPreference.findUnique({ where: { organizationId_userId_eventType_channel: { organizationId, userId, eventType, channel } } }); return preference?.enabled ?? true }) }

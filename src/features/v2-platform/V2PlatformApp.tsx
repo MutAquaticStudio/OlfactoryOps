@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import {
   Activity,
   Bell,
@@ -50,7 +50,7 @@ export function safeV2ReturnPath(value: string | null | undefined) {
     const parsed = new URL(value, 'https://olfactoryops.invalid')
     if (parsed.origin !== 'https://olfactoryops.invalid') return undefined
     if (parsed.pathname !== '/v2' && !parsed.pathname.startsWith('/v2/')) return undefined
-    if (['/v2/login', '/v2/signup', '/v2/invitations/accept'].includes(parsed.pathname)) return undefined
+    if (['/v2/login', '/v2/signup', '/v2/forgot-password', '/v2/reset-password', '/v2/verify-email', '/v2/invitations/accept'].includes(parsed.pathname)) return undefined
     return `${parsed.pathname}${parsed.search}${parsed.hash}`
   } catch {
     return undefined
@@ -83,7 +83,27 @@ const copy = {
 type PlatformCopy = { [K in keyof typeof copy['en-US']]: string }
 
 function currentLocale(): Locale { return window.localStorage.getItem('olfactoryops.locale') === 'vi-VN' ? 'vi-VN' : 'en-US' }
-export function platformPathMode(pathname = window.location.pathname) { const path = pathname; if (path === '/signup' || path === '/v2/signup') return 'signup'; if (path === '/login' || path === '/v2/login') return 'login'; if (path === '/v2/platform-admin') return 'platform-admin'; if (path === '/v2/invitations/accept') return 'accept'; if (path.startsWith('/v2/public/sensory/')) return 'public-sensory'; return 'workspace' }
+function browserLocation() {
+  return typeof window === 'undefined' ? { pathname: '/', search: '' } : window.location
+}
+
+export function platformPathMode(pathname = browserLocation().pathname, search = browserLocation().search) {
+  const path = pathname
+  const legacyToken = new URLSearchParams(search).has('reset') || new URLSearchParams(search).has('verify')
+  if (legacyToken && (path === '/login' || path === '/signup')) return 'legacy-recovery'
+  if (path === '/signup' || path === '/v2/signup') return 'signup'
+  if (path === '/login' || path === '/v2/login') return 'login'
+  if (path === '/forgot-password' || path === '/v2/forgot-password') return 'reset-request'
+  // Root reset and verification endpoints belonged to the retired V1 UI. New
+  // V2 mail uses the explicit /v2 aliases so legacy tokens are never bridged.
+  if (path === '/reset-password' || path === '/verify-email') return 'legacy-recovery'
+  if (path === '/v2/reset-password') return 'reset-confirm'
+  if (path === '/v2/verify-email') return 'verify-confirm'
+  if (path === '/v2/platform-admin') return 'platform-admin'
+  if (path === '/v2/invitations/accept') return 'accept'
+  if (path.startsWith('/v2/public/sensory/')) return 'public-sensory'
+  return 'workspace'
+}
 function workspaceSection() {
   const segments = window.location.pathname.split('/').filter(Boolean)
   const workspaceIndex = segments.indexOf('workspace')
@@ -163,6 +183,10 @@ export function V2PlatformApp() {
   const text = copy[locale]
   const toggleLocale = () => { const next = locale === 'en-US' ? 'vi-VN' : 'en-US'; window.localStorage.setItem('olfactoryops.locale', next); setLocale(next) }
   if (mode === 'login' || mode === 'signup') return <AuthView mode={mode} text={text} onLocale={toggleLocale} onNavigate={navigate} />
+  if (mode === 'reset-request') return <PasswordResetRequestView text={text} onLocale={toggleLocale} onNavigate={navigate} />
+  if (mode === 'reset-confirm') return <PasswordResetConfirmView text={text} onLocale={toggleLocale} onNavigate={navigate} />
+  if (mode === 'verify-confirm') return <EmailVerificationView text={text} onLocale={toggleLocale} onNavigate={navigate} />
+  if (mode === 'legacy-recovery') return <LegacyRecoveryView text={text} onLocale={toggleLocale} onNavigate={navigate} />
   if (mode === 'platform-admin') return <Suspense fallback={<WorkspaceSurfaceFallback />}><PlatformAdminApp /></Suspense>
   if (mode === 'accept') return <InvitationAcceptView text={text} onLocale={toggleLocale} onNavigate={navigate} />
   if (mode === 'public-sensory') return stagingPublicCutover
@@ -200,11 +224,63 @@ function InvitationAcceptView({ text, onLocale, onNavigate }: { text: PlatformCo
   return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate('/login')}>{text.signIn}</button></div></div><section className="v2-auth-card" data-testid="v2-invitation-accept"><span className="v2-eyebrow">{text.members}</span><h1>Accept invitation</h1><p>Use the invited email and one-time token to join this workspace.</p><form onSubmit={submit}><label>Invitation token<input required value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} /></label><label>{text.email}<input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>{text.name}<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>{text.password}<input type="password" required minLength={12} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : 'Accept invitation'}</button></form></section></main>
 }
 
+function PublicAuthFrame({ text, onLocale, onNavigate, children }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void; children: ReactNode }) {
+  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate('/login')}>{text.signIn}</button></div></div>{children}</main>
+}
+
+function PasswordResetRequestView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(null); setNotice(null)
+    try {
+      await request('/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email }) })
+      setNotice('If this V2 account is eligible, a reset link will arrive shortly.')
+    } catch (requestError) { setError(workspaceErrorMessage(requestError, 'request a password reset')) } finally { setBusy(false) }
+  }
+  return <PublicAuthFrame text={text} onLocale={onLocale} onNavigate={onNavigate}><section className="v2-auth-card" data-testid="v2-password-reset-request"><span className="v2-eyebrow">Account recovery</span><h1>Reset your password</h1><p>Enter your email and we will send a new V2 recovery link if the account is eligible.</p><form onSubmit={submit}><label>{text.email}<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : 'Send recovery link'}</button><button className="v2-secondary-button" type="button" onClick={() => onNavigate('/login')}>Back to sign in</button></form></section></PublicAuthFrame>
+}
+
+function PasswordResetConfirmView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
+  const token = new URLSearchParams(window.location.search).get('token')?.trim() ?? ''
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(token ? null : 'This recovery link is incomplete. Request a new V2 recovery link.')
+  const [notice, setNotice] = useState<string | null>(null)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!token || password.length < 12 || password !== confirmPassword) { setError('Use matching passwords with at least 12 characters.'); return }
+    setBusy(true); setError(null); setNotice(null)
+    try { await request('/auth/password-reset/confirm', { method: 'POST', body: JSON.stringify({ token, password }) }); setNotice('Password reset complete. You can now sign in.'); setPassword(''); setConfirmPassword('') } catch (requestError) { setError(workspaceErrorMessage(requestError, 'reset your password')) } finally { setBusy(false) }
+  }
+  return <PublicAuthFrame text={text} onLocale={onLocale} onNavigate={onNavigate}><section className="v2-auth-card" data-testid="v2-password-reset-confirm"><span className="v2-eyebrow">Account recovery</span><h1>Choose a new password</h1><p>This V2 recovery link is single-use and expires after 30 minutes.</p><form onSubmit={submit}><label>{text.password}<input required type="password" minLength={12} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><label>Confirm password<input required type="password" minLength={12} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<button className="v2-primary-button" disabled={busy || !token}>{busy ? text.loading : 'Reset password'}</button><button className="v2-secondary-button" type="button" onClick={() => onNavigate('/forgot-password')}>Request a new link</button></form></section></PublicAuthFrame>
+}
+
+function EmailVerificationView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
+  const token = new URLSearchParams(window.location.search).get('token')?.trim() ?? ''
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(token ? null : 'This V2 verification link is incomplete. Request a new recovery link if you need help signing in.')
+  const [notice, setNotice] = useState<string | null>(null)
+  const confirm = async () => {
+    if (!token) return
+    setBusy(true); setError(null); setNotice(null)
+    try { await request('/auth/email-verification/confirm', { method: 'POST', body: JSON.stringify({ token }) }); setNotice('Your email is verified. You can now sign in.') } catch (requestError) { setError(workspaceErrorMessage(requestError, 'verify your email')) } finally { setBusy(false) }
+  }
+  return <PublicAuthFrame text={text} onLocale={onLocale} onNavigate={onNavigate}><section className="v2-auth-card" data-testid="v2-email-verification"><span className="v2-eyebrow">Account verification</span><h1>Verify your email</h1><p>Confirm this V2 link to unlock your workspace.</p>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<div className="v2-auth-actions"><button className="v2-primary-button" type="button" disabled={busy || !token} onClick={() => void confirm()}>{busy ? text.loading : 'Verify email'}</button><button className="v2-secondary-button" type="button" onClick={() => onNavigate('/login')}>Back to sign in</button></div></section></PublicAuthFrame>
+}
+
+function LegacyRecoveryView({ text, onLocale, onNavigate }: { text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
+  return <PublicAuthFrame text={text} onLocale={onLocale} onNavigate={onNavigate}><section className="v2-auth-card" data-testid="v2-legacy-auth-recovery"><span className="v2-eyebrow">Secure recovery</span><h1>Request a new V2 recovery link</h1><p>Older verification and password-reset links are not carried into V2. Start a new V2 recovery request instead.</p><div className="v2-auth-actions"><button className="v2-primary-button" type="button" onClick={() => onNavigate('/forgot-password')}>Request recovery link</button><button className="v2-secondary-button" type="button" onClick={() => onNavigate('/login')}>Back to sign in</button></div></section></PublicAuthFrame>
+}
+
 function AuthView({ mode, text, onLocale, onNavigate }: { mode: 'login' | 'signup'; text: PlatformCopy; onLocale: () => void; onNavigate: (path: string) => void }) {
   const [form, setForm] = useState({ email: '', password: '', displayName: '', organizationName: '', workspaceSlug: '' })
   const [busy, setBusy] = useState(false); const [notice, setNotice] = useState<string | null>(null); const [error, setError] = useState<string | null>(null)
   const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); setError(null); setNotice(null); try { if (mode === 'login') { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email: form.email, password: form.password }) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); if (!navigateToTrustedWorkspace(result.workspaceUrl, onNavigate)) throw new Error('WORKSPACE_REDIRECT_REJECTED') } else { const result = await request<{ csrfToken?: string; workspaceUrl?: string }>('/auth/signup', { method: 'POST', body: JSON.stringify(form) }); if (result.csrfToken) window.localStorage.setItem('oo_v2_csrf', result.csrfToken); setNotice(text.verify) } } catch (err) { setError(workspaceErrorMessage(err, mode === 'login' ? 'sign in' : 'create this workspace')) } finally { setBusy(false) } }
-  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate(mode === 'login' ? '/signup' : '/login')}>{mode === 'login' ? text.signUp : text.signIn}</button></div></div><section className="v2-auth-card" data-testid="v2-auth-card"><span className="v2-eyebrow">{text.status}</span><h1>{mode === 'login' ? text.signIn : text.signUp}</h1><p>{mode === 'login' ? text.switchSignup : text.switchLogin}</p><form onSubmit={submit}>{mode === 'signup' ? <><label>{text.name}<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>{text.workspace}<input required value={form.organizationName} onChange={(e) => setForm({ ...form, organizationName: e.target.value })} /></label><label>{text.slug}<input required value={form.workspaceSlug} onChange={(e) => setForm({ ...form, workspaceSlug: e.target.value })} /></label></> : null}<label>{text.email}<input type="email" required autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>{text.password}<input type="password" required minLength={12} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : mode === 'login' ? text.submitLogin : text.submitSignup}</button></form></section></main>
+  return <main className="v2-platform-page"><div className="v2-platform-topbar"><strong>{text.product}</strong><div><button type="button" className="v2-text-button" onClick={onLocale}>{text.locale}</button><button type="button" className="v2-text-button" onClick={() => onNavigate(mode === 'login' ? '/signup' : '/login')}>{mode === 'login' ? text.signUp : text.signIn}</button></div></div><section className="v2-auth-card" data-testid="v2-auth-card"><span className="v2-eyebrow">{text.status}</span><h1>{mode === 'login' ? text.signIn : text.signUp}</h1><p>{mode === 'login' ? text.switchSignup : text.switchLogin}</p><form onSubmit={submit}>{mode === 'signup' ? <><label>{text.name}<input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} /></label><label>{text.workspace}<input required value={form.organizationName} onChange={(e) => setForm({ ...form, organizationName: e.target.value })} /></label><label>{text.slug}<input required value={form.workspaceSlug} onChange={(e) => setForm({ ...form, workspaceSlug: e.target.value })} /></label></> : null}<label>{text.email}<input type="email" required autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>{text.password}<input type="password" required minLength={12} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>{error ? <div className="v2-alert is-error" role="alert">{error}</div> : null}{notice ? <div className="v2-alert is-success" role="status">{notice}</div> : null}<button className="v2-primary-button" disabled={busy}>{busy ? text.loading : mode === 'login' ? text.submitLogin : text.submitSignup}</button>{mode === 'login' ? <button className="v2-secondary-button" type="button" onClick={() => onNavigate('/forgot-password')}>Forgot password?</button> : null}</form></section></main>
 }
 
 type WorkspaceNavigationItem = { key: string; label: string; permissions: readonly string[]; icon: LucideIcon }
