@@ -159,7 +159,10 @@ jobs:
             'cloud-runtime:.qa/wrangler.v2-cloud-runtime.production.toml'; do
             name="${entry%%:*}"
             config="${entry#*:}"
-            ./node_modules/.bin/wrangler versions upload --config "$config" --tag "rc12-${RELEASE_SHA:0:12}" --message "RC12 ${RELEASE_SHA}" >"$state/upload-$name.json" 2>"$state/upload-$name.err"
+            if ! ./node_modules/.bin/wrangler versions upload --config "$config" --tag "rc12-${RELEASE_SHA:0:12}" --message "RC12 ${RELEASE_SHA}" >"$state/upload-$name.json" 2>"$state/upload-$name.err"; then
+              node ../ops/scripts/classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"
+              exit 1
+            fi
             ./node_modules/.bin/wrangler versions list --json --name "$(node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs service "$name")" >"$state/versions-$name.json" 2>"$state/versions-$name.err"
           done
           node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs uploaded
