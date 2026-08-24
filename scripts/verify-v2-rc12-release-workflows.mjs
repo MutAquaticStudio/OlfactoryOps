@@ -26,6 +26,17 @@ function assertMainOnly(value, label) {
   requireText(value, "github.ref_type == 'branch'", `${label}: branch guard`)
 }
 
+function stepBlock(value, name) {
+  const directMarker = `      - name: ${name}\n`
+  const nestedMarker = `        name: ${name}\n`
+  const direct = value.indexOf(directMarker)
+  const nested = value.indexOf(nestedMarker)
+  const start = direct >= 0 ? direct : nested >= 0 ? value.lastIndexOf('\n      - ', nested) + 1 : -1
+  assert.ok(start >= 0, `workflow step exists: ${name}`)
+  const next = value.indexOf('\n      - ', start + 1)
+  return value.slice(start, next >= 0 ? next : undefined)
+}
+
 export function verifyRc12ReleaseWorkflows() {
   const sourceFinalization = source('v2-rc12-release-source-finalization.yml')
   const candidate = source('v2-rc12-isolated-production-candidate.yml')
@@ -114,6 +125,16 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(generatedAcceptance, 'generatedWorkspaceRedirectMatches', 'generated acceptance: workspace redirect validation')
   forbid(generatedAcceptance, /'PLATFORM_OWNER', 'ACTIVE'/, 'generated acceptance: no Platform Owner fixture')
   requireText(upgrade, 'wrangler versions upload', 'upgrade: inactive version upload')
+  const inactiveUpload = stepBlock(upgrade, 'Upload only inactive exact RC12 Worker versions')
+  const promotion = stepBlock(upgrade, 'Promote exact RC12 Workers then Pages in bounded order')
+  requireText(inactiveUpload, 'set -euo pipefail', 'upgrade: inactive upload runs fail-closed')
+  requireText(inactiveUpload, 'RELEASE_SHA: ${{ inputs.release_sha }}', 'upgrade: inactive upload receives exact release SHA')
+  requireText(inactiveUpload, 'rc12-${RELEASE_SHA:0:12}', 'upgrade: inactive upload tag derives from exact release SHA')
+  requireText(promotion, 'RELEASE_SHA: ${{ inputs.release_sha }}', 'upgrade: promotion receives exact release SHA')
+  requireText(promotion, '--commit-hash "$RELEASE_SHA"', 'upgrade: Pages promotion receives exact release SHA')
+  for (const [name, value] of Object.entries({ inactiveUpload, promotion })) {
+    requireText(value, 'set -euo pipefail', `upgrade: ${name} uses strict shell mode`)
+  }
   requireText(upgrade, 'classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"', 'upgrade: upload failure has safe classification')
   for (const marker of ['RC12_INACTIVE_UPLOAD_COMPONENT=', 'RC12_INACTIVE_UPLOAD_HTTP_STATUS=', 'RC12_INACTIVE_UPLOAD_CF_ERROR_CODE=', 'RC12_INACTIVE_UPLOAD_FAILURE_CLASS=']) requireText(uploadFailureClassifier, marker, `upgrade: safe upload evidence ${marker}`)
   forbid(uploadFailureClassifier, /console\.(?:error|log)\([^\n]*(?:stderr|text|message|file)/, 'upgrade: raw upload failure output is forbidden')
@@ -158,6 +179,10 @@ export function verifyRc12ReleaseWorkflows() {
   forbid(all, /workers\/routes|workers\/domains|route-handoff|git tag -f|git push --force/, 'RC12: no route handoff or force mutation')
   console.log('RC12_RELEASE_WORKFLOW_CONTRACT=PASS')
   console.log('RC12_CANDIDATE_PAGES_PROJECT_ROOT_ORIGIN_CONTRACT=PASS')
+  console.log('RC12_UPGRADE_ENV_CONTRACT=PASS')
+  console.log('RC12_ROUTE_FREE_UPLOAD_CONTRACT=PASS')
+  console.log('RC12_ROLLBACK_CONTRACT=PASS')
+  console.log('STATIC_WORKFLOW_POLICY=PASS')
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) verifyRc12ReleaseWorkflows()
