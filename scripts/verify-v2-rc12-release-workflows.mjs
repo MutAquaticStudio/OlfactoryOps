@@ -37,6 +37,7 @@ export function verifyRc12ReleaseWorkflows() {
   const acceptance = source('v2-rc12-production-public-acceptance.yml')
   const finalizer = source('v2-rc12-production-live-finalization.yml')
   const renderer = readFileSync(join(root, 'scripts', 'render-v2-rc12-cloud-runtime-candidate-config.mjs'), 'utf8')
+  const pagesRootVerifier = readFileSync(join(root, 'scripts', 'verify-v2-rc12-candidate-pages-project-root.mjs'), 'utf8')
   const browserAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-browser-acceptance.mjs'), 'utf8')
   const generatedAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-acceptance.mjs'), 'utf8')
   const all = [sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join('\n')
@@ -55,6 +56,36 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(candidate, 'render-v2-rc12-cloud-runtime-candidate-config.mjs verify', 'candidate: isolated renderer verification')
   requireText(candidate, 'verify-v2-rc12-production-candidate-browser-acceptance.mjs', 'candidate: RC12 browser acceptance')
   requireText(candidate, 'verify-v2-rc12-production-candidate-acceptance.mjs', 'candidate: RC12 generated acceptance')
+  requireText(candidate, 'verify-v2-rc12-candidate-pages-project-root.mjs --dist dist', 'candidate: project-root verifier')
+  requireText(candidate, 'https://${process.env.PRODUCTION_CANDIDATE_PAGES_PROJECT}.pages.dev', 'candidate: isolated project-root origin')
+  requireText(candidate, 'CANDIDATE_PAGES_ORIGIN: ${{ steps.pages-root.outputs.origin }}', 'candidate: only verified origin reaches Router rendering')
+  requireText(candidate, 'PROJECT_ROOT_RECHECK_CHECKPOINT: BEFORE_ROUTER', 'candidate: Router project-root recheck')
+  requireText(candidate, 'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_ROUTER=PASS', 'candidate: Router recheck evidence')
+  requireText(candidate, 'PROJECT_ROOT_RECHECK_CHECKPOINT: BEFORE_SMOKE', 'candidate: Smoke project-root recheck')
+  requireText(candidate, 'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_SMOKE=PASS', 'candidate: Smoke recheck evidence')
+  forbid(candidate, /https:\/\/production-candidate\.\$\{(?:process\.env\.)?PRODUCTION_CANDIDATE_PAGES_PROJECT\}\.pages\.dev/, 'candidate: invalid production branch alias is forbidden')
+  const routerRecheck = candidate.indexOf('Revalidate the mutable candidate Pages project root before Router')
+  const routerDeploy = candidate.indexOf('npx wrangler deploy --config wrangler.v2-tenant-router-production-candidate.toml')
+  assert.ok(routerRecheck >= 0 && routerDeploy > routerRecheck, 'candidate: Router recheck must precede deploy')
+  const smokeRecheck = candidate.indexOf('Revalidate the mutable candidate Pages project root before Smoke')
+  const smokeAcceptance = candidate.indexOf('Verify the isolated candidate browser entrypoints')
+  assert.ok(smokeRecheck >= 0 && smokeAcceptance > smokeRecheck, 'candidate: Smoke recheck must precede acceptance')
+  for (const marker of [
+    'CANDIDATE_PROJECT_ROOT_VERIFIED=PASS',
+    'CANDIDATE_PROJECT_ROOT_RELEASE_SHA=RC12',
+    'CANDIDATE_PROJECT_ROOT_HTTP=PASS',
+    'PAGES_PROJECT_ISOLATION=PASS',
+    'LIVE_CUSTOM_DOMAIN_OWNERSHIP=NONE',
+    'PAGES_API_CONFIGURATION=PASS',
+    'PAGES_WORKSPACE_CONFIGURATION=PASS',
+    'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_ROUTER=PASS',
+    'PROJECT_ROOT_RELEASE_RECHECK_BEFORE_SMOKE=PASS',
+  ]) requireText(pagesRootVerifier, marker, `project-root verifier: ${marker}`)
+  requireText(pagesRootVerifier, 'olfactoryops-v2-production-candidate', 'project-root verifier: exact candidate project')
+  requireText(pagesRootVerifier, 'olfactoryops-v2-production', 'project-root verifier: distinct live project')
+  requireText(pagesRootVerifier, 'production-candidate', 'project-root verifier: exact production branch')
+  requireText(pagesRootVerifier, 'method: "GET"', 'project-root verifier: read-only requests')
+  forbid(pagesRootVerifier, /method:\s*["'](?:POST|PUT|PATCH|DELETE)["']|wrangler\s+(?:deploy|pages|delete)|\bgh\s+(?:api|workflow|secret|variable)\b/, 'project-root verifier: mutation paths are forbidden')
   requireText(candidate, 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS', 'candidate: first-party public auth redirect evidence')
   requireText(candidate, 'LOGIN_WORKSPACE_REDIRECT=PASS', 'candidate: login workspace redirect evidence')
   requireText(candidate, 'SIGNUP_WORKSPACE_REDIRECT=PASS', 'candidate: signup workspace redirect evidence')
@@ -83,6 +114,7 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(acceptance, rc10Sha, 'acceptance: legacy RC10 readiness target preserved')
   forbid(all, /workers\/routes|workers\/domains|route-handoff|git tag -f|git push --force/, 'RC12: no route handoff or force mutation')
   console.log('RC12_RELEASE_WORKFLOW_CONTRACT=PASS')
+  console.log('RC12_CANDIDATE_PAGES_PROJECT_ROOT_ORIGIN_CONTRACT=PASS')
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) verifyRc12ReleaseWorkflows()
