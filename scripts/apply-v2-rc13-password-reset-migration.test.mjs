@@ -10,7 +10,7 @@ import {
 
 function immutableMigration() {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-  return readFileSync(join(root, PASSWORD_RESET_MIGRATION_PATH), 'utf8')
+  return readFileSync(join(root, PASSWORD_RESET_MIGRATION_PATH), 'utf8').replaceAll('\r\n', '\n')
 }
 
 test('the RC13 password-reset migration is anchored to the immutable release source', () => {

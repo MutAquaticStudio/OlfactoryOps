@@ -63,6 +63,7 @@ export function verifyRc13ReleaseWorkflows() {
   requireText(named.migration, 'APPLY_RC13_PASSWORD_RESET_MIGRATION', 'migration: exact confirmation')
   requireText(named.migration, 'apply-v2-rc13-password-reset-migration.mjs', 'migration: bounded helper')
   requireText(named.migration, 'fetch-depth: 0', 'migration: immutable source remains locally addressable')
+  requireText(named.migration, 'refs/tags/$RC13_TAG:refs/tags/$RC13_TAG', 'migration: exact immutable tag is fetched')
   forbid(named.migration, /configure:v2-production-runtime-role|migrate:v2-production/, 'migration: no broad production migration chain')
   requireText(named.readiness, 'migration_run_id', 'readiness: migration run required')
   requireText(named.readiness, 'RC13_PASSWORD_RESET_MIGRATION=PASS', 'readiness: migration evidence gate')
