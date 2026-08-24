@@ -42,6 +42,7 @@ export function verifyRc12ReleaseWorkflows() {
   const generatedAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-acceptance.mjs'), 'utf8')
   const clientSecretVerifier = readFileSync(join(root, 'scripts', 'verify-v2-rc12-client-secret-references.mjs'), 'utf8')
   const upgradeState = readFileSync(join(root, 'scripts', 'capture-v2-rc12-upgrade-state.mjs'), 'utf8')
+  const uploadFailureClassifier = readFileSync(join(root, 'scripts', 'classify-v2-rc12-inactive-upload-failure.mjs'), 'utf8')
   const all = [sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join('\n')
 
   for (const [name, value] of Object.entries({ sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer })) {
@@ -113,6 +114,9 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(generatedAcceptance, 'generatedWorkspaceRedirectMatches', 'generated acceptance: workspace redirect validation')
   forbid(generatedAcceptance, /'PLATFORM_OWNER', 'ACTIVE'/, 'generated acceptance: no Platform Owner fixture')
   requireText(upgrade, 'wrangler versions upload', 'upgrade: inactive version upload')
+  requireText(upgrade, 'classify-v2-rc12-inactive-upload-failure.mjs "$name" "$state/upload-$name.err"', 'upgrade: upload failure has safe classification')
+  for (const marker of ['RC12_INACTIVE_UPLOAD_COMPONENT=', 'RC12_INACTIVE_UPLOAD_HTTP_STATUS=', 'RC12_INACTIVE_UPLOAD_CF_ERROR_CODE=', 'RC12_INACTIVE_UPLOAD_FAILURE_CLASS=']) requireText(uploadFailureClassifier, marker, `upgrade: safe upload evidence ${marker}`)
+  forbid(uploadFailureClassifier, /console\.(?:error|log)\([^\n]*(?:stderr|text|message|file)/, 'upgrade: raw upload failure output is forbidden')
   requireText(upgrade, 'wrangler versions deploy', 'upgrade: exact version promotion')
   requireText(upgrade, 'PAGES_PROJECT_ROOT_ORIGIN: https://olfactoryops-v2-production.pages.dev', 'upgrade: production Pages project-root origin')
   for (const binding of [
