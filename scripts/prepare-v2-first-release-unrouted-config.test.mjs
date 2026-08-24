@@ -39,4 +39,14 @@ describe("first-release unrouted config", () => {
       }),
     ).toThrow("ROUTE_INVALID");
   });
+
+  it("removes the approved route with CRLF line endings", () => {
+    const result = prepareFirstReleaseUnroutedConfig({
+      component: "api",
+      content:
+        'name = "olfactoryops-v2-api-production"\r\nworkers_dev = false\r\n\r\nroutes = [{ pattern = "api.labofscents.org/*", zone_name = "labofscents.org" }]\r\n',
+    });
+    expect(result).not.toContain("routes =");
+    expect(result).toContain("\r\n");
+  });
 });

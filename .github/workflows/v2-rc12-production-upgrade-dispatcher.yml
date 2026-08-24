@@ -34,6 +34,7 @@ env:
   RC10_TAG: v2-production-rc10
   RC10_READY_TAG: v2-production-ready
   PAGES_PROJECT: olfactoryops-v2-production
+  PAGES_PROJECT_ROOT_ORIGIN: https://olfactoryops-v2-production.pages.dev
 
 jobs:
   validate:
@@ -112,6 +113,13 @@ jobs:
         env:
           RELEASE_SHA: ${{ inputs.release_sha }}
           PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          V2_API_PRODUCTION_GIT_SHA: ${{ inputs.release_sha }}
+          V2_API_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          V2_TENANT_ROUTER_PRODUCTION_GIT_SHA: ${{ inputs.release_sha }}
+          V2_TENANT_ROUTER_PRODUCTION_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
+          V2_TENANT_ROUTER_PRODUCTION_PAGES_ORIGIN: ${{ env.PAGES_PROJECT_ROOT_ORIGIN }}
+          CLOUD_RUNTIME_GIT_SHA: ${{ inputs.release_sha }}
+          CLOUD_RUNTIME_HYPERDRIVE_ID: ${{ vars.PRODUCTION_HYPERDRIVE_ID }}
           SCIENTIFIC_FEATURE_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE }}
           SCIENTIFIC_MODEL_IMAGE: ${{ vars.PRODUCTION_SCIENTIFIC_MODEL_IMAGE }}
           SCIENTIFIC_FEATURE_IMAGE_DIGEST: ${{ vars.PRODUCTION_SCIENTIFIC_FEATURE_IMAGE_DIGEST }}
@@ -126,6 +134,8 @@ jobs:
           node scripts/render-v2-api-production-config.mjs
           node scripts/render-v2-tenant-router-production-config.mjs
           npm run cloud-runtime:render-production
+          node ../ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-api-production.toml api
+          node ../ops/scripts/prepare-v2-first-release-unrouted-config.mjs .qa/wrangler.v2-tenant-router-production.toml tenantRouter
           for config in .qa/wrangler.v2-api-production.toml .qa/wrangler.v2-tenant-router-production.toml .qa/wrangler.v2-cloud-runtime.production.toml; do
             test -s "$config"
             if grep -Eq '(^|[[:space:]])(route|routes|custom_domain)[[:space:]]*=' "$config"; then exit 1; fi
@@ -154,7 +164,8 @@ jobs:
           done
           node ../ops/scripts/capture-v2-rc12-upgrade-state.mjs uploaded
           echo 'RC12_WORKER_VERSIONS_INACTIVE=PASS'
-      - name: Promote exact RC12 Workers then Pages in bounded order
+      - id: promote_components
+        name: Promote exact RC12 Workers then Pages in bounded order
         if: ${{ needs.validate.outputs.operation == 'promote' }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -179,7 +190,7 @@ jobs:
           echo 'RC12_WORKER_PROMOTION=PASS'
           echo 'RC12_PAGES_PROMOTION=PASS'
       - name: Restore captured RC10 versions and Pages deployment on failed promotion
-        if: ${{ failure() && needs.validate.outputs.operation == 'promote' && steps.capture.outcome == 'success' }}
+        if: ${{ failure() && needs.validate.outputs.operation == 'promote' && steps.promote_components.outcome == 'failure' }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
