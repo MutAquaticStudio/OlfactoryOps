@@ -72,8 +72,8 @@ export function inspectPagesProductionDeployment(envelope, expectedSha) {
     : { pass: false, state: "PRODUCTION_DEPLOYMENT_UNPROVEN" };
 }
 
-export function inspectUploadedVersion(list, tag = RC12_VERSION_TAG) {
-  const records = Array.isArray(list)
+export function versionRecords(list) {
+  return Array.isArray(list)
     ? list
     : Array.isArray(list?.result)
       ? list.result
@@ -82,6 +82,10 @@ export function inspectUploadedVersion(list, tag = RC12_VERSION_TAG) {
         : Array.isArray(list?.result?.items)
           ? list.result.items
           : null;
+}
+
+export function inspectUploadedVersion(list, tag = RC12_VERSION_TAG) {
+  const records = versionRecords(list);
   if (!records) return { pass: false, state: "UPLOADED_VERSION_INVENTORY_UNPROVEN" };
   const tagged = records.filter(
     (record) => record?.tag === tag || record?.annotations?.["workers/tag"] === tag,
@@ -284,7 +288,8 @@ async function verifyRollbackCapability(environment = process.env) {
       `/accounts/${encodeURIComponent(environment.CLOUDFLARE_ACCOUNT_ID ?? "")}/workers/scripts/${encodeURIComponent(service)}/versions`,
       { environment },
     );
-    const records = Array.isArray(versions.body?.result) ? versions.body.result : [];
+    const records = versionRecords(versions.body);
+    if (!records) throw new Error("RC10_ROLLBACK_VERSION_INVENTORY_UNPROVEN");
     let available = false;
     for (const record of records) {
       const id = record?.id ?? record?.version_id;

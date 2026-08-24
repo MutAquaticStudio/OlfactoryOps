@@ -8,6 +8,7 @@ import {
   inspectPagesProductionDeployment,
   inspectUploadedVersion,
   inspectVersionIdentity,
+  versionRecords,
 } from "./capture-v2-rc12-upgrade-state.mjs";
 
 const activeId = "11111111-1111-4111-8111-111111111111";
@@ -70,5 +71,10 @@ it("selects a unique tagged inactive upload and does not serialize provider sent
     "UPLOADED_VERSION_UNPROVEN",
   );
   assert.equal(inspectUploadedVersion({ result: {} }).state, "UPLOADED_VERSION_INVENTORY_UNPROVEN");
+  assert.equal(
+    versionRecords({ result: { items: [{ id: activeId }] } })?.length,
+    1,
+    "canonical Workers result.items inventory is available to rollback verification",
+  );
   expect(JSON.stringify(inspectActiveDeployment({ success: false, secret: "never-print" }))).not.toContain("never-print");
 });

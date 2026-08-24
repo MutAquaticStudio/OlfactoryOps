@@ -176,6 +176,8 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(upgradeState, 'record?.latest_stage?.status === "success"', 'upgrade state: Pages success is determined by stage status')
   forbid(upgradeState, /latest_stage\?\.name === "success"/, 'upgrade state: stage names are not success evidence')
   requireText(upgradeState, 'record?.annotations?.["workers/tag"] === tag', 'upgrade state: Cloudflare version annotation tags are recognized')
+  requireText(upgradeState, 'const records = versionRecords(versions.body)', 'upgrade state: rollback capability uses the canonical Workers version inventory parser')
+  requireText(upgradeState, 'RC10_ROLLBACK_VERSION_INVENTORY_UNPROVEN', 'upgrade state: malformed rollback inventory fails closed')
   requireText(upgradeState, 'UPLOADED_VERSION_STATE_INCONSISTENT', 'upgrade state: partial inactive uploads fail closed')
   requireText(upgradeState, 'UPLOADED_VERSION_IDENTITY_UNPROVEN', 'upgrade state: inactive upload identity is rechecked')
   requireText(revalidation, 'verify-v2-rc12-client-secret-references.mjs "$RELEASE_WORKTREE"', 'revalidation: scoped client source scan')
