@@ -6,6 +6,28 @@ export const CANDIDATE_PUBLIC_AUTH_ORIGIN = "https://next.labofscents.org";
 
 const apiOrigin = "https://api-next.labofscents.org";
 const paths = ["/", "/login", "/signup", "/v2/login", "/v2/signup"];
+export const AUTH_TRANSPORT_PATHS = Object.freeze({
+  login: "/api/v1/v2/platform/auth/login",
+  signup: "/api/v1/v2/platform/auth/signup",
+});
+
+export function browserAuthTransportIsExpected(result) {
+  return (
+    result?.login?.status >= 400 &&
+    result.login.status <= 499 &&
+    result.login.json === true &&
+    result.login.opaque === false &&
+    result.login.urlMatch === true &&
+    result?.signup?.status >= 400 &&
+    result.signup.status <= 499 &&
+    result.signup.json === true &&
+    result.signup.opaque === false &&
+    result.signup.urlMatch === true &&
+    result.loginPreflight === true &&
+    result.signupPreflight === true &&
+    result.rawNetworkErrors === 0
+  );
+}
 
 export function candidateBrowserInputs(environment = process.env) {
   const releaseSha = environment.V2_PRODUCTION_CANDIDATE_EXPECTED_SHA?.trim().toLowerCase();
@@ -138,6 +160,116 @@ try {
     }, apiUrl);
     required(apiAccepted, "API_SESSION_BOUNDARY_FAILURE");
     await apiContext.close();
+
+    stage = "AUTH_TRANSPORT_CONTEXT_CREATE_FAILURE";
+    const authTransportContext = await browser.newContext();
+    const authTransportPage = await authTransportContext.newPage();
+    const authTransportCdp = await authTransportContext.newCDPSession(
+      authTransportPage,
+    );
+    await authTransportCdp.send("Network.enable");
+    const loginUrl = `${apiOrigin}${AUTH_TRANSPORT_PATHS.login}`;
+    const signupUrl = `${apiOrigin}${AUTH_TRANSPORT_PATHS.signup}`;
+    const authUrls = new Set([loginUrl, signupUrl]);
+    let rawAuthNetworkErrors = 0;
+    let loginPreflight = false;
+    let signupPreflight = false;
+    authTransportPage.on("requestfailed", (request) => {
+      if (authUrls.has(request.url())) rawAuthNetworkErrors += 1;
+    });
+    authTransportCdp.on("Network.responseReceived", ({ type, response }) => {
+      if (
+        type !== "Preflight" ||
+        response.status < 200 ||
+        response.status > 299
+      )
+        return;
+      if (response.url === loginUrl) loginPreflight = true;
+      if (response.url === signupUrl) signupPreflight = true;
+    });
+    stage = "AUTH_TRANSPORT_NAVIGATION_FAILURE";
+    const authNavigation = await authTransportPage.goto(tenantUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    required(
+      authNavigation?.status() === 200 &&
+        new URL(authTransportPage.url()).host === tenant.host,
+      "AUTH_TRANSPORT_NAVIGATION_FAILURE",
+    );
+    stage = "AUTH_TRANSPORT_PROBE_FAILURE";
+    const transport = await authTransportPage.evaluate(
+      async ({ login, signup }) => {
+        const probe = async (url, body) => {
+          try {
+            const response = await fetch(url, {
+              method: "POST",
+              credentials: "include",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(body),
+            });
+            const contentType = response.headers.get("content-type") ?? "";
+            let json = false;
+            if (/^application\/json\b/i.test(contentType)) {
+              try {
+                const value = JSON.parse(await response.text());
+                json = value !== null && typeof value === "object";
+              } catch {
+                json = false;
+              }
+            }
+            return {
+              status: response.status,
+              json,
+              opaque: response.type === "opaque",
+              urlMatch: response.url === url,
+            };
+          } catch {
+            return { status: 0, json: false, opaque: false, urlMatch: false };
+          }
+        };
+        return {
+          login: await probe(login, {
+            email: "invalid-auth-transport",
+            password: "invalid",
+          }),
+          signup: await probe(signup, {
+            organizationName: "",
+            workspaceSlug: "",
+            displayName: "",
+            email: "invalid-auth-transport",
+            password: "invalid",
+          }),
+        };
+      },
+      { login: loginUrl, signup: signupUrl },
+    );
+    const authTransport = {
+      ...transport,
+      loginPreflight,
+      signupPreflight,
+      rawNetworkErrors: rawAuthNetworkErrors,
+    };
+    console.log(`BROWSER_LOGIN_POST_HTTP_STATUS=${authTransport.login.status}`);
+    console.log(`BROWSER_LOGIN_POST_JSON=${authTransport.login.json ? "YES" : "NO"}`);
+    console.log(`BROWSER_SIGNUP_POST_HTTP_STATUS=${authTransport.signup.status}`);
+    console.log(`BROWSER_SIGNUP_POST_JSON=${authTransport.signup.json ? "YES" : "NO"}`);
+    console.log(`BROWSER_LOGIN_PREFLIGHT=${loginPreflight ? "PASS" : "FAIL"}`);
+    console.log(`BROWSER_SIGNUP_PREFLIGHT=${signupPreflight ? "PASS" : "FAIL"}`);
+    console.log(`RAW_AUTH_NETWORK_ERRORS_VISIBLE=${rawAuthNetworkErrors}`);
+    required(
+      browserAuthTransportIsExpected(authTransport),
+      "AUTH_TRANSPORT_PROBE_FAILURE",
+    );
+    await authTransportCdp.detach();
+    await authTransportContext.close();
+    console.log("BROWSER_LOGIN_POST_TRANSPORT=PASS");
+    console.log("BROWSER_SIGNUP_POST_TRANSPORT=PASS");
+    console.log("BROWSER_AUTH_PREFLIGHT_CORS=PASS");
+    console.log("FAILED_TO_FETCH_REPRODUCED=NO");
     console.log("CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS");
     console.log("CANDIDATE_BROWSER_ACCEPTANCE=PASS");
   } finally {
