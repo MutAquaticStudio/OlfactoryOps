@@ -40,6 +40,7 @@ export function verifyRc12ReleaseWorkflows() {
   const pagesRootVerifier = readFileSync(join(root, 'scripts', 'verify-v2-rc12-candidate-pages-project-root.mjs'), 'utf8')
   const browserAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-browser-acceptance.mjs'), 'utf8')
   const generatedAcceptance = readFileSync(join(root, 'scripts', 'verify-v2-rc12-production-candidate-acceptance.mjs'), 'utf8')
+  const clientSecretVerifier = readFileSync(join(root, 'scripts', 'verify-v2-rc12-client-secret-references.mjs'), 'utf8')
   const all = [sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer].join('\n')
 
   for (const [name, value] of Object.entries({ sourceFinalization, candidate, revalidation, backup, readiness, upgrade, rollback, acceptance, finalizer })) {
@@ -124,6 +125,13 @@ export function verifyRc12ReleaseWorkflows() {
   requireText(readiness, `v2-production-live)" = "$RC10_RUNTIME_BASE_SHA`, 'readiness: legacy RC10 live tag preserved')
   forbid(readiness, /git tag\b|git push\b/, 'readiness: no tag mutation')
   requireText(acceptance, rc10Sha, 'acceptance: legacy RC10 readiness target preserved')
+  requireText(revalidation, 'verify-v2-rc12-client-secret-references.mjs "$RELEASE_WORKTREE"', 'revalidation: scoped client source scan')
+  requireText(revalidation, 'npm --prefix "$RELEASE_WORKTREE" run security:client-bundle', 'revalidation: generated bundle scan')
+  forbid(revalidation, /git -C "\$RELEASE_WORKTREE" grep/, 'revalidation: repository-wide source scan is forbidden')
+  requireText(clientSecretVerifier, "normalized.startsWith('src/')", 'client scan: application sources included')
+  requireText(clientSecretVerifier, "normalized.startsWith('public/')", 'client scan: public assets included')
+  requireText(clientSecretVerifier, "normalized === '.env.production'", 'client scan: production client environment included')
+  forbid(clientSecretVerifier, /console\.(?:log|error)\([^\n]*(?:content|finding|path)/, 'client scan: findings are not emitted')
   forbid(all, /workers\/routes|workers\/domains|route-handoff|git tag -f|git push --force/, 'RC12: no route handoff or force mutation')
   console.log('RC12_RELEASE_WORKFLOW_CONTRACT=PASS')
   console.log('RC12_CANDIDATE_PAGES_PROJECT_ROOT_ORIGIN_CONTRACT=PASS')
