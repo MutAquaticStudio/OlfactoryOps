@@ -464,6 +464,11 @@ jobs:
           grep -Fxq 'CANDIDATE_PUBLIC_AUTH_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
           grep -Fxq 'LOGIN_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
           grep -Fxq 'SIGNUP_WORKSPACE_REDIRECT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'BROWSER_LOGIN_POST_TRANSPORT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'BROWSER_SIGNUP_POST_TRANSPORT=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'BROWSER_AUTH_PREFLIGHT_CORS=PASS' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'RAW_AUTH_NETWORK_ERRORS_VISIBLE=0' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
+          grep -Fxq 'FAILED_TO_FETCH_REPRODUCED=NO' "$RUNNER_TEMP/rc12-browser-acceptance.txt"
       - name: Verify post-bootstrap Platform Owner read-only readiness
         shell: bash
         env:
