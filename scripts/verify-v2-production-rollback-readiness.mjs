@@ -27,6 +27,8 @@ export async function verifyProductionRollbackReadiness({
     environment.PRODUCTION_PAGES_PROJECT?.trim() ||
     "olfactoryops-v2-production";
   const releaseSha = environment.RELEASE_SHA?.trim();
+  const pagesBaselinePolicy =
+    environment.PRODUCTION_PAGES_BASELINE_POLICY?.trim();
 
   const workerResults = await Promise.all(
     Object.entries(services).map(async ([name, service]) => [
@@ -43,7 +45,13 @@ export async function verifyProductionRollbackReadiness({
   );
   const pagesResult =
     account && project === "olfactoryops-v2-production"
-      ? await pagesRollback({ account, pagesToken, emit })
+      ? await pagesRollback({
+          account,
+          pagesToken,
+          baselinePolicy: pagesBaselinePolicy,
+          fetchImpl,
+          emit,
+        })
       : { ready: false, baseline: "UNPROVEN" };
   const existingDeploymentBaseline = workerResults.every(
     ([, result]) => result.ready,
@@ -212,14 +220,22 @@ function unavailableWorkerRollback() {
   };
 }
 
-async function pagesRollback({ account, pagesToken, emit }) {
+async function pagesRollback({
+  account,
+  pagesToken,
+  baselinePolicy,
+  fetchImpl,
+  emit,
+}) {
   const pagesEnvironment = {
     CLOUDFLARE_ACCOUNT_ID: account,
     CLOUDFLARE_PAGES_READ_TOKEN: pagesToken || "",
+    PRODUCTION_PAGES_BASELINE_POLICY: baselinePolicy || "",
   };
   try {
     const resolution = await resolveProductionPagesProject({
       environment: pagesEnvironment,
+      fetchImpl,
       appendOutput: async () => {},
       emit,
     });

@@ -193,6 +193,7 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
+          PRODUCTION_PAGES_BASELINE_POLICY: EXISTING_LIVE_UPGRADE
         shell: bash
         run: |
           set -euo pipefail
@@ -228,6 +229,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_PAGES_READ_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_READ_TOKEN }}
           PRODUCTION_PAGES_PROJECT: olfactoryops-v2-production
+          PRODUCTION_PAGES_BASELINE_POLICY: EXISTING_LIVE_UPGRADE
           PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE: ${{ vars.PRODUCTION_FIRST_RELEASE_ROUTE_BASELINE }}
         run: node ops/scripts/verify-v2-production-rollback-readiness.mjs | tee "$RUNNER_TEMP/rollback.txt"
       - name: Verify immutable scientific image identity
