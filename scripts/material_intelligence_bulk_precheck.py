@@ -163,8 +163,10 @@ IN_CARRIER_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CAS_PATTERN = re.compile(r"(?<!\d)(\d{2,7}-\d{2}-\d)(?!\d)")
+CAS_ALLOWED_RESIDUE_PATTERN = re.compile(r"^[\s/;,|()\[\]{}]*$")
 INCHIKEY_PATTERN = re.compile(r"^[A-Z]{14}-[A-Z]{10}-[A-Z]$")
-MISSING_MARKERS = {"", "--", "-", "N/A", "NA", "NONE", "NULL", "PENDING", "UNVERIFIED"}
+MISSING_MARKERS = {"", "--", "-", "N/A", "NA", "NONE", "NULL", "PENDING", "UNVERIFIED", "NOT AVAILABLE"}
+INGEST_WAVES = ("Wave A", "Wave B", "Wave C", "Wave D", "Wave E")
 
 XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -374,7 +376,12 @@ def cas_claims(value: Any) -> tuple[list[dict[str, str]], bool]:
         {"value": claim, "formatStatus": "VALID" if cas_checksum_valid(claim) else "INVALID_CHECKSUM"}
         for claim in matches
     ]
-    malformed = not matches or any(item["formatStatus"] != "VALID" for item in claims)
+    residue = CAS_PATTERN.sub("", raw)
+    malformed = (
+        not matches
+        or any(item["formatStatus"] != "VALID" for item in claims)
+        or CAS_ALLOWED_RESIDUE_PATTERN.fullmatch(residue) is None
+    )
     return claims, malformed
 
 
@@ -543,6 +550,57 @@ def _concentration_variant_key(name: str) -> tuple[str, str] | None:
     return (base, "|".join(value.replace(",", ".") for value in matches)) if base else None
 
 
+def assign_ingest_wave(item: dict[str, Any]) -> str:
+    """Assign exactly one processing wave, with review safety taking precedence."""
+    if item.get("reviewRequired") or item.get("conflictCodes") or item.get("malformedCasClaim"):
+        return "Wave E"
+    if item.get("chemicalEntityAction") in {"LINK_VERIFIED_EXISTING", "CREATE_VERIFIED_CANDIDATE"}:
+        return "Wave A"
+    action = item.get("enrichmentAction")
+    if action == "AUTHORITATIVE_LOOKUP_READY":
+        return "Wave B"
+    if action == "SUPPLIER_DOCUMENT_REQUIRED":
+        return "Wave C"
+    if action == "NO_SINGLE_MOLECULE_LOOKUP":
+        return "Wave D"
+    return "Wave E"
+
+
+def validate_evidence_requirements(item: dict[str, Any]) -> None:
+    action = item["enrichmentAction"]
+    requirements = set(item["evidenceRequirements"])
+    if action == "AUTHORITATIVE_LOOKUP_READY" and not {
+        "AUTHORITATIVE_CAS_VERIFICATION",
+        "AUTHORITATIVE_STRUCTURE_EVIDENCE",
+    }.issubset(requirements):
+        raise PrecheckError("AUTHORITATIVE_LOOKUP_EVIDENCE_REQUIREMENT_MISSING")
+    if action == "SUPPLIER_DOCUMENT_REQUIRED" and "SUPPLIER_COMPOSITION_DOCUMENT" not in requirements:
+        raise PrecheckError("SUPPLIER_DOCUMENT_EVIDENCE_REQUIREMENT_MISSING")
+    if action == "NO_SINGLE_MOLECULE_LOOKUP" and "NO_REPRESENTATIVE_SINGLE_MOLECULE" not in requirements:
+        raise PrecheckError("NO_SINGLE_MOLECULE_EVIDENCE_REQUIREMENT_MISSING")
+    if action == "MANUAL_REVIEW_REQUIRED" and "MANUAL_IDENTITY_REVIEW" not in requirements:
+        raise PrecheckError("MANUAL_REVIEW_EVIDENCE_REQUIREMENT_MISSING")
+    if "NO_REPRESENTATIVE_SINGLE_MOLECULE" in requirements and "AUTHORITATIVE_STRUCTURE_EVIDENCE" in requirements:
+        raise PrecheckError("CONTRADICTORY_MOLECULAR_EVIDENCE_REQUIREMENTS")
+
+
+def cas_collision_semantics(items: list[dict[str, Any]]) -> str:
+    if any({"IDENTITY_NAME_CAS_CONFLICT", "STRUCTURE_CONFLICT"} & set(item["conflictCodes"]) for item in items):
+        return "CAS_IDENTITY_CONFLICT"
+    if any(item["malformedCasClaim"] for item in items):
+        return "CAS_REVIEW_REQUIRED"
+    classifications = {item["productClassification"] for item in items}
+    names = {item["normalizedName"] for item in items if item["normalizedName"]}
+    suppliers = {normalized_name(item["supplier"]) for item in items if item["supplier"]}
+    if "DILUTION" in classifications or len(classifications) > 1 or len(names) == 1:
+        return "CAS_SHARED_PRODUCT_VARIANTS"
+    if len(names) > 1 and len(suppliers) <= 1:
+        return "CAS_SHARED_TRADE_PRODUCTS"
+    if len(names) > 1:
+        return "CAS_POTENTIAL_ENTITY_REUSE"
+    return "CAS_REVIEW_REQUIRED"
+
+
 def analyze_rows(
     sheet: SheetData,
     structure_validator: Callable[[dict[str, str | None]], dict[str, str | None]] = validate_structure_with_rdkit,
@@ -558,7 +616,9 @@ def analyze_rows(
         supplier_code = normalized_optional(field_value(source, fields, "supplier_product_code"))
         dilution = structured_dilution(source, fields) or dilution_from_name(name)
         classification = classify_product(name, category, dilution, bool(dilution))
-        claims, malformed_cas = cas_claims(field_value(source, fields, "cas"))
+        source_cas_value = field_value(source, fields, "cas")
+        source_cas_raw = normalized_text(source_cas_value) or None
+        claims, malformed_cas = cas_claims(source_cas_value)
         claim = structure_claim(source, fields)
         source_verified = evidence_verified(source, fields)
         if any(claim.values()):
@@ -589,7 +649,8 @@ def analyze_rows(
             "sourceCategory": category,
             "productClassification": classification,
             "sourceCasClaims": claims,
-            "sourceCasRawPresent": normalized_optional(field_value(source, fields, "cas")) is not None,
+            "sourceCasRaw": source_cas_raw,
+            "sourceCasRawPresent": normalized_optional(source_cas_value) is not None,
             "malformedCasClaim": malformed_cas,
             "sourceStructureClaimStatus": structure_status,
             "sourceStructureClaimPresent": any(claim.values()),
@@ -633,7 +694,11 @@ def analyze_rows(
 
     exact_groups = [members for members in name_groups.values() if len(members) > 1]
     supplier_duplicates = [members for members in supplier_code_groups.values() if len(members) > 1]
-    cas_collisions = [sorted(set(members)) for members in cas_groups.values() if len(set(members)) > 1]
+    cas_collisions = [
+        (cas_value, sorted(set(members)))
+        for cas_value, members in cas_groups.items()
+        if len(set(members)) > 1
+    ]
     structure_candidates = [sorted(set(members)) for members in structure_groups.values() if len(set(members)) > 1]
     inchikey_candidates = [sorted(set(members)) for members in inchikey_groups.values() if len(set(members)) > 1]
     concentration_variants = [
@@ -665,13 +730,26 @@ def analyze_rows(
             identity_conflicts.append(record)
 
     cas_group_records = []
-    for group_number, members in enumerate(sorted(cas_collisions, key=lambda group: preliminary[group[0]]["sourceRowNumber"]), start=1):
+    for group_number, (cas_value, members) in enumerate(
+        sorted(cas_collisions, key=lambda group: (preliminary[group[1][0]]["sourceRowNumber"], group[0])),
+        start=1,
+    ):
         group_id = _group_id("CAS-COLLISION", group_number)
         row_ids = [preliminary[index]["sourceRowId"] for index in members]
+        collision_items = [preliminary[index] for index in members]
         for index in members:
             preliminary[index]["duplicateCandidateIds"].extend(row_id for row_id in row_ids if row_id != preliminary[index]["sourceRowId"])
             preliminary[index]["reasonCodes"].append("CAS_COLLISION_REQUIRES_ENTITY_REVIEW")
-        cas_group_records.append({"groupId": group_id, "sourceRowIds": row_ids})
+        cas_group_records.append({
+            "casValue": cas_value,
+            "groupId": group_id,
+            "sourceRowIds": row_ids,
+            "rowCount": len(row_ids),
+            "collisionSemantics": cas_collision_semantics(collision_items),
+            "distinctNormalizedNames": sorted({item["normalizedName"] for item in collision_items if item["normalizedName"]}),
+            "distinctProductClassifications": sorted({item["productClassification"] for item in collision_items}),
+            "distinctSuppliers": sorted({item["supplier"] for item in collision_items if item["supplier"]}),
+        })
 
     structure_group_records = []
     for group_number, members in enumerate(sorted(structure_candidates, key=lambda group: preliminary[group[0]]["sourceRowNumber"]), start=1):
@@ -745,14 +823,10 @@ def analyze_rows(
             requirements.add("AUTHORITATIVE_CAS_VERIFICATION")
         if classification == "DILUTION":
             requirements.update({"SUPPLIER_COMPOSITION_DOCUMENT", "ACTIVE_AND_CARRIER_IDENTITY_EVIDENCE"})
-        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
+        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE", "FORMULATION"}:
             requirements.update({"SUPPLIER_COMPOSITION_DOCUMENT", "NO_REPRESENTATIVE_SINGLE_MOLECULE"})
         elif classification == "NEAT_SUBSTANCE":
             requirements.add("AUTHORITATIVE_STRUCTURE_EVIDENCE")
-        if review_required:
-            requirements.add("MANUAL_IDENTITY_REVIEW")
-        item["evidenceRequirements"] = sorted(requirements)
-
         if classification in {"NATURAL", "BASE", "FORMULATION", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
             enrichment = "NO_SINGLE_MOLECULE_LOOKUP"
         elif classification == "DILUTION":
@@ -761,8 +835,13 @@ def analyze_rows(
             enrichment = "MANUAL_REVIEW_REQUIRED"
         else:
             enrichment = "AUTHORITATIVE_LOOKUP_READY"
+        if review_required or enrichment == "MANUAL_REVIEW_REQUIRED":
+            requirements.add("MANUAL_IDENTITY_REVIEW")
+        item["evidenceRequirements"] = sorted(requirements)
         item["enrichmentAction"] = enrichment
         item["reviewRequired"] = review_required or enrichment == "MANUAL_REVIEW_REQUIRED"
+        validate_evidence_requirements(item)
+        item["recommendedWave"] = assign_ingest_wave(item)
         item["reasonCodes"] = sorted(set(item["reasonCodes"] + eligibility_reasons))
         item.pop("structureClaimKey", None)
         item.pop("structureCandidateKey", None)
@@ -802,6 +881,8 @@ def build_counts(results: list[dict[str, Any]], conflicts: dict[str, list[dict[s
     classification = Counter(item["productClassification"] for item in results)
     chemical = Counter(item["chemicalEntityAction"] for item in results)
     enrichment = Counter(item["enrichmentAction"] for item in results)
+    waves = Counter(item.get("recommendedWave") for item in results)
+    wave_memberships = [sum(item.get("recommendedWave") == wave for wave in INGEST_WAVES) for item in results]
     duplicate_rows = {row_id for group in conflicts["exactProductDuplicateGroups"] for row_id in group["sourceRowIds"]}
     return {
         "SOURCE_ROW_COUNT": len(results),
@@ -823,6 +904,15 @@ def build_counts(results: list[dict[str, Any]], conflicts: dict[str, list[dict[s
         "STRUCTURE_CONFLICT_GROUPS": len(conflicts["structureConflictGroups"]),
         "IDENTITY_CONFLICT_COUNT": len(conflicts["identityConflictGroups"]),
         "COMPONENT_PLAN_COUNT": sum(bool(item["componentPlan"]) for item in results),
+        "MANUAL_REVIEW_ACTION_WITHOUT_REQUIREMENT_COUNT": sum(
+            item["enrichmentAction"] == "MANUAL_REVIEW_REQUIRED"
+            and "MANUAL_IDENTITY_REVIEW" not in item["evidenceRequirements"]
+            for item in results
+        ),
+        "ROWS_WITH_ZERO_WAVES": sum(count == 0 for count in wave_memberships),
+        "ROWS_WITH_MULTIPLE_WAVES": sum(count > 1 for count in wave_memberships),
+        **{f"WAVE_{wave[-1]}_COUNT": waves[wave] for wave in INGEST_WAVES},
+        "TOTAL_WAVE_ROW_COUNT": sum(waves[wave] for wave in INGEST_WAVES),
         "CHEMICAL_ENTITY_LINK_EXISTING_COUNT": chemical["LINK_VERIFIED_EXISTING"],
         "CHEMICAL_ENTITY_CREATE_VERIFIED_CANDIDATE_COUNT": chemical["CREATE_VERIFIED_CANDIDATE"],
         "CHEMICAL_ENTITY_CREATE_UNRESOLVED_COUNT": chemical["CREATE_UNRESOLVED"],
@@ -853,14 +943,15 @@ def profile_columns(sheet: SheetData) -> list[dict[str, Any]]:
 
 
 def recommended_batches(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    definitions = (
-        ("Wave A", "Verified/reusable deterministic records", lambda item: item["chemicalEntityAction"] in {"LINK_VERIFIED_EXISTING", "CREATE_VERIFIED_CANDIDATE"} and not item["reviewRequired"]),
-        ("Wave B", "Authoritative identity lookup candidates", lambda item: item["enrichmentAction"] == "AUTHORITATIVE_LOOKUP_READY"),
-        ("Wave C", "Trade materials and explicit dilutions requiring supplier evidence", lambda item: item["enrichmentAction"] == "SUPPLIER_DOCUMENT_REQUIRED"),
-        ("Wave D", "Natural and complex products with no representative single molecule", lambda item: item["enrichmentAction"] == "NO_SINGLE_MOLECULE_LOOKUP"),
-        ("Wave E", "Manual duplicate, CAS-collision, malformed, and identity-conflict review", lambda item: item["enrichmentAction"] == "MANUAL_REVIEW_REQUIRED"),
-    )
-    return [{"wave": wave, "description": description, "rowCount": sum(predicate(item) for item in results)} for wave, description, predicate in definitions]
+    descriptions = {
+        "Wave A": "Verified/reusable deterministic records",
+        "Wave B": "Authoritative identity lookup candidates",
+        "Wave C": "Trade materials and explicit dilutions requiring supplier evidence",
+        "Wave D": "Natural and complex products with no representative single molecule",
+        "Wave E": "Manual duplicate, CAS-collision, malformed, and identity-conflict review",
+    }
+    counts = Counter(item["recommendedWave"] for item in results)
+    return [{"wave": wave, "description": descriptions[wave], "rowCount": counts[wave]} for wave in INGEST_WAVES]
 
 
 def markdown_table(rows: Iterable[Iterable[Any]]) -> str:
@@ -902,6 +993,8 @@ def render_precheck_markdown(source: dict[str, Any], counts: dict[str, int], bat
         "- All future persistence remains tenant-scoped.\n\n"
         "## Counts\n\n" + markdown_table(count_rows) + "\n\n"
         "## Recommended ingest waves\n\n" + markdown_table(batch_rows) + "\n\n"
+        "Each row has exactly one `recommendedWave`. Conflict, malformed-identity, duplicate-review, and other "
+        "manual-review conditions take precedence and route the row to Wave E.\n\n"
         "`BULK_DATA_PRECHECK_READY=YES` means the deterministic data artifacts reconcile. "
         "The goal-level `BULK_INGEST_PRECHECK_READY` remains pending until Pilot50, Osmo, freeze, full-test, and PR-CI gates pass.\n"
     )
@@ -985,6 +1078,17 @@ def run_precheck(source_path: Path, sheet_name: str, output_dir: Path, write_out
         raise PrecheckError("CHEMICAL_ENTITY_ACTION_ACCOUNTING_FAILED")
     if sum(counts[f"{key}_COUNT"] for key in ENRICHMENT_ACTIONS) != counts["SOURCE_ROW_COUNT"]:
         raise PrecheckError("ENRICHMENT_ACCOUNTING_FAILED")
+    if counts["MANUAL_REVIEW_ACTION_WITHOUT_REQUIREMENT_COUNT"] != 0:
+        raise PrecheckError("MANUAL_REVIEW_EVIDENCE_ACCOUNTING_FAILED")
+    if counts["ROWS_WITH_ZERO_WAVES"] != 0 or counts["ROWS_WITH_MULTIPLE_WAVES"] != 0:
+        raise PrecheckError("INGEST_WAVE_EXCLUSIVITY_FAILED")
+    if counts["TOTAL_WAVE_ROW_COUNT"] != counts["SOURCE_ROW_COUNT"]:
+        raise PrecheckError("INGEST_WAVE_ACCOUNTING_FAILED")
+    for collision in conflicts["casCollisionGroups"]:
+        if not collision.get("casValue") or collision.get("rowCount") != len(collision.get("sourceRowIds", [])):
+            raise PrecheckError("CAS_COLLISION_RECORD_CONTRACT_FAILED")
+    if len({collision["casValue"] for collision in conflicts["casCollisionGroups"]}) != len(conflicts["casCollisionGroups"]):
+        raise PrecheckError("CAS_COLLISION_VALUES_NOT_UNIQUE")
     source = {
         "fileName": source_path.name,
         "fileSha256": file_hash,

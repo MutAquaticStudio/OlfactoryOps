@@ -10,10 +10,12 @@ from material_intelligence_bulk_precheck import (
     SheetRow,
     analyze_rows,
     build_counts,
+    cas_claims,
     cas_checksum_valid,
     classify_product,
     dilution_from_name,
     read_xlsx_sheet,
+    recommended_batches,
     stable_json,
 )
 
@@ -170,6 +172,44 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["chemicalEntityAction"], "REVIEW_REQUIRED")
         self.assertIn("INVALID_STRUCTURE_CLAIM", result["conflictCodes"])
 
+    def test_cas_raw_assertion_is_preserved(self):
+        result = analyze_rows(sheet(source_row(2, 1, "Synthetic aroma chemicals", "ETHANOL", "64-17-5 / 67-56-X")))["results"][0]
+        self.assertEqual(result["sourceCasRaw"], "64-17-5 / 67-56-X")
+        self.assertEqual([claim["value"] for claim in result["sourceCasClaims"]], ["64-17-5"])
+        self.assertIn("CAS_CLAIM_FORMAT_INVALID", result["conflictCodes"])
+        self.assertEqual(result["enrichmentAction"], "MANUAL_REVIEW_REQUIRED")
+        self.assertIn("MANUAL_IDENTITY_REVIEW", result["evidenceRequirements"])
+
+
+class CasParsingTests(unittest.TestCase):
+    def test_valid_single_cas(self):
+        claims, malformed = cas_claims("64-17-5")
+        self.assertEqual(claims, [{"value": "64-17-5", "formatStatus": "VALID"}])
+        self.assertFalse(malformed)
+
+    def test_multiple_valid_cas_values(self):
+        claims, malformed = cas_claims("64-17-5 / 67-56-1")
+        self.assertEqual([claim["value"] for claim in claims], ["64-17-5", "67-56-1"])
+        self.assertFalse(malformed)
+
+    def test_partial_malformed_cas_preserves_valid_token_and_fails_closed(self):
+        claims, malformed = cas_claims("64-17-5 / 67-56-X")
+        self.assertEqual([claim["value"] for claim in claims], ["64-17-5"])
+        self.assertTrue(malformed)
+
+    def test_non_separator_residue_is_malformed(self):
+        claims, malformed = cas_claims("64-17-5 foo")
+        self.assertEqual([claim["value"] for claim in claims], ["64-17-5"])
+        self.assertTrue(malformed)
+
+    def test_missing_marker_is_not_malformed(self):
+        self.assertEqual(cas_claims("not available"), ([], False))
+
+    def test_invalid_checksum_is_malformed(self):
+        claims, malformed = cas_claims("64-17-4")
+        self.assertEqual(claims[0]["formatStatus"], "INVALID_CHECKSUM")
+        self.assertTrue(malformed)
+
 
 class DuplicateAndAccountingTests(unittest.TestCase):
     def test_product_duplicate_and_identity_conflict_are_separate(self):
@@ -209,6 +249,49 @@ class DuplicateAndAccountingTests(unittest.TestCase):
     def test_cas_checksum_contract(self):
         self.assertTrue(cas_checksum_valid("64-17-5"))
         self.assertFalse(cas_checksum_valid("64-17-4"))
+
+    def test_collision_records_preserve_each_distinct_cas_value(self):
+        analysis = analyze_rows(sheet(
+            source_row(2, 1, "Synthetic aroma chemicals", "PRODUCT A", "64-17-5 / 67-56-1"),
+            source_row(3, 2, "Synthetic aroma chemicals", "PRODUCT B", "64-17-5 / 67-56-1"),
+        ))
+        collisions = analysis["conflicts"]["casCollisionGroups"]
+        self.assertEqual([group["casValue"] for group in collisions], ["64-17-5", "67-56-1"])
+        self.assertEqual([group["rowCount"] for group in collisions], [2, 2])
+        self.assertEqual(len({group["groupId"] for group in collisions}), 2)
+        self.assertTrue(all(group["sourceRowIds"] == ["Material Intelligence!2", "Material Intelligence!3"] for group in collisions))
+        self.assertTrue(all(group["collisionSemantics"] in {
+            "CAS_SHARED_PRODUCT_VARIANTS",
+            "CAS_SHARED_TRADE_PRODUCTS",
+            "CAS_POTENTIAL_ENTITY_REUSE",
+            "CAS_IDENTITY_CONFLICT",
+            "CAS_REVIEW_REQUIRED",
+        } for group in collisions))
+
+    def test_manual_review_action_always_has_manual_requirement(self):
+        result = analyze_rows(sheet(source_row(2, 1, "Synthetic aroma chemicals", "CAS-LESS MATERIAL")))["results"][0]
+        self.assertEqual(result["enrichmentAction"], "MANUAL_REVIEW_REQUIRED")
+        self.assertIn("MANUAL_IDENTITY_REVIEW", result["evidenceRequirements"])
+
+    def test_recommended_waves_are_mutually_exclusive_and_exhaustive(self):
+        def validator(_claim):
+            return {"status": "VALID_NORMALIZABLE", "canonicalSmiles": "CCO", "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"}
+
+        analysis = analyze_rows(sheet(
+            source_row(2, 1, "Synthetic aroma chemicals", "VERIFIED ETHANOL", "64-17-5", smiles="CCO", evidence="PUBLISHED", confidence="VERIFIED", url="https://pubchem.ncbi.nlm.nih.gov/compound/702"),
+            source_row(3, 2, "Synthetic aroma chemicals", "VANILLIN", "121-33-5"),
+            source_row(4, 3, "Synthetic aroma chemicals", "ETHYL VANILLIN 10% DPG", "121-32-4 / 25265-71-8"),
+            source_row(5, 4, "Natural products", "ROSE OIL", "8007-01-0"),
+            source_row(6, 5, "Synthetic aroma chemicals", "CAS-LESS MATERIAL"),
+        ), validator)
+        results = analysis["results"]
+        self.assertEqual([item["recommendedWave"] for item in results], ["Wave A", "Wave B", "Wave C", "Wave D", "Wave E"])
+        self.assertEqual(results[0]["enrichmentAction"], "AUTHORITATIVE_LOOKUP_READY")
+        counts = build_counts(results, analysis["conflicts"])
+        self.assertEqual(counts["ROWS_WITH_ZERO_WAVES"], 0)
+        self.assertEqual(counts["ROWS_WITH_MULTIPLE_WAVES"], 0)
+        self.assertEqual(counts["TOTAL_WAVE_ROW_COUNT"], 5)
+        self.assertEqual([batch["rowCount"] for batch in recommended_batches(results)], [1, 1, 1, 1, 1])
 
 
 class SafetyContractTests(unittest.TestCase):

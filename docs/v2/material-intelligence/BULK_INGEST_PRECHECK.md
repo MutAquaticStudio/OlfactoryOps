@@ -41,13 +41,22 @@ Source `OlfactoryOps_Material_Intelligence_Master_v1.xlsx` (`a49bede2801da2e0edb
 | `STRUCTURE_CONFLICT_GROUPS` | 0 |
 | `IDENTITY_CONFLICT_COUNT` | 1 |
 | `COMPONENT_PLAN_COUNT` | 31 |
+| `MANUAL_REVIEW_ACTION_WITHOUT_REQUIREMENT_COUNT` | 0 |
+| `ROWS_WITH_ZERO_WAVES` | 0 |
+| `ROWS_WITH_MULTIPLE_WAVES` | 0 |
+| `WAVE_A_COUNT` | 0 |
+| `WAVE_B_COUNT` | 809 |
+| `WAVE_C_COUNT` | 1 |
+| `WAVE_D_COUNT` | 118 |
+| `WAVE_E_COUNT` | 1058 |
+| `TOTAL_WAVE_ROW_COUNT` | 1986 |
 | `CHEMICAL_ENTITY_LINK_EXISTING_COUNT` | 0 |
 | `CHEMICAL_ENTITY_CREATE_VERIFIED_CANDIDATE_COUNT` | 0 |
 | `CHEMICAL_ENTITY_CREATE_UNRESOLVED_COUNT` | 853 |
-| `CHEMICAL_ENTITY_CREATE_COMPLEX_COUNT` | 123 |
-| `CHEMICAL_ENTITY_REVIEW_REQUIRED_COUNT` | 1010 |
+| `CHEMICAL_ENTITY_CREATE_COMPLEX_COUNT` | 118 |
+| `CHEMICAL_ENTITY_REVIEW_REQUIRED_COUNT` | 1015 |
 | `CHEMICAL_ENTITY_NOT_APPLICABLE_COUNT` | 0 |
-| `EXPECTED_UNIQUE_CHEMICAL_ENTITY_CANDIDATES` | 976 |
+| `EXPECTED_UNIQUE_CHEMICAL_ENTITY_CANDIDATES` | 971 |
 | `AUTHORITATIVE_LOOKUP_READY_COUNT` | 809 |
 | `SUPPLIER_DOCUMENT_REQUIRED_COUNT` | 30 |
 | `MANUAL_REVIEW_REQUIRED_COUNT` | 636 |
@@ -59,8 +68,10 @@ Source `OlfactoryOps_Material_Intelligence_Master_v1.xlsx` (`a49bede2801da2e0edb
 | --- | --- | --- |
 | Wave A | 0 | Verified/reusable deterministic records |
 | Wave B | 809 | Authoritative identity lookup candidates |
-| Wave C | 30 | Trade materials and explicit dilutions requiring supplier evidence |
-| Wave D | 511 | Natural and complex products with no representative single molecule |
-| Wave E | 636 | Manual duplicate, CAS-collision, malformed, and identity-conflict review |
+| Wave C | 1 | Trade materials and explicit dilutions requiring supplier evidence |
+| Wave D | 118 | Natural and complex products with no representative single molecule |
+| Wave E | 1058 | Manual duplicate, CAS-collision, malformed, and identity-conflict review |
+
+Each row has exactly one `recommendedWave`. Conflict, malformed-identity, duplicate-review, and other manual-review conditions take precedence and route the row to Wave E.
 
 `BULK_DATA_PRECHECK_READY=YES` means the deterministic data artifacts reconcile. The goal-level `BULK_INGEST_PRECHECK_READY` remains pending until Pilot50, Osmo, freeze, full-test, and PR-CI gates pass.
