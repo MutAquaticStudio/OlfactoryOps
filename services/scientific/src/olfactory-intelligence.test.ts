@@ -34,7 +34,7 @@ const sqlText = (query: { strings?: readonly string[]; sql?: string } | readonly
 class PredictionClient {
   readonly executed: string[] = []
   readonly queried: string[] = []
-  constructor(private readonly model: { visible?: boolean; evaluationStatus?: string; leakageStatus?: string; checkpointStatus?: string } = {}) {}
+  constructor(private readonly model: { visible?: boolean; materialVisible?: boolean; evaluationStatus?: string; leakageStatus?: string; checkpointStatus?: string } = {}) {}
   async $transaction<T>(action: (tx: this) => Promise<T>) { return action(this) }
   async $executeRaw(query: { strings?: readonly string[]; sql?: string } | readonly string[]) { this.executed.push(sqlText(query)); return 1 }
   async $queryRaw(query: { strings?: readonly string[]; sql?: string } | readonly string[]) {
@@ -42,7 +42,7 @@ class PredictionClient {
     this.queried.push(sql)
     if (sql.includes('SELECT request_hash AS')) return []
     if (sql.includes('INSERT INTO v2_operation_idempotency')) return [{ id: 'idem_prediction' }]
-    if (sql.includes('FROM v2_materials material')) return [{ id: 'material_1', canonicalSmiles: 'CCO', structureHash: hash('a'), resolutionStatus: 'RESOLVED', rdkitVersion: '2023.9.3', standardizationVersion: 'olfactoryops-rdkit-standardization/1.0.0' }]
+    if (sql.includes('FROM v2_materials material')) return this.model.materialVisible === false ? [] : [{ id: 'material_1', canonicalSmiles: 'CCO', structureHash: hash('a'), resolutionStatus: 'RESOLVED', rdkitVersion: '2023.9.3', standardizationVersion: 'olfactoryops-rdkit-standardization/1.0.0' }]
     if (sql.includes('FROM v2_model_versions version')) return this.model.visible === false ? [] : [{ id: 'model_version_1', modelId: 'model_1', modelName: 'Research odor candidate', version: 'osmo-dravnieks-transformer-cnn/1.0.0', stage: 'RESEARCH', status: 'REVIEW_REQUIRED', componentKey: 'TRANSFORMER_CNN', checkpointHash: hash('b'), checkpointStatus: this.model.checkpointStatus ?? 'VERIFIED', datasetVersionId: 'dataset_version_1', datasetVersion: '5aa9d2cd-d560c47e', evaluationStatus: this.model.evaluationStatus ?? 'REVIEW_REQUIRED', leakageStatus: this.model.leakageStatus ?? 'PASS' }]
     if (sql.includes('INSERT INTO v2_olfactory_predictions')) return [{ id: 'prediction_1' }]
     throw new Error(`Unhandled query: ${sql}`)
@@ -78,6 +78,25 @@ describe('research odor inference boundary', () => {
     const runtime = { predict: vi.fn() }
     const service = new OlfactoryIntelligenceService(new PredictionClient({ visible: false }) as never, { requirePermission: vi.fn().mockResolvedValue(undefined) } as never, runtime)
     await expect(service.predictOdor(context, 'material_1', { modelVersionId: 'foreign_model', requestedTask: 'odor-descriptor' }, 'prediction-key-0002')).rejects.toMatchObject({ code: 'MODEL_VERSION_NOT_FOUND', status: 404 })
+    expect(runtime.predict).not.toHaveBeenCalled()
+  })
+
+  it('blocks a cross-tenant material before invoking the private runtime', async () => {
+    const runtime = { predict: vi.fn() }
+    const service = new OlfactoryIntelligenceService(new PredictionClient({ materialVisible: false }) as never, { requirePermission: vi.fn().mockResolvedValue(undefined) } as never, runtime)
+    await expect(service.predictOdor(context, 'foreign_material', { modelVersionId: 'model_version_1', requestedTask: 'odor-descriptor' }, 'prediction-key-cross-tenant-material')).rejects.toMatchObject({ code: 'MATERIAL_NOT_FOUND', status: 404 })
+    expect(runtime.predict).not.toHaveBeenCalled()
+  })
+
+  it.each(['materials.viewSensitive', 'scientific_ai.predict'])('blocks missing %s before invoking the private runtime', async (deniedPermission) => {
+    const runtime = { predict: vi.fn() }
+    const platform = {
+      requirePermission: vi.fn((_context, permission: string) => permission === deniedPermission
+        ? Promise.reject(new Error('PERMISSION_DENIED'))
+        : Promise.resolve()),
+    }
+    const service = new OlfactoryIntelligenceService(new PredictionClient() as never, platform as never, runtime)
+    await expect(service.predictOdor(context, 'material_1', { modelVersionId: 'model_version_1', requestedTask: 'odor-descriptor' }, `prediction-key-denied-${deniedPermission}`)).rejects.toThrow('PERMISSION_DENIED')
     expect(runtime.predict).not.toHaveBeenCalled()
   })
 

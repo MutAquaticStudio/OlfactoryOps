@@ -15,6 +15,16 @@ describe('scientific Container lane lifecycle', () => {
     expect(source).toContain('await this.startup.ensure(async () =>')
   })
 
+  it('reuses the private model container lane for bounded predictions without changing MODEL_SMOKE', () => {
+    expect(source).toContain('async runOdorPrediction(input: CloudOdorPredictionPayload, sharedSecret: string)')
+    expect(source).toContain("new Request('https://scientific.internal/v1/predictions'")
+    expect(source).toContain("'x-olfactoryops-scientific-key': sharedSecret")
+    expect(source).toContain('cloudOdorPredictionResponseSchema.parse(JSON.parse(body))')
+    expect(source).toContain('scientificContainerPredictionTimeoutMs = 30_000')
+    expect(source).toContain('async runScientificJob(input: ScientificContainerRequest, sharedSecret: string)')
+    expect(source).toContain("new Request('https://scientific.internal/v1/jobs'")
+  })
+
   it('keeps automatic expiry as a fallback while drained lanes own explicit one-stop/one-destroy cleanup', () => {
     expect(source).toContain("event: 'scientific_container_idle_expired'")
     expect(source).toContain('await this.stop()')

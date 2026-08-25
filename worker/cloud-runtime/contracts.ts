@@ -1,10 +1,15 @@
 import { z } from 'zod'
+import { odorResearchPredictionSchema } from '../../packages/contracts/src/olfactory-intelligence.js'
 
 const id = z.string().trim().min(1).max(160)
 const hash = z.string().regex(/^[a-f0-9]{64}$/i).transform((value) => value.toLowerCase())
 const reference = z.string().trim().min(1).max(512)
 
 export const cloudRuntimeProtocol = 'cloud-runtime/v1' as const
+export const cloudOdorPredictionOperation = 'ODOR_PREDICTION' as const
+export const cloudOdorPredictionMaximumRequestBytes = 16_384
+export const cloudOdorPredictionMaximumResponseBytes = 65_536
+export const cloudOdorPredictionTimeoutMs = 330_000
 /**
  * `STAGING_DLQ_TERMINAL_FAILURE_PROBE` is an internal-only acceptance fixture.
  * It has no public dispatcher and the runtime acknowledges it outside staging.
@@ -35,6 +40,30 @@ export const cloudJobEnvelopeSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict()
 export type CloudJobEnvelope = z.infer<typeof cloudJobEnvelopeSchema>
+
+const odorPredictionTarget = z.string().regex(/^regression_[a-z0-9_]{1,80}$/)
+
+export const cloudOdorPredictionPayloadSchema = z.object({
+  modelVersionId: id,
+  canonicalSmiles: z.string().trim().min(1).max(4096).refine(
+    (value) => [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127),
+    'SMILES must not contain control characters.',
+  ),
+  requestedTargets: z.array(odorPredictionTarget).min(1).max(20).refine(
+    (targets) => new Set(targets).size === targets.length,
+    'Prediction targets must be unique.',
+  ).optional(),
+}).strict()
+export type CloudOdorPredictionPayload = z.infer<typeof cloudOdorPredictionPayloadSchema>
+
+export const cloudOdorPredictionRequestSchema = z.object({
+  protocolVersion: z.literal(cloudRuntimeProtocol),
+  operation: z.literal(cloudOdorPredictionOperation),
+  payload: cloudOdorPredictionPayloadSchema,
+}).strict()
+export type CloudOdorPredictionRequest = z.infer<typeof cloudOdorPredictionRequestSchema>
+
+export const cloudOdorPredictionResponseSchema = odorResearchPredictionSchema
 
 export const cloudArtifactManifestSchema = z.object({
   organizationId: id,

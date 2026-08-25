@@ -85,3 +85,6 @@ max_instances = 2
 [[migrations]]
 tag = "v2-cloud-runtime-1"
 new_sqlite_classes = ["ScientificFeatureContainer", "ScientificModelContainer"]
+
+# Server-side secret set only through the Cloudflare control plane:
+# SCIENTIFIC_CONTAINER_SHARED_SECRET
