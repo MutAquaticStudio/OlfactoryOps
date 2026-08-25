@@ -911,6 +911,25 @@
 .v2-member-row span { min-width: 0; overflow-wrap: anywhere; color: var(--v2-text-secondary); font-size: 12px; }
 .v2-mono { font-family: "Fira Code", "Cascadia Mono", ui-monospace, monospace; font-size: .92em; }
 .v2-material-library { gap: 14px; }
+.v2-olfactory-research { display: grid; gap: 14px; border-top: 1px solid var(--v2-border-subtle); padding-top: 18px; }
+.v2-olfactory-research-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.v2-olfactory-research-heading h3 { margin: 3px 0 4px; }
+.v2-olfactory-research-heading p { margin: 0; color: var(--v2-text-secondary); }
+.v2-olfactory-research-controls { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: end; gap: 12px; }
+.v2-olfactory-research-controls label { display: grid; gap: 6px; color: var(--v2-text-muted); font-size: 12px; }
+.v2-olfactory-runtime-state { display: flex; align-items: center; gap: 8px; color: var(--v2-text-secondary); }
+.v2-olfactory-evidence { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--v2-border-subtle); border-radius: 7px; }
+.v2-olfactory-evidence > div { display: grid; gap: 4px; min-width: 0; padding: 12px; border-right: 1px solid var(--v2-border-subtle); }
+.v2-olfactory-evidence > div:last-child { border-right: 0; }
+.v2-olfactory-evidence span, .v2-olfactory-evidence small { color: var(--v2-text-muted); }
+.v2-olfactory-evidence strong { overflow-wrap: anywhere; }
+.v2-odor-score-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.v2-odor-score-grid article { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--v2-border-subtle); border-radius: 7px; background: #18211e; }
+.v2-odor-score-grid article > div { display: flex; justify-content: space-between; gap: 12px; }
+.v2-odor-score-grid progress { width: 100%; accent-color: var(--v2-accent); }
+.v2-odor-score-grid small, .v2-olfactory-disclaimer { color: var(--v2-text-muted); }
+.v2-olfactory-disclaimer { margin: 0; font-size: 12px; }
+@media (max-width: 720px) { .v2-olfactory-research-controls, .v2-olfactory-evidence, .v2-odor-score-grid { grid-template-columns: 1fr; } .v2-olfactory-evidence > div { border-right: 0; border-bottom: 1px solid var(--v2-border-subtle); } .v2-olfactory-evidence > div:last-child { border-bottom: 0; } }
 .v2-scope-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .v2-scope-chip, .v2-status-chip { display: inline-flex; width: fit-content; align-items: center; border: 1px solid var(--v2-border-subtle); border-radius: 999px; color: var(--v2-text-muted); padding: 3px 7px; font-size: 10px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
 .v2-scope-chip.is-active { border-color: #346a53; background: #162a20; color: #a9d8bd; }

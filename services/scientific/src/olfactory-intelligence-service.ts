@@ -3,11 +3,15 @@ import { Prisma, PrismaClient } from '@prisma/client'
 import { explainabilityRequestSchema, molecularEmbeddingRequestSchema, molecularSimilarityRequestSchema, odorPredictionRequestSchema } from '../../../packages/contracts/src/olfactory-intelligence.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
+import { OdorPredictionRuntimeUnavailable, type OdorPredictionRuntime } from './model-http-runtime.js'
+import { isResearchEvaluationEligible } from './research-model-eligibility.js'
 
 type Transaction = Prisma.TransactionClient
 type JsonRecord = Record<string, unknown>
 type IdempotencyRow = { requestHash: string; response: unknown }
 type ArtifactRow = { id: string; artifactKind: string; evidenceStatus: string; contentHash: string; payload: JsonRecord }
+type MolecularMaterialRow = { id: string; canonicalSmiles: string | null; structureHash: string | null; resolutionStatus: string | null; rdkitVersion: string | null; standardizationVersion: string | null }
+type ResearchModelRow = { id: string; modelId: string; modelName: string; version: string; stage: string; status: string; componentKey: string; checkpointHash: string; checkpointStatus: string; datasetVersionId: string; datasetVersion: string; evaluationStatus: string; leakageStatus: string }
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
@@ -42,7 +46,7 @@ function tanimoto(left: number[], right: number[]) {
  * reviewed dataset/model/evaluation path.
  */
 export class OlfactoryIntelligenceService {
-  constructor(private readonly client: PrismaClient, private readonly platform: PlatformService) {}
+  constructor(private readonly client: PrismaClient, private readonly platform: PlatformService, private readonly modelRuntime: OdorPredictionRuntime = new OdorPredictionRuntimeUnavailable()) {}
 
   private async scoped<T>(context: PlatformContext, action: (tx: Transaction) => Promise<T>) {
     return this.client.$transaction(async (tx) => {
@@ -59,6 +63,11 @@ export class OlfactoryIntelligenceService {
   private async requireManage(context: PlatformContext) {
     await this.requireView(context)
     await this.platform.requirePermission(context, 'scientific_ai.manage')
+  }
+
+  private async requirePredict(context: PlatformContext) {
+    await this.platform.requirePermission(context, 'materials.viewSensitive')
+    await this.platform.requirePermission(context, 'scientific_ai.predict')
   }
 
   private async audit(tx: Transaction, context: PlatformContext, action: string, outcome: 'allowed' | 'blocked', subjectType: string, subjectId: string, payload: unknown) {
@@ -87,6 +96,46 @@ export class OlfactoryIntelligenceService {
   private async material(tx: Transaction, context: PlatformContext, materialId: string) {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_materials WHERE id = ${materialId} AND organization_id = ${context.organizationId}`
     if (!rows[0]) throw new PlatformError('MATERIAL_NOT_FOUND', 'The requested material is not available in this workspace.', 404)
+  }
+
+  private async molecularMaterial(tx: Transaction, context: PlatformContext, materialId: string) {
+    const rows = await tx.$queryRaw<MolecularMaterialRow[]>`
+      SELECT material.id, identity.canonical_smiles AS "canonicalSmiles", identity.structure_hash AS "structureHash",
+        identity.resolution_status AS "resolutionStatus", identity.rdkit_version AS "rdkitVersion",
+        identity.canonicalization_version AS "standardizationVersion"
+      FROM v2_materials material
+      LEFT JOIN v2_molecular_identities identity ON identity.id = material.molecular_identity_id AND identity.organization_id = material.organization_id
+      WHERE material.id = ${materialId} AND material.organization_id = ${context.organizationId}
+    `
+    if (!rows[0]) throw new PlatformError('MATERIAL_NOT_FOUND', 'The requested material is not available in this workspace.', 404)
+    if (rows[0].resolutionStatus !== 'RESOLVED' || !rows[0].canonicalSmiles || !rows[0].structureHash) {
+      throw new PlatformError('MOLECULAR_IDENTITY_NOT_EVALUATED', 'A verified molecular identity is required before odor inference.', 409)
+    }
+    return rows[0]
+  }
+
+  private async researchModel(tx: Transaction, context: PlatformContext, modelVersionId: string) {
+    const rows = await tx.$queryRaw<ResearchModelRow[]>`
+      SELECT version.id, version.model_id AS "modelId", model.name AS "modelName", version.version, version.stage, version.status,
+        architecture.component_key AS "componentKey", checkpoint.checkpoint_hash AS "checkpointHash", checkpoint.status AS "checkpointStatus",
+        dataset.id AS "datasetVersionId", dataset.version AS "datasetVersion", evaluation.status AS "evaluationStatus", evaluation.leakage_status AS "leakageStatus"
+      FROM v2_model_versions version
+      JOIN v2_models model ON model.id = version.model_id AND model.organization_id = version.organization_id
+      JOIN v2_model_architectures architecture ON architecture.id = version.architecture_id AND architecture.organization_id = version.organization_id
+      JOIN v2_model_checkpoints checkpoint ON checkpoint.model_version_id = version.id AND checkpoint.organization_id = version.organization_id AND checkpoint.status = 'VERIFIED'
+      JOIN v2_training_runs training ON training.model_version_id = version.id AND training.organization_id = version.organization_id
+      JOIN v2_evaluation_runs evaluation ON evaluation.training_run_id = training.id AND evaluation.organization_id = version.organization_id
+      JOIN v2_dataset_versions dataset ON dataset.id = evaluation.dataset_version_id AND dataset.organization_id = version.organization_id
+      WHERE version.id = ${modelVersionId} AND version.organization_id = ${context.organizationId}
+        AND training.status = 'SUCCEEDED' AND training.leakage_status = 'PASS'
+      ORDER BY evaluation.created_at DESC LIMIT 1
+    `
+    const model = rows[0]
+    if (!model) throw new PlatformError('MODEL_VERSION_NOT_FOUND', 'The requested evaluated model version is not available in this workspace.', 404)
+    if (model.stage !== 'RESEARCH' || model.componentKey !== 'TRANSFORMER_CNN' || model.checkpointStatus !== 'VERIFIED' || !isResearchEvaluationEligible(model.evaluationStatus, model.leakageStatus) || ['ARCHIVED', 'BLOCKED'].includes(model.status)) {
+      throw new PlatformError('ODOR_MODEL_NOT_EVALUATED', 'The selected model is not an eligible verified research model.', 409)
+    }
+    return model
   }
 
   private async artifacts(tx: Transaction, context: PlatformContext, materialId: string, kinds: string[]) {
@@ -148,21 +197,34 @@ export class OlfactoryIntelligenceService {
     })
   }
 
-  async recordOdorPredictionNotEvaluated(context: PlatformContext, materialId: string, rawInput: unknown, idempotencyKey?: string) {
-    await this.requireView(context)
+  async predictOdor(context: PlatformContext, materialId: string, rawInput: unknown, idempotencyKey?: string) {
+    await this.requirePredict(context)
     const parsed = odorPredictionRequestSchema.safeParse(rawInput)
     if (!parsed.success) throw new PlatformError('INVALID_INPUT', 'Select a model version and bounded research task.', 422)
     return this.idempotent(context, 'olfactory-intelligence.odor-prediction.request', idempotencyKey, { materialId, ...parsed.data }, async (tx) => {
-      await this.material(tx, context, materialId)
-      const model = await tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM v2_model_versions WHERE id = ${parsed.data.modelVersionId} AND organization_id = ${context.organizationId}`
-      if (!model[0]) throw new PlatformError('MODEL_VERSION_NOT_FOUND', 'The requested model version is not available in this workspace.', 404)
-      const inputHash = digest({ materialId, modelVersionId: parsed.data.modelVersionId, task: parsed.data.requestedTask })
+      const material = await this.molecularMaterial(tx, context, materialId)
+      const model = await this.researchModel(tx, context, parsed.data.modelVersionId)
+      let prediction
+      try {
+        prediction = await this.modelRuntime.predict({ artifactModelVersion: model.version, canonicalSmiles: material.canonicalSmiles!, requestedTargets: parsed.data.requestedTargets })
+      } catch (error) {
+        const code = error instanceof Error ? error.message : 'MODEL_RUNTIME_UNAVAILABLE'
+        if (code === 'MODEL_RUNTIME_INVALID_INPUT') throw new PlatformError('INVALID_INPUT', 'The molecular structure or requested descriptor is not supported by this research model.', 422)
+        if (code === 'MODEL_NOT_EVALUATED') throw new PlatformError('ODOR_MODEL_NOT_EVALUATED', 'The selected model artifact is not evaluated or its checkpoint could not be verified.', 409)
+        throw new PlatformError('MODEL_RUNTIME_NOT_CONFIGURED', 'The isolated research model runtime is not available.', 503)
+      }
+      if (prediction.modelVersionId !== model.version || prediction.modelStage !== 'RESEARCH' || prediction.inputStructureHash !== material.structureHash || prediction.provenance.checkpointSha256 !== model.checkpointHash) {
+        throw new PlatformError('MODEL_EVIDENCE_MISMATCH', 'The runtime response does not match the registered model or molecular evidence.', 409)
+      }
+      const inputHash = digest({ structureHash: material.structureHash, modelVersionId: parsed.data.modelVersionId, task: parsed.data.requestedTask, requestedTargets: parsed.data.requestedTargets ?? null })
       const id = identifier('prediction')
-      const persisted = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_olfactory_predictions (id, organization_id, material_id, model_version_id, requested_task, input_hash, output, uncertainty, evidence_status, reason_code, created_by) VALUES (${id}, ${context.organizationId}, ${materialId}, ${parsed.data.modelVersionId}, ${parsed.data.requestedTask}, ${inputHash}, ${JSON.stringify({ reason: 'No reviewed odor-labelled dataset and calibrated serving model are registered.' })}::jsonb, NULL, 'NOT_EVALUATED', 'ODOR_MODEL_NOT_EVALUATED', ${context.userId}) ON CONFLICT (organization_id, material_id, model_version_id, requested_task, input_hash) DO UPDATE SET input_hash = EXCLUDED.input_hash RETURNING id`
+      const response = { ...prediction, modelId: model.modelId, modelVersionId: model.id, datasetVersionId: model.datasetVersionId, modelName: model.modelName, datasetVersion: model.datasetVersion }
+      const uncertainty = { method: prediction.predictions[0]?.uncertaintyMethod, values: prediction.predictions.map((item) => ({ targetKey: item.targetKey, uncertainty: item.uncertainty })) }
+      const persisted = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_olfactory_predictions (id, organization_id, material_id, model_version_id, requested_task, input_hash, output, uncertainty, calibration_version, evidence_status, reason_code, created_by) VALUES (${id}, ${context.organizationId}, ${materialId}, ${parsed.data.modelVersionId}, ${parsed.data.requestedTask}, ${inputHash}, ${JSON.stringify(response)}::jsonb, ${JSON.stringify(uncertainty)}::jsonb, 'validation-residual-rmse/1.0.0', 'VERIFIED', NULL, ${context.userId}) ON CONFLICT (organization_id, material_id, model_version_id, requested_task, input_hash) DO UPDATE SET input_hash = EXCLUDED.input_hash RETURNING id`
       const persistedId = persisted[0]?.id
       if (!persistedId) throw new PlatformError('PREDICTION_WRITE_FAILED', 'The odor prediction request could not be recorded.', 409)
-      await this.audit(tx, context, 'olfactory_intelligence.odor_prediction.request', 'blocked', 'olfactory_prediction', persistedId, { materialId, modelVersionId: parsed.data.modelVersionId, reason: 'ODOR_MODEL_NOT_EVALUATED' })
-      return { id: persistedId, materialId, modelVersionId: parsed.data.modelVersionId, status: 'NOT_EVALUATED', code: 'ODOR_MODEL_NOT_EVALUATED', message: 'No reviewed odor-labelled dataset and calibrated serving model are registered.' }
+      await this.audit(tx, context, 'olfactory_intelligence.odor_prediction.request', 'allowed', 'olfactory_prediction', persistedId, { materialId, modelVersionId: parsed.data.modelVersionId, inputStructureHash: material.structureHash, evidenceStatus: 'VERIFIED' })
+      return { id: persistedId, materialId, status: 'SUCCESS', ...response }
     })
   }
 

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0.0",
+  "capturedAt": "2026-08-25T10:48:54.9422959+07:00",
+  "cpu": {
+    "name": "AMD Ryzen 7 5800X 8-Core Processor",
+    "physicalCores": 8,
+    "logicalProcessors": 16
+  },
+  "memory": {
+    "totalBytes": 34240167936
+  },
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 3060 Ti",
+    "memoryMiB": 8192,
+    "driverVersion": "560.94",
+    "dockerDevicePassThrough": true
+  },
+  "disk": {
+    "workDrive": "F:",
+    "freeBytesAtCapture": 56346644480
+  },
+  "docker": {
+    "available": true,
+    "desktopVersion": "4.78.0",
+    "engineVersion": "29.5.3",
+    "engineOs": "linux",
+    "engineArch": "amd64"
+  },
+  "trainingRuntime": {
+    "pythonVersion": "3.11",
+    "tensorflowVersion": "2.15.1",
+    "rdkitVersion": "2023.9.3",
+    "numpyVersion": "1.26.4",
+    "compatibilityImageGpuVisible": false,
+    "actualTrainingDevice": "CPU",
+    "actualTrainingImage": "olfactoryops-model-runtime-phase4",
+    "reason": "Docker GPU pass-through was proven, but the pinned compatibility image lacks CUDA user-space libraries. The bounded 127-row run completed on CPU in 17.485 seconds without changing the image dependency contract."
+  }
+}

@@ -2,6 +2,8 @@
 
 import csv
 import os
+from pathlib import Path
+import shutil
 import sys
 import tempfile
 import numpy as np
@@ -15,6 +17,9 @@ from kgcnn.literature_core.GCN._model import make_model
 sys.path.insert(0, "/opt/transformer-cnn/transformer_cnn")
 from augment_smiles import augment_smiles
 from layers import PositionLayer, SelfLayer
+sys.path.insert(0, "/opt/olfactoryops-model-runtime")
+from osmo_demo.train_candidate import load_predictor, predict_smiles
+from osmo_demo.transformer_model import EMBEDDING_SIZE, build_property_head, configure_determinism, verify_property_head_gradients
 
 
 def build_kgcnn_model():
@@ -91,6 +96,19 @@ def test_transformer_cnn_preprocessing_training_and_checkpoint():
     assert np.allclose(output, restored_output, atol=1e-6)
 
 
+def test_actual_property_head_has_explicit_finite_gradients():
+    configure_determinism(20260825)
+    target_count = 20
+    model = build_property_head(target_count, 0.0001)
+    encoded = tf.reshape(tf.linspace(0.05, 0.95, 2 * 24 * EMBEDDING_SIZE), (2, 24, EMBEDDING_SIZE))
+    targets = [tf.fill((2, 1), tf.cast(index + 1, tf.float32) / target_count) for index in range(target_count)]
+    evidence = verify_property_head_gradients(model, encoded, targets)
+    assert evidence["status"] == "PASS"
+    assert evidence["finiteLoss"] is True
+    assert evidence["finiteGradients"] is True
+    assert evidence["trainableVariableCount"] == len(model.trainable_variables)
+
+
 def test_public_fixture_is_bounded_and_structurally_groupable():
     fixture = "/opt/fixtures/dravnieks_benchmark.csv"
     with open(fixture, newline="", encoding="utf-8") as handle:
@@ -109,8 +127,45 @@ def test_public_fixture_is_bounded_and_structurally_groupable():
     assert report["serving"] == "RESEARCH_ONLY"
 
 
+def test_evaluated_research_checkpoint_and_demo_inference():
+    artifact_dir = Path("/opt/olfactoryops-model-runtime/artifacts/osmo-dravnieks-transformer-cnn")
+    upstream_dir = Path("/opt/transformer-cnn")
+    manifest, encoder, head = load_predictor(artifact_dir, upstream_dir)
+    assert manifest["modelStage"] == "RESEARCH"
+    cases = __import__("json").loads((artifact_dir / "demo_cases.json").read_text(encoding="utf-8"))["cases"]
+    assert len(cases) == 3
+    for case in cases:
+        first = predict_smiles(manifest, encoder, head, case["canonicalSmiles"])
+        second = predict_smiles(manifest, encoder, head, case["canonicalSmiles"])
+        assert first == second
+        assert 1 <= len(first["predictions"]) <= 20
+        assert first["modelStage"] == "RESEARCH"
+        assert first["evidenceStatus"] == "EVALUATED_RESEARCH"
+        assert all("not a probability" in item["scale"] for item in first["predictions"])
+
+
+def test_tampered_research_checkpoint_is_rejected_before_model_load():
+    artifact_dir = Path("/opt/olfactoryops-model-runtime/artifacts/osmo-dravnieks-transformer-cnn")
+    upstream_dir = Path("/opt/transformer-cnn")
+    with tempfile.TemporaryDirectory() as directory:
+        tampered_dir = Path(directory)
+        shutil.copy2(artifact_dir / "model_manifest.json", tampered_dir / "model_manifest.json")
+        shutil.copy2(artifact_dir / "candidate.weights.h5", tampered_dir / "candidate.weights.h5")
+        with (tampered_dir / "candidate.weights.h5").open("ab") as handle:
+            handle.write(b"tampered")
+        try:
+            load_predictor(tampered_dir, upstream_dir)
+        except ValueError as error:
+            assert str(error) == "CHECKPOINT_HASH_MISMATCH"
+        else:
+            raise AssertionError("tampered checkpoint must fail closed")
+
+
 if __name__ == "__main__":
     test_kgcnn_checkpoint_load_inference_and_metric()
     test_transformer_cnn_preprocessing_training_and_checkpoint()
+    test_actual_property_head_has_explicit_finite_gradients()
     test_public_fixture_is_bounded_and_structurally_groupable()
+    test_evaluated_research_checkpoint_and_demo_inference()
+    test_tampered_research_checkpoint_is_rejected_before_model_load()
     print("MODEL_RUNTIME_COMPATIBILITY=PASS")

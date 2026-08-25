@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceRepository": "https://github.com/osmoai/publications",
+  "sourceCommit": "5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+  "sourcePath": "qian_et_al_2023/predictive_performance/data/c_Dravnieks/data.csv",
+  "sourceVersion": "commit:5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8+lfs:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "license": "CC-BY-4.0",
+  "licenseEvidence": "The pinned repository README declares all datasets CC BY 4.0; source code is Apache-2.0.",
+  "citation": "Qian et al., Metabolic activity organizes olfactory representations, eLife 2023;12:e82502, doi:10.7554/eLife.82502",
+  "rawSha256": "d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "rawSize": 123443,
+  "lfsOid": "sha256:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "retrievedAt": "2026-08-25T10:42:00+07:00",
+  "rawRows": 127,
+  "rawColumns": 132,
+  "fixtureReconciliation": {
+    "fixturePath": "services/scientific/model-runtime/fixtures/dravnieks_benchmark.csv",
+    "fixtureAttributionCommit": "5aa9d2fa98b5d4e133676368c43a9cf65d6f6e04",
+    "fixtureAttributionCommitResolved": false,
+    "currentPinCommit": "5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+    "fixtureSha256": "bddb72d3c490f1eda9e276499ed072584cce6d8a17de17a64acbf1a75926ad69",
+    "fixtureLfsOid": null,
+    "pinnedDatasetLfsOid": "sha256:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+    "byteIdentical": false,
+    "rowAndValueReconciliation": "22 of 24 fixture SMILES occur exactly once in the pinned dataset; 5 matched rows differ in at least one of floral/citrus/musk; 2 fixture SMILES are absent.",
+    "decision": "The fixture remains historical compatibility evidence only. The pinned full Git LFS object is the sole canonical training dataset."
+  },
+  "transformations": [
+    {
+      "transformationKey": "VALIDATED_RAW",
+      "transformationVersion": "raw-integrity/1.0.0",
+      "codeRef": "services/scientific/model-runtime/osmo_demo/data_pipeline.py",
+      "configurationHash": "daadc7be454724f963e82992182f1d96a1a2890eee0d64953a063d75b3697012",
+      "inputHash": "d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+      "outputHash": "75589b6641d961fe87d69071f053489b8b0d2299e78d78aecc4a98e5f3b1463c"
+    },
+    {
+      "transformationKey": "NORMALIZED",
+      "transformationVersion": "rdkit-isomeric/1.0.0",
+      "codeRef": "services/scientific/model-runtime/osmo_demo/data_pipeline.py",
+      "configurationHash": "7081f27c5af2f2c4bde0ecb4b1494f6f09ad1da363f05b6d5b303762c097e786",
+      "inputHash": "d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+      "outputHash": "8b68d9a83d1ba94fbf60fa3c13a8d302c6a74a4aa35e658ff614493cbcb7afe1"
+    },
+    {
+      "transformationKey": "SPLIT_MANIFESTS",
+      "transformationVersion": "bemis-murcko-greedy/1.0.0",
+      "codeRef": "services/scientific/model-runtime/osmo_demo/data_pipeline.py",
+      "configurationHash": "83ac115b823f13c28c2aef42e8b79984d3258dee10f09b8265f919e2fa3d671f",
+      "inputHash": "8b68d9a83d1ba94fbf60fa3c13a8d302c6a74a4aa35e658ff614493cbcb7afe1",
+      "outputHash": "0779783ac133f4ee2cf3d5a52dc14b854929e3fd96771eb294060ae3a654045e"
+    },
+    {
+      "transformationKey": "MODEL_INPUTS",
+      "transformationVersion": "demo-schema-train-quality/1.0.0",
+      "codeRef": "services/scientific/model-runtime/osmo_demo/data_pipeline.py",
+      "configurationHash": "86b5abb287fa80615155883ccd72dfdcd0d6c73bbbfeaea029cb28a3da9ea39e",
+      "inputHash": "8b68d9a83d1ba94fbf60fa3c13a8d302c6a74a4aa35e658ff614493cbcb7afe1",
+      "outputHash": "f7f5d13db47f65d4a4ea78e06ceb76729445fa933e4d1c31d59fa423b5c90100"
+    }
+  ]
+}

@@ -23,7 +23,7 @@ export class V2OlfactoryIntelligenceController {
   async similarity(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { similarity: await this.intelligence.compareMolecularSimilarity(context, id, body, key) } }
 
   @Post('materials/:id/odor-predictions')
-  async prediction(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { prediction: await this.intelligence.recordOdorPredictionNotEvaluated(context, id, body, key) } }
+  async prediction(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { prediction: await this.intelligence.predictOdor(context, id, body, key) } }
 
   @Post('materials/:id/explainability')
   async explain(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) { const { context } = await this.context(request); await this.mutation(request, context, csrf); return { explanation: await this.intelligence.explain(context, id, body, key) } }

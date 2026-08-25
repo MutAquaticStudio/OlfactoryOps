@@ -7,9 +7,11 @@ import {
   registerDatasetVersionRequestSchema,
   registerModelRequestSchema,
   registerModelVersionRequestSchema,
+  verifyModelCheckpointRequestSchema,
 } from '../../../packages/contracts/src/model-dataset.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
+import { researchEligibleEvaluationStatuses } from './research-model-eligibility.js'
 
 type Transaction = Prisma.TransactionClient
 type JsonRecord = Record<string, unknown>
@@ -310,6 +312,29 @@ export class ModelDatasetService {
     })
   }
 
+  async verifyCheckpoint(context: PlatformContext, modelVersionId: string, rawInput: unknown, idempotencyKey?: string) {
+    await this.requireManage(context)
+    const parsed = verifyModelCheckpointRequestSchema.safeParse(rawInput)
+    if (!parsed.success) throw new PlatformError('INVALID_INPUT', 'Provide the independently computed checkpoint SHA-256.', 422)
+    return this.idempotent(context, 'model-dataset.checkpoints.verify', idempotencyKey, { modelVersionId, ...parsed.data }, async (tx) => {
+      await this.modelVersion(tx, context, modelVersionId)
+      const checkpoints = await tx.$queryRaw<Array<{ id: string; checkpointHash: string; status: string }>>`
+        SELECT id, checkpoint_hash AS "checkpointHash", status FROM v2_model_checkpoints
+        WHERE model_version_id = ${modelVersionId} AND organization_id = ${context.organizationId}
+      `
+      const checkpoint = checkpoints[0]
+      if (!checkpoint) throw new PlatformError('MODEL_CHECKPOINT_NOT_FOUND', 'No registered checkpoint is available for this model version.', 404)
+      if (checkpoint.status === 'REVOKED' || checkpoint.status === 'BLOCKED') throw new PlatformError('MODEL_CHECKPOINT_BLOCKED', 'The checkpoint is not eligible for verification.', 409)
+      if (checkpoint.checkpointHash !== parsed.data.expectedSha256) {
+        await this.audit(tx, context, 'model_dataset.checkpoint.verify', 'blocked', 'model_checkpoint', checkpoint.id, { reason: 'CHECKPOINT_HASH_MISMATCH' })
+        throw new PlatformError('CHECKPOINT_HASH_MISMATCH', 'The independently verified checkpoint hash does not match the registry.', 409)
+      }
+      await tx.$executeRaw`UPDATE v2_model_checkpoints SET status = 'VERIFIED', verified_at = now() WHERE id = ${checkpoint.id} AND organization_id = ${context.organizationId}`
+      await this.audit(tx, context, 'model_dataset.checkpoint.verify', 'allowed', 'model_checkpoint', checkpoint.id, { checkpointHash: parsed.data.expectedSha256 })
+      return { id: checkpoint.id, modelVersionId, status: 'VERIFIED', checkpointSha256: parsed.data.expectedSha256 }
+    })
+  }
+
   async recordEvaluation(context: PlatformContext, trainingRunId: string, rawInput: unknown, idempotencyKey?: string) {
     await this.requireManage(context)
     const parsed = recordEvaluationRequestSchema.safeParse(rawInput)
@@ -391,6 +416,33 @@ export class ModelDatasetService {
         GROUP BY model.id ORDER BY model.created_at DESC, model.id DESC
       `
       return rows.map((row) => ({ ...row, versionCount: Number(row.versionCount) }))
+    })
+  }
+
+  async listResearchReadyModels(context: PlatformContext) {
+    await this.requireView(context)
+    return this.scoped(context, async (tx) => {
+      return tx.$queryRaw<Array<{ id: string; modelId: string; name: string; version: string; stage: 'RESEARCH'; trainingMode: string; datasetVersion: string; evaluationStatus: string }>>`
+        SELECT version.id, version.model_id AS "modelId", model.name, version.version, version.stage,
+          coalesce(version.model_card->>'trainingMode', 'FINE_TUNE_FROZEN_PRETRAINED_ENCODER') AS "trainingMode",
+          evidence."datasetVersion", evidence."evaluationStatus"
+        FROM v2_model_versions version
+        JOIN v2_models model ON model.id = version.model_id AND model.organization_id = version.organization_id
+        JOIN v2_model_architectures architecture ON architecture.id = version.architecture_id AND architecture.organization_id = version.organization_id AND architecture.component_key = 'TRANSFORMER_CNN'
+        JOIN LATERAL (
+          SELECT dataset.version AS "datasetVersion", evaluation.status AS "evaluationStatus", evaluation.leakage_status AS "evaluationLeakageStatus"
+          FROM v2_training_runs training
+          JOIN v2_evaluation_runs evaluation ON evaluation.training_run_id = training.id AND evaluation.organization_id = training.organization_id
+          JOIN v2_dataset_versions dataset ON dataset.id = evaluation.dataset_version_id AND dataset.organization_id = training.organization_id AND dataset.status = 'APPROVED'
+          WHERE training.model_version_id = version.id AND training.organization_id = version.organization_id AND training.status = 'SUCCEEDED' AND training.leakage_status = 'PASS'
+          ORDER BY evaluation.created_at DESC, evaluation.id DESC LIMIT 1
+        ) evidence ON true
+        WHERE version.organization_id = ${context.organizationId} AND version.stage = 'RESEARCH' AND version.status NOT IN ('ARCHIVED','BLOCKED')
+          AND evidence."evaluationLeakageStatus" = 'PASS' AND evidence."evaluationStatus" IN (${Prisma.join([...researchEligibleEvaluationStatuses])})
+          AND EXISTS (SELECT 1 FROM v2_model_checkpoints checkpoint WHERE checkpoint.model_version_id = version.id AND checkpoint.organization_id = version.organization_id AND checkpoint.status = 'VERIFIED')
+        ORDER BY version.created_at DESC, version.id DESC
+        LIMIT 20
+      `
     })
   }
 
