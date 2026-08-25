@@ -6,8 +6,10 @@ import {
 } from './material-intelligence-rls-contract.mjs'
 import {
   V2_PLATFORM_REGISTRY_CLIENT_ROLES,
+  V2_PLATFORM_REGISTRY_READER_ROLE,
   V2_PLATFORM_REGISTRY_TABLES,
   assertV2PlatformRegistryClientGrants,
+  assertV2PlatformRegistryReaderRole,
   assertV2PlatformRegistryRlsContract,
   assertV2PlatformRegistryRuntimeGrants,
 } from './v2-platform-registry-security-contract.mjs'
@@ -83,8 +85,27 @@ try {
     WHERE schemaname = 'public' AND tablename = ANY($1::text[])
   `, [MATERIAL_INTELLIGENCE_TABLES])
   assertMaterialIntelligenceRlsContract({ rlsRows: materialRlsRows, policyRows: materialPolicyRows })
+  const runtimeIdentifier = `"${runtimeRole}"`
+  await client.query('BEGIN')
+  try {
+    await client.query(`REVOKE ALL PRIVILEGES ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins FROM ${runtimeIdentifier}`)
+    await client.query(`GRANT SELECT ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins TO ${runtimeIdentifier}`)
+    await client.query(`GRANT "${V2_PLATFORM_REGISTRY_READER_ROLE}" TO ${runtimeIdentifier}`)
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  }
+  const { rows: registryReaderRoleRows } = await client.query(`
+    SELECT rolname AS "roleName", rolcanlogin AS "canLogin", rolsuper AS superuser,
+      rolcreatedb AS "createDb", rolcreaterole AS "createRole", rolinherit AS inherit,
+      rolbypassrls AS "bypassRls", rolreplication AS replication
+    FROM pg_roles WHERE rolname = $1
+  `, [V2_PLATFORM_REGISTRY_READER_ROLE])
+  assertV2PlatformRegistryReaderRole(registryReaderRoleRows)
   const { rows: registryRlsRows } = await client.query(`
-    SELECT c.relname AS "tableName", c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+    SELECT c.relname AS "tableName", pg_get_userbyid(c.relowner) AS "tableOwner",
+      c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
   `, [V2_PLATFORM_REGISTRY_TABLES])
@@ -102,11 +123,12 @@ try {
       has_table_privilege(role_name, format('public.%I', table_name), 'DELETE') AS "canDelete",
       has_table_privilege(role_name, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
       has_table_privilege(role_name, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
-      has_table_privilege(role_name, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+      has_table_privilege(role_name, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role(role_name, $3, 'MEMBER') AS "readerMembership"
     FROM unnest($1::text[]) AS role_name
     CROSS JOIN unnest($2::text[]) AS table_name
     WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)
-  `, [V2_PLATFORM_REGISTRY_CLIENT_ROLES, V2_PLATFORM_REGISTRY_TABLES])
+  `, [V2_PLATFORM_REGISTRY_CLIENT_ROLES, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
   const { rows: registryRuntimeGrantRows } = await client.query(`
     SELECT table_name AS "tableName",
       has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
@@ -115,10 +137,11 @@ try {
       has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
       has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
       has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
-      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role($1, $3, 'MEMBER') AS "readerMembership"
     FROM unnest($2::text[]) AS table_name
     WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
-  `, [runtimeRole, V2_PLATFORM_REGISTRY_TABLES])
+  `, [runtimeRole, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
   assertV2PlatformRegistryRlsContract({ rlsRows: registryRlsRows, policyRows: registryPolicyRows })
   assertV2PlatformRegistryClientGrants(registryClientGrantRows)
   assertV2PlatformRegistryRuntimeGrants(registryRuntimeGrantRows)

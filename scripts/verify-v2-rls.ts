@@ -129,6 +129,7 @@ async function configureApplicationRole() {
   await adminClient.$executeRawUnsafe('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('REVOKE ALL PRIVILEGES ON v2_plans, v2_scientific_component_pins, v2_model_component_pins FROM v2_app')
   await adminClient.$executeRawUnsafe('GRANT SELECT ON v2_plans, v2_scientific_component_pins, v2_model_component_pins TO v2_app')
+  await adminClient.$executeRawUnsafe('GRANT v2_platform_registry_reader TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO v2_app')

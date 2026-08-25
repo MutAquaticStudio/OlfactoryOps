@@ -4,7 +4,9 @@ import {
   assertMaterialIntelligenceRuntimeGrants,
 } from './material-intelligence-rls-contract.mjs'
 import {
+  V2_PLATFORM_REGISTRY_READER_ROLE,
   V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryReaderRole,
   assertV2PlatformRegistryRuntimeGrants,
 } from './v2-platform-registry-security-contract.mjs'
 
@@ -16,7 +18,7 @@ const allowLoopbackTest = process.env.V2_STAGING_ALLOW_LOOPBACK_TEST === 'true' 
 
 if (process.env.V2_STAGING_MIGRATION_APPROVED !== 'APPLY_STAGING') throw new Error('RUNTIME_DB_PRIVILEGES=BLOCKED explicit approval is required')
 if (!databaseUrl) throw new Error('RUNTIME_DB_PRIVILEGES=BLOCKED STAGING_DATABASE_URL is required')
-if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error('RUNTIME_DB_PRIVILEGES=FAIL runtime role name is invalid')
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(role) || role === V2_PLATFORM_REGISTRY_READER_ROLE) throw new Error('RUNTIME_DB_PRIVILEGES=FAIL runtime role name is invalid')
 
 const database = new URL(databaseUrl)
 if (database.protocol !== 'postgresql:' && database.protocol !== 'postgres:') throw new Error('RUNTIME_DB_PRIVILEGES=FAIL PostgreSQL is required')
@@ -55,16 +57,26 @@ try {
   if (roleState.rolsuper) {
     throw new Error('RUNTIME_DB_PRIVILEGES=BLOCKED configured Hyperdrive role is still SUPERUSER in the staging database targeted by STAGING_DATABASE_URL')
   }
+  const { rows: registryReaderRoleRows } = await client.query(`
+    SELECT rolname AS "roleName", rolcanlogin AS "canLogin", rolsuper AS superuser,
+      rolcreatedb AS "createDb", rolcreaterole AS "createRole", rolinherit AS inherit,
+      rolbypassrls AS "bypassRls", rolreplication AS replication
+    FROM pg_roles WHERE rolname = $1
+  `, [V2_PLATFORM_REGISTRY_READER_ROLE])
+  assertV2PlatformRegistryReaderRole(registryReaderRoleRows)
 
   await client.query('BEGIN')
   try {
     const databaseName = (await client.query('SELECT current_database() AS name')).rows[0].name
     for (const membership of memberships.rows) {
-      await client.query(`REVOKE ${quoteIdentifier(membership.rolname)} FROM ${identifier}`)
+      if (membership.rolname !== V2_PLATFORM_REGISTRY_READER_ROLE) {
+        await client.query(`REVOKE ${quoteIdentifier(membership.rolname)} FROM ${identifier}`)
+      }
     }
-    if (!roleState.rolcanlogin || roleState.rolcreatedb || roleState.rolcreaterole || roleState.rolbypassrls || roleState.rolreplication) {
+    if (!roleState.rolcanlogin || roleState.rolcreatedb || roleState.rolcreaterole || roleState.rolinherit || roleState.rolbypassrls || roleState.rolreplication) {
       await client.query(`ALTER ROLE ${identifier} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION`)
     }
+    await client.query(`GRANT ${quoteIdentifier(V2_PLATFORM_REGISTRY_READER_ROLE)} TO ${identifier}`)
     await client.query(`GRANT CONNECT ON DATABASE "${databaseName.replaceAll('"', '""')}" TO ${identifier}`)
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
     await client.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${identifier}`)
@@ -119,21 +131,24 @@ try {
       has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
       has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
       has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
-      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role($1, $3, 'MEMBER') AS "readerMembership"
     FROM unnest($2::text[]) AS table_name
-  `, [role, V2_PLATFORM_REGISTRY_TABLES])
+  `, [role, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
   assertV2PlatformRegistryRuntimeGrants(platformRegistryGrantRows)
   const result = verification.rows[0]
-  const parentRoleCount = (await client.query(`
-    SELECT COUNT(*)::int AS count
+  const { rows: parentRoleRows } = await client.query(`
+    SELECT parent.rolname
     FROM pg_auth_members membership
+    JOIN pg_roles parent ON parent.oid = membership.roleid
     JOIN pg_roles member ON member.oid = membership.member
     WHERE member.rolname = $1
-  `, [role])).rows[0].count
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute || !result.platform_role_execute || !result.platform_state_execute || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) {
+  `, [role])
+  const readerMembershipOnly = parentRoleRows.length === 1 && parentRoleRows[0].rolname === V2_PLATFORM_REGISTRY_READER_ROLE
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || !readerMembershipOnly || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute || !result.platform_role_execute || !result.platform_state_execute || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) {
     throw new Error('RUNTIME_DB_PRIVILEGES=FAIL least-privilege verification failed')
   }
-  console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'NONE' }))
+  console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'PLATFORM_REGISTRY_READER_ONLY' }))
 } finally {
   await client.end().catch(() => undefined)
 }

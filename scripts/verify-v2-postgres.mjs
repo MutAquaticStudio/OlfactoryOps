@@ -108,7 +108,8 @@ try {
       }
     }
     const registryRlsRows = await client.$queryRawUnsafe(`
-      SELECT c.relname AS "tableName", c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+      SELECT c.relname AS "tableName", pg_get_userbyid(c.relowner) AS "tableOwner",
+        c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
     `, V2_PLATFORM_REGISTRY_TABLES)

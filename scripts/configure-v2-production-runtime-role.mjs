@@ -10,7 +10,9 @@ import {
   assertMaterialIntelligenceRuntimeGrants,
 } from './material-intelligence-rls-contract.mjs'
 import {
+  V2_PLATFORM_REGISTRY_READER_ROLE,
   V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryReaderRole,
   assertV2PlatformRegistryRuntimeGrants,
 } from './v2-platform-registry-security-contract.mjs'
 
@@ -18,7 +20,7 @@ const { Client } = pg
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
 const role = process.env.V2_RUNTIME_DB_ROLE ?? 'hyperdrive_user'
 if (process.env.V2_PRODUCTION_MIGRATION_APPROVED !== 'APPLY_PRODUCTION') throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED explicit production approval is required')
-if (!databaseUrl || !/^[a-z_][a-z0-9_]{0,62}$/.test(role)) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED protected production inputs are required')
+if (!databaseUrl || !/^[a-z_][a-z0-9_]{0,62}$/.test(role) || role === V2_PLATFORM_REGISTRY_READER_ROLE) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED protected production inputs are required')
 const database = new URL(databaseUrl)
 if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL a non-loopback PostgreSQL origin is required')
 const identifier = quotePostgresIdentifier(role)
@@ -29,6 +31,13 @@ try {
   if (roleResult.rowCount !== 1) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=BLOCKED configured Hyperdrive role does not exist')
   const roleState = roleResult.rows[0]
   assertHostedRoleIsNotPrivileged(roleState)
+  const { rows: registryReaderRoleRows } = await client.query(`
+    SELECT rolname AS "roleName", rolcanlogin AS "canLogin", rolsuper AS superuser,
+      rolcreatedb AS "createDb", rolcreaterole AS "createRole", rolinherit AS inherit,
+      rolbypassrls AS "bypassRls", rolreplication AS replication
+    FROM pg_roles WHERE rolname = $1
+  `, [V2_PLATFORM_REGISTRY_READER_ROLE])
+  assertV2PlatformRegistryReaderRole(registryReaderRoleRows)
   const ownership = await client.query(`
     SELECT COUNT(*)::int AS count
     FROM (
@@ -50,8 +59,13 @@ try {
   await client.query('BEGIN')
   try {
     const databaseName = (await client.query('SELECT current_database() AS name')).rows[0].name
-    for (const membership of memberships.rows) await client.query(`REVOKE ${quotePostgresIdentifier(membership.rolname)} FROM ${identifier}`)
+    for (const membership of memberships.rows) {
+      if (membership.rolname !== V2_PLATFORM_REGISTRY_READER_ROLE) {
+        await client.query(`REVOKE ${quotePostgresIdentifier(membership.rolname)} FROM ${identifier}`)
+      }
+    }
     if (requiresSafeAttributeHardening(roleState)) await client.query(hostedSafeAlterRoleStatement(identifier))
+    await client.query(`GRANT ${quotePostgresIdentifier(V2_PLATFORM_REGISTRY_READER_ROLE)} TO ${identifier}`)
     await client.query(`GRANT CONNECT ON DATABASE "${databaseName.replaceAll('"', '""')}" TO ${identifier}`)
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
     await client.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${identifier}`)
@@ -93,11 +107,13 @@ try {
       has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
       has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
       has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
-      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role($1, $3, 'MEMBER') AS "readerMembership"
     FROM unnest($2::text[]) AS table_name
-  `, [role, V2_PLATFORM_REGISTRY_TABLES])
+  `, [role, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
   assertV2PlatformRegistryRuntimeGrants(platformRegistryGrantRows)
-  const parentRoleCount = (await client.query('SELECT COUNT(*)::int AS count FROM pg_auth_members membership JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1', [role])).rows[0].count
+  const { rows: parentRoleRows } = await client.query('SELECT parent.rolname FROM pg_auth_members membership JOIN pg_roles parent ON parent.oid = membership.roleid JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1', [role])
+  const readerMembershipOnly = parentRoleRows.length === 1 && parentRoleRows[0].rolname === V2_PLATFORM_REGISTRY_READER_ROLE
   const finalOwnership = await client.query(`
     SELECT COUNT(*)::int AS count
     FROM (
@@ -115,6 +131,6 @@ try {
     ) owned_objects
   `, [role])
   const result = rows[0]
-  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || parentRoleCount !== 0 || finalOwnership.rows[0].count !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
-  console.log(JSON.stringify({ productionRuntimePrivileges: 'PASS', role, superuser: false, bypassRls: false, privilegedMembership: 'NONE' }))
+  if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || !readerMembershipOnly || finalOwnership.rows[0].count !== 0 || !result.schema_usage || result.schema_create || !result.table_access || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) throw new Error('PRODUCTION_RUNTIME_PRIVILEGES=FAIL least-privilege verification failed')
+  console.log(JSON.stringify({ productionRuntimePrivileges: 'PASS', role, superuser: false, bypassRls: false, privilegedMembership: 'PLATFORM_REGISTRY_READER_ONLY' }))
 } finally { await client.end().catch(() => undefined) }
