@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceRepository": "https://github.com/osmoai/publications",
+  "sourceCommit": "5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+  "sourcePath": "qian_et_al_2023/predictive_performance/data/c_Dravnieks/data.csv",
+  "sourceVersion": "commit:5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8+lfs:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "license": "CC-BY-4.0",
+  "licenseEvidence": "The pinned repository README declares all datasets CC BY 4.0; source code is Apache-2.0.",
+  "citation": "Qian et al., Metabolic activity organizes olfactory representations, eLife 2023;12:e82502, doi:10.7554/eLife.82502",
+  "rawSha256": "d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "rawSize": 123443,
+  "lfsOid": "sha256:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+  "retrievedAt": "2026-08-25T10:42:00+07:00",
+  "rawRows": 127,
+  "rawColumns": 132,
+  "fixtureReconciliation": {
+    "fixturePath": "services/scientific/model-runtime/fixtures/dravnieks_benchmark.csv",
+    "fixtureAttributionCommit": "5aa9d2fa98b5d4e133676368c43a9cf65d6f6e04",
+    "fixtureAttributionCommitResolved": false,
+    "currentPinCommit": "5aa9d2cd06a9b4dcae8b5fce2ec5e5d0f763fbd8",
+    "fixtureSha256": "bddb72d3c490f1eda9e276499ed072584cce6d8a17de17a64acbf1a75926ad69",
+    "fixtureLfsOid": null,
+    "pinnedDatasetLfsOid": "sha256:d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf",
+    "byteIdentical": false,
+    "rowAndValueReconciliation": "22 of 24 fixture SMILES occur exactly once in the pinned dataset; 5 matched rows differ in at least one of floral/citrus/musk; 2 fixture SMILES are absent.",
+    "decision": "The fixture remains historical compatibility evidence only. The pinned full Git LFS object is the sole canonical training dataset."
+  },
+  "transformations": []
+}

@@ -39,5 +39,7 @@ COPY olfactory_pipeline.py /opt/olfactory_pipeline.py
 COPY model_runtime_server.py /opt/model_runtime_server.py
 COPY model-component-pins.json /opt/model-component-pins.json
 COPY fixtures /opt/fixtures
+COPY osmo_demo /opt/olfactoryops-model-runtime/osmo_demo
+COPY artifacts/osmo-dravnieks-transformer-cnn /opt/olfactoryops-model-runtime/artifacts/osmo-dravnieks-transformer-cnn
 EXPOSE 8100
 CMD ["python", "/opt/model_runtime_server.py"]

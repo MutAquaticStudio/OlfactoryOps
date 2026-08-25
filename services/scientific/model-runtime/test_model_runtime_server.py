@@ -32,18 +32,49 @@ class ModelRuntimeHttpTests(unittest.TestCase):
         self.assertEqual(response, HTTPStatus.OK)
         self.assertEqual(body["payload"]["evidenceStatus"], "NOT_CONFIGURED")
 
-    def request(self, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
-        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+    def request(self, payload: dict[str, object], path: str = "/v1/jobs", secret: str = "model-http-test-secret") -> tuple[int, dict[str, object]]:
+        connection = HTTPConnection("127.0.0.1", self.server.server_port, timeout=30)
         encoded = json.dumps(payload).encode("utf-8")
-        connection.request("POST", "/v1/jobs", body=encoded, headers={
+        connection.request("POST", path, body=encoded, headers={
             "content-type": "application/json",
             "content-length": str(len(encoded)),
-            "x-olfactoryops-scientific-key": "model-http-test-secret",
+            "x-olfactoryops-scientific-key": secret,
         })
         response = connection.getresponse()
         body = json.loads(response.read().decode("utf-8"))
         connection.close()
         return response.status, body
+
+    def test_prediction_rejects_unauthorized_and_unbounded_input_without_loading_model(self) -> None:
+        status, body = self.request({"modelVersionId": "candidate", "canonicalSmiles": "CCO"}, path="/v1/predictions", secret="wrong")
+        self.assertEqual(status, HTTPStatus.UNAUTHORIZED)
+        self.assertEqual(body, {"error": "UNAUTHORIZED"})
+        status, body = self.request({"modelVersionId": "candidate", "canonicalSmiles": "CCO", "checkpointPath": "/tmp/unsafe"}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.UNPROCESSABLE_ENTITY)
+        self.assertEqual(body, {"error": "INVALID_SCIENTIFIC_REQUEST"})
+
+    def test_prediction_uses_only_the_bundled_evaluated_research_model(self) -> None:
+        status, body = self.request({"modelVersionId": "osmo-dravnieks-transformer-cnn/1.0.0", "canonicalSmiles": "CCO", "requestedTargets": ["regression_floral"]}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(body["modelStage"], "RESEARCH")
+        self.assertEqual(body["evidenceStatus"], "EVALUATED_RESEARCH")
+        self.assertEqual([item["targetKey"] for item in body["predictions"]], ["regression_floral"])
+        status, body = self.request({"modelVersionId": "unregistered-model", "canonicalSmiles": "CCO"}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.CONFLICT)
+        self.assertEqual(body, {"error": "MODEL_NOT_EVALUATED"})
+
+    def test_prediction_rejects_invalid_smiles_and_unsupported_targets(self) -> None:
+        status, body = self.request({"modelVersionId": "osmo-dravnieks-transformer-cnn/1.0.0", "canonicalSmiles": "not-a-smiles"}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.UNPROCESSABLE_ENTITY)
+        self.assertEqual(body, {"error": "INVALID_SMILES"})
+        status, body = self.request({"modelVersionId": "osmo-dravnieks-transformer-cnn/1.0.0", "canonicalSmiles": "CCO", "requestedTargets": ["regression_not_registered"]}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.UNPROCESSABLE_ENTITY)
+        self.assertEqual(body, {"error": "UNSUPPORTED_TARGET"})
+
+    def test_prediction_rejects_oversized_request_before_model_inference(self) -> None:
+        status, body = self.request({"modelVersionId": "osmo-dravnieks-transformer-cnn/1.0.0", "canonicalSmiles": "C" * 66_000}, path="/v1/predictions")
+        self.assertEqual(status, HTTPStatus.UNPROCESSABLE_ENTITY)
+        self.assertEqual(body, {"error": "INVALID_SCIENTIFIC_REQUEST"})
 
     def test_parallel_private_jobs_preserve_each_artifact_reference(self) -> None:
         payloads = [
@@ -59,3 +90,7 @@ class ModelRuntimeHttpTests(unittest.TestCase):
             {f"{payload['artifactRef']}/model-runtime" for payload in payloads},
         )
         self.assertTrue(all(body["payload"]["evidenceStatus"] == "NOT_CONFIGURED" for _, body in results))
+
+
+if __name__ == "__main__":
+    unittest.main()

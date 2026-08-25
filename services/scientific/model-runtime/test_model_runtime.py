@@ -2,6 +2,8 @@
 
 import csv
 import os
+from pathlib import Path
+import shutil
 import sys
 import tempfile
 import numpy as np
@@ -15,6 +17,8 @@ from kgcnn.literature_core.GCN._model import make_model
 sys.path.insert(0, "/opt/transformer-cnn/transformer_cnn")
 from augment_smiles import augment_smiles
 from layers import PositionLayer, SelfLayer
+sys.path.insert(0, "/opt/olfactoryops-model-runtime")
+from osmo_demo.train_candidate import load_predictor, predict_smiles
 
 
 def build_kgcnn_model():
@@ -109,8 +113,44 @@ def test_public_fixture_is_bounded_and_structurally_groupable():
     assert report["serving"] == "RESEARCH_ONLY"
 
 
+def test_evaluated_research_checkpoint_and_demo_inference():
+    artifact_dir = Path("/opt/olfactoryops-model-runtime/artifacts/osmo-dravnieks-transformer-cnn")
+    upstream_dir = Path("/opt/transformer-cnn")
+    manifest, encoder, head = load_predictor(artifact_dir, upstream_dir)
+    assert manifest["modelStage"] == "RESEARCH"
+    cases = __import__("json").loads((artifact_dir / "demo_cases.json").read_text(encoding="utf-8"))["cases"]
+    assert len(cases) == 3
+    for case in cases:
+        first = predict_smiles(manifest, encoder, head, case["canonicalSmiles"])
+        second = predict_smiles(manifest, encoder, head, case["canonicalSmiles"])
+        assert first == second
+        assert 1 <= len(first["predictions"]) <= 20
+        assert first["modelStage"] == "RESEARCH"
+        assert first["evidenceStatus"] == "EVALUATED_RESEARCH"
+        assert all("not a probability" in item["scale"] for item in first["predictions"])
+
+
+def test_tampered_research_checkpoint_is_rejected_before_model_load():
+    artifact_dir = Path("/opt/olfactoryops-model-runtime/artifacts/osmo-dravnieks-transformer-cnn")
+    upstream_dir = Path("/opt/transformer-cnn")
+    with tempfile.TemporaryDirectory() as directory:
+        tampered_dir = Path(directory)
+        shutil.copy2(artifact_dir / "model_manifest.json", tampered_dir / "model_manifest.json")
+        shutil.copy2(artifact_dir / "candidate.weights.h5", tampered_dir / "candidate.weights.h5")
+        with (tampered_dir / "candidate.weights.h5").open("ab") as handle:
+            handle.write(b"tampered")
+        try:
+            load_predictor(tampered_dir, upstream_dir)
+        except ValueError as error:
+            assert str(error) == "CHECKPOINT_HASH_MISMATCH"
+        else:
+            raise AssertionError("tampered checkpoint must fail closed")
+
+
 if __name__ == "__main__":
     test_kgcnn_checkpoint_load_inference_and_metric()
     test_transformer_cnn_preprocessing_training_and_checkpoint()
     test_public_fixture_is_bounded_and_structurally_groupable()
+    test_evaluated_research_checkpoint_and_demo_inference()
+    test_tampered_research_checkpoint_is_rejected_before_model_load()
     print("MODEL_RUNTIME_COMPATIBILITY=PASS")
