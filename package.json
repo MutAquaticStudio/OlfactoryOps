@@ -22,6 +22,8 @@
     "cloud-runtime:render-staging": "node scripts/render-cloud-runtime-staging-config.mjs",
     "test:scientific:remote": "node scripts/verify-scientific-remote.mjs",
     "test:material-intelligence-pilot50": "tsx scripts/run-material-intelligence-pilot50.ts",
+    "material-intelligence:bulk-precheck": "python scripts/material_intelligence_bulk_precheck.py",
+    "test:material-intelligence-bulk-precheck": "python -m unittest discover -s scripts -p test_material_intelligence_bulk_precheck.py",
     "test:material-intelligence-postgres": "node scripts/verify-material-intelligence-postgres.mjs",
     "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
     "build:tenant-router": "wrangler deploy --dry-run --config wrangler.tenant-router.toml --outdir dist-tenant-router",
