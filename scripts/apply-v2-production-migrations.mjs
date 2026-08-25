@@ -4,6 +4,13 @@ import {
   MATERIAL_INTELLIGENCE_TABLES,
   assertMaterialIntelligenceRlsContract,
 } from './material-intelligence-rls-contract.mjs'
+import {
+  V2_PLATFORM_REGISTRY_CLIENT_ROLES,
+  V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryClientGrants,
+  assertV2PlatformRegistryRlsContract,
+  assertV2PlatformRegistryRuntimeGrants,
+} from './v2-platform-registry-security-contract.mjs'
 
 const { Client } = pg
 const migrations = [
@@ -34,11 +41,14 @@ const migrations = [
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
   'infra/postgres/migrations/0026_platform_password_resets.sql',
   'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
+  'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql',
 ]
 
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
+const runtimeRole = process.env.V2_RUNTIME_DB_ROLE ?? 'hyperdrive_user'
 if (process.env.V2_PRODUCTION_MIGRATION_APPROVED !== 'APPLY_PRODUCTION') throw new Error('PRODUCTION_MIGRATIONS=BLOCKED explicit production approval is required')
 if (!databaseUrl) throw new Error('PRODUCTION_MIGRATIONS=BLOCKED PRODUCTION_DATABASE_URL is required')
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(runtimeRole)) throw new Error('PRODUCTION_MIGRATIONS=FAIL runtime role name is invalid')
 const database = new URL(databaseUrl)
 if (!['postgresql:', 'postgres:'].includes(database.protocol) || ['localhost', '127.0.0.1', '::1'].includes(database.hostname)) throw new Error('PRODUCTION_MIGRATIONS=FAIL a non-loopback PostgreSQL origin is required')
 
@@ -64,12 +74,55 @@ try {
     WHERE schemaname = 'public' AND tablename = ANY($1::text[])
   `, [MATERIAL_INTELLIGENCE_TABLES])
   assertMaterialIntelligenceRlsContract({ rlsRows: materialRlsRows, policyRows: materialPolicyRows })
+  const { rows: registryRlsRows } = await client.query(`
+    SELECT c.relname AS "tableName", c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+  `, [V2_PLATFORM_REGISTRY_TABLES])
+  const { rows: registryPolicyRows } = await client.query(`
+    SELECT tablename AS "tableName", policyname AS "policyName", permissive, roles, cmd AS command,
+      qual AS "usingExpression", with_check AS "checkExpression"
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+  `, [V2_PLATFORM_REGISTRY_TABLES])
+  const { rows: registryClientGrantRows } = await client.query(`
+    SELECT role_name AS "roleName", table_name AS "tableName",
+      has_table_privilege(role_name, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege(role_name, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege(role_name, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege(role_name, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      has_table_privilege(role_name, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
+      has_table_privilege(role_name, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
+      has_table_privilege(role_name, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+    FROM unnest($1::text[]) AS role_name
+    CROSS JOIN unnest($2::text[]) AS table_name
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)
+  `, [V2_PLATFORM_REGISTRY_CLIENT_ROLES, V2_PLATFORM_REGISTRY_TABLES])
+  const { rows: registryRuntimeGrantRows } = await client.query(`
+    SELECT table_name AS "tableName",
+      has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
+      has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+    FROM unnest($2::text[]) AS table_name
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+  `, [runtimeRole, V2_PLATFORM_REGISTRY_TABLES])
+  assertV2PlatformRegistryRlsContract({ rlsRows: registryRlsRows, policyRows: registryPolicyRows })
+  assertV2PlatformRegistryClientGrants(registryClientGrantRows)
+  assertV2PlatformRegistryRuntimeGrants(registryRuntimeGrantRows)
   console.log(JSON.stringify({
     productionMigrations: 'PASS',
     migrationCount: migrations.length,
-    rlsTablesVerified: baselineRlsRows.length + materialRlsRows.length,
+    rlsTablesVerified: baselineRlsRows.length + materialRlsRows.length + registryRlsRows.length,
     materialIntelligenceRlsTablesVerified: materialRlsRows.length,
     materialIntelligenceTenantPoliciesVerified: materialPolicyRows.length,
+    platformRegistryRlsTablesVerified: registryRlsRows.length,
+    platformRegistryReadPoliciesVerified: registryPolicyRows.length,
+    platformRegistryClientGrantRowsVerified: registryClientGrantRows.length,
+    platformRegistryRuntimeGrantRowsVerified: registryRuntimeGrantRows.length,
   }))
 } finally {
   await client.end().catch(() => undefined)

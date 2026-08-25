@@ -3,6 +3,10 @@ import {
   MATERIAL_INTELLIGENCE_TABLES,
   assertMaterialIntelligenceRuntimeGrants,
 } from './material-intelligence-rls-contract.mjs'
+import {
+  V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryRuntimeGrants,
+} from './v2-platform-registry-security-contract.mjs'
 
 const { Client } = pg
 
@@ -69,6 +73,8 @@ try {
     await client.query(`GRANT USAGE ON SCHEMA public TO ${identifier}`)
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${identifier}`)
     await client.query(`REVOKE UPDATE, DELETE ON public.v2_material_intelligence_evidence, public.v2_scientific_eligibility_decisions FROM ${identifier}`)
+    await client.query(`REVOKE ALL PRIVILEGES ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins FROM ${identifier}`)
+    await client.query(`GRANT SELECT ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_platform_has_role(TEXT[]) TO ${identifier}`)
@@ -105,6 +111,18 @@ try {
     FROM unnest($2::text[]) AS table_name
   `, [role, MATERIAL_INTELLIGENCE_TABLES])
   assertMaterialIntelligenceRuntimeGrants(materialGrantRows)
+  const { rows: platformRegistryGrantRows } = await client.query(`
+    SELECT table_name AS "tableName",
+      has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
+      has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger"
+    FROM unnest($2::text[]) AS table_name
+  `, [role, V2_PLATFORM_REGISTRY_TABLES])
+  assertV2PlatformRegistryRuntimeGrants(platformRegistryGrantRows)
   const result = verification.rows[0]
   const parentRoleCount = (await client.query(`
     SELECT COUNT(*)::int AS count

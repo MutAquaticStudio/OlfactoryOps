@@ -27,6 +27,7 @@
     "test:material-intelligence-bulk-precheck": "python -m unittest discover -s scripts -p test_material_intelligence_bulk_precheck.py",
     "test:material-intelligence-postgres": "node scripts/verify-material-intelligence-postgres.mjs",
     "test:material-intelligence-persistence-postgres": "tsx scripts/verify-material-intelligence-persistence-postgres.ts",
+    "test:v2:platform-registry-security": "cross-env V2_QA_ENVIRONMENT=test V2_QA_DISPOSABLE_DATABASE=CONFIRMED node scripts/verify-v2-platform-registry-security-postgres.mjs",
     "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
     "build:tenant-router": "wrangler deploy --dry-run --config wrangler.tenant-router.toml --outdir dist-tenant-router",
     "start:api": "node dist-api/server/src/main.js",

@@ -87,6 +87,9 @@ function applyMigrations() {
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0023_platform_control_plane_operations.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql')
   executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0026_platform_password_resets.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0027_material_intelligence_foundation.sql')
+  executePrisma(databaseUrl, undefined, 'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql')
 }
 
 function resetDisposableSchema() {
@@ -124,6 +127,8 @@ async function configureApplicationRole() {
   `)
   await adminClient.$executeRawUnsafe('GRANT USAGE ON SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO v2_app')
+  await adminClient.$executeRawUnsafe('REVOKE ALL PRIVILEGES ON v2_plans, v2_scientific_component_pins, v2_model_component_pins FROM v2_app')
+  await adminClient.$executeRawUnsafe('GRANT SELECT ON v2_plans, v2_scientific_component_pins, v2_model_component_pins TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT) TO v2_app')
   await adminClient.$executeRawUnsafe('GRANT EXECUTE ON FUNCTION public.v2_resolve_active_workspace_hostname(TEXT) TO v2_app')
