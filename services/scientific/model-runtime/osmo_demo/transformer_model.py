@@ -152,6 +152,40 @@ def build_property_head(target_count: int, learning_rate: float) -> tf.keras.Mod
     return model
 
 
+def verify_property_head_gradients(
+    model: tf.keras.Model,
+    encoded_batch: np.ndarray | tf.Tensor,
+    target_values: list[np.ndarray | tf.Tensor],
+) -> dict[str, Any]:
+    encoded = tf.convert_to_tensor(encoded_batch, dtype=tf.float32)
+    if encoded.shape.rank != 3 or encoded.shape[-1] != EMBEDDING_SIZE:
+        raise ValueError("GRADIENT_CHECK_INPUT_SHAPE_INVALID")
+    if len(target_values) != len(model.outputs):
+        raise ValueError("GRADIENT_CHECK_TARGET_COUNT_INVALID")
+    targets = [tf.convert_to_tensor(value, dtype=tf.float32) for value in target_values]
+    with tf.GradientTape() as tape:
+        raw_predictions = model(encoded, training=True)
+        predictions = raw_predictions if isinstance(raw_predictions, list) else [raw_predictions]
+        if len(predictions) != len(targets):
+            raise ValueError("GRADIENT_CHECK_OUTPUT_COUNT_INVALID")
+        losses = [tf.reduce_mean(tf.math.squared_difference(target, prediction)) for target, prediction in zip(targets, predictions)]
+        total_loss = tf.add_n(losses)
+    variables = model.trainable_variables
+    gradients = tape.gradient(total_loss, variables)
+    if not variables or any(gradient is None for gradient in gradients):
+        raise ValueError("MISSING_PROPERTY_HEAD_GRADIENT")
+    if not bool(tf.math.is_finite(total_loss).numpy()):
+        raise ValueError("NONFINITE_PROPERTY_HEAD_LOSS")
+    if not all(bool(tf.reduce_all(tf.math.is_finite(gradient)).numpy()) for gradient in gradients if gradient is not None):
+        raise ValueError("NONFINITE_PROPERTY_HEAD_GRADIENT")
+    return {
+        "status": "PASS",
+        "finiteLoss": True,
+        "finiteGradients": True,
+        "trainableVariableCount": len(variables),
+    }
+
+
 def encode(encoder: tf.keras.Model, smiles_values: list[str], batch_size: int) -> np.ndarray:
     tokens, mask = tokenize(smiles_values)
     result = encoder.predict([tokens, mask], batch_size=batch_size, verbose=0)

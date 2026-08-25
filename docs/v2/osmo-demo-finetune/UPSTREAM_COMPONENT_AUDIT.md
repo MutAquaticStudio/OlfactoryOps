@@ -24,6 +24,9 @@ OlfactoryOps policy state remains `REVIEW_REQUIRED`.
 The default upstream property-training path copies a pretrained
 `pretrained/embeddings.npy` encoder artifact and loads those weights into a frozen
 Transformer encoder. The property-specific Transformer-CNN head is then optimized
-on the supervised dataset. The exact training label for this goal is therefore
-`FINE_TUNE_FROZEN_PRETRAINED_ENCODER`; it is not training from random initialization,
-and it does not claim that the frozen encoder weights themselves are updated.
+on the supervised dataset. The canonical interpretation is
+`TRANSFER_LEARNING_FROZEN_PRETRAINED_ENCODER`: transfer learning with a frozen
+pretrained molecular Transformer encoder. Historical artifacts retain
+`FINE_TUNE_FROZEN_PRETRAINED_ENCODER` as an immutable lineage identifier; it is
+not training from random initialization and does not claim that the frozen
+encoder weights themselves are updated.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Activity, FlaskConical } from 'lucide-react'
+import { trainingModeLabel } from './olfactory-research-labels'
 
 type ResearchModel = { id: string; name: string; version: string; stage: 'RESEARCH'; trainingMode: string; datasetVersion: string }
 type Prediction = {
@@ -100,7 +101,7 @@ export function OlfactoryResearchPanel({ material }: { material?: { id: string; 
     {state === 'NOT_CONFIGURED' ? <div className="v2-alert" role="status">The private research model runtime is not configured in this environment.</div> : null}
     {state === 'ERROR' ? <div className="v2-alert is-error" role="alert">Research inference could not be completed. No fallback result was generated.</div> : null}
     {state === 'SUCCESS' && prediction ? <div className="v2-olfactory-result">
-      <div className="v2-olfactory-evidence"><div><span>Model</span><strong>{prediction.modelName}</strong><small>{prediction.modelStage} / {prediction.trainingMode.replaceAll('_', ' ')}</small></div><div><span>Molecular identity</span><strong className="v2-mono">{prediction.canonicalSmiles}</strong><small>Structure {prediction.inputStructureHash.slice(0, 12)}</small></div><div><span>Evidence</span><strong>Evaluated research</strong><small>Dataset {prediction.datasetVersion}</small></div></div>
+      <div className="v2-olfactory-evidence"><div><span>Model</span><strong>{prediction.modelName}</strong><small>{prediction.modelStage} / {trainingModeLabel(prediction.trainingMode)}</small></div><div><span>Molecular identity</span><strong className="v2-mono">{prediction.canonicalSmiles}</strong><small>Structure {prediction.inputStructureHash.slice(0, 12)}</small></div><div><span>Evidence</span><strong>Evaluated research</strong><small>Dataset {prediction.datasetVersion}</small></div></div>
       <div className="v2-odor-score-grid">{topPredictions.map((item) => <article key={item.targetKey}><div><strong>{item.descriptor}</strong><span>{item.score.toFixed(3)}</span></div><progress max="1" value={Math.max(0, Math.min(1, item.score))} aria-label={`${item.descriptor} score ${item.score.toFixed(3)}`} /><small>Score on source 0-1 response scale, not probability. Estimated uncertainty ±{item.uncertainty.toFixed(3)}.</small></article>)}</div>
     </div> : null}
     <p className="v2-olfactory-disclaimer">Research model. Not a safety, regulatory, IFRA, supplier, or formula-approval decision.</p>

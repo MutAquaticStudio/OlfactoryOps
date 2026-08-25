@@ -11,6 +11,12 @@
    hash was produced by `olfactoryops-rdkit-standardization/1.0.0`.
 5. Open Materials, select the material, and run **Predict research profile**.
 
+The UI describes the training method as **Transfer learning — frozen pretrained
+encoder**. This means transfer learning with a frozen pretrained molecular
+Transformer encoder: the encoder weights remain unchanged while the supervised
+property head is trained. Historical registry artifacts keep
+`FINE_TUNE_FROZEN_PRETRAINED_ENCODER` solely as an immutable lineage identifier.
+
 Expected states are `IDLE`, `RUNNING`, `SUCCESS`, `NOT_EVALUATED`,
 `NOT_CONFIGURED`, and `ERROR`. Only a successful private runtime response whose
 model version, checkpoint hash, stage, and molecular structure hash all match

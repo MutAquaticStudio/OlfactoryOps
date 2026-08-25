@@ -19,6 +19,7 @@ LOCK_UPDATED_AT=2026-08-25T11:20:30+07:00
 - `services/scientific/src/model-http-runtime.ts`
 - `services/scientific/src/model-dataset-service.ts`
 - `services/scientific/src/model-dataset.test.ts`
+- `services/scientific/src/research-model-eligibility.ts`
 - `services/scientific/src/olfactory-intelligence-service.ts`
 - `services/scientific/src/olfactory-intelligence.test.ts`
 - `services/scientific/src/osmo-demo-evidence.test.ts`
@@ -30,6 +31,7 @@ LOCK_UPDATED_AT=2026-08-25T11:20:30+07:00
 - `docs/v2/cloudflare/V2_WORKER_ROUTE_MATRIX.md`
 - `src/features/v2-platform/OlfactoryResearchPanel.tsx`
 - `src/features/v2-platform/OlfactoryResearchPanel.test.tsx`
+- `src/features/v2-platform/olfactory-research-labels.ts`
 - `src/features/v2-platform/V2PlatformApp.tsx`
 - `src/styles/features.css`
 - `e2e/v2-platform-redesign.playwright.ts`

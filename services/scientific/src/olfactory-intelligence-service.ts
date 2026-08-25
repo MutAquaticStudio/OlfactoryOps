@@ -4,6 +4,7 @@ import { explainabilityRequestSchema, molecularEmbeddingRequestSchema, molecular
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
 import { OdorPredictionRuntimeUnavailable, type OdorPredictionRuntime } from './model-http-runtime.js'
+import { isResearchEvaluationEligible } from './research-model-eligibility.js'
 
 type Transaction = Prisma.TransactionClient
 type JsonRecord = Record<string, unknown>
@@ -121,17 +122,17 @@ export class OlfactoryIntelligenceService {
       FROM v2_model_versions version
       JOIN v2_models model ON model.id = version.model_id AND model.organization_id = version.organization_id
       JOIN v2_model_architectures architecture ON architecture.id = version.architecture_id AND architecture.organization_id = version.organization_id
-      JOIN v2_model_checkpoints checkpoint ON checkpoint.model_version_id = version.id AND checkpoint.organization_id = version.organization_id
+      JOIN v2_model_checkpoints checkpoint ON checkpoint.model_version_id = version.id AND checkpoint.organization_id = version.organization_id AND checkpoint.status = 'VERIFIED'
       JOIN v2_training_runs training ON training.model_version_id = version.id AND training.organization_id = version.organization_id
       JOIN v2_evaluation_runs evaluation ON evaluation.training_run_id = training.id AND evaluation.organization_id = version.organization_id
       JOIN v2_dataset_versions dataset ON dataset.id = evaluation.dataset_version_id AND dataset.organization_id = version.organization_id
       WHERE version.id = ${modelVersionId} AND version.organization_id = ${context.organizationId}
-        AND training.status = 'SUCCEEDED' AND training.leakage_status = 'PASS' AND evaluation.leakage_status = 'PASS'
+        AND training.status = 'SUCCEEDED' AND training.leakage_status = 'PASS'
       ORDER BY evaluation.created_at DESC LIMIT 1
     `
     const model = rows[0]
     if (!model) throw new PlatformError('MODEL_VERSION_NOT_FOUND', 'The requested evaluated model version is not available in this workspace.', 404)
-    if (model.stage !== 'RESEARCH' || model.componentKey !== 'TRANSFORMER_CNN' || model.checkpointStatus !== 'VERIFIED' || ['ARCHIVED', 'BLOCKED'].includes(model.status)) {
+    if (model.stage !== 'RESEARCH' || model.componentKey !== 'TRANSFORMER_CNN' || model.checkpointStatus !== 'VERIFIED' || !isResearchEvaluationEligible(model.evaluationStatus, model.leakageStatus) || ['ARCHIVED', 'BLOCKED'].includes(model.status)) {
       throw new PlatformError('ODOR_MODEL_NOT_EVALUATED', 'The selected model is not an eligible verified research model.', 409)
     }
     return model

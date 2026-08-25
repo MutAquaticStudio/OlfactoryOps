@@ -25,6 +25,7 @@ from .transformer_model import (
     encode,
     file_sha256,
     prediction_matrix,
+    verify_property_head_gradients,
     validate_smiles,
 )
 from sklearn.linear_model import Ridge
@@ -128,6 +129,12 @@ def train(data_dir: Path, artifact_dir: Path, upstream_dir: Path, *, smoke: bool
     configure_determinism(seed)
 
     model = build_property_head(len(targets), learning_rate)
+    gradient_batch_size = min(batch_size, len(train_encoded))
+    gradient_evidence = verify_property_head_gradients(
+        model,
+        train_encoded[:gradient_batch_size],
+        [values[:gradient_batch_size] for values in train_y],
+    )
     callbacks: list[tf.keras.callbacks.Callback] = []
     if not smoke:
         callbacks.append(tf.keras.callbacks.EarlyStopping(monitor="val_loss", patience=5, min_delta=1e-6, restore_best_weights=True, verbose=0))
@@ -197,7 +204,9 @@ def train(data_dir: Path, artifact_dir: Path, upstream_dir: Path, *, smoke: bool
         "trainingConfig": config,
         "trainingConfigSha256": training_config_sha,
         "finiteLoss": True,
-        "finiteGradients": True,
+        "finiteGradients": gradient_evidence["finiteGradients"],
+        "gradientCheck": gradient_evidence["status"],
+        "gradientVariableCount": gradient_evidence["trainableVariableCount"],
         "finiteOutputs": True,
         "shapeContracts": "PASS",
         "encoderParameterCount": encoder_parameter_count,

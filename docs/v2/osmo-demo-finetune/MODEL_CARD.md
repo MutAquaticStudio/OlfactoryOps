@@ -4,14 +4,22 @@
 
 - Model: `osmo-dravnieks-transformer-cnn/1.0.0`
 - Stage: `RESEARCH`
-- Training mode: `FINE_TUNE_FROZEN_PRETRAINED_ENCODER`
+- Canonical training mode: `TRANSFER_LEARNING_FROZEN_PRETRAINED_ENCODER`
+- Historical artifact identifier: `FINE_TUNE_FROZEN_PRETRAINED_ENCODER`
 - Upstream Transformer-CNN: `4db725b5e549af7697215d8cc7a6e8a2a952dca5`
 - Checkpoint SHA-256: `a23cb99eaa603678ca15f9a83e814a9a6c8691c692582f4aae5f18c65ae0813d`
 - Checkpoint format: Keras H5 weights, 26,862,792 bytes
 
-The upstream pretrained 3-block, 10-head Transformer encoder is loaded from
-`pretrained/embeddings.npy` and frozen. Only the Transformer-CNN property head
-and highway layers are updated on the odor-labelled training partition.
+This is transfer learning with a frozen pretrained molecular Transformer
+encoder. The upstream pretrained 3-block, 10-head encoder is loaded from
+`pretrained/embeddings.npy` and remains frozen; only the property head and
+highway layers are updated on the odor-labelled training partition. The
+historical artifact identifier is retained to preserve checkpoint lineage and
+does not mean that the Transformer encoder itself was fine-tuned.
+
+The bounded `test_actual_property_head_has_explicit_finite_gradients` runtime
+smoke executes the actual supervised head under `GradientTape`, checks its real
+MSE loss, and requires every trainable gradient and the loss to be finite.
 
 ## Intended Use
 
