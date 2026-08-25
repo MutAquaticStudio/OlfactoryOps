@@ -76,6 +76,8 @@ jobs:
       MATERIAL_DEMO_LOGIN_EMAIL: ${{ secrets.MATERIAL_DEMO_LOGIN_EMAIL }}
       MATERIAL_DEMO_LOGIN_PASSWORD: ${{ secrets.MATERIAL_DEMO_LOGIN_PASSWORD }}
       IMPORT_MODE: ${{ needs.validate-staging-revision.outputs.mode }}
+      V2_STAGING_ROLE_BRIDGE_APPROVED: BRIDGE_STAGING_RUNTIME_ROLE
+      V2_RUNTIME_DB_ROLE: hyperdrive_user
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/material-intelligence-apply.json"
-          npx tsx scripts/material-intelligence-bulk-import.ts --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
+          npx tsx scripts/run-material-intelligence-staging-bulk.ts run --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
           REPORT="$report" node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises'
           const r = JSON.parse(await readFile(process.env.REPORT, 'utf8'))
@@ -156,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           report="$RUNNER_TEMP/material-intelligence-replay.json"
-          npx tsx scripts/material-intelligence-bulk-import.ts --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
+          npx tsx scripts/run-material-intelligence-staging-bulk.ts run --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
           REPORT="$report" node --input-type=module <<'NODE'
           import { readFile } from 'node:fs/promises'
           const r = JSON.parse(await readFile(process.env.REPORT, 'utf8'))
@@ -164,6 +166,9 @@ jobs:
           console.log('RERUN_NEW_DUPLICATE_MATERIALS=0')
           console.log('BULK_PERSISTENCE_IDEMPOTENT=PASS')
           NODE
+      - name: Prove temporary staging runtime role bridge is revoked
+        if: ${{ always() && needs.validate-staging-revision.outputs.mode == 'apply' }}
+        run: npx tsx scripts/run-material-intelligence-staging-bulk.ts cleanup
       - name: Remove workbook and reports from runner
         if: always()
         shell: bash
