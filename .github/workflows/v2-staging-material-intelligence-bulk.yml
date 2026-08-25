@@ -1,0 +1,170 @@
+name: V2 Staging Material Intelligence Bulk Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of main.
+        required: true
+        type: string
+      mode:
+        description: Zero-write preview or governed staging apply and replay.
+        required: true
+        type: choice
+        options: [preview, apply]
+      confirm_staging:
+        description: Exact preview or apply confirmation.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-material-intelligence-bulk
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: main
+  SOURCE_SHA256: a49bede2801da2e0edb25a305fc3df8b751837e3d0aba6779bf0750e1e456ef4
+  SOURCE_ROW_COUNT: "1986"
+  SOURCE_R2_BUCKET: olfactoryops-v2-artifacts-staging
+  SOURCE_R2_KEY: material-intelligence/sources/a49bede2801da2e0edb25a305fc3df8b751837e3d0aba6779bf0750e1e456ef4.xlsx
+  V2_STAGING_API_ORIGIN: https://api-beta.labofscents.org/api/v1
+  V2_STAGING_WORKSPACE_BASE_DOMAIN: api-beta.labofscents.org
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+      mode: ${{ steps.revision.outputs.mode }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      IMPORT_MODE: ${{ inputs.mode }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          if [ "$IMPORT_MODE" = preview ]; then
+            test "$CONFIRM_STAGING" = PREVIEW_MATERIAL_INTELLIGENCE_STAGING
+          else
+            test "$IMPORT_MODE" = apply
+            test "$CONFIRM_STAGING" = APPLY_MATERIAL_INTELLIGENCE_STAGING
+          fi
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+          echo "mode=$IMPORT_MODE" >> "$GITHUB_OUTPUT"
+
+  bulk-import:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      MATERIAL_DEMO_TENANT_SLUG: ${{ vars.MATERIAL_DEMO_TENANT_SLUG }}
+      MATERIAL_DEMO_LOGIN_EMAIL: ${{ secrets.MATERIAL_DEMO_LOGIN_EMAIL }}
+      MATERIAL_DEMO_LOGIN_PASSWORD: ${{ secrets.MATERIAL_DEMO_LOGIN_PASSWORD }}
+      IMPORT_MODE: ${{ needs.validate-staging-revision.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run prisma:generate:v2
+      - name: Require protected staging inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          if [ "$IMPORT_MODE" = apply ]; then
+            test -n "$STAGING_DATABASE_URL"
+            test -n "$MATERIAL_DEMO_TENANT_SLUG"
+            test -n "$MATERIAL_DEMO_LOGIN_EMAIL"
+            test -n "$MATERIAL_DEMO_LOGIN_PASSWORD"
+          fi
+      - name: Download and verify exact private staging source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_path="$RUNNER_TEMP/material-intelligence-source.xlsx"
+          npx wrangler r2 object get "$SOURCE_R2_BUCKET/$SOURCE_R2_KEY" --file "$source_path" --remote
+          SOURCE_PATH="$source_path" node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto'
+          import { readFile } from 'node:fs/promises'
+          const digest = createHash('sha256').update(await readFile(process.env.SOURCE_PATH)).digest('hex')
+          if (digest !== process.env.SOURCE_SHA256) throw new Error('MATERIAL_SOURCE_SHA_MISMATCH')
+          console.log('MATERIAL_SOURCE_SHA=PASS')
+          NODE
+      - name: Run canonical zero-write preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/material-intelligence-preview.json"
+          npx tsx scripts/material-intelligence-bulk-import.ts --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --mode preview > "$report"
+          REPORT="$report" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+          const r = JSON.parse(await readFile(process.env.REPORT, 'utf8'))
+          if (r.mode !== 'PREVIEW' || r.sourceRows !== 1986 || r.plannedMaterialProducts !== 1986 || r.writeCount !== 0) throw new Error('MATERIAL_BULK_PREVIEW_FAILED')
+          console.log('MATERIAL_BULK_PREVIEW=PASS')
+          console.log('INPUT_ROWS=1986')
+          console.log('PLANNED_ROWS=1986')
+          console.log('PREVIEW_DATABASE_WRITES=0')
+          NODE
+      - id: demo
+        if: ${{ needs.validate-staging-revision.outputs.mode == 'apply' }}
+        name: Create or reuse dedicated staging demo tenant
+        run: node scripts/prepare-material-intelligence-staging-demo.mjs
+      - name: Apply all rows in governed batches
+        if: ${{ needs.validate-staging-revision.outputs.mode == 'apply' }}
+        shell: bash
+        env:
+          TENANT_ID: ${{ steps.demo.outputs.organization_id }}
+          ACTOR_ID: ${{ steps.demo.outputs.actor_user_id }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/material-intelligence-apply.json"
+          npx tsx scripts/material-intelligence-bulk-import.ts --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
+          REPORT="$report" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+          const r = JSON.parse(await readFile(process.env.REPORT, 'utf8'))
+          if (r.inputRows !== 1986 || r.persistedRows + r.skippedIdempotentRows !== 1986 || r.failedRows !== 0 || r.unaccountedRows !== 0 || r.batchSize !== 50) throw new Error('MATERIAL_BULK_APPLY_ACCOUNTING_FAILED')
+          console.log('MATERIAL_BULK_APPLY=PASS')
+          for (const key of ['importRunId','persistedRows','skippedIdempotentRows','failedRows','unaccountedRows','materialProductCount','componentCount','evidenceCount']) console.log(key + '=' + r[key])
+          NODE
+      - name: Prove replay creates no duplicates
+        if: ${{ needs.validate-staging-revision.outputs.mode == 'apply' }}
+        shell: bash
+        env:
+          TENANT_ID: ${{ steps.demo.outputs.organization_id }}
+          ACTOR_ID: ${{ steps.demo.outputs.actor_user_id }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/material-intelligence-replay.json"
+          npx tsx scripts/material-intelligence-bulk-import.ts --file "$RUNNER_TEMP/material-intelligence-source.xlsx" --sheet "Material Intelligence" --expected-sha256 "$SOURCE_SHA256" --environment staging --tenant "$TENANT_ID" --actor-user "$ACTOR_ID" --runtime-role hyperdrive_user --batch-size 50 --mode apply --confirm-apply APPLY_MATERIAL_INTELLIGENCE_STAGING > "$report"
+          REPORT="$report" node --input-type=module <<'NODE'
+          import { readFile } from 'node:fs/promises'
+          const r = JSON.parse(await readFile(process.env.REPORT, 'utf8'))
+          if (r.inputRows !== 1986 || r.persistedRows !== 0 || r.skippedIdempotentRows !== 1986 || r.failedRows !== 0 || r.unaccountedRows !== 0) throw new Error('MATERIAL_BULK_IDEMPOTENCY_FAILED')
+          console.log('RERUN_NEW_DUPLICATE_MATERIALS=0')
+          console.log('BULK_PERSISTENCE_IDEMPOTENT=PASS')
+          NODE
+      - name: Remove workbook and reports from runner
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/material-intelligence-source.xlsx" "$RUNNER_TEMP/material-intelligence-preview.json" "$RUNNER_TEMP/material-intelligence-apply.json" "$RUNNER_TEMP/material-intelligence-replay.json"
