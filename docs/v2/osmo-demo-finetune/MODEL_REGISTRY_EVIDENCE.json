@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0.0",
+  "registryKind": "ISOLATED_LOCAL_POSTGRES_INTEGRATION",
+  "productionMutation": "NONE",
+  "dataset": {
+    "id": "dataset_3eca58a77d154b10a9287f778df3bedd",
+    "status": "APPROVED",
+    "versionId": "datasetver_9080134100f745f3adb97afa7073fa54",
+    "contentChecksum": "8b68d9a83d1ba94fbf60fa3c13a8d302c6a74a4aa35e658ff614493cbcb7afe1"
+  },
+  "model": {
+    "id": "model_7d3e2db5c9c34be3b317e34280ab068d",
+    "versionId": "modelver_b76f2b6fea044f96a2a3a27967e63437",
+    "version": "osmo-dravnieks-transformer-cnn/1.0.0",
+    "stage": "RESEARCH",
+    "status": "REVIEW_REQUIRED"
+  },
+  "checkpoint": {
+    "id": "checkpoint_6af7eb7424994903bdeab9872c9263ee",
+    "status": "VERIFIED",
+    "sha256": "a23cb99eaa603678ca15f9a83e814a9a6c8691c692582f4aae5f18c65ae0813d"
+  },
+  "trainingRun": {
+    "id": "trainrun_bfd9d5ae01c3448191e49b0bac5a1130",
+    "statusAfterEvaluation": "SUCCEEDED",
+    "splitStrategy": "SCAFFOLD_GROUP",
+    "leakageStatus": "PASS"
+  },
+  "evaluation": {
+    "id": "evaluation_3dcafa50e97c42baa324545767c4051c",
+    "status": "REVIEW_REQUIRED",
+    "leakageStatus": "PASS",
+    "metricCount": 42
+  },
+  "researchReadyListing": "PASS",
+  "permissionsEnforced": [
+    "scientific_ai.manage",
+    "scientific_ai.use"
+  ],
+  "modelStage": "RESEARCH"
+}

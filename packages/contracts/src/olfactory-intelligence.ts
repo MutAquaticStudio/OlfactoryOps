@@ -27,9 +27,39 @@ export type MolecularSimilarityRequest = z.infer<typeof molecularSimilarityReque
 
 export const odorPredictionRequestSchema = z.object({
   modelVersionId: id,
-  requestedTask: z.string().trim().min(1).max(160),
+  requestedTask: z.literal('odor-descriptor'),
+  requestedTargets: z.array(z.string().regex(/^regression_[a-z0-9_]{1,80}$/)).min(1).max(20).transform((items) => [...new Set(items)]).optional(),
 })
 export type OdorPredictionRequest = z.infer<typeof odorPredictionRequestSchema>
+
+export const odorResearchPredictionSchema = z.object({
+  schemaVersion: z.literal('1.0.0'),
+  modelId: id,
+  modelVersionId: id,
+  modelStage: z.literal('RESEARCH'),
+  trainingMode: z.literal('FINE_TUNE_FROZEN_PRETRAINED_ENCODER'),
+  datasetVersionId: id,
+  inputStructureHash: hash,
+  canonicalSmiles: z.string().trim().min(1).max(4096),
+  rdkitVersion: z.string().trim().min(1).max(80),
+  standardizationVersion: z.literal('olfactoryops-rdkit-standardization/1.0.0'),
+  predictions: z.array(z.object({
+    descriptor: z.string().trim().min(1).max(120),
+    targetKey: z.string().regex(/^regression_[a-z0-9_]{1,80}$/),
+    score: z.number().finite(),
+    scale: z.literal('dataset descriptor response score, source range 0-1; not a probability'),
+    uncertainty: z.number().finite().nonnegative(),
+    uncertaintyMethod: z.literal('per-target validation residual RMSE'),
+  })).min(1).max(20),
+  provenance: z.object({
+    upstreamCommit: z.string().regex(/^[a-f0-9]{40}$/),
+    checkpointSha256: hash,
+    evaluationHash: hash,
+  }),
+  evidenceStatus: z.literal('EVALUATED_RESEARCH'),
+  runtimeVersion: z.string().trim().min(1).max(120),
+})
+export type OdorResearchPrediction = z.infer<typeof odorResearchPredictionSchema>
 
 export const explainabilityRequestSchema = z.object({
   modelVersionId: id.optional(),

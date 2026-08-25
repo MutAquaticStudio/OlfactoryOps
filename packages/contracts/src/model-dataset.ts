@@ -100,6 +100,11 @@ export const registerModelVersionRequestSchema = z.object({
 })
 export type RegisterModelVersionRequest = z.infer<typeof registerModelVersionRequestSchema>
 
+export const verifyModelCheckpointRequestSchema = z.object({
+  expectedSha256: hash,
+})
+export type VerifyModelCheckpointRequest = z.infer<typeof verifyModelCheckpointRequestSchema>
+
 const trainingDatasetRelationSchema = z.object({
   datasetVersionId: id,
   splitRole: splitRoleSchema,

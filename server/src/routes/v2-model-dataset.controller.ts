@@ -83,6 +83,12 @@ export class V2ModelDatasetController {
     return { trainingRun: await this.registry.createTrainingRun(context, id, body, key) }
   }
 
+  @Post('model-versions/:id/checkpoint-verification')
+  async verifyCheckpoint(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) {
+    const { context } = await this.context(request); await this.mutateGuard(request, context, csrf)
+    return { checkpoint: await this.registry.verifyCheckpoint(context, id, body, key) }
+  }
+
   @Post('training-runs/:id/evaluations')
   async recordEvaluation(@Req() request: FastifyRequest, @Param('id') id: string, @Body() body: unknown, @Headers('idempotency-key') key?: string, @Headers('x-csrf-token') csrf?: string) {
     const { context } = await this.context(request); await this.mutateGuard(request, context, csrf)
@@ -92,6 +98,11 @@ export class V2ModelDatasetController {
   @Get('model-versions/:id/runtime')
   async runtimeStatus(@Req() request: FastifyRequest, @Param('id') id: string) {
     return { runtime: await this.registry.runtimeStatus((await this.context(request)).context, id) }
+  }
+
+  @Get('models/research-ready')
+  async researchReadyModels(@Req() request: FastifyRequest) {
+    return { models: await this.registry.listResearchReadyModels((await this.context(request)).context) }
   }
 
   private async context(request: FastifyRequest) {

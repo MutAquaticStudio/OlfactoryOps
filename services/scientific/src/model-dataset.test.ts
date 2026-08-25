@@ -3,6 +3,7 @@ import {
   createTrainingRunRequestSchema,
   registerDatasetVersionRequestSchema,
   registerModelVersionRequestSchema,
+  verifyModelCheckpointRequestSchema,
 } from '../../../packages/contracts/src/model-dataset.js'
 
 const hash = (character: string) => character.repeat(64)
@@ -45,5 +46,10 @@ describe('Phase 4 model and dataset contracts', () => {
       ],
     })
     expect(result.success).toBe(false)
+  })
+
+  it('accepts only an independently computed SHA-256 for checkpoint verification', () => {
+    expect(verifyModelCheckpointRequestSchema.safeParse({ expectedSha256: hash('a') }).success).toBe(true)
+    expect(verifyModelCheckpointRequestSchema.safeParse({ expectedSha256: 'test://checkpoint' }).success).toBe(false)
   })
 })

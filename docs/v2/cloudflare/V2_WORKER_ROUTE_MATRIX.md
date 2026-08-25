@@ -113,8 +113,10 @@ The Worker imports generated decorator-free controller delegates; all business l
 | modelDataset | POST | `/api/v1/v2/model-dataset/models` |
 | modelDataset | POST | `/api/v1/v2/model-dataset/models/:id/versions` |
 | modelDataset | POST | `/api/v1/v2/model-dataset/model-versions/:id/training-runs` |
+| modelDataset | POST | `/api/v1/v2/model-dataset/model-versions/:id/checkpoint-verification` |
 | modelDataset | POST | `/api/v1/v2/model-dataset/training-runs/:id/evaluations` |
 | modelDataset | GET | `/api/v1/v2/model-dataset/model-versions/:id/runtime` |
+| modelDataset | GET | `/api/v1/v2/model-dataset/models/research-ready` |
 | olfactory | POST | `/api/v1/v2/olfactory-intelligence/materials/:id/molecular-embeddings` |
 | olfactory | POST | `/api/v1/v2/olfactory-intelligence/materials/:id/similarity` |
 | olfactory | POST | `/api/v1/v2/olfactory-intelligence/materials/:id/odor-predictions` |
