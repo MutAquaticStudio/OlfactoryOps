@@ -34,6 +34,7 @@ const AgentRuntimeWorkspace = lazy(async () => ({ default: (await import('../v2-
 const CommerceWorkspace = lazy(async () => ({ default: (await import('../v2-commerce')).CommerceWorkspace }))
 const AdvancedWorkspace = lazy(async () => ({ default: (await import('../v2-advanced')).AdvancedWorkspace }))
 const PlatformAdminApp = lazy(async () => ({ default: (await import('../v2-platform-admin')).PlatformAdminApp }))
+const MaterialIntelligenceWorkspace = lazy(async () => ({ default: (await import('./MaterialIntelligenceWorkspace')).MaterialIntelligenceWorkspace }))
 
 type Locale = 'en-US' | 'vi-VN'
 type V2Session = { user: { email: string; displayName: string; verified: boolean }; membership: { organizationName: string; organizationSlug: string; role: string }; capabilities: Record<string, boolean> }
@@ -70,6 +71,7 @@ const productionApiBase = apiBase.replace(/\/platform$/, '/production')
 const agentRuntimeApiBase = apiBase.replace(/\/platform$/, '/agent-runtime')
 const commerceApiBase = apiBase.replace(/\/platform$/, '/commerce')
 const advancedApiBase = apiBase.replace(/\/platform$/, '/advanced')
+const materialIntelligenceApiBase = apiBase.replace(/\/platform$/, '/material-intelligence')
 const stagingPublicCutover = import.meta.env.VITE_V2_STAGING_PUBLIC_CUTOVER === 'true'
 const publicFeatureRouteCutover = import.meta.env.PROD || stagingPublicCutover
 
@@ -461,7 +463,8 @@ function V2Section({ active, text, locale, session, onNavigate }: { active: stri
   const post = async (path: string, body?: unknown) => { setNotice(null); try { await request(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) }); setNotice('Saved securely.') } catch (error) { setNotice(workspaceErrorMessage(error, 'save this workspace change')) } }
   const requiredPermissions = featureCapabilities(active)
   if (requiredPermissions.length > 0 && !requiredPermissions.some((permission) => session?.capabilities?.[permission] === true)) return <div className="v2-panel"><h2>{text.noAccess}</h2><p>Access is enforced by the workspace role policy.</p></div>
-  if (active === 'materials' || active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
+  if (active === 'materials') return <Suspense fallback={<WorkspaceSurfaceFallback />}><MaterialIntelligenceWorkspace apiBase={materialIntelligenceApiBase} capabilities={session?.capabilities ?? {}} /></Suspense>
+  if (active === 'suppliers' || active === 'inventory' || active === 'procurement') return <LabOperationsPanel active={active} capabilities={session?.capabilities ?? {}} />
   if (active === 'formulas' || active === 'design-studio') return <FormulaIntelligencePanel active={active} />
   if (active === 'trials') return <Suspense fallback={<WorkspaceSurfaceFallback />}><TrialsSensoryWorkspace apiBase={trialsApiBase} capabilities={session?.capabilities ?? {}} initialTrialId={trialRouteId()} onNavigate={onNavigate} /></Suspense>
   if (active === 'production') return <Suspense fallback={<WorkspaceSurfaceFallback />}><ProductionWorkspace apiBase={productionApiBase} capabilities={session?.capabilities ?? {}} initialOrderId={productionRouteId()} onNavigate={onNavigate} /></Suspense>
