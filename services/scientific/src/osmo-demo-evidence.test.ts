@@ -16,6 +16,8 @@ describe('Osmo research evidence bundle', () => {
     expect(provenance.rawSha256).toBe('d560c47e9fc9fe8e802144be0c219e84594ef99611cfe1f7e4c861f38720edaf')
     expect(provenance.rawSize).toBe(123443)
     expect(provenance.license).toBe('CC-BY-4.0')
+    expect(provenance.transformations).toEqual(preparation.transformationManifest.transformations)
+    expect(provenance.transformations).toHaveLength(4)
     expect(preparation.normalization).toMatchObject({ rawRowCount: 127, modelRowCount: 127, rejectedRowCount: 0, invalidStructureCount: 0, duplicateStructureGroupCount: 0, conflictingDuplicateGroupCount: 0 })
   })
 
