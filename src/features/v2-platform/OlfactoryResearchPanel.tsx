@@ -54,7 +54,7 @@ function researchStateForError(error: unknown): ResearchPanelState {
   return 'ERROR'
 }
 
-export function OlfactoryResearchPanel({ material }: { material?: { id: string; name: string } }) {
+export function OlfactoryResearchPanel({ material, predictionAllowed = true, predictionBlockReason }: { material?: { id: string; name: string }; predictionAllowed?: boolean; predictionBlockReason?: string }) {
   const [models, setModels] = useState<ResearchModel[]>([])
   const [modelVersionId, setModelVersionId] = useState('')
   const [state, setState] = useState<ResearchPanelState>('IDLE')
@@ -73,7 +73,7 @@ export function OlfactoryResearchPanel({ material }: { material?: { id: string; 
   }, [])
 
   const run = async () => {
-    if (!material || !modelVersionId) { setState('NOT_EVALUATED'); return }
+    if (!material || !modelVersionId || !predictionAllowed) { setState('NOT_EVALUATED'); return }
     setState('RUNNING'); setPrediction(null)
     try {
       const payload = await scientificRequest<{ prediction: Prediction }>(scientificBase('olfactory-intelligence'), `/materials/${encodeURIComponent(material.id)}/odor-predictions`, {
@@ -93,8 +93,9 @@ export function OlfactoryResearchPanel({ material }: { material?: { id: string; 
     </div>
     <div className="v2-olfactory-research-controls">
       <label>Evaluated research model<select value={modelVersionId} onChange={(event) => setModelVersionId(event.target.value)} disabled={!models.length || state === 'RUNNING'}><option value="">No eligible model registered</option>{models.map((model) => <option key={model.id} value={model.id}>{model.name} / {model.version}</option>)}</select></label>
-      <button className="v2-primary-button" type="button" disabled={!material || !modelVersionId || state === 'RUNNING'} onClick={() => void run()}>{state === 'RUNNING' ? 'Running bounded inference' : 'Predict research profile'}</button>
+      <button className="v2-primary-button" type="button" disabled={!material || !modelVersionId || !predictionAllowed || state === 'RUNNING'} onClick={() => void run()}>{state === 'RUNNING' ? 'Running bounded inference' : 'Run Research Prediction'}</button>
     </div>
+    {!predictionAllowed && predictionBlockReason ? <div className="v2-alert" role="status">{predictionBlockReason}</div> : null}
     {state === 'IDLE' ? <p className="v2-muted">No inference has been requested.</p> : null}
     {state === 'RUNNING' ? <p className="v2-olfactory-runtime-state" role="status"><Activity size={16} aria-hidden="true" /> Verifying model and molecular evidence</p> : null}
     {state === 'NOT_EVALUATED' ? <div className="v2-alert" role="status">A verified molecular identity and evaluated research checkpoint are required.</div> : null}
