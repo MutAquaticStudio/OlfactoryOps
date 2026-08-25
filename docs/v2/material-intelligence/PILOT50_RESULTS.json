@@ -1,0 +1,667 @@
+{
+  "contractVersion": "material-intelligence-pilot/1.0.0",
+  "policyVersion": "material-intelligence/1.0.0",
+  "normalizationVersion": "olfactoryops-rdkit-standardization/1.0.0",
+  "rdkitVersion": "2023.09.3",
+  "fixture": "services/scientific/testdata/material-intelligence-pilot50.json",
+  "caseCount": 50,
+  "resultCounts": {
+    "ELIGIBLE": 14,
+    "NOT_ELIGIBLE": 11,
+    "REVIEW_REQUIRED": 25
+  },
+  "resolutionCounts": {
+    "RESOLVED": 16,
+    "UNRESOLVED": 23,
+    "CONFLICTED": 0,
+    "NOT_APPLICABLE": 11
+  },
+  "reasonCounts": {
+    "DEFINED_MIXTURE": 1,
+    "DILUTION_PRODUCT": 4,
+    "NATURAL_COMPLEX": 5,
+    "PROPRIETARY_BASE": 1,
+    "RESOLVED_SINGLE_SUBSTANCE": 14,
+    "STEREOCHEMISTRY_UNRESOLVED": 2,
+    "UNKNOWN_COMPOSITION": 22,
+    "UNRESOLVED_IDENTITY": 1
+  },
+  "componentCount": 10,
+  "chemicalEntityCount": 50,
+  "verifiedIdentityCount": 16,
+  "guessedIdentityCount": 0,
+  "cases": [
+    {
+      "id": "M001",
+      "name": "Hedione®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M002",
+      "name": "Hedione HC®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M003",
+      "name": "Ambroxan® / Ambroxide",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M004",
+      "name": "Ambrofix®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M005",
+      "name": "Cashmeran®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M006",
+      "name": "Calone® 1951",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M007",
+      "name": "Ethyl Vanillin",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/8467"
+      ]
+    },
+    {
+      "id": "M008",
+      "name": "Vanillin",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/1183"
+      ]
+    },
+    {
+      "id": "M009",
+      "name": "Benzyl Salicylate",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/8363"
+      ]
+    },
+    {
+      "id": "M010",
+      "name": "Benzyl Benzoate",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/2345"
+      ]
+    },
+    {
+      "id": "M011",
+      "name": "Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/6549"
+      ]
+    },
+    {
+      "id": "M012",
+      "name": "(R)-Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/443158"
+      ]
+    },
+    {
+      "id": "M013",
+      "name": "(S)-Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/67179"
+      ]
+    },
+    {
+      "id": "M014",
+      "name": "Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/22311"
+      ]
+    },
+    {
+      "id": "M015",
+      "name": "(R)-(+)-Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/440917"
+      ]
+    },
+    {
+      "id": "M016",
+      "name": "(S)-(-)-Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/439250"
+      ]
+    },
+    {
+      "id": "M017",
+      "name": "Citronellol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNRESOLVED_IDENTITY"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M018",
+      "name": "Geraniol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/637566"
+      ]
+    },
+    {
+      "id": "M019",
+      "name": "Nerol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/643820"
+      ]
+    },
+    {
+      "id": "M020",
+      "name": "Citral",
+      "productClassification": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M021",
+      "name": "Geranial",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/638011"
+      ]
+    },
+    {
+      "id": "M022",
+      "name": "Neral",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/643779"
+      ]
+    },
+    {
+      "id": "M023",
+      "name": "Iso E Super®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M024",
+      "name": "Timbersilk®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M025",
+      "name": "Galaxolide® / HHCB",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M026",
+      "name": "Ethylene Brassylate",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M027",
+      "name": "Ambrettolide",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M028",
+      "name": "Exaltolide® / Pentadecanolide",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M029",
+      "name": "Rose Oxide",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M030",
+      "name": "β-Ionone",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/638014"
+      ]
+    },
+    {
+      "id": "M031",
+      "name": "α-Ionone",
+      "productClassification": "NEAT_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "result": "ELIGIBLE",
+      "reasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "sourceRefs": [
+        "https://pubchem.ncbi.nlm.nih.gov/compound/5282108"
+      ]
+    },
+    {
+      "id": "M032",
+      "name": "Methyl Ionone Gamma",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M033",
+      "name": "Aldehyde C-10 / Decanal",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M034",
+      "name": "Aldehyde C-11 Undecylenic",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M035",
+      "name": "Aldehyde C-12 Lauric / Dodecanal",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M036",
+      "name": "Aldehyde C-12 MNA",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M037",
+      "name": "Amber Xtreme®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M038",
+      "name": "Clearwood® Prisma",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M039",
+      "name": "Cedroxyde®",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M040",
+      "name": "Ambermax® 10% TEC",
+      "productClassification": "DILUTION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M041",
+      "name": "Ambroxan 10% DPG",
+      "productClassification": "DILUTION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M042",
+      "name": "Ethyl Vanillin 10% DPG",
+      "productClassification": "DILUTION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M043",
+      "name": "Indole 1% Ethanol",
+      "productClassification": "DILUTION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M044",
+      "name": "Bergamot Essential Oil",
+      "productClassification": "NATURAL",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M045",
+      "name": "Lavender Essential Oil",
+      "productClassification": "NATURAL",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M046",
+      "name": "Patchouli Essential Oil",
+      "productClassification": "NATURAL",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M047",
+      "name": "Jasmine Absolute",
+      "productClassification": "NATURAL",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M048",
+      "name": "Oakmoss Absolute / Extract",
+      "productClassification": "NATURAL",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M049",
+      "name": "Generic Jasmine Base",
+      "productClassification": "BASE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "NOT_ELIGIBLE",
+      "reasonCodes": [
+        "PROPRIETARY_BASE"
+      ],
+      "sourceRefs": []
+    },
+    {
+      "id": "M050",
+      "name": "Unknown Supplier Material — Incomplete Identity",
+      "productClassification": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "result": "REVIEW_REQUIRED",
+      "reasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "sourceRefs": []
+    }
+  ]
+}

@@ -32,6 +32,7 @@ const migrations = [
   'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
   'infra/postgres/migrations/0026_platform_password_resets.sql',
+  'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -520,6 +521,29 @@ try {
       || !String(ownerInvariant.definition).includes('(role_key)')) {
       throw new Error('Platform Owner active-role uniqueness invariant is missing')
     }
+    const materialIntelligenceTables = [
+      'v2_chemical_entities', 'v2_chemical_identifiers', 'v2_material_components',
+      'v2_material_intelligence_evidence', 'v2_scientific_eligibility_decisions',
+    ]
+    const materialIntelligenceRls = await client.$queryRawUnsafe(`
+      SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, materialIntelligenceTables)
+    if (materialIntelligenceRls.length !== materialIntelligenceTables.length || materialIntelligenceRls.some((row) => !row.rls_enabled || !row.rls_forced)) {
+      throw new Error('Material Intelligence tables or forced RLS policies are missing')
+    }
+    const materialIntelligenceIndexes = await client.$queryRawUnsafe(`
+      SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname = ANY($1::text[])
+    `, ['v2_chemical_entity_verified_structure_unique', 'v2_chemical_entity_verified_inchikey_unique'])
+    if (materialIntelligenceIndexes.length !== 2 || materialIntelligenceIndexes.some((row) => !row.indexdef.includes('(organization_id, verified_'))) {
+      throw new Error('Material Intelligence strong-identity tenant deduplication indexes are missing')
+    }
+    const materialIntelligenceTriggers = await client.$queryRawUnsafe(`
+      SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname = ANY($1::text[])
+    `, ['v2_chemical_entity_verified_identity_guard', 'v2_material_intelligence_evidence_append_only', 'v2_scientific_eligibility_append_only'])
+    if (materialIntelligenceTriggers.length !== 3) throw new Error('Material Intelligence identity guard or append-only evidence triggers are missing')
   } finally {
     await client.$disconnect()
   }

@@ -30,6 +30,7 @@ const migrations = [
   'infra/postgres/migrations/0024_platform_tenant_state_transition_qualification.sql',
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
   'infra/postgres/migrations/0026_platform_password_resets.sql',
+  'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL
