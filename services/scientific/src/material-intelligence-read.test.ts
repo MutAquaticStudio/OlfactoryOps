@@ -34,11 +34,12 @@ function serviceWith(query: (sql: string, values: unknown[]) => unknown) {
 
 describe("Material Intelligence tenant read API service", () => {
   it("uses sensitive material permission and bounded list pagination", async () => {
-    const { service, tx, platform } = serviceWith((sql, _values) =>
-      sql.includes("count(*) OVER()")
-        ? [{ id: "material_a", name: "Vanillin", totalCount: 1 }]
-        : [],
-    );
+    const { service, tx, platform } = serviceWith((sql, _values) => {
+      if (sql.includes("SELECT count(*)::int")) return [{ totalCount: 1 }];
+      if (sql.includes("ORDER BY material.name"))
+        return [{ id: "material_a", name: "Vanillin" }];
+      return [];
+    });
     const result = await service.listMaterials(context, {
       page: "1",
       pageSize: "100",
@@ -55,11 +56,29 @@ describe("Material Intelligence tenant read API service", () => {
       items: [{ id: "material_a" }],
     });
     const listCall = tx.$queryRawUnsafe.mock.calls.find(([sql]) =>
-      String(sql).includes("count(*) OVER()"),
+      String(sql).includes("ORDER BY material.name"),
     );
     expect(listCall?.[1]).toBe(context.organizationId);
     expect(String(listCall?.[0])).toContain("LIMIT");
+    const countCall = tx.$queryRawUnsafe.mock.calls.find(([sql]) =>
+      String(sql).includes("SELECT count(*)::int"),
+    );
+    expect(countCall?.slice(1)).toEqual([context.organizationId, "%Vanillin%"]);
   });
+  it("preserves the filtered total when a requested page is empty", async () => {
+    const { service } = serviceWith((sql) =>
+      sql.includes("SELECT count(*)::int") ? [{ totalCount: 3 }] : [],
+    );
+    await expect(
+      service.listMaterials(context, { page: "99", pageSize: "50" }),
+    ).resolves.toMatchObject({
+      page: 99,
+      pageSize: 50,
+      total: 3,
+      items: [],
+    });
+  });
+
 
   it("rejects unbounded pagination before querying", async () => {
     const { service, tx } = serviceWith(() => []);

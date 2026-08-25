@@ -210,6 +210,20 @@ def normalized_optional(value: Any) -> str | None:
     return None if text.upper() in MISSING_MARKERS else text
 
 
+def canonical_structure_hash(canonical_smiles: str) -> str:
+    payload = json.dumps(
+        {
+            "canonicalSmiles": canonical_smiles,
+            "standardizationVersion": RDKIT_CONTRACT,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
@@ -663,7 +677,7 @@ def analyze_rows(
             "isomericSmiles": normalized_optional(field_value(source, fields, "isomeric_smiles")),
             "inchi": normalized_optional(field_value(source, fields, "inchi")),
             "inchiKey": verified_inchikey,
-            "structureHash": hashlib.sha256(verified_canonical_smiles.encode("utf-8")).hexdigest(),
+            "structureHash": canonical_structure_hash(verified_canonical_smiles),
             "normalizationVersion": RDKIT_CONTRACT,
             "rdkitVersion": validation.get("rdkitVersion"),
             "molecularFormula": formula,
@@ -833,7 +847,7 @@ def analyze_rows(
             chemical_action = "REVIEW_REQUIRED"
         elif review_required:
             chemical_action = "REVIEW_REQUIRED"
-        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
+        elif classification in {"NATURAL", "BASE", "DILUTION", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
             chemical_action = "CREATE_COMPLEX"
         elif classification == "FORMULATION":
             chemical_action = "NOT_APPLICABLE"
@@ -847,7 +861,7 @@ def analyze_rows(
 
         if item["sourceStructureClaimStatus"] == "CONFLICTED":
             molecular_action = "CONFLICTED"
-        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE", "FORMULATION"}:
+        elif classification in {"NATURAL", "BASE", "DILUTION", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE", "FORMULATION"}:
             molecular_action = "NOT_APPLICABLE"
         elif item["sourceStructureClaimStatus"] == "VALID_NORMALIZABLE" and item["sourceEvidenceVerified"]:
             molecular_action = "NORMALIZE_VERIFIED_SOURCE_STRUCTURE"

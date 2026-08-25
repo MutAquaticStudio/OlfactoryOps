@@ -104,7 +104,10 @@ function paramValue(parameter: ControllerParameter, request: Request, body: unkn
   }
   if (parameter.source === 'RESPONSE') return reply
   if (parameter.source === 'BODY') return parameter.name ? (body && typeof body === 'object' ? (body as Record<string, unknown>)[parameter.name] : undefined) : body
-  if (parameter.source === 'QUERY') return new URL(request.url).searchParams.get(parameter.name ?? '') ?? undefined
+  if (parameter.source === 'QUERY') {
+    const query = new URL(request.url).searchParams
+    return parameter.name ? query.get(parameter.name) ?? undefined : Object.fromEntries(query.entries())
+  }
   if (parameter.source === 'PARAM') return parameter.name ? params[parameter.name] : params
   return request.headers.get(parameter.name ?? '') ?? undefined
 }

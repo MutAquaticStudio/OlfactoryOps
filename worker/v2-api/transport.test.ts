@@ -69,6 +69,34 @@ describe('V2 Worker transport', () => {
     expect(observed).toEqual(['tenant-a.api-beta.labofscents.org', 'item-1', { value: 1 }, 'csrf'])
   })
 
+  it('passes an unnamed query parameter as the complete query object', async () => {
+    let observed: unknown
+    const route: ControllerRoute = {
+      method: 'GET',
+      path: '/v2/material-intelligence/materials',
+      handler: 'list',
+      controller: {
+        async list(query: unknown) {
+          observed = query
+          return { ok: true }
+        },
+      },
+      parameters: [{ index: 0, source: 'QUERY' }],
+    }
+    const request = new Request(
+      'https://api-beta.labofscents.org/api/v1/v2/material-intelligence/materials?page=2&pageSize=25&text=Vanillin&reviewRequired=true',
+      { headers: { Origin: 'https://tenant-a.api-beta.labofscents.org' } },
+    )
+    const response = await invokeControllerRoute({ request, route, params: {}, config })
+    expect(response.status).toBe(200)
+    expect(observed).toEqual({
+      page: '2',
+      pageSize: '25',
+      text: 'Vanillin',
+      reviewRequired: 'true',
+    })
+  })
+
   it('accepts the exact public staging Pages origin for cookie-authenticated mutations', async () => {
     const route: ControllerRoute = { method: 'POST', path: '/v2/example', handler: 'write', controller: { async write() { return { ok: true } } }, parameters: [] }
     const request = new Request('https://api-beta.labofscents.org/api/v1/v2/example', {

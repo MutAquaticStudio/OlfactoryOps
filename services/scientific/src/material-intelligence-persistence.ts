@@ -174,9 +174,17 @@ function entityType(row: BulkIngestPlanRow) {
 }
 
 function productEligibility(row: BulkIngestPlanRow): {
-  result: "NOT_ELIGIBLE" | "REVIEW_REQUIRED";
+  result: "NOT_ELIGIBLE" | "REVIEW_REQUIRED" | "ELIGIBLE";
   reasons: string[];
 } {
+  if (
+    row.productClassification === "NEAT_SUBSTANCE" &&
+    row.verifiedStructureCandidate &&
+    (row.chemicalEntityAction === "CREATE_VERIFIED_CANDIDATE" ||
+      row.chemicalEntityAction === "LINK_VERIFIED_EXISTING")
+  ) {
+    return { result: "ELIGIBLE", reasons: ["RESOLVED_SINGLE_SUBSTANCE"] };
+  }
   const fixed = {
     DILUTION: "DILUTION_PRODUCT",
     DEFINED_MIXTURE: "DEFINED_MIXTURE",

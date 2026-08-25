@@ -253,4 +253,51 @@ describe("governed Material Intelligence persistence", () => {
       ),
     ).toBe(false);
   });
+  it("marks a verified neat product and entity eligible", async () => {
+    const verifiedRow: BulkIngestPlanRow = {
+      ...row,
+      chemicalEntityAction: "CREATE_VERIFIED_CANDIDATE",
+      verifiedStructureCandidate: {
+        canonicalSmiles: "CCO",
+        isomericSmiles: null,
+        inchi: null,
+        inchiKey: "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+        structureHash: "b".repeat(64),
+        normalizationVersion: "normalization/1",
+        rdkitVersion: "2026.03.5",
+        molecularFormula: "C2H6O",
+        molecularWeight: 46.07,
+        sourceRef: "https://example.test/evidence",
+      },
+    };
+    const tx = {
+      $executeRawUnsafe: vi.fn(async () => 1),
+      $queryRawUnsafe: vi.fn(async () => []),
+    };
+    const client = {
+      $transaction: vi.fn(async (action: (client: typeof tx) => unknown) =>
+        action(tx),
+      ),
+    };
+    const service = new GovernedMaterialIntelligencePersistence(
+      client as never,
+    );
+    const result = await service.persistBatch({
+      context,
+      runtimeRole: "v2_app",
+      importRunId: "run_verified",
+      batchNumber: 1,
+      source,
+      rows: [verifiedRow],
+    });
+    const materialDecision = tx.$executeRawUnsafe.mock.calls.find(([sql]) =>
+      String(sql).includes("'MATERIAL_PRODUCT'"),
+    );
+    expect(materialDecision?.[5]).toBe("ELIGIBLE");
+    expect(materialDecision?.[6]).toBe(
+      JSON.stringify(["RESOLVED_SINGLE_SUBSTANCE"]),
+    );
+    expect(result.counts.eligibilityDecisions.ELIGIBLE).toBe(2);
+  });
+
 });

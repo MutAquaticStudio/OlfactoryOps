@@ -233,25 +233,32 @@ export class MaterialIntelligenceService {
             ? "material.status = 'REVIEW_REQUIRED'"
             : "material.status <> 'REVIEW_REQUIRED'",
         );
+      const relationSql =
+        " FROM v2_materials material LEFT JOIN latest_eligibility eligibility ON eligibility.material_id = material.id LEFT JOIN v2_chemical_entities entity ON entity.organization_id = material.organization_id AND entity.id = eligibility.chemical_entity_id WHERE " +
+        clauses.join(" AND ");
+      const countRows = await tx.$queryRawUnsafe<Array<{ totalCount: number }>>(
+        "WITH latest_eligibility AS (SELECT DISTINCT ON (material_id) material_id, chemical_entity_id, result, reason_codes FROM v2_scientific_eligibility_decisions WHERE organization_id = $1 AND subject_type = 'MATERIAL_PRODUCT' ORDER BY material_id, evaluated_at DESC, id DESC) SELECT count(*)::int AS \"totalCount\"" + relationSql,
+        ...values,
+      );
       values.push(query.pageSize, (query.page - 1) * query.pageSize);
       const limit = "$" + (values.length - 1);
       const offset = "$" + values.length;
       const sql =
         "WITH latest_eligibility AS (SELECT DISTINCT ON (material_id) material_id, chemical_entity_id, result, reason_codes FROM v2_scientific_eligibility_decisions WHERE organization_id = $1 AND subject_type = 'MATERIAL_PRODUCT' ORDER BY material_id, evaluated_at DESC, id DESC) " +
-        'SELECT material.id, material.name, material.trade_name AS "tradeName", material.supplier_name AS "supplier", material.product_classification AS "productClassification", entity.resolution_status AS "resolutionStatus", eligibility.result AS "eligibilityResult", eligibility.reason_codes AS "eligibilityReasonCodes", (material.status = \'REVIEW_REQUIRED\') AS "reviewRequired", entity.id AS "primaryChemicalEntityId", entity.preferred_name AS "primaryChemicalEntityName", count(*) OVER()::int AS "totalCount" FROM v2_materials material LEFT JOIN latest_eligibility eligibility ON eligibility.material_id = material.id LEFT JOIN v2_chemical_entities entity ON entity.organization_id = material.organization_id AND entity.id = eligibility.chemical_entity_id WHERE ' +
-        clauses.join(" AND ") +
+        'SELECT material.id, material.name, material.trade_name AS "tradeName", material.supplier_name AS "supplier", material.product_classification AS "productClassification", entity.resolution_status AS "resolutionStatus", eligibility.result AS "eligibilityResult", eligibility.reason_codes AS "eligibilityReasonCodes", (material.status = \'REVIEW_REQUIRED\') AS "reviewRequired", entity.id AS "primaryChemicalEntityId", entity.preferred_name AS "primaryChemicalEntityName"' +
+        relationSql +
         " ORDER BY material.name, material.id LIMIT " +
         limit +
         " OFFSET " +
         offset;
       const rows = await tx.$queryRawUnsafe<
-        Array<Record<string, unknown> & { totalCount: number }>
+        Array<Record<string, unknown>>
       >(sql, ...values);
       return {
-        items: rows.map(({ totalCount: _totalCount, ...row }) => row),
+        items: rows,
         page: query.page,
         pageSize: query.pageSize,
-        total: rows[0]?.totalCount ?? 0,
+        total: countRows[0]?.totalCount ?? 0,
       };
     });
   }
