@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { MaterialIntelligenceAssessment, VerifiedMolecularIdentity } from '../../../packages/contracts/src/material-intelligence.js'
+import { materialIntelligenceAssessmentSchema, type MaterialIntelligenceAssessment, type VerifiedMolecularIdentity } from '../../../packages/contracts/src/material-intelligence.js'
 import {
   buildScientificFeatureCacheIdentity,
   compareVerifiedIdentities,
@@ -9,6 +9,7 @@ import {
 const hash = (character: string) => character.repeat(64)
 const evidence = [{
   id: 'evidence-pubchem', sourceKind: 'PUBLIC_DATABASE_RECORD' as const, sourceRef: 'https://pubchem.ncbi.nlm.nih.gov/compound/1183',
+  assertionKind: 'STRUCTURE' as const, subjectType: 'CHEMICAL_ENTITY' as const, subjectId: 'entity-vanillin',
   sourceVersion: 'CID 1183', retrievedAt: '2026-08-25T00:00:00.000Z', contentHash: hash('a'), status: 'VERIFIED' as const,
 }]
 const molecularIdentity: VerifiedMolecularIdentity = {
@@ -55,6 +56,31 @@ describe('material intelligence scientific eligibility', () => {
     expect(evaluateScientificEligibility(assessment({
       chemicalEntity: { id: 'entity-conflict', preferredName: 'Conflicted material', entityType: 'SINGLE_SUBSTANCE', resolutionStatus: 'CONFLICTED', evidenceStatus: 'CONFLICTED' },
     }))).toMatchObject({ result: 'REVIEW_REQUIRED', reasonCodes: ['IDENTITY_CONFLICT'] })
+  })
+
+  it.each([
+    ['missing', [], ['missing-evidence']],
+    ['unverified', [{ ...evidence[0]!, status: 'UNVERIFIED' as const }], ['evidence-pubchem']],
+    ['rejected', [{ ...evidence[0]!, status: 'REJECTED' as const }], ['evidence-pubchem']],
+    ['conflicted', [{ ...evidence[0]!, status: 'CONFLICTED' as const }], ['evidence-pubchem']],
+    ['identifier-only', [{ ...evidence[0]!, assertionKind: 'IDENTIFIER' as const }], ['evidence-pubchem']],
+    ['wrong-subject', [{ ...evidence[0]!, subjectId: 'entity-someone-else' }], ['evidence-pubchem']],
+  ])('fails closed for %s molecular identity evidence', (_case, invalidEvidence, evidenceRefs) => {
+    const raw = assessment({
+      evidence: invalidEvidence,
+      chemicalEntity: { ...assessment().chemicalEntity!, molecularIdentity: { ...molecularIdentity, evidenceRefs } },
+    })
+    expect(evaluateScientificEligibility(raw)).toMatchObject({ result: 'REVIEW_REQUIRED', reasonCodes: ['UNVERIFIED_STRUCTURE'] })
+  })
+
+  it('requires matching verified structure evidence at the typed boundary', () => {
+    expect(materialIntelligenceAssessmentSchema.safeParse(assessment()).success).toBe(true)
+    expect(materialIntelligenceAssessmentSchema.safeParse(assessment({
+      evidence: [{ ...evidence[0]!, assertionKind: 'PRODUCT_IDENTITY' }],
+    })).success).toBe(false)
+    expect(materialIntelligenceAssessmentSchema.safeParse(assessment({
+      chemicalEntity: { ...assessment().chemicalEntity!, molecularIdentity: { ...molecularIdentity, evidenceRefs: ['evidence-pubchem', 'evidence-pubchem'] } },
+    })).success).toBe(false)
   })
 
   it('requires strong verified identity keys and rejects isomer collapse', () => {

@@ -31,6 +31,9 @@ export type IdentityResolutionStatus = z.infer<typeof identityResolutionStatusSc
 export const materialIntelligenceEvidenceStatusSchema = z.enum(['UNVERIFIED', 'VERIFIED', 'CONFLICTED', 'REJECTED'])
 export type MaterialIntelligenceEvidenceStatus = z.infer<typeof materialIntelligenceEvidenceStatusSchema>
 
+export const materialIntelligenceAssertionKindSchema = z.enum(['STRUCTURE', 'IDENTIFIER', 'COMPOSITION', 'PRODUCT_IDENTITY'])
+export const materialIntelligenceEvidenceSubjectTypeSchema = z.enum(['MATERIAL_PRODUCT', 'CHEMICAL_ENTITY', 'MATERIAL_COMPONENT'])
+
 export const materialComponentRoleSchema = z.enum(['ACTIVE', 'CARRIER', 'SOLVENT', 'STABILIZER', 'OTHER', 'UNKNOWN'])
 export type MaterialComponentRole = z.infer<typeof materialComponentRoleSchema>
 
@@ -55,6 +58,9 @@ export type MaterialComponent = z.infer<typeof materialComponentSchema>
 export const materialIntelligenceEvidenceSchema = z.object({
   id,
   sourceKind: z.enum(['PUBLIC_DATABASE_RECORD', 'SUPPLIER_DOCUMENT', 'MATERIAL_DOCUMENT', 'OPERATOR_ASSERTION', 'PILOT_FIXTURE']),
+  assertionKind: materialIntelligenceAssertionKindSchema,
+  subjectType: materialIntelligenceEvidenceSubjectTypeSchema,
+  subjectId: id,
   sourceRef: z.string().trim().min(1).max(2_048),
   sourceVersion: boundedText,
   retrievedAt: z.string().datetime({ offset: true }),
@@ -66,13 +72,17 @@ export type MaterialIntelligenceEvidence = z.infer<typeof materialIntelligenceEv
 export const verifiedMolecularIdentitySchema = z.object({
   molecularIdentityId: id.optional(),
   canonicalSmiles: z.string().trim().min(1).max(4_096),
+  isomericSmiles: z.string().trim().min(1).max(4_096).nullable().optional(),
+  inchi: z.string().trim().min(1).max(8_192).nullable().optional(),
   inchiKey: z.string().trim().regex(/^[A-Z]{14}-[A-Z]{10}-[A-Z]$/),
+  molecularFormula: boundedText.nullable().optional(),
+  molecularWeight: z.number().positive().finite().nullable().optional(),
   structureHash: sha256,
   normalizationVersion: boundedText,
   rdkitVersion: boundedText,
   stereochemistry: z.enum(['RESOLVED', 'UNRESOLVED', 'NOT_APPLICABLE']),
   structureSupport: z.enum(['SUPPORTED', 'UNSUPPORTED', 'UNPROVEN']),
-  evidenceRefs: z.array(id).min(1).max(16),
+  evidenceRefs: z.array(id).min(1).max(16).refine((refs) => new Set(refs).size === refs.length, 'Molecular identity evidence references must be unique.'),
 }).strict()
 export type VerifiedMolecularIdentity = z.infer<typeof verifiedMolecularIdentitySchema>
 
@@ -91,7 +101,7 @@ export const chemicalEntityAssessmentSchema = z.object({
 })
 export type ChemicalEntityAssessment = z.infer<typeof chemicalEntityAssessmentSchema>
 
-export const materialIntelligenceAssessmentSchema = z.object({
+export const materialIntelligenceAssessmentBaseSchema = z.object({
   materialId: id,
   materialName: boundedText,
   productClassification: materialProductClassificationSchema,
@@ -99,6 +109,32 @@ export const materialIntelligenceAssessmentSchema = z.object({
   components: z.array(materialComponentSchema).max(128).default([]),
   evidence: z.array(materialIntelligenceEvidenceSchema).max(128).default([]),
 }).strict()
+
+export type MaterialIntelligenceAssessmentBase = z.infer<typeof materialIntelligenceAssessmentBaseSchema>
+
+export function hasMatchingVerifiedStructureEvidence(assessment: MaterialIntelligenceAssessmentBase) {
+  const entity = assessment.chemicalEntity
+  const identity = entity?.molecularIdentity
+  if (!identity) return true
+  if (!entity?.id) return false
+  return identity.evidenceRefs.every((reference) => assessment.evidence.some((evidence) =>
+    evidence.id === reference
+    && evidence.status === 'VERIFIED'
+    && evidence.assertionKind === 'STRUCTURE'
+    && evidence.subjectType === 'CHEMICAL_ENTITY'
+    && evidence.subjectId === entity.id,
+  ))
+}
+
+export const materialIntelligenceAssessmentSchema = materialIntelligenceAssessmentBaseSchema.superRefine((assessment, ctx) => {
+  if (!hasMatchingVerifiedStructureEvidence(assessment)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['chemicalEntity', 'molecularIdentity', 'evidenceRefs'],
+      message: 'Every molecular identity reference must resolve to VERIFIED STRUCTURE evidence for the same Chemical Entity.',
+    })
+  }
+})
 export type MaterialIntelligenceAssessment = z.infer<typeof materialIntelligenceAssessmentSchema>
 
 export const scientificEligibilityResultSchema = z.enum(['ELIGIBLE', 'NOT_ELIGIBLE', 'REVIEW_REQUIRED'])

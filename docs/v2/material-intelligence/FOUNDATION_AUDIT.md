@@ -46,6 +46,10 @@ The TypeScript contract and `MaterialIntelligenceService.getScientificEligibilit
 - No name-to-SMILES, formula-to-SMILES, fuzzy trade-name resolution, feature backfill, or model retraining is included.
 - Frozen Osmo checkpoint/dataset/split/target identities are regression-tested and unchanged.
 
+## Review hardening
+
+PR review hardening closes three fail-open/correctness gaps before merge: molecular evidence references are cross-validated against verified structure assertions for the exact ChemicalEntity; eligibility persistence and lookup use explicit MaterialProduct/ChemicalEntity subjects; and the composite molecular-identity foreign key uses restrictive deletion without nulling the tenant key. Pilot 50 now reports every primary ChemicalEntity action, five bounded supporting entities, and all ten component links while keeping naturals, bases, dilutions, and unknown composition fail-closed.
+
 ## Audit result
 
 `MATERIAL_INTELLIGENCE_FOUNDATION_AUDIT=PASS`

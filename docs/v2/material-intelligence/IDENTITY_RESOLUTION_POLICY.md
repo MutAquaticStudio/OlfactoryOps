@@ -32,6 +32,8 @@ The following are not deduplication keys:
 - odor description;
 - embedding or prediction similarity.
 
+CAS is an identifier assertion, not structure proof. A verified CAS record without separately verified structure evidence for the exact ChemicalEntity remains ineligible for molecular feature generation. Formula-to-SMILES conversion and name-only structure guessing are prohibited.
+
 ## Stereochemistry and isomers
 
 Generic Linalool and Limonene records with unspecified stereochemistry remain `REVIEW_REQUIRED`, even when their non-isomeric structure record is verified. `(R)` and `(S)` entries retain distinct isomeric SMILES, InChIKeys, and structure hashes. Geraniol/Nerol, Geranial/Neral, and alpha/beta Ionone are tested as distinct identities.
@@ -45,7 +47,7 @@ Generic Linalool and Limonene records with unspecified stereochemistry remain `R
 
 ## Pilot source boundary
 
-The only verified public records in Pilot 50 are pinned PubChem CID records returned by the official PubChem PUG REST service on 2026-08-25. Each fixture entry stores the CID, source canonical/isomeric SMILES, InChIKey, source version, and content hash. The source structure was normalized locally through the repository's exact `ScientificRuntimeService` adapter using RDKit `2023.09.3`; the resulting canonical SMILES and structure hash are stored separately. All other pilot cases remain unverified rather than relying on model memory.
+Verified molecular records in Pilot 50 are pinned PubChem CID records returned by the official PubChem PUG REST service on 2026-08-25. Each record stores the CID, source canonical/isomeric SMILES, InChI, InChIKey, molecular formula, molecular weight, source version, and content hash. The source structure was normalized locally through the repository's exact `ScientificRuntimeService` adapter using RDKit `2023.09.3`; the resulting canonical SMILES and structure hash are stored separately. Manufacturer evidence may classify a trade product or composition, but it cannot prove a molecular structure by itself.
 
 Production persistence must normalize again through the active governed runtime and record its runtime and normalization versions. The local pilot output is evidence for this bounded validation, not permission to bypass the production normalization boundary.
 

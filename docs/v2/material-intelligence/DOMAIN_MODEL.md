@@ -35,7 +35,7 @@ Resolution and evidence are independent dimensions:
 - resolution: `UNRESOLVED`, `RESOLVED`, `CONFLICTED`, `NOT_APPLICABLE`;
 - evidence: `UNVERIFIED`, `VERIFIED`, `CONFLICTED`, `REJECTED`.
 
-Only `SINGLE_SUBSTANCE + RESOLVED + VERIFIED` may carry verified structure hash and InChIKey fields. The database constraint and contract enforce this invariant.
+Only `SINGLE_SUBSTANCE + RESOLVED + VERIFIED` may carry verified structure hash and InChIKey fields. The database constraint and contract enforce this invariant. Canonical SMILES, isomeric SMILES, InChI, InChIKey, molecular formula, and molecular weight are owned by `v2_molecular_identities`; ChemicalEntity stores only the verified strong keys needed to guard its link.
 
 ## Material component
 
@@ -51,7 +51,9 @@ An active component's eligibility never makes the containing dilution or mixture
 
 ## Evidence and decisions
 
-Evidence and eligibility decisions are append-only. Corrections create new evidence/decision records; they do not rewrite prior provenance. Material/chemical/component foreign keys include `organization_id`, and all new tables use forced tenant RLS.
+Evidence and eligibility decisions are append-only. Corrections create new evidence/decision records; they do not rewrite prior provenance. Every evidence assertion identifies its kind (`STRUCTURE`, `IDENTIFIER`, `COMPOSITION`, or `PRODUCT_IDENTITY`) and exact subject. A molecular identity may reference only verified structure evidence for that same ChemicalEntity.
+
+Eligibility decisions have an explicit `subject_type`. A MaterialProduct decision and a ChemicalEntity decision may coexist for the same linked entity and are queried independently. Material/chemical/component foreign keys include `organization_id`, and all new tables use forced tenant RLS.
 
 ## Feature cache identity
 

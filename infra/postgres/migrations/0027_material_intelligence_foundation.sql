@@ -11,6 +11,11 @@ ALTER TABLE v2_materials
   ADD COLUMN IF NOT EXISTS grade TEXT,
   ADD COLUMN IF NOT EXISTS physical_form TEXT;
 
+-- Molecular structure fields remain owned by the existing canonical identity.
+ALTER TABLE v2_molecular_identities
+  ADD COLUMN IF NOT EXISTS molecular_formula TEXT,
+  ADD COLUMN IF NOT EXISTS molecular_weight NUMERIC(18,8) CHECK (molecular_weight IS NULL OR molecular_weight > 0);
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'v2_molecular_identities_org_id_unique') THEN
@@ -34,7 +39,7 @@ CREATE TABLE IF NOT EXISTS v2_chemical_entities (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT v2_chemical_entity_org_id_unique UNIQUE (organization_id, id),
-  CONSTRAINT v2_chemical_entity_identity_tenant_fk FOREIGN KEY (organization_id, molecular_identity_id) REFERENCES v2_molecular_identities(organization_id, id) ON DELETE SET NULL,
+  CONSTRAINT v2_chemical_entity_identity_tenant_fk FOREIGN KEY (organization_id, molecular_identity_id) REFERENCES v2_molecular_identities(organization_id, id) ON DELETE NO ACTION,
   CONSTRAINT v2_chemical_entity_verified_identity CHECK (
     (resolution_status = 'RESOLVED' AND evidence_status = 'VERIFIED' AND entity_type = 'SINGLE_SUBSTANCE' AND molecular_identity_id IS NOT NULL AND verified_structure_hash IS NOT NULL AND verified_inchikey IS NOT NULL)
     OR
@@ -151,6 +156,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS v2_scientific_eligibility_decisions (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL REFERENCES v2_organizations(id) ON DELETE CASCADE,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('MATERIAL_PRODUCT','CHEMICAL_ENTITY')),
   material_id TEXT,
   chemical_entity_id TEXT,
   result TEXT NOT NULL CHECK (result IN ('ELIGIBLE','NOT_ELIGIBLE','REVIEW_REQUIRED')),
@@ -161,7 +167,11 @@ CREATE TABLE IF NOT EXISTS v2_scientific_eligibility_decisions (
   evidence_hash TEXT NOT NULL CHECK (evidence_hash ~ '^[a-f0-9]{64}$'),
   evaluated_by TEXT NOT NULL REFERENCES v2_users(id) ON DELETE RESTRICT,
   evaluated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT v2_scientific_eligibility_subject CHECK (num_nonnulls(material_id, chemical_entity_id) >= 1),
+  CONSTRAINT v2_scientific_eligibility_subject CHECK (
+    (subject_type = 'MATERIAL_PRODUCT' AND material_id IS NOT NULL)
+    OR
+    (subject_type = 'CHEMICAL_ENTITY' AND material_id IS NULL AND chemical_entity_id IS NOT NULL)
+  ),
   CONSTRAINT v2_scientific_eligibility_material_tenant_fk FOREIGN KEY (organization_id, material_id) REFERENCES v2_materials(organization_id, id) ON DELETE CASCADE,
   CONSTRAINT v2_scientific_eligibility_entity_tenant_fk FOREIGN KEY (organization_id, chemical_entity_id) REFERENCES v2_chemical_entities(organization_id, id) ON DELETE CASCADE,
   CONSTRAINT v2_scientific_eligibility_structure CHECK (
@@ -172,8 +182,8 @@ CREATE TABLE IF NOT EXISTS v2_scientific_eligibility_decisions (
 CREATE INDEX IF NOT EXISTS v2_chemical_entities_lookup_idx ON v2_chemical_entities(organization_id, resolution_status, evidence_status);
 CREATE INDEX IF NOT EXISTS v2_material_components_material_idx ON v2_material_components(organization_id, material_id, created_at);
 CREATE INDEX IF NOT EXISTS v2_material_intelligence_evidence_lookup_idx ON v2_material_intelligence_evidence(organization_id, material_id, chemical_entity_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS v2_scientific_eligibility_material_idx ON v2_scientific_eligibility_decisions(organization_id, material_id, evaluated_at DESC);
-CREATE INDEX IF NOT EXISTS v2_scientific_eligibility_entity_idx ON v2_scientific_eligibility_decisions(organization_id, chemical_entity_id, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS v2_scientific_eligibility_material_idx ON v2_scientific_eligibility_decisions(organization_id, subject_type, material_id, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS v2_scientific_eligibility_entity_idx ON v2_scientific_eligibility_decisions(organization_id, subject_type, chemical_entity_id, evaluated_at DESC);
 
 DO $$
 DECLARE t TEXT;

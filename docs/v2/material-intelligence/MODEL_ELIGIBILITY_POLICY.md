@@ -14,6 +14,8 @@ It includes stable reason codes, subject identity, verified structure hash/norma
 
 Product classification is evaluated before molecular evidence. This prevents an active ingredient from accidentally making its dilution, mixture, natural, base, or formulation eligible.
 
+The subject boundary is explicit. `MATERIAL_PRODUCT` evaluates the sold product and its classification. `CHEMICAL_ENTITY` evaluates only the entity. For example, a dilution product remains `NOT_ELIGIBLE` while its verified active ChemicalEntity may independently be `ELIGIBLE`; neither decision may mask the other.
+
 | Condition | Result | Reason |
 | --- | --- | --- |
 | Resolved, verified single substance; supported structure; stereochemistry resolved/not applicable | `ELIGIBLE` | `RESOLVED_SINGLE_SUBSTANCE` |

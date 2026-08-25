@@ -544,6 +544,34 @@ try {
       SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname = ANY($1::text[])
     `, ['v2_chemical_entity_verified_identity_guard', 'v2_material_intelligence_evidence_append_only', 'v2_scientific_eligibility_append_only'])
     if (materialIntelligenceTriggers.length !== 3) throw new Error('Material Intelligence identity guard or append-only evidence triggers are missing')
+    const materialIntelligenceColumns = await client.$queryRawUnsafe(`
+      SELECT table_name, column_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND (
+        (table_name = 'v2_molecular_identities' AND column_name IN ('molecular_formula', 'molecular_weight'))
+        OR (table_name = 'v2_scientific_eligibility_decisions' AND column_name = 'subject_type')
+      )
+    `)
+    if (materialIntelligenceColumns.length !== 3) throw new Error('Material Intelligence canonical molecular or eligibility subject columns are missing')
+    const materialIntelligenceConstraints = await client.$queryRawUnsafe(`
+      SELECT conname, confdeltype AS "deleteAction", pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conname IN ('v2_chemical_entity_identity_tenant_fk', 'v2_scientific_eligibility_subject')
+    `)
+    const identityFk = materialIntelligenceConstraints.find((row) => row.conname === 'v2_chemical_entity_identity_tenant_fk')
+    const subjectConstraint = materialIntelligenceConstraints.find((row) => row.conname === 'v2_scientific_eligibility_subject')
+    if (identityFk?.deleteAction !== 'a'
+      || !String(subjectConstraint?.definition).includes('subject_type')
+      || !String(subjectConstraint?.definition).includes('material_id IS NULL')) {
+      throw new Error('Material Intelligence identity deletion or eligibility subject constraint is unsafe')
+    }
+    const eligibilityIndexes = await client.$queryRawUnsafe(`
+      SELECT indexname, indexdef FROM pg_indexes
+      WHERE schemaname = 'public' AND indexname = ANY($1::text[])
+    `, ['v2_scientific_eligibility_material_idx', 'v2_scientific_eligibility_entity_idx'])
+    if (eligibilityIndexes.length !== 2 || eligibilityIndexes.some((row) => !row.indexdef.includes('subject_type'))) {
+      throw new Error('Material Intelligence eligibility subject indexes are missing')
+    }
   } finally {
     await client.$disconnect()
   }

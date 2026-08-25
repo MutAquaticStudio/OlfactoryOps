@@ -19,6 +19,10 @@ describe('material intelligence migration contract', () => {
     expect(migration).toContain("ALTER TABLE %I FORCE ROW LEVEL SECURITY")
     expect(migration).toContain('FOREIGN KEY (organization_id, material_id) REFERENCES v2_materials(organization_id, id)')
     expect(migration).toContain('FOREIGN KEY (organization_id, chemical_entity_id) REFERENCES v2_chemical_entities(organization_id, id)')
+    expect(migration).toMatch(/subject_type\s+TEXT NOT NULL CHECK \(subject_type IN \('MATERIAL_PRODUCT','CHEMICAL_ENTITY'\)\)/)
+    expect(migration).toContain('v2_chemical_entity_identity_tenant_fk FOREIGN KEY (organization_id, molecular_identity_id) REFERENCES v2_molecular_identities(organization_id, id) ON DELETE NO ACTION')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS molecular_formula TEXT')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS molecular_weight NUMERIC(18,8)')
     expect(migration).toContain('v2_material_intelligence_evidence_append_only')
     expect(migration).toContain('v2_scientific_eligibility_append_only')
     expect(migration).toContain('v2_chemical_entity_verified_identity_guard')
@@ -40,6 +44,13 @@ describe('material intelligence migration contract', () => {
     const pilot = await read('scripts/run-material-intelligence-pilot50.ts')
     expect(`${migration}\n${pilot}`).not.toMatch(/INSERT INTO v2_scientific_jobs|train_candidate|FEATURE_GENERATE/)
   })
+
+  it('queries persisted product and ChemicalEntity decisions through distinct subjects', async () => {
+    const service = await read('services/scientific/src/material-intelligence-service.ts')
+    expect(service).toContain("subject_type = 'MATERIAL_PRODUCT' AND material_id =")
+    expect(service).toContain("subject_type = 'CHEMICAL_ENTITY' AND material_id IS NULL AND chemical_entity_id =")
+    expect(service).toContain('subjectType: row.subjectType')
+  })
 })
 
 describe('material intelligence pilot evidence contract', () => {
@@ -47,18 +58,35 @@ describe('material intelligence pilot evidence contract', () => {
     const fixture = JSON.parse(await read('services/scientific/testdata/material-intelligence-pilot50.json'))
     expect(fixture.normalizationVersion).toBe('olfactoryops-rdkit-standardization/1.0.0')
     expect(fixture.rdkitVersion).toBe('2023.09.3')
-    const verified = fixture.cases.filter((item) => item.evidenceStatus === 'VERIFIED')
-    expect(verified).toHaveLength(16)
+    expect(fixture.contractVersion).toBe('material-intelligence-pilot/2.0.0')
+    const verified = [...fixture.cases, ...fixture.supportingEntities].filter((item) => item.resolutionStatus === 'RESOLVED' && item.evidenceStatus === 'VERIFIED')
+    expect(verified).toHaveLength(36)
+    expect(new Set(verified.map((item) => item.molecularIdentityId)).size).toBe(35)
     for (const item of verified) {
+      const structureSource = item.linkedPrimaryCaseId
+        ? fixture.cases.find((candidate) => candidate.id === item.linkedPrimaryCaseId)
+        : item
       const content = JSON.stringify({
-        canonicalSmiles: item.sourceCanonicalSmiles,
-        inchiKey: item.inchiKey,
-        sourceVersion: `PubChem CID ${item.cid}`,
+        canonicalSmiles: structureSource.sourceCanonicalSmiles,
+        inchiKey: structureSource.inchiKey,
+        sourceVersion: `PubChem CID ${structureSource.cid}`,
       })
-      expect(createHash('sha256').update(content).digest('hex')).toBe(item.contentHash)
+      expect(createHash('sha256').update(content).digest('hex')).toBe(structureSource.contentHash)
       expect(item.canonicalSmiles).toBeTruthy()
+      expect(item.inchi).toBeTruthy()
+      expect(item.molecularFormula).toBeTruthy()
+      expect(item.molecularWeight).toBeGreaterThan(0)
       expect(item.structureHash).toMatch(/^[a-f0-9]{64}$/)
     }
+  })
+
+  it('requires explicit ChemicalEntity actions and component links for every pilot result', async () => {
+    const fixture = JSON.parse(await read('services/scientific/testdata/material-intelligence-pilot50.json'))
+    expect(fixture.cases).toHaveLength(50)
+    expect(fixture.cases.every((item) => item.chemicalEntityAction && item.chemicalEntityId && item.researchReason)).toBe(true)
+    const components = fixture.cases.flatMap((item) => item.components ?? [])
+    expect(components).toHaveLength(10)
+    expect(components.every((item) => item.chemicalEntityId && item.resolutionStatus && item.verificationStatus && item.evidenceRefs.length > 0)).toBe(true)
   })
 })
 

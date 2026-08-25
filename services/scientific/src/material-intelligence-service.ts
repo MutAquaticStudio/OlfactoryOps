@@ -1,6 +1,8 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import {
   getScientificEligibilityRequestSchema,
+  hasMatchingVerifiedStructureEvidence,
+  materialIntelligenceAssessmentBaseSchema,
   materialIntelligenceAssessmentSchema,
   scientificEligibilitySchema,
   scientificFeatureCacheIdentitySchema,
@@ -18,6 +20,7 @@ export const MATERIAL_INTELLIGENCE_POLICY_VERSION = 'material-intelligence/1.0.0
 
 type Transaction = Prisma.TransactionClient
 type EligibilityRow = {
+  subjectType: ScientificEligibility['subjectType']
   materialId: string | null
   chemicalEntityId: string | null
   result: ScientificEligibility['result']
@@ -60,7 +63,9 @@ function eligibility(
  * dilution, natural, base, or formulation eligible as a neat substance.
  */
 export function evaluateScientificEligibility(rawAssessment: unknown): ScientificEligibility {
-  const assessment = materialIntelligenceAssessmentSchema.parse(rawAssessment)
+  const assessment = materialIntelligenceAssessmentBaseSchema.parse(rawAssessment)
+  if (!hasMatchingVerifiedStructureEvidence(assessment)) return eligibility(assessment, 'REVIEW_REQUIRED', 'UNVERIFIED_STRUCTURE')
+  materialIntelligenceAssessmentSchema.parse(assessment)
   if (assessment.productClassification === 'UNKNOWN') return eligibility(assessment, 'REVIEW_REQUIRED', 'UNKNOWN_COMPOSITION')
   if (assessment.productClassification in productReason) {
     return eligibility(assessment, 'NOT_ELIGIBLE', productReason[assessment.productClassification as keyof typeof productReason])
@@ -127,26 +132,25 @@ export class MaterialIntelligenceService {
     return this.scoped(context, async (tx) => {
       const rows = input.data.materialId
         ? await tx.$queryRaw<EligibilityRow[]>`
-            SELECT material_id AS "materialId", chemical_entity_id AS "chemicalEntityId", result,
+            SELECT subject_type AS "subjectType", material_id AS "materialId", chemical_entity_id AS "chemicalEntityId", result,
               reason_codes AS "reasonCodes", structure_hash AS "structureHash",
               normalization_version AS "normalizationVersion", policy_version AS "policyVersion"
             FROM v2_scientific_eligibility_decisions
-            WHERE organization_id = ${context.organizationId} AND material_id = ${input.data.materialId}
+            WHERE organization_id = ${context.organizationId} AND subject_type = 'MATERIAL_PRODUCT' AND material_id = ${input.data.materialId}
             ORDER BY evaluated_at DESC, id DESC LIMIT 1
           `
         : await tx.$queryRaw<EligibilityRow[]>`
-            SELECT material_id AS "materialId", chemical_entity_id AS "chemicalEntityId", result,
+            SELECT subject_type AS "subjectType", material_id AS "materialId", chemical_entity_id AS "chemicalEntityId", result,
               reason_codes AS "reasonCodes", structure_hash AS "structureHash",
               normalization_version AS "normalizationVersion", policy_version AS "policyVersion"
             FROM v2_scientific_eligibility_decisions
-            WHERE organization_id = ${context.organizationId} AND chemical_entity_id = ${input.data.chemicalEntityId}
+            WHERE organization_id = ${context.organizationId} AND subject_type = 'CHEMICAL_ENTITY' AND material_id IS NULL AND chemical_entity_id = ${input.data.chemicalEntityId}
             ORDER BY evaluated_at DESC, id DESC LIMIT 1
           `
       const row = rows[0]
       if (!row) throw new PlatformError('SCIENTIFIC_ELIGIBILITY_NOT_EVALUATED', 'Scientific eligibility has not been evaluated for this subject.', 404)
-      const subjectType = input.data.materialId ? 'MATERIAL_PRODUCT' : 'CHEMICAL_ENTITY'
       return scientificEligibilitySchema.parse({
-        subjectType,
+        subjectType: row.subjectType,
         subjectId: input.data.materialId ?? input.data.chemicalEntityId,
         result: row.result,
         reasonCodes: row.reasonCodes,
