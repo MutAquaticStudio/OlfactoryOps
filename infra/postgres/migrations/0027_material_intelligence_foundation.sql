@@ -204,6 +204,7 @@ BEGIN
   CREATE TRIGGER v2_scientific_eligibility_append_only BEFORE UPDATE OR DELETE ON v2_scientific_eligibility_decisions FOR EACH ROW EXECUTE FUNCTION v2_reject_audit_mutation();
 
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'v2_app') THEN
+    EXECUTE 'REVOKE UPDATE, DELETE ON v2_material_intelligence_evidence, v2_scientific_eligibility_decisions FROM v2_app';
     EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON v2_chemical_entities, v2_chemical_identifiers, v2_material_components TO v2_app';
     EXECUTE 'GRANT SELECT, INSERT ON v2_material_intelligence_evidence, v2_scientific_eligibility_decisions TO v2_app';
   END IF;
