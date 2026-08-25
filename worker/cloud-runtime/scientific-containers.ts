@@ -9,7 +9,15 @@ import {
   scientificContainerStopPollAttempts,
   scientificContainerStopPollIntervalMs,
 } from './scientific-container-env.js'
-import { parseScientificContainerResponse, scientificContainerRequestSchema, type ScientificContainerRequest } from './contracts.js'
+import {
+  cloudOdorPredictionMaximumResponseBytes,
+  cloudOdorPredictionPayloadSchema,
+  cloudOdorPredictionResponseSchema,
+  parseScientificContainerResponse,
+  scientificContainerRequestSchema,
+  type CloudOdorPredictionPayload,
+  type ScientificContainerRequest,
+} from './contracts.js'
 import { ScientificContainerLane, type ScientificContainerLaneCleanup } from './scientific-container-lane.js'
 import { ScientificContainerStartup } from './scientific-container-startup.js'
 
@@ -23,8 +31,9 @@ export type BufferedScientificContainerResponse = {
 }
 
 const scientificContainerMaximumResponseBytes = 1_000_000
+export const scientificContainerPredictionTimeoutMs = 30_000
 
-async function readBoundedBody(response: Response): Promise<string> {
+async function readBoundedBody(response: Response, maximumBytes = scientificContainerMaximumResponseBytes): Promise<string> {
   if (!response.body) return ''
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
@@ -34,7 +43,7 @@ async function readBoundedBody(response: Response): Promise<string> {
       const { done, value } = await reader.read()
       if (done) break
       bytes += value.byteLength
-      if (bytes > scientificContainerMaximumResponseBytes) {
+      if (bytes > maximumBytes) {
         await reader.cancel().catch(() => undefined)
         throw new Error('SCIENTIFIC_CONTAINER_RESPONSE_TOO_LARGE')
       }
@@ -97,6 +106,27 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
     })
   }
 
+  /** Synchronous research prediction path; tenant data never enters this boundary. */
+  async runOdorPrediction(input: CloudOdorPredictionPayload, sharedSecret: string): Promise<BufferedScientificContainerResponse> {
+    const payload = cloudOdorPredictionPayloadSchema.parse(input)
+    if (!sharedSecret) throw new Error('SCIENTIFIC_CONTAINER_NOT_CONFIGURED')
+
+    return this.lane.run(async () => {
+      const response = await this.invokeContainer(new Request('https://scientific.internal/v1/predictions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-olfactoryops-scientific-key': sharedSecret },
+        body: JSON.stringify(payload),
+      }), scientificContainerPredictionTimeoutMs)
+      const body = await readBoundedBody(response, cloudOdorPredictionMaximumResponseBytes)
+      if (!response.ok) return { status: response.status, body }
+      try {
+        return { status: response.status, body: JSON.stringify(cloudOdorPredictionResponseSchema.parse(JSON.parse(body))) }
+      } catch {
+        throw new Error('MODEL_RUNTIME_RESPONSE_INVALID')
+      }
+    })
+  }
+
   override onError(error: unknown): void {
     const diagnostic = scientificContainerDiagnostic(error)
     console.error(
@@ -140,7 +170,7 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
     return this.invokeContainer(request)
   }
 
-  private async invokeContainer(request: Request): Promise<Response> {
+  private async invokeContainer(request: Request, responseTimeoutMs?: number): Promise<Response> {
     if (this.defaultPort === undefined) throw new Error('SCIENTIFIC_CONTAINER_PORT_NOT_CONFIGURED')
     await this.startup.ensure(async () => {
       await this.startAndWaitForPorts({
@@ -155,7 +185,17 @@ abstract class ScientificContainer extends Container<CloudRuntimeSecretBindings>
         },
       })
     })
-    return super.fetch(request)
+    if (!responseTimeoutMs) return super.fetch(request)
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), responseTimeoutMs)
+    try {
+      return await super.fetch(new Request(request, { signal: abort.signal }))
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') throw new Error('MODEL_RUNTIME_TIMEOUT')
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   private logLaneCleanup(outcome: ScientificContainerLaneCleanup): void {

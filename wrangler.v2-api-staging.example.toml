@@ -26,6 +26,7 @@ binding = "R2_ARTIFACTS"
 bucket_name = "olfactoryops-v2-artifacts-staging"
 
 [[services]]
+# Required private transport for synchronous research odor prediction.
 binding = "CLOUD_RUNTIME"
 service = "olfactoryops-v2-cloud-runtime-staging"
 

@@ -5,6 +5,8 @@ import { CloudQueueDispatcher } from './queue-dispatcher.js'
 import { handleCloudQueueMessage } from './queue-consumer.js'
 import { ScientificFeatureContainer, ScientificModelContainer } from './scientific-containers.js'
 import { ScientificJobWorkflow, type CloudScientificEnv } from './scientific-workflow.js'
+import { handleInternalOdorPrediction } from './odor-prediction-transport.js'
+import { scientificContainerFor } from './scientific-container-routing.js'
 
 export { ScientificFeatureContainer, ScientificJobWorkflow, ScientificModelContainer }
 
@@ -37,6 +39,9 @@ export default {
       } catch {
         return json(503, { status: 'blocked', code: 'HYPERDRIVE_NOT_CONFIGURED' })
       }
+    }
+    if (url.pathname === '/internal/odor-prediction') {
+      return handleInternalOdorPrediction(request, env, scientificContainerFor)
     }
     if (request.method === 'POST' && url.pathname === '/internal/scientific-dispatch') {
       if (env.RELEASE_ENVIRONMENT !== 'staging' || request.headers.get('x-olfactoryops-internal-dispatch') !== 'cloud-runtime/v1') {

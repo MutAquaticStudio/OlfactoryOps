@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Prisma, PrismaClient } from '@prisma/client'
-import { explainabilityRequestSchema, molecularEmbeddingRequestSchema, molecularSimilarityRequestSchema, odorPredictionRequestSchema } from '../../../packages/contracts/src/olfactory-intelligence.js'
+import { explainabilityRequestSchema, molecularEmbeddingRequestSchema, molecularSimilarityRequestSchema, odorPredictionRequestSchema, type OdorResearchPrediction } from '../../../packages/contracts/src/olfactory-intelligence.js'
 import { PlatformError, PlatformService } from '../../platform/src/service.js'
 import type { PlatformContext } from '../../platform/src/types.js'
 import { OdorPredictionRuntimeUnavailable, type OdorPredictionRuntime } from './model-http-runtime.js'
@@ -12,6 +12,9 @@ type IdempotencyRow = { requestHash: string; response: unknown }
 type ArtifactRow = { id: string; artifactKind: string; evidenceStatus: string; contentHash: string; payload: JsonRecord }
 type MolecularMaterialRow = { id: string; canonicalSmiles: string | null; structureHash: string | null; resolutionStatus: string | null; rdkitVersion: string | null; standardizationVersion: string | null }
 type ResearchModelRow = { id: string; modelId: string; modelName: string; version: string; stage: string; status: string; componentKey: string; checkpointHash: string; checkpointStatus: string; datasetVersionId: string; datasetVersion: string; evaluationStatus: string; leakageStatus: string }
+type PredictionPreparation =
+  | { requestHash: string; cachedResponse: JsonRecord }
+  | { requestHash: string; material: MolecularMaterialRow; model: ResearchModelRow; evidenceHash: string }
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
@@ -138,6 +141,36 @@ export class OlfactoryIntelligenceService {
     return model
   }
 
+  private async prepareOdorPrediction(context: PlatformContext, route: string, key: string | undefined, request: unknown, materialId: string, modelVersionId: string): Promise<PredictionPreparation> {
+    if (!key || key.length < 12 || key.length > 200) throw new PlatformError('IDEMPOTENCY_KEY_REQUIRED', 'Provide an Idempotency-Key for this operation.', 428)
+    const requestHash = digest(request)
+    return this.scoped(context, async (tx) => {
+      const existing = await tx.$queryRaw<IdempotencyRow[]>`SELECT request_hash AS "requestHash", response FROM v2_operation_idempotency WHERE organization_id = ${context.organizationId} AND actor_user_id = ${context.userId} AND route = ${route} AND idempotency_key = ${key}`
+      if (existing[0]) {
+        if (existing[0].requestHash !== requestHash) throw new PlatformError('IDEMPOTENCY_CONFLICT', 'This idempotency key was already used for a different request.', 409)
+        if (!existing[0].response) throw new PlatformError('OPERATION_IN_PROGRESS', 'The original operation is still being completed.', 409)
+        return { requestHash, cachedResponse: existing[0].response as JsonRecord }
+      }
+      const inserted = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_operation_idempotency (id, organization_id, actor_user_id, route, idempotency_key, request_hash) VALUES (${identifier('idem')}, ${context.organizationId}, ${context.userId}, ${route}, ${key}, ${requestHash}) ON CONFLICT (organization_id, actor_user_id, route, idempotency_key) DO NOTHING RETURNING id`
+      if (!inserted.length) throw new PlatformError('OPERATION_IN_PROGRESS', 'The original operation is still being completed.', 409)
+      const material = await this.molecularMaterial(tx, context, materialId)
+      const model = await this.researchModel(tx, context, modelVersionId)
+      return { requestHash, material, model, evidenceHash: digest({ material, model }) }
+    })
+  }
+
+  private async releaseOdorPredictionReservation(context: PlatformContext, route: string, key: string, requestHash: string) {
+    await this.scoped(context, async (tx) => {
+      await tx.$executeRaw`DELETE FROM v2_operation_idempotency WHERE organization_id = ${context.organizationId} AND actor_user_id = ${context.userId} AND route = ${route} AND idempotency_key = ${key} AND request_hash = ${requestHash} AND response IS NULL`
+    })
+  }
+
+  private verifyOdorPredictionEvidence(prediction: OdorResearchPrediction, material: MolecularMaterialRow, model: ResearchModelRow) {
+    if (prediction.modelVersionId !== model.version || prediction.modelStage !== 'RESEARCH' || prediction.inputStructureHash !== material.structureHash || prediction.provenance.checkpointSha256 !== model.checkpointHash) {
+      throw new PlatformError('MODEL_EVIDENCE_MISMATCH', 'The runtime response does not match the registered model or molecular evidence.', 409)
+    }
+  }
+
   private async artifacts(tx: Transaction, context: PlatformContext, materialId: string, kinds: string[]) {
     return tx.$queryRaw<ArtifactRow[]>`SELECT id, artifact_kind AS "artifactKind", evidence_status AS "evidenceStatus", content_hash AS "contentHash", payload FROM v2_scientific_artifacts WHERE organization_id = ${context.organizationId} AND material_id = ${materialId} AND artifact_kind IN (${Prisma.join(kinds)}) ORDER BY created_at DESC, id DESC`
   }
@@ -201,31 +234,45 @@ export class OlfactoryIntelligenceService {
     await this.requirePredict(context)
     const parsed = odorPredictionRequestSchema.safeParse(rawInput)
     if (!parsed.success) throw new PlatformError('INVALID_INPUT', 'Select a model version and bounded research task.', 422)
-    return this.idempotent(context, 'olfactory-intelligence.odor-prediction.request', idempotencyKey, { materialId, ...parsed.data }, async (tx) => {
-      const material = await this.molecularMaterial(tx, context, materialId)
-      const model = await this.researchModel(tx, context, parsed.data.modelVersionId)
-      let prediction
-      try {
-        prediction = await this.modelRuntime.predict({ artifactModelVersion: model.version, canonicalSmiles: material.canonicalSmiles!, requestedTargets: parsed.data.requestedTargets })
-      } catch (error) {
-        const code = error instanceof Error ? error.message : 'MODEL_RUNTIME_UNAVAILABLE'
-        if (code === 'MODEL_RUNTIME_INVALID_INPUT') throw new PlatformError('INVALID_INPUT', 'The molecular structure or requested descriptor is not supported by this research model.', 422)
-        if (code === 'MODEL_NOT_EVALUATED') throw new PlatformError('ODOR_MODEL_NOT_EVALUATED', 'The selected model artifact is not evaluated or its checkpoint could not be verified.', 409)
-        throw new PlatformError('MODEL_RUNTIME_NOT_CONFIGURED', 'The isolated research model runtime is not available.', 503)
-      }
-      if (prediction.modelVersionId !== model.version || prediction.modelStage !== 'RESEARCH' || prediction.inputStructureHash !== material.structureHash || prediction.provenance.checkpointSha256 !== model.checkpointHash) {
-        throw new PlatformError('MODEL_EVIDENCE_MISMATCH', 'The runtime response does not match the registered model or molecular evidence.', 409)
-      }
-      const inputHash = digest({ structureHash: material.structureHash, modelVersionId: parsed.data.modelVersionId, task: parsed.data.requestedTask, requestedTargets: parsed.data.requestedTargets ?? null })
-      const id = identifier('prediction')
-      const response = { ...prediction, modelId: model.modelId, modelVersionId: model.id, datasetVersionId: model.datasetVersionId, modelName: model.modelName, datasetVersion: model.datasetVersion }
-      const uncertainty = { method: prediction.predictions[0]?.uncertaintyMethod, values: prediction.predictions.map((item) => ({ targetKey: item.targetKey, uncertainty: item.uncertainty })) }
-      const persisted = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_olfactory_predictions (id, organization_id, material_id, model_version_id, requested_task, input_hash, output, uncertainty, calibration_version, evidence_status, reason_code, created_by) VALUES (${id}, ${context.organizationId}, ${materialId}, ${parsed.data.modelVersionId}, ${parsed.data.requestedTask}, ${inputHash}, ${JSON.stringify(response)}::jsonb, ${JSON.stringify(uncertainty)}::jsonb, 'validation-residual-rmse/1.0.0', 'VERIFIED', NULL, ${context.userId}) ON CONFLICT (organization_id, material_id, model_version_id, requested_task, input_hash) DO UPDATE SET input_hash = EXCLUDED.input_hash RETURNING id`
-      const persistedId = persisted[0]?.id
-      if (!persistedId) throw new PlatformError('PREDICTION_WRITE_FAILED', 'The odor prediction request could not be recorded.', 409)
-      await this.audit(tx, context, 'olfactory_intelligence.odor_prediction.request', 'allowed', 'olfactory_prediction', persistedId, { materialId, modelVersionId: parsed.data.modelVersionId, inputStructureHash: material.structureHash, evidenceStatus: 'VERIFIED' })
-      return { id: persistedId, materialId, status: 'SUCCESS', ...response }
-    })
+    const route = 'olfactory-intelligence.odor-prediction.request'
+    const request = { materialId, ...parsed.data }
+    const prepared = await this.prepareOdorPrediction(context, route, idempotencyKey, request, materialId, parsed.data.modelVersionId)
+    if ('cachedResponse' in prepared) return prepared.cachedResponse
+
+    let prediction: OdorResearchPrediction
+    try {
+      prediction = await this.modelRuntime.predict({ artifactModelVersion: prepared.model.version, canonicalSmiles: prepared.material.canonicalSmiles!, requestedTargets: parsed.data.requestedTargets })
+    } catch (error) {
+      await this.releaseOdorPredictionReservation(context, route, idempotencyKey!, prepared.requestHash)
+      const code = error instanceof Error ? error.message : 'MODEL_RUNTIME_UNAVAILABLE'
+      if (code === 'MODEL_RUNTIME_INVALID_INPUT') throw new PlatformError('INVALID_INPUT', 'The molecular structure or requested descriptor is not supported by this research model.', 422)
+      if (code === 'MODEL_NOT_EVALUATED') throw new PlatformError('ODOR_MODEL_NOT_EVALUATED', 'The selected model artifact is not evaluated or its checkpoint could not be verified.', 409)
+      throw new PlatformError('MODEL_RUNTIME_NOT_CONFIGURED', 'The isolated research model runtime is not available.', 503)
+    }
+
+    try {
+      return await this.scoped(context, async (tx) => {
+        const material = await this.molecularMaterial(tx, context, materialId)
+        const model = await this.researchModel(tx, context, parsed.data.modelVersionId)
+        if (digest({ material, model }) !== prepared.evidenceHash) throw new PlatformError('MODEL_EVIDENCE_MISMATCH', 'The registered model or molecular evidence changed during inference.', 409)
+        this.verifyOdorPredictionEvidence(prediction, material, model)
+        const inputHash = digest({ structureHash: material.structureHash, modelVersionId: parsed.data.modelVersionId, task: parsed.data.requestedTask, requestedTargets: parsed.data.requestedTargets ?? null })
+        const id = identifier('prediction')
+        const response = { ...prediction, modelId: model.modelId, modelVersionId: model.id, datasetVersionId: model.datasetVersionId, modelName: model.modelName, datasetVersion: model.datasetVersion }
+        const uncertainty = { method: prediction.predictions[0]?.uncertaintyMethod, values: prediction.predictions.map((item) => ({ targetKey: item.targetKey, uncertainty: item.uncertainty })) }
+        const persisted = await tx.$queryRaw<Array<{ id: string }>>`INSERT INTO v2_olfactory_predictions (id, organization_id, material_id, model_version_id, requested_task, input_hash, output, uncertainty, calibration_version, evidence_status, reason_code, created_by) VALUES (${id}, ${context.organizationId}, ${materialId}, ${parsed.data.modelVersionId}, ${parsed.data.requestedTask}, ${inputHash}, ${JSON.stringify(response)}::jsonb, ${JSON.stringify(uncertainty)}::jsonb, 'validation-residual-rmse/1.0.0', 'VERIFIED', NULL, ${context.userId}) ON CONFLICT (organization_id, material_id, model_version_id, requested_task, input_hash) DO UPDATE SET input_hash = EXCLUDED.input_hash RETURNING id`
+        const persistedId = persisted[0]?.id
+        if (!persistedId) throw new PlatformError('PREDICTION_WRITE_FAILED', 'The odor prediction request could not be recorded.', 409)
+        await this.audit(tx, context, 'olfactory_intelligence.odor_prediction.request', 'allowed', 'olfactory_prediction', persistedId, { materialId, modelVersionId: parsed.data.modelVersionId, inputStructureHash: material.structureHash, evidenceStatus: 'VERIFIED' })
+        const completed = { id: persistedId, materialId, status: 'SUCCESS', ...response }
+        const finalized = await tx.$queryRaw<Array<{ id: string }>>`UPDATE v2_operation_idempotency SET response = ${JSON.stringify(completed)}::jsonb WHERE organization_id = ${context.organizationId} AND actor_user_id = ${context.userId} AND route = ${route} AND idempotency_key = ${idempotencyKey!} AND request_hash = ${prepared.requestHash} AND response IS NULL RETURNING id`
+        if (!finalized.length) throw new PlatformError('IDEMPOTENCY_FINALIZATION_FAILED', 'The odor prediction reservation could not be finalized.', 409)
+        return completed
+      })
+    } catch (error) {
+      await this.releaseOdorPredictionReservation(context, route, idempotencyKey!, prepared.requestHash)
+      throw error
+    }
   }
 
   async explain(context: PlatformContext, materialId: string, rawInput: unknown, idempotencyKey?: string) {

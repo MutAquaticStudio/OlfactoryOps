@@ -14,11 +14,12 @@ import { OlfactoryIntelligenceService } from '../../services/scientific/src/olfa
 import { ScientificFeatureService, ScientificRuntimeUnavailable } from '../../services/scientific/src/service.js'
 import { CloudflareScientificDispatcher } from './cloud-scientific-dispatch.js'
 import { CloudflarePasswordResetDispatcher } from './cloud-password-reset-dispatch.js'
+import { odorPredictionRuntimeForBinding } from './cloud-odor-prediction-runtime.js'
 
 export type V2ApiServiceEnv = {
   HYPERDRIVE: Hyperdrive
   R2_ARTIFACTS: R2Bucket
-  CLOUD_RUNTIME: Fetcher
+  CLOUD_RUNTIME?: Fetcher
   V2_WORKSPACE_BASE_DOMAIN: string
   V2_API_PUBLIC_HOSTNAME?: string
   V2_PUBLIC_PAGES_HOSTNAME?: string
@@ -65,10 +66,15 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
     passwordPepper: required(env.V2_PASSWORD_PEPPER, 'V2_PASSWORD_PEPPER'),
     invitationEncryptionKey: required(env.V2_INVITATION_ENCRYPTION_KEY, 'V2_INVITATION_ENCRYPTION_KEY'),
     passwordResetEncryptionKey: required(env.V2_PASSWORD_RESET_ENCRYPTION_KEY, 'V2_PASSWORD_RESET_ENCRYPTION_KEY'),
-    passwordResetDispatcher: new CloudflarePasswordResetDispatcher(env),
+    passwordResetDispatcher: env.CLOUD_RUNTIME
+      ? new CloudflarePasswordResetDispatcher({ CLOUD_RUNTIME: env.CLOUD_RUNTIME })
+      : undefined,
   })
   const lab = new LabOperationsService(prisma, platform)
   const formula = new FormulaService(prisma, platform)
+  const cloudDispatcher = env.CLOUD_RUNTIME
+    ? new CloudflareScientificDispatcher({ ...env, CLOUD_RUNTIME: env.CLOUD_RUNTIME })
+    : undefined
   return {
     prisma,
     databaseHealth: async () => {
@@ -82,9 +88,9 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
     platform,
     platformAdmin: new PlatformAdminService(prisma, platform),
     lab,
-    scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable(), new CloudflareScientificDispatcher(env)),
+    scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable(), cloudDispatcher),
     modelDataset: new ModelDatasetService(prisma, platform),
-    olfactory: new OlfactoryIntelligenceService(prisma, platform),
+    olfactory: new OlfactoryIntelligenceService(prisma, platform, odorPredictionRuntimeForBinding(env.CLOUD_RUNTIME)),
     consumer: new ConsumerIntelligenceService(prisma, platform),
     formula,
     evidence: new MaterialEvidenceService(prisma, platform),
