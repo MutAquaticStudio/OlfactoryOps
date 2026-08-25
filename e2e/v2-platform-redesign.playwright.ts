@@ -22,13 +22,15 @@ const session = {
   },
 }
 
-async function mockWorkspaceApi(page: Page) {
+async function mockWorkspaceApi(page: Page, options: { research?: boolean } = {}) {
   await page.route('**/api/v1/v2/**', async (route) => {
     const pathname = new URL(route.request().url()).pathname
     const respond = (body: unknown) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(body) })
     if (pathname.endsWith('/platform/auth/csrf/bootstrap')) return respond({ csrfToken: 'test-csrf' })
-    if (pathname.endsWith('/platform/me')) return respond(session)
+    if (pathname.endsWith('/platform/me')) return respond(options.research ? { ...session, capabilities: { ...session.capabilities, 'scientific_ai.predict': true } } : session)
     if (pathname.endsWith('/lab/materials')) return respond({ materials: [{ id: 'mat-1', name: 'Bergamot fraction', internalCode: 'MAT-014', status: 'ACTIVE', scope: 'TENANT' }, { id: 'mat-2', name: 'Cedarwood atlas', internalCode: 'MAT-022', status: 'DRAFT', scope: 'TENANT' }] })
+    if (options.research && pathname.endsWith('/model-dataset/models/research-ready')) return respond({ models: [{ id: 'model-version-1', name: 'Osmo Dravnieks Transformer-CNN', version: 'osmo-dravnieks-transformer-cnn/1.0.0', stage: 'RESEARCH', trainingMode: 'FINE_TUNE_FROZEN_PRETRAINED_ENCODER', datasetVersion: '5aa9d2cd-d560c47e' }] })
+    if (options.research && pathname.endsWith('/olfactory-intelligence/materials/mat-1/odor-predictions')) return respond({ prediction: { id: 'prediction-1', status: 'SUCCESS', modelName: 'Osmo Dravnieks Transformer-CNN', modelVersionId: 'model-version-1', modelStage: 'RESEARCH', trainingMode: 'FINE_TUNE_FROZEN_PRETRAINED_ENCODER', datasetVersion: '5aa9d2cd-d560c47e', canonicalSmiles: 'CCOC(=O)C1=CC=CC=C1', inputStructureHash: 'a'.repeat(64), predictions: [{ descriptor: 'Citrus', targetKey: 'regression_citrus', score: 0.412, scale: 'dataset descriptor response score, source range 0-1; not a probability', uncertainty: 0.071, uncertaintyMethod: 'per-target validation residual RMSE' }], provenance: { upstreamCommit: '4db725b5e549af7697215d8cc7a6e8a2a952dca5', checkpointSha256: 'b'.repeat(64), evaluationHash: 'c'.repeat(64) }, evidenceStatus: 'EVALUATED_RESEARCH', runtimeVersion: 'olfactoryops-osmo-research-runtime/1.0.0' } })
     if (pathname.endsWith('/lab/inventory/lots')) return respond({ lots: [{ id: 'lot-1', materialId: 'mat-1', status: 'AVAILABLE', qualityStatus: 'RELEASED', location: 'Lab A', projection: { onHandGrams: 120, reservedGrams: 0, availableGrams: 120 } }] })
     if (pathname.endsWith('/formula-intelligence/projects')) return respond({ projects: [{ id: 'formula-1', name: 'Citrus study', formulaType: 'FINE_FRAGRANCE', status: 'DRAFT', latestVersion: 0 }] })
     if (pathname.endsWith('/formula-intelligence/design-projects')) return respond({ projects: [] })
@@ -68,6 +70,18 @@ test('keeps the material library scannable and horizontally safe', async ({ page
   await expect(page.getByText('Not captured').first()).toBeVisible()
   await expect(page.getByText('Tenant library')).toBeVisible()
   await page.screenshot({ path: testInfo.outputPath('materials-library.png'), fullPage: true })
+})
+
+test('shows bounded research odor evidence without probability language', async ({ page }) => {
+  await mockWorkspaceApi(page, { research: true })
+  await page.goto('/v2/workspace/materials')
+  await page.getByRole('button', { name: /Bergamot fraction/ }).click()
+  await expect(page.getByRole('heading', { name: 'Research odor profile' })).toBeVisible()
+  await page.getByRole('button', { name: 'Predict research profile' }).click()
+  await expect(page.getByText('Evaluated research', { exact: true })).toBeVisible()
+  await expect(page.getByText('Score on source 0-1 response scale, not probability. Estimated uncertainty ±0.071.')).toBeVisible()
+  await expect(page.getByText('Not a safety, regulatory, IFRA, supplier, or formula-approval decision.')).toBeVisible()
+  await expect(page.locator('.v2-olfactory-result')).not.toContainText('%')
 })
 
 test('keeps a usable mobile navigation trigger', async ({ page }, testInfo) => {

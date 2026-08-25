@@ -32,6 +32,7 @@ LOCK_UPDATED_AT=2026-08-25T11:20:30+07:00
 - `src/features/v2-platform/OlfactoryResearchPanel.test.tsx`
 - `src/features/v2-platform/V2PlatformApp.tsx`
 - `src/styles/features.css`
+- `e2e/v2-platform-redesign.playwright.ts`
 - `scripts/register-osmo-demo-local.ts`
 - `package.json`
 
