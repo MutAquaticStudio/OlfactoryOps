@@ -4,6 +4,15 @@ import {
   MATERIAL_INTELLIGENCE_TABLES,
   assertMaterialIntelligenceRlsContract,
 } from './material-intelligence-rls-contract.mjs'
+import {
+  V2_PLATFORM_REGISTRY_CLIENT_ROLES,
+  V2_PLATFORM_REGISTRY_READER_ROLE,
+  V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryClientGrants,
+  assertV2PlatformRegistryReaderRole,
+  assertV2PlatformRegistryRlsContract,
+  assertV2PlatformRegistryRuntimeGrants,
+} from './v2-platform-registry-security-contract.mjs'
 
 const { Client } = pg
 
@@ -35,13 +44,16 @@ const migrations = [
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
   'infra/postgres/migrations/0026_platform_password_resets.sql',
   'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
+  'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL
+const runtimeRole = process.env.V2_RUNTIME_DB_ROLE ?? 'hyperdrive_user'
 const allowLoopbackTest = process.env.V2_STAGING_ALLOW_LOOPBACK_TEST === 'true' && process.env.V2_QA_ENVIRONMENT === 'test'
 
 if (process.env.V2_STAGING_MIGRATION_APPROVED !== 'APPLY_STAGING') throw new Error('STAGING_MIGRATIONS=BLOCKED explicit approval is required')
 if (!databaseUrl) throw new Error('STAGING_MIGRATIONS=BLOCKED STAGING_DATABASE_URL is required')
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(runtimeRole)) throw new Error('STAGING_MIGRATIONS=FAIL runtime role name is invalid')
 
 const database = new URL(databaseUrl)
 if (database.protocol !== 'postgresql:' && database.protocol !== 'postgres:') throw new Error('STAGING_MIGRATIONS=FAIL PostgreSQL is required')
@@ -73,12 +85,76 @@ try {
     WHERE schemaname = 'public' AND tablename = ANY($1::text[])
   `, [MATERIAL_INTELLIGENCE_TABLES])
   assertMaterialIntelligenceRlsContract({ rlsRows: materialRlsRows, policyRows: materialPolicyRows })
+  const runtimeIdentifier = `"${runtimeRole}"`
+  await client.query('BEGIN')
+  try {
+    await client.query(`REVOKE ALL PRIVILEGES ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins FROM ${runtimeIdentifier}`)
+    await client.query(`GRANT SELECT ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins TO ${runtimeIdentifier}`)
+    await client.query(`GRANT "${V2_PLATFORM_REGISTRY_READER_ROLE}" TO ${runtimeIdentifier}`)
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw error
+  }
+  const { rows: registryReaderRoleRows } = await client.query(`
+    SELECT rolname AS "roleName", rolcanlogin AS "canLogin", rolsuper AS superuser,
+      rolcreatedb AS "createDb", rolcreaterole AS "createRole", rolinherit AS inherit,
+      rolbypassrls AS "bypassRls", rolreplication AS replication
+    FROM pg_roles WHERE rolname = $1
+  `, [V2_PLATFORM_REGISTRY_READER_ROLE])
+  assertV2PlatformRegistryReaderRole(registryReaderRoleRows)
+  const { rows: registryRlsRows } = await client.query(`
+    SELECT c.relname AS "tableName", pg_get_userbyid(c.relowner) AS "tableOwner",
+      c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+  `, [V2_PLATFORM_REGISTRY_TABLES])
+  const { rows: registryPolicyRows } = await client.query(`
+    SELECT tablename AS "tableName", policyname AS "policyName", permissive, roles, cmd AS command,
+      qual AS "usingExpression", with_check AS "checkExpression"
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+  `, [V2_PLATFORM_REGISTRY_TABLES])
+  const { rows: registryClientGrantRows } = await client.query(`
+    SELECT role_name AS "roleName", table_name AS "tableName",
+      has_table_privilege(role_name, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege(role_name, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege(role_name, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege(role_name, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      has_table_privilege(role_name, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
+      has_table_privilege(role_name, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
+      has_table_privilege(role_name, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role(role_name, $3, 'MEMBER') AS "readerMembership"
+    FROM unnest($1::text[]) AS role_name
+    CROSS JOIN unnest($2::text[]) AS table_name
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name)
+  `, [V2_PLATFORM_REGISTRY_CLIENT_ROLES, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
+  const { rows: registryRuntimeGrantRows } = await client.query(`
+    SELECT table_name AS "tableName",
+      has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      has_table_privilege($1, format('public.%I', table_name), 'TRUNCATE') AS "canTruncate",
+      has_table_privilege($1, format('public.%I', table_name), 'REFERENCES') AS "canReferences",
+      has_table_privilege($1, format('public.%I', table_name), 'TRIGGER') AS "canTrigger",
+      pg_has_role($1, $3, 'MEMBER') AS "readerMembership"
+    FROM unnest($2::text[]) AS table_name
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
+  `, [runtimeRole, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
+  assertV2PlatformRegistryRlsContract({ rlsRows: registryRlsRows, policyRows: registryPolicyRows })
+  assertV2PlatformRegistryClientGrants(registryClientGrantRows)
+  assertV2PlatformRegistryRuntimeGrants(registryRuntimeGrantRows)
   console.log(JSON.stringify({
     stagingMigrations: 'PASS',
     migrationCount: migrations.length,
-    rlsTablesVerified: baselineRlsRows.length + materialRlsRows.length,
+    rlsTablesVerified: baselineRlsRows.length + materialRlsRows.length + registryRlsRows.length,
     materialIntelligenceRlsTablesVerified: materialRlsRows.length,
     materialIntelligenceTenantPoliciesVerified: materialPolicyRows.length,
+    platformRegistryRlsTablesVerified: registryRlsRows.length,
+    platformRegistryReadPoliciesVerified: registryPolicyRows.length,
+    platformRegistryClientGrantRowsVerified: registryClientGrantRows.length,
+    platformRegistryRuntimeGrantRowsVerified: registryRuntimeGrantRows.length,
     loopbackTest: allowLoopbackTest,
   }))
 } finally {

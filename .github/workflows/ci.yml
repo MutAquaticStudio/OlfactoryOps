@@ -92,6 +92,40 @@ jobs:
         # Keep the gate focused on production and non-optional dependencies.
         run: npm audit --audit-level=high --omit=dev --omit=optional
 
+  postgres-security:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: olfactoryops_security
+          POSTGRES_USER: olfactoryops_security
+          POSTGRES_PASSWORD: olfactoryops_security
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U olfactoryops_security -d olfactoryops_security"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Platform registry RLS and grant verification
+        env:
+          V2_QA_DATABASE_URL: postgresql://olfactoryops_security:olfactoryops_security@127.0.0.1:5432/olfactoryops_security
+        run: npm run test:v2:platform-registry-security
+
   d1-router-gate:
     runs-on: ubuntu-latest
     steps:

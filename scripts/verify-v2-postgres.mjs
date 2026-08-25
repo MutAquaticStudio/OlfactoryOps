@@ -3,6 +3,10 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { PrismaClient } from '@prisma/client'
+import {
+  V2_PLATFORM_REGISTRY_TABLES,
+  assertV2PlatformRegistryRlsContract,
+} from './v2-platform-registry-security-contract.mjs'
 
 const schema = 'infra/postgres/prisma/schema.prisma'
 const migrations = [
@@ -33,6 +37,7 @@ const migrations = [
   'infra/postgres/migrations/0025_platform_owner_bootstrap_guard.sql',
   'infra/postgres/migrations/0026_platform_password_resets.sql',
   'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
+  'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')
@@ -102,6 +107,19 @@ try {
         throw new Error(`Model component registry diverged for ${row.component_key}`)
       }
     }
+    const registryRlsRows = await client.$queryRawUnsafe(`
+      SELECT c.relname AS "tableName", pg_get_userbyid(c.relowner) AS "tableOwner",
+        c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+    `, V2_PLATFORM_REGISTRY_TABLES)
+    const registryPolicyRows = await client.$queryRawUnsafe(`
+      SELECT tablename AS "tableName", policyname AS "policyName", permissive, roles, cmd AS command,
+        qual AS "usingExpression", with_check AS "checkExpression"
+      FROM pg_policies
+      WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+    `, V2_PLATFORM_REGISTRY_TABLES)
+    assertV2PlatformRegistryRlsContract({ rlsRows: registryRlsRows, policyRows: registryPolicyRows })
     const phase7Tables = [
       'v2_trials', 'v2_trial_versions', 'v2_trial_releases', 'v2_trial_preparations', 'v2_trial_usage_links', 'v2_trial_material_usages', 'v2_trial_samples', 'v2_trial_evidence',
   'v2_sensory_form_versions', 'v2_sensory_sessions', 'v2_sensory_panel_assignments', 'v2_sensory_sample_assignments', 'v2_sensory_public_links', 'v2_sensory_evaluations', 'v2_sensory_public_submission_requests', 'v2_trial_decisions',
