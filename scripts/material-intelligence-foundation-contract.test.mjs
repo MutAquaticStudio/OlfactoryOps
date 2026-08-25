@@ -10,6 +10,26 @@ describe('material intelligence migration contract', () => {
       expect(await read(path)).toContain("'infra/postgres/migrations/0027_material_intelligence_foundation.sql'")
     }
   })
+  it('attests every Material Intelligence table and canonical tenant policy in controlled runners', async () => {
+    for (const path of ['scripts/apply-v2-staging-migrations.mjs', 'scripts/apply-v2-production-migrations.mjs']) {
+      const runner = await read(path)
+      expect(runner).toContain('MATERIAL_INTELLIGENCE_TABLES')
+      expect(runner).toContain('FROM pg_policies')
+      expect(runner).toContain('assertMaterialIntelligenceRlsContract')
+      expect(runner).toContain('materialIntelligenceTenantPoliciesVerified')
+    }
+  })
+
+  it('keeps runtime roles least-privilege for append-only Material Intelligence tables', async () => {
+    const migration = await read('infra/postgres/migrations/0027_material_intelligence_foundation.sql')
+    expect(migration).toContain('REVOKE UPDATE, DELETE ON v2_material_intelligence_evidence, v2_scientific_eligibility_decisions FROM v2_app')
+    for (const path of ['scripts/configure-v2-runtime-role.mjs', 'scripts/configure-v2-production-runtime-role.mjs']) {
+      const configurator = await read(path)
+      expect(configurator).toContain('REVOKE UPDATE, DELETE ON public.v2_material_intelligence_evidence, public.v2_scientific_eligibility_decisions')
+      expect(configurator).toContain('assertMaterialIntelligenceRuntimeGrants')
+    }
+  })
+
 
   it('uses tenant-composite references, forced RLS, and append-only evidence', async () => {
     const migration = await read('infra/postgres/migrations/0027_material_intelligence_foundation.sql')

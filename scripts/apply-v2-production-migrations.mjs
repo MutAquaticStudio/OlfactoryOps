@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs'
 import pg from 'pg'
+import {
+  MATERIAL_INTELLIGENCE_TABLES,
+  assertMaterialIntelligenceRlsContract,
+} from './material-intelligence-rls-contract.mjs'
 
 const { Client } = pg
 const migrations = [
@@ -42,13 +46,31 @@ const client = new Client({ connectionString: databaseUrl })
 try {
   await client.connect()
   for (const migration of migrations) await client.query(readFileSync(migration, 'utf8'))
-  const { rows } = await client.query(`
+  const { rows: baselineRlsRows } = await client.query(`
     SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS rls_forced
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
   `, [['v2_organizations', 'v2_workspace_hostnames', 'v2_inventory_movements', 'v2_formula_versions', 'v2_cloud_job_dispatches', 'v2_cloud_job_events', 'v2_platform_operators', 'v2_platform_mutation_receipts', 'v2_platform_workspace_requests', 'v2_password_resets']])
-  if (rows.length !== 10 || rows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('PRODUCTION_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
-  console.log(JSON.stringify({ productionMigrations: 'PASS', migrationCount: migrations.length, rlsTablesVerified: rows.length }))
+  if (baselineRlsRows.length !== 10 || baselineRlsRows.some((row) => !row.rls_enabled || !row.rls_forced)) throw new Error('PRODUCTION_MIGRATIONS=FAIL required V2 RLS tables are incomplete')
+  const { rows: materialRlsRows } = await client.query(`
+    SELECT c.relname AS "tableName", c.relrowsecurity AS "rlsEnabled", c.relforcerowsecurity AS "rlsForced"
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+  `, [MATERIAL_INTELLIGENCE_TABLES])
+  const { rows: materialPolicyRows } = await client.query(`
+    SELECT tablename AS "tableName", policyname AS "policyName", permissive, roles, cmd AS command,
+      qual AS "usingExpression", with_check AS "checkExpression"
+    FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+  `, [MATERIAL_INTELLIGENCE_TABLES])
+  assertMaterialIntelligenceRlsContract({ rlsRows: materialRlsRows, policyRows: materialPolicyRows })
+  console.log(JSON.stringify({
+    productionMigrations: 'PASS',
+    migrationCount: migrations.length,
+    rlsTablesVerified: baselineRlsRows.length + materialRlsRows.length,
+    materialIntelligenceRlsTablesVerified: materialRlsRows.length,
+    materialIntelligenceTenantPoliciesVerified: materialPolicyRows.length,
+  }))
 } finally {
   await client.end().catch(() => undefined)
 }

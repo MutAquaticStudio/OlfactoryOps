@@ -5,6 +5,10 @@ import {
   quotePostgresIdentifier,
   requiresSafeAttributeHardening,
 } from './production-runtime-role-hardening.mjs'
+import {
+  MATERIAL_INTELLIGENCE_TABLES,
+  assertMaterialIntelligenceRuntimeGrants,
+} from './material-intelligence-rls-contract.mjs'
 
 const { Client } = pg
 const databaseUrl = process.env.PRODUCTION_DATABASE_URL
@@ -51,6 +55,7 @@ try {
     await client.query(`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM ${identifier}`)
     await client.query(`GRANT USAGE ON SCHEMA public TO ${identifier}`)
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${identifier}`)
+    await client.query(`REVOKE UPDATE, DELETE ON public.v2_material_intelligence_evidence, public.v2_scientific_eligibility_decisions FROM ${identifier}`)
     await client.query(`GRANT EXECUTE ON FUNCTION public.v2_resolve_sensory_public_link(TEXT), public.v2_resolve_active_workspace_hostname(TEXT), public.v2_platform_has_role(TEXT[]), public.v2_platform_set_tenant_state(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_workspace_directory(TEXT), public.v2_platform_workspace_detail(TEXT), public.v2_platform_overview_snapshot(), public.v2_platform_revoke_workspace_sessions(TEXT, TEXT), public.v2_platform_request_workspace_action(TEXT, TEXT, TEXT, TEXT, TEXT), public.v2_platform_set_workspace_entitlement(TEXT, TEXT, BOOLEAN, TIMESTAMPTZ), public.v2_platform_assign_workspace_plan(TEXT, TEXT, TIMESTAMPTZ), public.v2_platform_set_workspace_limit(TEXT, TEXT, INTEGER), public.v2_platform_set_operator_status(TEXT, TEXT), public.v2_platform_set_operator_role(TEXT, TEXT) TO ${identifier}`)
     await client.query('COMMIT')
   } catch (error) { await client.query('ROLLBACK').catch(() => undefined); throw error }
@@ -65,6 +70,15 @@ try {
       has_function_privilege($1, 'public.v2_platform_set_operator_role(text, text)', 'EXECUTE') AS platform_operator_role_execute
     FROM pg_roles r WHERE r.rolname = $1
   `, [role])
+  const { rows: materialGrantRows } = await client.query(`
+    SELECT table_name AS "tableName",
+      has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete"
+    FROM unnest($2::text[]) AS table_name
+  `, [role, MATERIAL_INTELLIGENCE_TABLES])
+  assertMaterialIntelligenceRuntimeGrants(materialGrantRows)
   const parentRoleCount = (await client.query('SELECT COUNT(*)::int AS count FROM pg_auth_members membership JOIN pg_roles member ON member.oid = membership.member WHERE member.rolname = $1', [role])).rows[0].count
   const finalOwnership = await client.query(`
     SELECT COUNT(*)::int AS count
