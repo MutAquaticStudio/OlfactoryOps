@@ -1,5 +1,10 @@
 import pg from 'pg'
 import {
+  assertHostedRoleIsNotPrivileged,
+  hostedSafeAlterRoleStatement,
+  requiresSafeAttributeHardening,
+} from './production-runtime-role-hardening.mjs'
+import {
   MATERIAL_INTELLIGENCE_TABLES,
   assertMaterialIntelligenceRuntimeGrants,
 } from './material-intelligence-rls-contract.mjs'
@@ -54,9 +59,7 @@ try {
     WHERE member.rolname = $1
   `, [role])
   const roleState = roleResult.rows[0]
-  if (roleState.rolsuper) {
-    throw new Error('RUNTIME_DB_PRIVILEGES=BLOCKED configured Hyperdrive role is still SUPERUSER in the staging database targeted by STAGING_DATABASE_URL')
-  }
+  assertHostedRoleIsNotPrivileged(roleState, 'RUNTIME_DB_PRIVILEGES')
   const { rows: registryReaderRoleRows } = await client.query(`
     SELECT rolname AS "roleName", rolcanlogin AS "canLogin", rolsuper AS superuser,
       rolcreatedb AS "createDb", rolcreaterole AS "createRole", rolinherit AS inherit,
@@ -73,9 +76,7 @@ try {
         await client.query(`REVOKE ${quoteIdentifier(membership.rolname)} FROM ${identifier}`)
       }
     }
-    if (!roleState.rolcanlogin || roleState.rolcreatedb || roleState.rolcreaterole || roleState.rolinherit || roleState.rolbypassrls || roleState.rolreplication) {
-      await client.query(`ALTER ROLE ${identifier} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION`)
-    }
+    if (requiresSafeAttributeHardening(roleState)) await client.query(hostedSafeAlterRoleStatement(identifier))
     await client.query(`GRANT ${quoteIdentifier(V2_PLATFORM_REGISTRY_READER_ROLE)} TO ${identifier}`)
     await client.query(`GRANT CONNECT ON DATABASE "${databaseName.replaceAll('"', '""')}" TO ${identifier}`)
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
