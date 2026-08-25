@@ -7,6 +7,7 @@ import { seededAdminCredentialsForEnv } from './auth-credentials.js'
 import { V2PlatformModule } from './v2-platform.module.js'
 import { V2LabOperationsModule } from './v2-lab-ops.module.js'
 import { V2ScientificModule } from './v2-scientific.module.js'
+import { V2MaterialIntelligenceModule } from './v2-material-intelligence.module.js'
 import { V2ModelDatasetModule } from './v2-model-dataset.module.js'
 import { V2OlfactoryIntelligenceModule } from './v2-olfactory-intelligence.module.js'
 import { V2ConsumerIntelligenceModule } from './v2-consumer-intelligence.module.js'
@@ -19,7 +20,7 @@ import { V2CommerceModule } from './v2-commerce.module.js'
 import { V2AdvancedModule } from './v2-advanced.module.js'
 
 @Module({
-  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule, V2ConsumerIntelligenceModule, V2FormulaIntelligenceModule, V2MaterialEvidenceModule, V2AgentRuntimeModule, V2TrialsSensoryModule, V2ProductionModule, V2CommerceModule, V2AdvancedModule],
+  imports: [V2PlatformModule, V2LabOperationsModule, V2ScientificModule, V2MaterialIntelligenceModule, V2ModelDatasetModule, V2OlfactoryIntelligenceModule, V2ConsumerIntelligenceModule, V2FormulaIntelligenceModule, V2MaterialEvidenceModule, V2AgentRuntimeModule, V2TrialsSensoryModule, V2ProductionModule, V2CommerceModule, V2AdvancedModule],
   controllers: [HealthController, NorthStarController],
   providers: [
     MutationIdempotencyService,

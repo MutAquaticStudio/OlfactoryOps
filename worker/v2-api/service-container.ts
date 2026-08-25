@@ -8,6 +8,7 @@ import { PlatformAdminService } from '../../services/platform/src/platform-admin
 import type { V2DatabaseHealth } from '../../server/src/routes/v2-platform.worker.js'
 import { PrismaPlatformRepository } from '../../services/platform/src/prisma-repository.js'
 import { MaterialEvidenceService } from '../../services/rag/src/material-evidence-service.js'
+import { MaterialIntelligenceService } from '../../services/scientific/src/material-intelligence-service.js'
 import { ConsumerIntelligenceService } from '../../services/sentiment/src/consumer-intelligence-service.js'
 import { ModelDatasetService } from '../../services/scientific/src/model-dataset-service.js'
 import { OlfactoryIntelligenceService } from '../../services/scientific/src/olfactory-intelligence-service.js'
@@ -37,6 +38,7 @@ export type V2ApiServices = {
   platformAdmin: PlatformAdminService
   lab: LabOperationsService
   scientific: ScientificFeatureService
+  materialIntelligence: MaterialIntelligenceService
   modelDataset: ModelDatasetService
   olfactory: OlfactoryIntelligenceService
   consumer: ConsumerIntelligenceService
@@ -89,6 +91,7 @@ export function createV2ApiServices(env: V2ApiServiceEnv): V2ApiServices {
     platformAdmin: new PlatformAdminService(prisma, platform),
     lab,
     scientific: new ScientificFeatureService(prisma, platform, new ScientificRuntimeUnavailable(), cloudDispatcher),
+    materialIntelligence: new MaterialIntelligenceService(prisma, platform),
     modelDataset: new ModelDatasetService(prisma, platform),
     olfactory: new OlfactoryIntelligenceService(prisma, platform, odorPredictionRuntimeForBinding(env.CLOUD_RUNTIME)),
     consumer: new ConsumerIntelligenceService(prisma, platform),

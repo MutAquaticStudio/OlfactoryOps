@@ -186,3 +186,223 @@ export type IdentityMergeDecision =
   | { decision: 'SAME_VERIFIED_ENTITY'; strongKey: string }
   | { decision: 'DISTINCT_VERIFIED_ENTITIES'; reason: 'STRUCTURE_HASH_CONFLICT' | 'INCHIKEY_CONFLICT' }
   | { decision: 'REVIEW_REQUIRED'; reason: 'STRONG_IDENTIFIER_REQUIRED' | 'EVIDENCE_NOT_VERIFIED' }
+
+export const materialIntelligenceListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).max(100_000).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(50),
+    text: z.string().trim().min(1).max(160).optional(),
+    productClassification: materialProductClassificationSchema.optional(),
+    eligibility: scientificEligibilityResultSchema.optional(),
+    resolutionStatus: identityResolutionStatusSchema.optional(),
+    reviewRequired: z
+      .preprocess(
+        (value) =>
+          value === true || value === "true"
+            ? true
+            : value === false || value === "false"
+              ? false
+              : value,
+        z.boolean(),
+      )
+      .optional(),
+  })
+  .strict();
+export type MaterialIntelligenceListQuery = z.infer<
+  typeof materialIntelligenceListQuerySchema
+>;
+
+export const bulkChemicalEntityActionSchema = z.enum([
+  "LINK_VERIFIED_EXISTING",
+  "CREATE_VERIFIED_CANDIDATE",
+  "CREATE_UNRESOLVED",
+  "CREATE_COMPLEX",
+  "REVIEW_REQUIRED",
+  "NOT_APPLICABLE",
+]);
+
+const bulkSourceClaimSchema = z
+  .object({
+    value: z.string().trim().min(1).max(4_096),
+    formatStatus: z.enum(["VALID", "INVALID_CHECKSUM"]),
+  })
+  .strict();
+
+const bulkComponentPlanSchema = z
+  .object({
+    componentName: boundedText,
+    role: materialComponentRoleSchema,
+    concentration: z.number().min(0).max(100).nullable(),
+    basis: z.enum(["MASS", "VOLUME", "MASS_PER_VOLUME", "UNKNOWN"]),
+    resolutionStatus: identityResolutionStatusSchema,
+    candidateChemicalEntity: id.nullable(),
+    evidenceRequirement: boundedText,
+  })
+  .strict();
+
+const bulkVerifiedStructureCandidateSchema = z
+  .object({
+    canonicalSmiles: z.string().trim().min(1).max(4_096),
+    isomericSmiles: z.string().trim().min(1).max(4_096).nullable(),
+    inchi: z.string().trim().min(1).max(8_192).nullable(),
+    inchiKey: z
+      .string()
+      .trim()
+      .regex(/^[A-Z]{14}-[A-Z]{10}-[A-Z]$/),
+    structureHash: sha256,
+    normalizationVersion: boundedText,
+    rdkitVersion: boundedText,
+    molecularFormula: boundedText.nullable(),
+    molecularWeight: z.number().positive().finite().nullable(),
+    sourceRef: z.string().trim().min(1).max(2_048),
+  })
+  .strict();
+
+export const bulkIngestPlanRowSchema = z
+  .object({
+    sourceRowId: z.string().trim().min(1).max(500),
+    sourceRowNumber: z.number().int().min(2),
+    sourceCatalogNumber: z.union([z.string(), z.number()]).nullable(),
+    inputName: z.string().trim().min(1).max(500),
+    normalizedDisplayName: z.string().trim().min(1).max(500),
+    supplierName: z.string().trim().min(1).max(500).nullable(),
+    supplierProductCode: z.string().trim().min(1).max(500).nullable(),
+    tradeName: z.string().trim().min(1).max(500).nullable().optional(),
+    grade: z.string().trim().min(1).max(500).nullable().optional(),
+    physicalForm: z.string().trim().min(1).max(500).nullable().optional(),
+    productClassification: materialProductClassificationSchema,
+    chemicalEntityAction: bulkChemicalEntityActionSchema,
+    resolutionStatus: identityResolutionStatusSchema,
+    reviewRequired: z.boolean(),
+    sourceCasClaims: z.array(bulkSourceClaimSchema).max(32),
+      sourceCasRaw: z.string().trim().min(1).max(4_096).nullable().optional(),
+    sourceFemaClaims: z
+      .array(z.string().trim().min(1).max(500))
+      .max(16)
+      .default([]),
+    sourceEinecsClaims: z
+      .array(z.string().trim().min(1).max(500))
+      .max(16)
+      .default([]),
+    sourceFormula: z.string().trim().min(1).max(500).nullable().optional(),
+    sourceMolecularWeight: z.number().positive().finite().nullable().optional(),
+    componentPlan: z.array(bulkComponentPlanSchema).max(128),
+    eligibilityReasonCodes: z
+      .array(z.string().trim().min(1).max(160))
+      .min(1)
+      .max(32),
+    conflictCodes: z.array(z.string().trim().min(1).max(160)).max(32),
+    reasonCodes: z.array(z.string().trim().min(1).max(160)).max(64),
+    verifiedStructureCandidate: bulkVerifiedStructureCandidateSchema
+      .nullable()
+      .optional(),
+    verifiedExistingEntityId: id.nullable().optional(),
+  })
+  .passthrough()
+  .superRefine((row, ctx) => {
+    if (
+      row.chemicalEntityAction === "CREATE_VERIFIED_CANDIDATE" &&
+      !row.verifiedStructureCandidate
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["verifiedStructureCandidate"],
+        message: "Verified candidate evidence is required.",
+      });
+    }
+    if (row.chemicalEntityAction === "LINK_VERIFIED_EXISTING") {
+      if (!row.verifiedStructureCandidate) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["verifiedStructureCandidate"],
+          message:
+            "Verified structure evidence is required for a strong identity link.",
+        });
+      }
+      if (!row.verifiedExistingEntityId) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["verifiedExistingEntityId"],
+          message:
+            "An explicit tenant entity is required for a verified identity link.",
+        });
+      }
+    } else if (row.verifiedExistingEntityId) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["verifiedExistingEntityId"],
+        message:
+          "Existing entity links are only valid for LINK_VERIFIED_EXISTING.",
+      });
+    }
+  });
+export type BulkIngestPlanRow = z.infer<typeof bulkIngestPlanRowSchema>;
+
+export const bulkIngestPlanSchema = z
+  .object({
+    contractVersion: boundedText,
+    policyVersion: boundedText,
+    rdkitContract: boundedText,
+    source: z
+      .object({
+        fileName: z.string().trim().min(1).max(500),
+        fileSha256: sha256,
+        format: z.literal("XLSX"),
+        sheet: z.string().trim().min(1).max(500),
+        rowCount: z.number().int().positive().max(100_000),
+        columnCount: z.number().int().positive().max(10_000),
+        supplierContext: z.string().trim().min(1).max(500).nullable(),
+      })
+      .strict(),
+    counts: z.record(z.string(), z.number().int().nonnegative()),
+    results: z.array(bulkIngestPlanRowSchema).min(1).max(100_000),
+    dataPrecheckReady: z.literal(true),
+  })
+  .passthrough()
+  .superRefine((value, ctx) => {
+    if (value.source.rowCount !== value.results.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["results"],
+        message: "Source rows and planned rows must reconcile.",
+      });
+    }
+    if (
+      value.counts.ROWS_WITH_ZERO_WAVES !== 0 ||
+      value.counts.ROWS_WITH_MULTIPLE_WAVES !== 0
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["counts"],
+        message: "Every source row must have exactly one ingest wave.",
+      });
+    }
+    if (
+      new Set(value.results.map((row) => row.sourceRowId)).size !==
+      value.results.length
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["results"],
+        message: "Source row identities must be unique.",
+      });
+    }
+  });
+export type BulkIngestPlan = z.infer<typeof bulkIngestPlanSchema>;
+
+export type MaterialIntelligenceImportAccounting = {
+  inputRows: number;
+  plannedRows: number;
+  persistedRows: number;
+  skippedIdempotentRows: number;
+  failedRows: number;
+  unaccountedRows: number;
+};
+
+export type MaterialIntelligenceImportCounts = {
+  materialProducts: number;
+  chemicalEntities: Record<string, number>;
+  components: number;
+  evidence: number;
+  eligibilityDecisions: Record<string, number>;
+};

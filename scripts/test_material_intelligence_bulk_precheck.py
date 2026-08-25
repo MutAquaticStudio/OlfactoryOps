@@ -148,6 +148,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["molecularIdentityAction"], "NEEDS_AUTHORITATIVE_VERIFICATION")
         self.assertEqual(result["eligibilityPreview"], "ELIGIBLE_AFTER_VERIFICATION")
         self.assertIn("NO_STRUCTURE", result["eligibilityReasonCodes"])
+        self.assertEqual(result["sourceFormula"], "C8H8O3")
 
     def test_rdkit_validator_is_not_loaded_when_structure_claims_are_absent(self):
         def forbidden_validator(_claim):
@@ -156,7 +157,12 @@ class ClassificationTests(unittest.TestCase):
 
     def test_valid_source_structure_is_only_a_candidate(self):
         def validator(_claim):
-            return {"status": "VALID_NORMALIZABLE", "canonicalSmiles": "CCO", "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"}
+            return {
+                "status": "VALID_NORMALIZABLE",
+                "canonicalSmiles": "CCO",
+                "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+                "rdkitVersion": "2026.03.5",
+            }
         result = analyze_rows(sheet(source_row(
             2, 1, "Synthetic aroma chemicals", "ETHANOL", "64-17-5", smiles="CCO",
             evidence="PUBLISHED", confidence="VERIFIED", url="https://pubchem.ncbi.nlm.nih.gov/compound/702",
@@ -164,6 +170,10 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["chemicalEntityAction"], "CREATE_VERIFIED_CANDIDATE")
         self.assertEqual(result["molecularIdentityAction"], "NORMALIZE_VERIFIED_SOURCE_STRUCTURE")
         self.assertNotEqual(result["resolutionStatus"], "RESOLVED")
+        self.assertEqual(result["verifiedStructureCandidate"]["canonicalSmiles"], "CCO")
+        self.assertEqual(result["verifiedStructureCandidate"]["rdkitVersion"], "2026.03.5")
+        self.assertEqual(result["verifiedStructureCandidate"]["sourceRef"], "https://pubchem.ncbi.nlm.nih.gov/compound/702")
+        self.assertEqual(len(result["verifiedStructureCandidate"]["structureHash"]), 64)
 
     def test_invalid_structure_isolated_for_review(self):
         def validator(_claim):
