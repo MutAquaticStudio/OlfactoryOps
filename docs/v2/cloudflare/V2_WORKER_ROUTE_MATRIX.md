@@ -104,6 +104,12 @@ The Worker imports generated decorator-free controller delegates; all business l
 | scientific | POST | `/api/v1/v2/scientific/materials/:id/features` |
 | scientific | GET | `/api/v1/v2/scientific/materials/:id/artifacts` |
 | scientific | GET | `/api/v1/v2/scientific/jobs/:id` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/materials` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/materials/:materialId` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/materials/:materialId/components` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/materials/:materialId/evidence` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/materials/:materialId/eligibility` |
+| materialIntelligence | GET | `/api/v1/v2/material-intelligence/chemical-entities/:entityId` |
 | modelDataset | GET | `/api/v1/v2/model-dataset/datasets` |
 | modelDataset | POST | `/api/v1/v2/model-dataset/datasets` |
 | modelDataset | GET | `/api/v1/v2/model-dataset/datasets/:id` |

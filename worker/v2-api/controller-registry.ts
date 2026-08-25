@@ -3,6 +3,7 @@ import { V2ConsumerIntelligenceController } from '../../server/src/routes/v2-con
 import { V2FormulaIntelligenceController } from '../../server/src/routes/v2-formula-intelligence.worker.js'
 import { V2LabOperationsController } from '../../server/src/routes/v2-lab-operations.worker.js'
 import { V2MaterialEvidenceController } from '../../server/src/routes/v2-material-evidence.worker.js'
+import { V2MaterialIntelligenceController } from '../../server/src/routes/v2-material-intelligence.worker.js'
 import { V2ModelDatasetController } from '../../server/src/routes/v2-model-dataset.worker.js'
 import { V2OlfactoryIntelligenceController } from '../../server/src/routes/v2-olfactory-intelligence.worker.js'
 import { V2PlatformController } from '../../server/src/routes/v2-platform.worker.js'
@@ -33,6 +34,7 @@ export function v2ControllerRoutes(services: V2ApiServices): ControllerRoute[] {
     platformAdmin: new V2PlatformAdminController(services.platformAdmin, services.platform),
     lab: new V2LabOperationsController(services.platform, services.lab),
     scientific: new V2ScientificController(services.platform, services.scientific),
+    materialIntelligence: new V2MaterialIntelligenceController(services.platform, services.materialIntelligence),
     modelDataset: new V2ModelDatasetController(services.platform, services.modelDataset),
     olfactory: new V2OlfactoryIntelligenceController(services.platform, services.olfactory),
     consumer: new V2ConsumerIntelligenceController(services.platform, services.consumer),

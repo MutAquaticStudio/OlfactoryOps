@@ -58,6 +58,8 @@ FIELD_ALIASES = {
     "source_number": ("no", "number", "source row", "source number"),
     "category": ("category", "material category", "product category"),
     "name": ("product name", "material name", "name", "trade name"),
+    "trade_name": ("trade name",),
+    "grade": ("grade", "product grade"),
     "notes": ("notes", "source notes"),
     "material_id": ("material id",),
     "identity_type": ("identity type",),
@@ -206,6 +208,20 @@ def normalized_name(value: Any) -> str:
 def normalized_optional(value: Any) -> str | None:
     text = normalized_text(value)
     return None if text.upper() in MISSING_MARKERS else text
+
+
+def canonical_structure_hash(canonical_smiles: str) -> str:
+    payload = json.dumps(
+        {
+            "canonicalSmiles": canonical_smiles,
+            "standardizationVersion": RDKIT_CONTRACT,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def stable_json(value: Any) -> str:
@@ -401,7 +417,7 @@ def structure_claim(row: SheetRow, fields: dict[str, int | None]) -> dict[str, s
 
 def validate_structure_with_rdkit(claim: dict[str, str | None]) -> dict[str, str | None]:
     try:
-        from rdkit import Chem
+        from rdkit import Chem, rdBase
     except ImportError as error:
         raise PrecheckError("RDKIT_RUNTIME_REQUIRED_FOR_STRUCTURE_CLAIMS") from error
 
@@ -428,7 +444,12 @@ def validate_structure_with_rdkit(claim: dict[str, str | None]) -> dict[str, str
     supplied_key = claim["inchikey"].upper() if claim["inchikey"] else None
     if supplied_key and (not INCHIKEY_PATTERN.fullmatch(supplied_key) or supplied_key != generated_key):
         return {"status": "CONFLICTED", "canonicalSmiles": None, "inchiKey": None}
-    return {"status": "VALID_NORMALIZABLE", "canonicalSmiles": canonical, "inchiKey": generated_key}
+    return {
+        "status": "VALID_NORMALIZABLE",
+        "canonicalSmiles": canonical,
+        "inchiKey": generated_key,
+        "rdkitVersion": rdBase.rdkitVersion,
+    }
 
 
 def dilution_from_name(name: str) -> dict[str, Any] | None:
@@ -636,6 +657,33 @@ def analyze_rows(
             verified_inchikey = None
         components = component_plan(dilution)
         formula = normalized_optional(field_value(source, fields, "formula"))
+        molecular_weight = normalized_optional(field_value(source, fields, "molecular_weight"))
+        try:
+            parsed_molecular_weight = float(molecular_weight.replace(",", ".")) if molecular_weight else None
+            if parsed_molecular_weight is not None and parsed_molecular_weight <= 0:
+                parsed_molecular_weight = None
+        except ValueError:
+            parsed_molecular_weight = None
+        source_ref = next((
+            value for value in (
+                normalized_optional(field_value(source, fields, "supplier_url")),
+                normalized_optional(field_value(source, fields, "structure_url")),
+                normalized_optional(field_value(source, fields, "pubchem_url")),
+                normalized_optional(field_value(source, fields, "additional_url")),
+            ) if value
+        ), None)
+        verified_structure_candidate = ({
+            "canonicalSmiles": verified_canonical_smiles,
+            "isomericSmiles": normalized_optional(field_value(source, fields, "isomeric_smiles")),
+            "inchi": normalized_optional(field_value(source, fields, "inchi")),
+            "inchiKey": verified_inchikey,
+            "structureHash": canonical_structure_hash(verified_canonical_smiles),
+            "normalizationVersion": RDKIT_CONTRACT,
+            "rdkitVersion": validation.get("rdkitVersion"),
+            "molecularFormula": formula,
+            "molecularWeight": parsed_molecular_weight,
+            "sourceRef": source_ref,
+        } if verified_canonical_smiles and verified_inchikey and source_ref else None)
         preliminary.append({
             "sourceRowId": f"{sheet_name}!{source.row_number}",
             "sourceRowNumber": source.row_number,
@@ -646,6 +694,9 @@ def analyze_rows(
             "supplier": supplier,
             "supplierName": supplier,
             "supplierProductCode": supplier_code,
+            "tradeName": normalized_optional(field_value(source, fields, "trade_name")),
+            "grade": normalized_optional(field_value(source, fields, "grade")),
+            "physicalForm": normalized_optional(field_value(source, fields, "physical_state")),
             "sourceCategory": category,
             "productClassification": classification,
             "sourceCasClaims": claims,
@@ -655,6 +706,11 @@ def analyze_rows(
             "sourceStructureClaimStatus": structure_status,
             "sourceStructureClaimPresent": any(claim.values()),
             "sourceFormulaPresent": formula is not None,
+            "sourceFormula": formula,
+            "sourceMolecularWeight": parsed_molecular_weight,
+            "sourceFemaClaims": [value] if (value := normalized_optional(field_value(source, fields, "fema"))) else [],
+            "sourceEinecsClaims": [value] if (value := normalized_optional(field_value(source, fields, "einecs"))) else [],
+            "verifiedStructureCandidate": verified_structure_candidate,
             "sourceEvidenceVerified": source_verified,
             "structureClaimKey": structure_claim_key,
             "structureCandidateKey": structure_candidate_key,
@@ -791,7 +847,7 @@ def analyze_rows(
             chemical_action = "REVIEW_REQUIRED"
         elif review_required:
             chemical_action = "REVIEW_REQUIRED"
-        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
+        elif classification in {"NATURAL", "BASE", "DILUTION", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE"}:
             chemical_action = "CREATE_COMPLEX"
         elif classification == "FORMULATION":
             chemical_action = "NOT_APPLICABLE"
@@ -805,7 +861,7 @@ def analyze_rows(
 
         if item["sourceStructureClaimStatus"] == "CONFLICTED":
             molecular_action = "CONFLICTED"
-        elif classification in {"NATURAL", "BASE", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE", "FORMULATION"}:
+        elif classification in {"NATURAL", "BASE", "DILUTION", "DEFINED_MIXTURE", "UNDEFINED_MIXTURE", "FORMULATION"}:
             molecular_action = "NOT_APPLICABLE"
         elif item["sourceStructureClaimStatus"] == "VALID_NORMALIZABLE" and item["sourceEvidenceVerified"]:
             molecular_action = "NORMALIZE_VERIFIED_SOURCE_STRUCTURE"

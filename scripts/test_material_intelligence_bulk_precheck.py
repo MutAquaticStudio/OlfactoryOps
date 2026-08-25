@@ -1,4 +1,6 @@
 import ast
+import hashlib
+import json
 import tempfile
 import unittest
 import zipfile
@@ -10,6 +12,8 @@ from material_intelligence_bulk_precheck import (
     SheetRow,
     analyze_rows,
     build_counts,
+    RDKIT_CONTRACT,
+    canonical_structure_hash,
     cas_claims,
     cas_checksum_valid,
     classify_product,
@@ -148,6 +152,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["molecularIdentityAction"], "NEEDS_AUTHORITATIVE_VERIFICATION")
         self.assertEqual(result["eligibilityPreview"], "ELIGIBLE_AFTER_VERIFICATION")
         self.assertIn("NO_STRUCTURE", result["eligibilityReasonCodes"])
+        self.assertEqual(result["sourceFormula"], "C8H8O3")
 
     def test_rdkit_validator_is_not_loaded_when_structure_claims_are_absent(self):
         def forbidden_validator(_claim):
@@ -156,7 +161,12 @@ class ClassificationTests(unittest.TestCase):
 
     def test_valid_source_structure_is_only_a_candidate(self):
         def validator(_claim):
-            return {"status": "VALID_NORMALIZABLE", "canonicalSmiles": "CCO", "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"}
+            return {
+                "status": "VALID_NORMALIZABLE",
+                "canonicalSmiles": "CCO",
+                "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+                "rdkitVersion": "2026.03.5",
+            }
         result = analyze_rows(sheet(source_row(
             2, 1, "Synthetic aroma chemicals", "ETHANOL", "64-17-5", smiles="CCO",
             evidence="PUBLISHED", confidence="VERIFIED", url="https://pubchem.ncbi.nlm.nih.gov/compound/702",
@@ -164,6 +174,37 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(result["chemicalEntityAction"], "CREATE_VERIFIED_CANDIDATE")
         self.assertEqual(result["molecularIdentityAction"], "NORMALIZE_VERIFIED_SOURCE_STRUCTURE")
         self.assertNotEqual(result["resolutionStatus"], "RESOLVED")
+        self.assertEqual(result["verifiedStructureCandidate"]["canonicalSmiles"], "CCO")
+        self.assertEqual(result["verifiedStructureCandidate"]["rdkitVersion"], "2026.03.5")
+        self.assertEqual(result["verifiedStructureCandidate"]["sourceRef"], "https://pubchem.ncbi.nlm.nih.gov/compound/702")
+        expected_hash = hashlib.sha256(json.dumps(
+            {
+                "canonicalSmiles": "CCO",
+                "standardizationVersion": RDKIT_CONTRACT,
+            },
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        self.assertEqual(result["verifiedStructureCandidate"]["structureHash"], expected_hash)
+        self.assertEqual(canonical_structure_hash("CCO"), expected_hash)
+
+    def test_verified_structure_does_not_promote_a_dilution_to_single_substance(self):
+        def validator(_claim):
+            return {
+                "status": "VALID_NORMALIZABLE",
+                "canonicalSmiles": "CCO",
+                "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+                "rdkitVersion": "2026.03.5",
+            }
+        result = analyze_rows(sheet(source_row(
+            2, 1, "Synthetic aroma chemicals", "ETHYL VANILLIN 10% DPG",
+            "121-32-4 / 25265-71-8", smiles="CCO", evidence="PUBLISHED",
+            confidence="VERIFIED", url="https://example.test/verified-structure",
+        )), validator)["results"][0]
+        self.assertEqual(result["productClassification"], "DILUTION")
+        self.assertEqual(result["chemicalEntityAction"], "CREATE_COMPLEX")
+        self.assertEqual(result["molecularIdentityAction"], "NOT_APPLICABLE")
+        self.assertEqual(result["eligibilityPreview"], "NOT_ELIGIBLE")
+        self.assertIn("DILUTION_PRODUCT", result["eligibilityReasonCodes"])
 
     def test_invalid_structure_isolated_for_review(self):
         def validator(_claim):

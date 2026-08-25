@@ -15,6 +15,7 @@ const controllers: SourceDefinition[] = [
   { input: 'v2-platform-admin.controller.ts', output: 'v2-platform-admin.worker.ts', key: 'platformAdmin', controller: 'V2PlatformAdminController' },
   { input: 'v2-lab-operations.controller.ts', output: 'v2-lab-operations.worker.ts', key: 'lab', controller: 'V2LabOperationsController' },
   { input: 'v2-scientific.controller.ts', output: 'v2-scientific.worker.ts', key: 'scientific', controller: 'V2ScientificController' },
+  { input: 'v2-material-intelligence.controller.ts', output: 'v2-material-intelligence.worker.ts', key: 'materialIntelligence', controller: 'V2MaterialIntelligenceController' },
   { input: 'v2-model-dataset.controller.ts', output: 'v2-model-dataset.worker.ts', key: 'modelDataset', controller: 'V2ModelDatasetController' },
   { input: 'v2-olfactory-intelligence.controller.ts', output: 'v2-olfactory-intelligence.worker.ts', key: 'olfactory', controller: 'V2OlfactoryIntelligenceController' },
   { input: 'v2-consumer-intelligence.controller.ts', output: 'v2-consumer-intelligence.worker.ts', key: 'consumer', controller: 'V2ConsumerIntelligenceController' },
