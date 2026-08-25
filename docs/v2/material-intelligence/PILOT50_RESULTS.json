@@ -1,0 +1,1905 @@
+{
+  "contractVersion": "material-intelligence-pilot/2.0.0",
+  "policyVersion": "material-intelligence/1.0.0",
+  "normalizationVersion": "olfactoryops-rdkit-standardization/1.0.0",
+  "rdkitVersion": "2023.09.3",
+  "fixture": "services/scientific/testdata/material-intelligence-pilot50.json",
+  "materialProductCount": 50,
+  "primaryChemicalEntityAssessmentCount": 50,
+  "supportingChemicalEntityCount": 5,
+  "totalUniqueChemicalEntityCount": 54,
+  "verifiedChemicalEntityCount": 35,
+  "unresolvedChemicalEntityCount": 1,
+  "complexChemicalEntityCount": 18,
+  "verifiedMolecularIdentityCount": 35,
+  "componentCount": 10,
+  "componentEntityLinkedCount": 10,
+  "resultCounts": {
+    "ELIGIBLE": 24,
+    "NOT_ELIGIBLE": 16,
+    "REVIEW_REQUIRED": 10
+  },
+  "resolutionCounts": {
+    "RESOLVED": 33,
+    "UNRESOLVED": 1,
+    "CONFLICTED": 0,
+    "NOT_APPLICABLE": 16
+  },
+  "reasonCounts": {
+    "DEFINED_MIXTURE": 5,
+    "DILUTION_PRODUCT": 4,
+    "NATURAL_COMPLEX": 5,
+    "PROPRIETARY_BASE": 1,
+    "RESOLVED_SINGLE_SUBSTANCE": 24,
+    "STEREOCHEMISTRY_UNRESOLVED": 9,
+    "UNDEFINED_MIXTURE": 1,
+    "UNKNOWN_COMPOSITION": 1
+  },
+  "priorityUnresolvedResearchedCount": 14,
+  "priorityUnresolvedResolvedCount": 14,
+  "priorityUnresolvedRemainingCount": 0,
+  "guessedIdentityCount": 0,
+  "supportingEntities": [
+    {
+      "id": "entity-support-ambermax",
+      "name": "Ambermax active composition",
+      "entityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "casAssertions": [
+        "929625-08-1",
+        "1001252-30-7"
+      ],
+      "sourceRef": "https://www.givaudan.com/fragrance-beauty/fragrance-ingredients-business/fragrance-molecules/ambermaxtm-10tec",
+      "sourceVersion": "Givaudan Ambermax 10 TEC product page",
+      "sourceKind": "SUPPLIER_DOCUMENT",
+      "assertionKind": "COMPOSITION",
+      "contentHash": "084bbfbb0596203b988b06bf5d3faf7a2f111ead7e5e25e72845360f5120a4b7",
+      "eligibilityResult": "NOT_ELIGIBLE"
+    },
+    {
+      "id": "entity-support-tec",
+      "name": "Triethyl citrate",
+      "entityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "casAssertions": [
+        "77-93-0"
+      ],
+      "cid": "6506",
+      "sourceCanonicalSmiles": "CCOC(=O)CC(CC(=O)OCC)(C(=O)OCC)O",
+      "canonicalSmiles": "CCOC(=O)CC(O)(CC(=O)OCC)C(=O)OCC",
+      "isomericSmiles": "CCOC(=O)CC(CC(=O)OCC)(C(=O)OCC)O",
+      "inchi": "InChI=1S/C12H20O7/c1-4-17-9(13)7-12(16,11(15)19-6-3)8-10(14)18-5-2/h16H,4-8H2,1-3H3",
+      "inchiKey": "DOOTYTYQINUNNV-UHFFFAOYSA-N",
+      "molecularFormula": "C12H20O7",
+      "molecularWeight": 276.28,
+      "molecularIdentityId": "identity-entity-support-tec",
+      "structureHash": "fbbf5995aace91b027137338d44d720b8e1925fe88af7571d00e6768eb6f94a0",
+      "stereochemistry": "NOT_APPLICABLE",
+      "sourceRef": "https://pubchem.ncbi.nlm.nih.gov/compound/6506",
+      "sourceVersion": "PubChem CID 6506",
+      "sourceKind": "PUBLIC_DATABASE_RECORD",
+      "assertionKind": "STRUCTURE",
+      "contentHash": "a9c3bd18edeffd8dc86b7aef43018bbac89f674526dea56582f179c924c4c54b",
+      "eligibilityResult": "ELIGIBLE"
+    },
+    {
+      "id": "entity-support-dpg",
+      "name": "Dipropylene glycol",
+      "entityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "casAssertions": [
+        "25265-71-8"
+      ],
+      "sourceRef": "https://pubchem.ncbi.nlm.nih.gov/compound/8082",
+      "sourceVersion": "PubChem CID 8082 identity record",
+      "sourceKind": "PUBLIC_DATABASE_RECORD",
+      "assertionKind": "IDENTIFIER",
+      "contentHash": "9ac9b01425c169964d0fa2b55abc01228bd9be1c54b73bc4f810b6b15e9434a6",
+      "eligibilityResult": "NOT_ELIGIBLE"
+    },
+    {
+      "id": "entity-support-indole",
+      "name": "Indole",
+      "entityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "casAssertions": [
+        "120-72-9"
+      ],
+      "cid": "798",
+      "sourceCanonicalSmiles": "C1=CC=C2C(=C1)C=CN2",
+      "canonicalSmiles": "c1ccc2[nH]ccc2c1",
+      "isomericSmiles": "C1=CC=C2C(=C1)C=CN2",
+      "inchi": "InChI=1S/C8H7N/c1-2-4-8-7(3-1)5-6-9-8/h1-6,9H",
+      "inchiKey": "SIKJAQJRHWYJAI-UHFFFAOYSA-N",
+      "molecularFormula": "C8H7N",
+      "molecularWeight": 117.15,
+      "molecularIdentityId": "identity-entity-support-indole",
+      "structureHash": "bdd124e2497b73c71c268ba3eb86cb601e792b7737f1d8018b96d72fb2cb4f01",
+      "stereochemistry": "NOT_APPLICABLE",
+      "sourceRef": "https://pubchem.ncbi.nlm.nih.gov/compound/798",
+      "sourceVersion": "PubChem CID 798",
+      "sourceKind": "PUBLIC_DATABASE_RECORD",
+      "assertionKind": "STRUCTURE",
+      "contentHash": "f4280e56449a05466115ddc5699641a2469ef6ff0173ac317f800c6304954996",
+      "eligibilityResult": "ELIGIBLE"
+    },
+    {
+      "id": "entity-support-ethanol",
+      "name": "Ethanol",
+      "entityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "casAssertions": [
+        "64-17-5"
+      ],
+      "cid": "702",
+      "sourceCanonicalSmiles": "CCO",
+      "canonicalSmiles": "CCO",
+      "isomericSmiles": "CCO",
+      "inchi": "InChI=1S/C2H6O/c1-2-3/h3H,2H2,1H3",
+      "inchiKey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+      "molecularFormula": "C2H6O",
+      "molecularWeight": 46.07,
+      "molecularIdentityId": "identity-entity-support-ethanol",
+      "structureHash": "3d0e70da5dd1fde798657bc7c0a00c3ff0ca3ef73974c91f0dfac083cb72b100",
+      "stereochemistry": "NOT_APPLICABLE",
+      "sourceRef": "https://pubchem.ncbi.nlm.nih.gov/compound/702",
+      "sourceVersion": "PubChem CID 702",
+      "sourceKind": "PUBLIC_DATABASE_RECORD",
+      "assertionKind": "STRUCTURE",
+      "contentHash": "d320f59d9811fa4f999e00eee90903f880605b245f927a1ddfbb933cebcb9aa5",
+      "eligibilityResult": "ELIGIBLE"
+    }
+  ],
+  "cases": [
+    {
+      "id": "M001",
+      "name": "Hedione®",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m001",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m001",
+      "casAssertions": [
+        "24851-98-7"
+      ],
+      "inchiKey": "KVWWIYGFBYDJQC-UHFFFAOYSA-N",
+      "canonicalSmiles": "CCCCCC1C(=O)CCC1CC(=O)OC",
+      "isomericSmiles": "CCCCCC1C(CCC1=O)CC(=O)OC",
+      "inchi": "InChI=1S/C13H22O3/c1-3-4-5-6-11-10(7-8-12(11)14)9-13(15)16-2/h10-11H,3-9H2,1-2H3",
+      "molecularFormula": "C13H22O3",
+      "molecularWeight": 226.31,
+      "structureHash": "26354c6e9cb521988eb5eb56113d68e74151fb758e29ddec7fd7a2c886eea4ad",
+      "evidenceRefs": [
+        "evidence-M001"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M002",
+      "name": "Hedione HC®",
+      "productClassification": "DEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m002",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M002"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M003",
+      "name": "Ambroxan® / Ambroxide",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m003",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m003",
+      "casAssertions": [
+        "6790-58-5"
+      ],
+      "inchiKey": "YPZUZOLGGMJZJO-LQKXBSAESA-N",
+      "canonicalSmiles": "CC1(C)CCC[C@]2(C)[C@H]3CCO[C@]3(C)CC[C@@H]12",
+      "isomericSmiles": "C[C@]12CCCC([C@@H]1CC[C@@]3([C@@H]2CCO3)C)(C)C",
+      "inchi": "InChI=1S/C16H28O/c1-14(2)8-5-9-15(3)12(14)6-10-16(4)13(15)7-11-17-16/h12-13H,5-11H2,1-4H3/t12-,13+,15-,16+/m0/s1",
+      "molecularFormula": "C16H28O",
+      "molecularWeight": 236.39,
+      "structureHash": "edc45b694af0e3847454ecf0f6eddaa2955c70038079fac94e25dbad9f0496f3",
+      "evidenceRefs": [
+        "evidence-M003"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M004",
+      "name": "Ambrofix®",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "LINKED_EXISTING_LOCAL",
+      "primaryChemicalEntityId": "entity-m003",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m003",
+      "casAssertions": [
+        "6790-58-5"
+      ],
+      "inchiKey": "YPZUZOLGGMJZJO-LQKXBSAESA-N",
+      "canonicalSmiles": "CC1(C)CCC[C@]2(C)[C@H]3CCO[C@]3(C)CC[C@@H]12",
+      "isomericSmiles": "C[C@]12CCCC([C@@H]1CC[C@@]3([C@@H]2CCO3)C)(C)C",
+      "inchi": "InChI=1S/C16H28O/c1-14(2)8-5-9-15(3)12(14)6-10-16(4)13(15)7-11-17-16/h12-13H,5-11H2,1-4H3/t12-,13+,15-,16+/m0/s1",
+      "molecularFormula": "C16H28O",
+      "molecularWeight": 236.39,
+      "structureHash": "edc45b694af0e3847454ecf0f6eddaa2955c70038079fac94e25dbad9f0496f3",
+      "evidenceRefs": [
+        "evidence-M004",
+        "evidence-M003"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M005",
+      "name": "Cashmeran®",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m005",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m005",
+      "casAssertions": [
+        "33704-61-9"
+      ],
+      "inchiKey": "MIZGSAALSYARKU-UHFFFAOYSA-N",
+      "canonicalSmiles": "CC1C(C)(C)C2=C(C(=O)CCC2)C1(C)C",
+      "isomericSmiles": "CC1C(C2=C(C1(C)C)C(=O)CCC2)(C)C",
+      "inchi": "InChI=1S/C14H22O/c1-9-13(2,3)10-7-6-8-11(15)12(10)14(9,4)5/h9H,6-8H2,1-5H3",
+      "molecularFormula": "C14H22O",
+      "molecularWeight": 206.32,
+      "structureHash": "56a31c16e1fe92bfd9ee701a71c397353a7b7824abaa371d463821599712587b",
+      "evidenceRefs": [
+        "evidence-M005"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M006",
+      "name": "Calone® 1951",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m006",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m006",
+      "casAssertions": [
+        "28940-11-6"
+      ],
+      "inchiKey": "SWUIQEBPZIHZQS-UHFFFAOYSA-N",
+      "canonicalSmiles": "Cc1ccc2c(c1)OCC(=O)CO2",
+      "isomericSmiles": "CC1=CC2=C(C=C1)OCC(=O)CO2",
+      "inchi": "InChI=1S/C10H10O3/c1-7-2-3-9-10(4-7)13-6-8(11)5-12-9/h2-4H,5-6H2,1H3",
+      "molecularFormula": "C10H10O3",
+      "molecularWeight": 178.18,
+      "structureHash": "c75c4d632854b0b31a663db30b8c419d6500986c57322337d6c840edf66bd5a4",
+      "evidenceRefs": [
+        "evidence-M006"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M007",
+      "name": "Ethyl Vanillin",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m007",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m007",
+      "casAssertions": [],
+      "inchiKey": "CBOQJANXLMLOSS-UHFFFAOYSA-N",
+      "canonicalSmiles": "CCOc1cc(C=O)ccc1O",
+      "isomericSmiles": "CCOC1=C(C=CC(=C1)C=O)O",
+      "inchi": "InChI=1S/C9H10O3/c1-2-12-9-5-7(6-10)3-4-8(9)11/h3-6,11H,2H2,1H3",
+      "molecularFormula": "C9H10O3",
+      "molecularWeight": 166.17,
+      "structureHash": "5faa64b0a2adff28921e0f9544e8075925a25aa45236b5a2deba9c04e9e4b73b",
+      "evidenceRefs": [
+        "evidence-M007"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M008",
+      "name": "Vanillin",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m008",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m008",
+      "casAssertions": [],
+      "inchiKey": "MWOOGOJBHIARFG-UHFFFAOYSA-N",
+      "canonicalSmiles": "COc1cc(C=O)ccc1O",
+      "isomericSmiles": "COC1=C(C=CC(=C1)C=O)O",
+      "inchi": "InChI=1S/C8H8O3/c1-11-8-4-6(5-9)2-3-7(8)10/h2-5,10H,1H3",
+      "molecularFormula": "C8H8O3",
+      "molecularWeight": 152.15,
+      "structureHash": "4e2ffa4cf8947c4d9940ecd171faf465450f29e1d0d488848568cf64dd0e0482",
+      "evidenceRefs": [
+        "evidence-M008"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M009",
+      "name": "Benzyl Salicylate",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m009",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m009",
+      "casAssertions": [],
+      "inchiKey": "ZCTQGTTXIYCGGC-UHFFFAOYSA-N",
+      "canonicalSmiles": "O=C(OCc1ccccc1)c1ccccc1O",
+      "isomericSmiles": "C1=CC=C(C=C1)COC(=O)C2=CC=CC=C2O",
+      "inchi": "InChI=1S/C14H12O3/c15-13-9-5-4-8-12(13)14(16)17-10-11-6-2-1-3-7-11/h1-9,15H,10H2",
+      "molecularFormula": "C14H12O3",
+      "molecularWeight": 228.24,
+      "structureHash": "a0d2913c96ce4916e9b3d44d43a4dd1cd91b8623ab9346f945baa566abb33e48",
+      "evidenceRefs": [
+        "evidence-M009"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M010",
+      "name": "Benzyl Benzoate",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m010",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m010",
+      "casAssertions": [],
+      "inchiKey": "SESFRYSPDFLNCH-UHFFFAOYSA-N",
+      "canonicalSmiles": "O=C(OCc1ccccc1)c1ccccc1",
+      "isomericSmiles": "C1=CC=C(C=C1)COC(=O)C2=CC=CC=C2",
+      "inchi": "InChI=1S/C14H12O2/c15-14(13-9-5-2-6-10-13)16-11-12-7-3-1-4-8-12/h1-10H,11H2",
+      "molecularFormula": "C14H12O2",
+      "molecularWeight": 212.24,
+      "structureHash": "6217831f0b65cd0c76eef7bc450b48ab2e30a7bd07c171723e38c75d3cb9274e",
+      "evidenceRefs": [
+        "evidence-M010"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M011",
+      "name": "Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m011",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m011",
+      "casAssertions": [],
+      "inchiKey": "CDOSHBSSFJOMGT-UHFFFAOYSA-N",
+      "canonicalSmiles": "C=CC(C)(O)CCC=C(C)C",
+      "isomericSmiles": "CC(=CCCC(C)(C=C)O)C",
+      "inchi": "InChI=1S/C10H18O/c1-5-10(4,11)8-6-7-9(2)3/h5,7,11H,1,6,8H2,2-4H3",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "5eb23d5cdc08effda1f1571c5cee8d2348b0bd3ffaedfbaf55808e5b4657fd94",
+      "evidenceRefs": [
+        "evidence-M011"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M012",
+      "name": "(R)-Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m012",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m012",
+      "casAssertions": [],
+      "inchiKey": "CDOSHBSSFJOMGT-JTQLQIEISA-N",
+      "canonicalSmiles": "C=C[C@](C)(O)CCC=C(C)C",
+      "isomericSmiles": "CC(=CCC[C@](C)(C=C)O)C",
+      "inchi": "InChI=1S/C10H18O/c1-5-10(4,11)8-6-7-9(2)3/h5,7,11H,1,6,8H2,2-4H3/t10-/m0/s1",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "6870ee492256855ebc79ec9af42c563297f67e46fc8a996525e9512298c73e71",
+      "evidenceRefs": [
+        "evidence-M012"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M013",
+      "name": "(S)-Linalool",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m013",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m013",
+      "casAssertions": [],
+      "inchiKey": "CDOSHBSSFJOMGT-SNVBAGLBSA-N",
+      "canonicalSmiles": "C=C[C@@](C)(O)CCC=C(C)C",
+      "isomericSmiles": "CC(=CCC[C@@](C)(C=C)O)C",
+      "inchi": "InChI=1S/C10H18O/c1-5-10(4,11)8-6-7-9(2)3/h5,7,11H,1,6,8H2,2-4H3/t10-/m1/s1",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "01d9cc89700adaf8b06dc5ca1bd02605270a70c5aaa6235fbd54d4e2a4e40724",
+      "evidenceRefs": [
+        "evidence-M013"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M014",
+      "name": "Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m014",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m014",
+      "casAssertions": [],
+      "inchiKey": "XMGQYMWWDOXHJM-UHFFFAOYSA-N",
+      "canonicalSmiles": "C=C(C)C1CC=C(C)CC1",
+      "isomericSmiles": "CC1=CCC(CC1)C(=C)C",
+      "inchi": "InChI=1S/C10H16/c1-8(2)10-6-4-9(3)5-7-10/h4,10H,1,5-7H2,2-3H3",
+      "molecularFormula": "C10H16",
+      "molecularWeight": 136.23,
+      "structureHash": "9771162b022edee91eac0829909adb83d3e2236c45b1a8ae557f5685b185f540",
+      "evidenceRefs": [
+        "evidence-M014"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M015",
+      "name": "(R)-(+)-Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m015",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m015",
+      "casAssertions": [],
+      "inchiKey": "XMGQYMWWDOXHJM-JTQLQIEISA-N",
+      "canonicalSmiles": "C=C(C)[C@H]1CC=C(C)CC1",
+      "isomericSmiles": "CC1=CC[C@@H](CC1)C(=C)C",
+      "inchi": "InChI=1S/C10H16/c1-8(2)10-6-4-9(3)5-7-10/h4,10H,1,5-7H2,2-3H3/t10-/m0/s1",
+      "molecularFormula": "C10H16",
+      "molecularWeight": 136.23,
+      "structureHash": "a06d3f9dd37e2284ac1e95b042d204ab309d1ab6c61625343aa8b7e590a1ce8e",
+      "evidenceRefs": [
+        "evidence-M015"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M016",
+      "name": "(S)-(-)-Limonene",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m016",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m016",
+      "casAssertions": [],
+      "inchiKey": "XMGQYMWWDOXHJM-SNVBAGLBSA-N",
+      "canonicalSmiles": "C=C(C)[C@@H]1CC=C(C)CC1",
+      "isomericSmiles": "CC1=CC[C@H](CC1)C(=C)C",
+      "inchi": "InChI=1S/C10H16/c1-8(2)10-6-4-9(3)5-7-10/h4,10H,1,5-7H2,2-3H3/t10-/m1/s1",
+      "molecularFormula": "C10H16",
+      "molecularWeight": 136.23,
+      "structureHash": "2d3f7493f0b0440de7f3de4920c979d6626ff38068304587f45f610c87469684",
+      "evidenceRefs": [
+        "evidence-M016"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M017",
+      "name": "Citronellol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m017",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m017",
+      "casAssertions": [
+        "106-22-9"
+      ],
+      "inchiKey": "QMVPMAAFGQKVCJ-UHFFFAOYSA-N",
+      "canonicalSmiles": "CC(C)=CCCC(C)CCO",
+      "isomericSmiles": "CC(CCC=C(C)C)CCO",
+      "inchi": "InChI=1S/C10H20O/c1-9(2)5-4-6-10(3)7-8-11/h5,10-11H,4,6-8H2,1-3H3",
+      "molecularFormula": "C10H20O",
+      "molecularWeight": 156.26,
+      "structureHash": "759f6a4395176f8f3b740ab6d54798838aec005cba4bffd01bd6b5aeb2a87f20",
+      "evidenceRefs": [
+        "evidence-M017"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M018",
+      "name": "Geraniol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m018",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m018",
+      "casAssertions": [],
+      "inchiKey": "GLZPCOQZEFWAFX-JXMROGBWSA-N",
+      "canonicalSmiles": "CC(C)=CCC/C(C)=C/CO",
+      "isomericSmiles": "CC(=CCC/C(=C/CO)/C)C",
+      "inchi": "InChI=1S/C10H18O/c1-9(2)5-4-6-10(3)7-8-11/h5,7,11H,4,6,8H2,1-3H3/b10-7+",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "88a617f73386eda7c8f3025fe79e4efb8a9e52fc29069b86c42cf89c83cbc4ef",
+      "evidenceRefs": [
+        "evidence-M018"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M019",
+      "name": "Nerol",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m019",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m019",
+      "casAssertions": [],
+      "inchiKey": "GLZPCOQZEFWAFX-YFHOEESVSA-N",
+      "canonicalSmiles": "CC(C)=CCC/C(C)=C\\CO",
+      "isomericSmiles": "CC(=CCC/C(=C\\CO)/C)C",
+      "inchi": "InChI=1S/C10H18O/c1-9(2)5-4-6-10(3)7-8-11/h5,7,11H,4,6,8H2,1-3H3/b10-7-",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "bfa77e409fd19f37d5da3a7ea2f0156b66397fc6c72a84ca4ad9bd20fe5585e0",
+      "evidenceRefs": [
+        "evidence-M019"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M020",
+      "name": "Citral",
+      "productClassification": "DEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m020",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M021",
+        "evidence-M022"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": [
+        {
+          "componentName": "Geranial",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-m021",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-M021"
+          ],
+          "concentration": {
+            "kind": "UNKNOWN",
+            "unit": "UNKNOWN",
+            "basis": "UNKNOWN"
+          },
+          "verificationStatus": "VERIFIED"
+        },
+        {
+          "componentName": "Neral",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-m022",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-M022"
+          ],
+          "concentration": {
+            "kind": "UNKNOWN",
+            "unit": "UNKNOWN",
+            "basis": "UNKNOWN"
+          },
+          "verificationStatus": "VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "M021",
+      "name": "Geranial",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m021",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m021",
+      "casAssertions": [],
+      "inchiKey": "WTEVQBCEXWBHNA-JXMROGBWSA-N",
+      "canonicalSmiles": "CC(C)=CCC/C(C)=C/C=O",
+      "isomericSmiles": "CC(=CCC/C(=C/C=O)/C)C",
+      "inchi": "InChI=1S/C10H16O/c1-9(2)5-4-6-10(3)7-8-11/h5,7-8H,4,6H2,1-3H3/b10-7+",
+      "molecularFormula": "C10H16O",
+      "molecularWeight": 152.23,
+      "structureHash": "bf2835793febb7091ad86143ea09b6029728265786e723f88b8545ed3a381631",
+      "evidenceRefs": [
+        "evidence-M021"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M022",
+      "name": "Neral",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m022",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m022",
+      "casAssertions": [],
+      "inchiKey": "WTEVQBCEXWBHNA-YFHOEESVSA-N",
+      "canonicalSmiles": "CC(C)=CCC/C(C)=C\\C=O",
+      "isomericSmiles": "CC(=CCC/C(=C\\C=O)/C)C",
+      "inchi": "InChI=1S/C10H16O/c1-9(2)5-4-6-10(3)7-8-11/h5,7-8H,4,6H2,1-3H3/b10-7-",
+      "molecularFormula": "C10H16O",
+      "molecularWeight": 152.23,
+      "structureHash": "764a2f8056430c94978e1e4b295cb61d5f9320233b6b4e5e80fb1414e7e4b8d4",
+      "evidenceRefs": [
+        "evidence-M022"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M023",
+      "name": "Iso E Super®",
+      "productClassification": "DEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m023",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M023"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M024",
+      "name": "Timbersilk®",
+      "productClassification": "DEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m024",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M024"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M025",
+      "name": "Galaxolide® / HHCB",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m025",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m025",
+      "casAssertions": [
+        "1222-05-5"
+      ],
+      "inchiKey": "ONKNPOPIGWHAQC-UHFFFAOYSA-N",
+      "canonicalSmiles": "CC1COCc2cc3c(cc21)C(C)(C)C(C)C3(C)C",
+      "isomericSmiles": "CC1COCC2=CC3=C(C=C12)C(C(C3(C)C)C)(C)C",
+      "inchi": "InChI=1S/C18H26O/c1-11-9-19-10-13-7-15-16(8-14(11)13)18(5,6)12(2)17(15,3)4/h7-8,11-12H,9-10H2,1-6H3",
+      "molecularFormula": "C18H26O",
+      "molecularWeight": 258.4,
+      "structureHash": "3bd879e13093bffa3599892d8564b49eb30522959fe24d922aeaf4985ca09f64",
+      "evidenceRefs": [
+        "evidence-M025"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M026",
+      "name": "Ethylene Brassylate",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m026",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m026",
+      "casAssertions": [
+        "105-95-3"
+      ],
+      "inchiKey": "XRHCAGNSDHCHFJ-UHFFFAOYSA-N",
+      "canonicalSmiles": "O=C1CCCCCCCCCCCC(=O)OCCO1",
+      "isomericSmiles": "C1CCCCCC(=O)OCCOC(=O)CCCCC1",
+      "inchi": "InChI=1S/C15H26O4/c16-14-10-8-6-4-2-1-3-5-7-9-11-15(17)19-13-12-18-14/h1-13H2",
+      "molecularFormula": "C15H26O4",
+      "molecularWeight": 270.36,
+      "structureHash": "cca403b5e94dbb2727be373ff77bfaa0109c878ea4b1c42a623e481338a3cbe6",
+      "evidenceRefs": [
+        "evidence-M026"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M027",
+      "name": "Ambrettolide",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m027",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m027",
+      "casAssertions": [
+        "123-69-3"
+      ],
+      "inchiKey": "NVIPUOMWGQAOIT-RQOWECAXSA-N",
+      "canonicalSmiles": "O=C1CCCCC/C=C\\CCCCCCCCO1",
+      "isomericSmiles": "C1CCCCOC(=O)CCCCC/C=C\\CCC1",
+      "inchi": "InChI=1S/C16H28O2/c17-16-14-12-10-8-6-4-2-1-3-5-7-9-11-13-15-18-16/h2,4H,1,3,5-15H2/b4-2-",
+      "molecularFormula": "C16H28O2",
+      "molecularWeight": 252.39,
+      "structureHash": "bf94ab3d326a7b58ad42c180352d14a0702896ff93c6f97700c04203bdbb4255",
+      "evidenceRefs": [
+        "evidence-M027"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M028",
+      "name": "Exaltolide® / Pentadecanolide",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m028",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m028",
+      "casAssertions": [
+        "106-02-5"
+      ],
+      "inchiKey": "FKUPPRZPSYCDRS-UHFFFAOYSA-N",
+      "canonicalSmiles": "O=C1CCCCCCCCCCCCCCO1",
+      "isomericSmiles": "C1CCCCCCCOC(=O)CCCCCC1",
+      "inchi": "InChI=1S/C15H28O2/c16-15-13-11-9-7-5-3-1-2-4-6-8-10-12-14-17-15/h1-14H2",
+      "molecularFormula": "C15H28O2",
+      "molecularWeight": 240.38,
+      "structureHash": "b72318aaf0fd29ed704406e7c804f8ccf68f57223bdabc90fab720a16a62d07d",
+      "evidenceRefs": [
+        "evidence-M028"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M029",
+      "name": "Rose Oxide",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m029",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m029",
+      "casAssertions": [
+        "16409-43-1"
+      ],
+      "inchiKey": "CZCBTSFUTPZVKJ-UHFFFAOYSA-N",
+      "canonicalSmiles": "CC(C)=CC1CC(C)CCO1",
+      "isomericSmiles": "CC1CCOC(C1)C=C(C)C",
+      "inchi": "InChI=1S/C10H18O/c1-8(2)6-10-7-9(3)4-5-11-10/h6,9-10H,4-5,7H2,1-3H3",
+      "molecularFormula": "C10H18O",
+      "molecularWeight": 154.25,
+      "structureHash": "a33172a18e57ed27d65be3a5c62c1dcff518147af16194031eaa34276bc080a6",
+      "evidenceRefs": [
+        "evidence-M029"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M030",
+      "name": "β-Ionone",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m030",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m030",
+      "casAssertions": [],
+      "inchiKey": "PSQYTAPXSHCGMF-BQYQJAHWSA-N",
+      "canonicalSmiles": "CC(=O)/C=C/C1=C(C)CCCC1(C)C",
+      "isomericSmiles": "CC1=C(C(CCC1)(C)C)/C=C/C(=O)C",
+      "inchi": "InChI=1S/C13H20O/c1-10-6-5-9-13(3,4)12(10)8-7-11(2)14/h7-8H,5-6,9H2,1-4H3/b8-7+",
+      "molecularFormula": "C13H20O",
+      "molecularWeight": 192.3,
+      "structureHash": "b962b56de841a7a889fa5971428be08871212e3c783f28fec4cca1e105ec5fe5",
+      "evidenceRefs": [
+        "evidence-M030"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M031",
+      "name": "α-Ionone",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m031",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m031",
+      "casAssertions": [],
+      "inchiKey": "UZFLPKAIBPNNCA-BQYQJAHWSA-N",
+      "canonicalSmiles": "CC(=O)/C=C/C1C(C)=CCCC1(C)C",
+      "isomericSmiles": "CC1=CCCC(C1/C=C/C(=O)C)(C)C",
+      "inchi": "InChI=1S/C13H20O/c1-10-6-5-9-13(3,4)12(10)8-7-11(2)14/h6-8,12H,5,9H2,1-4H3/b8-7+",
+      "molecularFormula": "C13H20O",
+      "molecularWeight": 192.3,
+      "structureHash": "7e7131d9e322cefd9123aa343cc6973c62b0b5782419cefc5ef3cb82c64571f1",
+      "evidenceRefs": [
+        "evidence-M031"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M032",
+      "name": "Methyl Ionone Gamma",
+      "productClassification": "DEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m032",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M032"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M033",
+      "name": "Aldehyde C-10 / Decanal",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m033",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m033",
+      "casAssertions": [
+        "112-31-2"
+      ],
+      "inchiKey": "KSMVZQYAVGTKIV-UHFFFAOYSA-N",
+      "canonicalSmiles": "CCCCCCCCCC=O",
+      "isomericSmiles": "CCCCCCCCCC=O",
+      "inchi": "InChI=1S/C10H20O/c1-2-3-4-5-6-7-8-9-10-11/h10H,2-9H2,1H3",
+      "molecularFormula": "C10H20O",
+      "molecularWeight": 156.26,
+      "structureHash": "d0ec1e94afb6d473bcdbb2abef3f457dc723869c7170a67b3b73d5e15c9a0578",
+      "evidenceRefs": [
+        "evidence-M033"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M034",
+      "name": "Aldehyde C-11 Undecylenic",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m034",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m034",
+      "casAssertions": [
+        "112-45-8"
+      ],
+      "inchiKey": "OFHHDSQXFXLTKC-UHFFFAOYSA-N",
+      "canonicalSmiles": "C=CCCCCCCCCC=O",
+      "isomericSmiles": "C=CCCCCCCCCC=O",
+      "inchi": "InChI=1S/C11H20O/c1-2-3-4-5-6-7-8-9-10-11-12/h2,11H,1,3-10H2",
+      "molecularFormula": "C11H20O",
+      "molecularWeight": 168.28,
+      "structureHash": "89dfdd89da437ee9516b8b0c09f2ed19f561987f04b7e2fe3cb53b164ca1cf1c",
+      "evidenceRefs": [
+        "evidence-M034"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M035",
+      "name": "Aldehyde C-12 Lauric / Dodecanal",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m035",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m035",
+      "casAssertions": [
+        "112-54-9"
+      ],
+      "inchiKey": "HFJRKMMYBMWEAD-UHFFFAOYSA-N",
+      "canonicalSmiles": "CCCCCCCCCCCC=O",
+      "isomericSmiles": "CCCCCCCCCCCC=O",
+      "inchi": "InChI=1S/C12H24O/c1-2-3-4-5-6-7-8-9-10-11-12-13/h12H,2-11H2,1H3",
+      "molecularFormula": "C12H24O",
+      "molecularWeight": 184.32,
+      "structureHash": "b2486c4411405344aa89f9143b5e36a2081524015af7d2063335b12d044d3001",
+      "evidenceRefs": [
+        "evidence-M035"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M036",
+      "name": "Aldehyde C-12 MNA",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m036",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m036",
+      "casAssertions": [
+        "110-41-8"
+      ],
+      "inchiKey": "NFAVNWJJYQAGNB-UHFFFAOYSA-N",
+      "canonicalSmiles": "CCCCCCCCCC(C)C=O",
+      "isomericSmiles": "CCCCCCCCCC(C)C=O",
+      "inchi": "InChI=1S/C12H24O/c1-3-4-5-6-7-8-9-10-12(2)11-13/h11-12H,3-10H2,1-2H3",
+      "molecularFormula": "C12H24O",
+      "molecularWeight": 184.32,
+      "structureHash": "dbe65504a2732909da553f491d21bc3f5e4f8f1315887c8507beb3dc97e13dab",
+      "evidenceRefs": [
+        "evidence-M036"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M037",
+      "name": "Amber Xtreme®",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m037",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m037",
+      "casAssertions": [
+        "476332-65-7"
+      ],
+      "inchiKey": "HUYXPANWJVOYCI-UHFFFAOYSA-N",
+      "canonicalSmiles": "CC1C(C)(C)C2CCC3CC(C)(C)OC3C2C1(C)C",
+      "isomericSmiles": "CC1C(C2CCC3CC(OC3C2C1(C)C)(C)C)(C)C",
+      "inchi": "InChI=1S/C18H32O/c1-11-17(4,5)13-9-8-12-10-16(2,3)19-15(12)14(13)18(11,6)7/h11-15H,8-10H2,1-7H3",
+      "molecularFormula": "C18H32O",
+      "molecularWeight": 264.4,
+      "structureHash": "352766abd4399c45df5a5876661b1a422b370ac1ab6e06721a1efdbeff8e2416",
+      "evidenceRefs": [
+        "evidence-M037"
+      ],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "STEREOCHEMISTRY_UNRESOLVED"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": true,
+      "researchReason": "Authoritative manufacturer and PubChem identity review completed for priority unresolved case.",
+      "components": []
+    },
+    {
+      "id": "M038",
+      "name": "Clearwood® Prisma",
+      "productClassification": "UNDEFINED_MIXTURE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m038",
+      "chemicalEntityType": "UNDEFINED_OR_VARIABLE_COMPOSITION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M038"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "UNDEFINED_MIXTURE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M039",
+      "name": "Cedroxyde®",
+      "productClassification": "NEAT_SUBSTANCE",
+      "chemicalEntityAction": "CREATED_LOCAL",
+      "primaryChemicalEntityId": "entity-m039",
+      "chemicalEntityType": "SINGLE_SUBSTANCE",
+      "resolutionStatus": "RESOLVED",
+      "evidenceStatus": "VERIFIED",
+      "molecularIdentityId": "identity-m039",
+      "casAssertions": [
+        "13786-79-3"
+      ],
+      "inchiKey": "PAZWFUGWOAQBJJ-SWZPTJTJSA-N",
+      "canonicalSmiles": "C/C1=C\\CCC2(C)OC2CC/C(C)=C/CC1",
+      "isomericSmiles": "C/C/1=C\\CCC2(C(O2)CC/C(=C/CC1)/C)C",
+      "inchi": "InChI=1S/C15H24O/c1-12-6-4-7-13(2)9-10-14-15(3,16-14)11-5-8-12/h7-8,14H,4-6,9-11H2,1-3H3/b12-8+,13-7+",
+      "molecularFormula": "C15H24O",
+      "molecularWeight": 220.35,
+      "structureHash": "27213660d3da3fecc3610b41484aa2d32369132c778fe9c62636700c93a277e5",
+      "evidenceRefs": [
+        "evidence-M039"
+      ],
+      "eligibilityResult": "ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "RESOLVED_SINGLE_SUBSTANCE"
+      ],
+      "entityEligibilityResult": "ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M040",
+      "name": "Ambermax® 10% TEC",
+      "productClassification": "DILUTION",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m040",
+      "chemicalEntityType": "UNDEFINED_OR_VARIABLE_COMPOSITION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M040",
+        "evidence-entity-support-ambermax",
+        "evidence-entity-support-tec"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": [
+        {
+          "componentName": "Ambermax®",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-support-ambermax",
+          "resolutionStatus": "NOT_APPLICABLE",
+          "evidenceRefs": [
+            "evidence-entity-support-ambermax"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 10,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        },
+        {
+          "componentName": "Triethyl citrate",
+          "componentRole": "CARRIER",
+          "chemicalEntityId": "entity-support-tec",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-entity-support-tec"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 90,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "M041",
+      "name": "Ambroxan 10% DPG",
+      "productClassification": "DILUTION",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m041",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M003",
+        "evidence-entity-support-dpg"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": [
+        {
+          "componentName": "Ambroxan",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-m003",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-M003"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 10,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        },
+        {
+          "componentName": "Dipropylene glycol",
+          "componentRole": "CARRIER",
+          "chemicalEntityId": "entity-support-dpg",
+          "resolutionStatus": "NOT_APPLICABLE",
+          "evidenceRefs": [
+            "evidence-entity-support-dpg"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 90,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "M042",
+      "name": "Ethyl Vanillin 10% DPG",
+      "productClassification": "DILUTION",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m042",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-M007",
+        "evidence-entity-support-dpg"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": [
+        {
+          "componentName": "Ethyl Vanillin",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-m007",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-M007"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 10,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        },
+        {
+          "componentName": "Dipropylene glycol",
+          "componentRole": "CARRIER",
+          "chemicalEntityId": "entity-support-dpg",
+          "resolutionStatus": "NOT_APPLICABLE",
+          "evidenceRefs": [
+            "evidence-entity-support-dpg"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 90,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "M043",
+      "name": "Indole 1% Ethanol",
+      "productClassification": "DILUTION",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m043",
+      "chemicalEntityType": "DEFINED_MIXTURE",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [
+        "evidence-entity-support-indole",
+        "evidence-entity-support-ethanol"
+      ],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "DILUTION_PRODUCT"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": [
+        {
+          "componentName": "Indole",
+          "componentRole": "ACTIVE",
+          "chemicalEntityId": "entity-support-indole",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-entity-support-indole"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 1,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        },
+        {
+          "componentName": "Ethanol",
+          "componentRole": "SOLVENT",
+          "chemicalEntityId": "entity-support-ethanol",
+          "resolutionStatus": "RESOLVED",
+          "evidenceRefs": [
+            "evidence-entity-support-ethanol"
+          ],
+          "concentration": {
+            "kind": "EXACT",
+            "value": 99,
+            "unit": "PERCENT",
+            "basis": "MASS"
+          },
+          "verificationStatus": "VERIFIED"
+        }
+      ]
+    },
+    {
+      "id": "M044",
+      "name": "Bergamot Essential Oil",
+      "productClassification": "NATURAL",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m044",
+      "chemicalEntityType": "NATURAL_COMPLEX",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M045",
+      "name": "Lavender Essential Oil",
+      "productClassification": "NATURAL",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m045",
+      "chemicalEntityType": "NATURAL_COMPLEX",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M046",
+      "name": "Patchouli Essential Oil",
+      "productClassification": "NATURAL",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m046",
+      "chemicalEntityType": "NATURAL_COMPLEX",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M047",
+      "name": "Jasmine Absolute",
+      "productClassification": "NATURAL",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m047",
+      "chemicalEntityType": "NATURAL_COMPLEX",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M048",
+      "name": "Oakmoss Absolute / Extract",
+      "productClassification": "NATURAL",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m048",
+      "chemicalEntityType": "NATURAL_COMPLEX",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "NATURAL_COMPLEX"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M049",
+      "name": "Generic Jasmine Base",
+      "productClassification": "BASE",
+      "chemicalEntityAction": "CLASSIFIED_COMPLEX",
+      "primaryChemicalEntityId": "entity-m049",
+      "chemicalEntityType": "UNDEFINED_OR_VARIABLE_COMPOSITION",
+      "resolutionStatus": "NOT_APPLICABLE",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "NOT_ELIGIBLE",
+      "eligibilityReasonCodes": [
+        "PROPRIETARY_BASE"
+      ],
+      "entityEligibilityResult": "NOT_ELIGIBLE",
+      "reviewRequired": false,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    },
+    {
+      "id": "M050",
+      "name": "Unknown Supplier Material — Incomplete Identity",
+      "productClassification": "UNKNOWN",
+      "chemicalEntityAction": "UNRESOLVED",
+      "primaryChemicalEntityId": "entity-m050",
+      "chemicalEntityType": "UNKNOWN",
+      "resolutionStatus": "UNRESOLVED",
+      "evidenceStatus": "UNVERIFIED",
+      "molecularIdentityId": null,
+      "casAssertions": [],
+      "inchiKey": null,
+      "canonicalSmiles": null,
+      "isomericSmiles": null,
+      "inchi": null,
+      "molecularFormula": null,
+      "molecularWeight": null,
+      "structureHash": null,
+      "evidenceRefs": [],
+      "eligibilityResult": "REVIEW_REQUIRED",
+      "eligibilityReasonCodes": [
+        "UNKNOWN_COMPOSITION"
+      ],
+      "entityEligibilityResult": "REVIEW_REQUIRED",
+      "reviewRequired": true,
+      "researchPriority": false,
+      "researchReason": "Bounded Pilot 50 identity classification reviewed without name-only structure inference.",
+      "components": []
+    }
+  ]
+}
