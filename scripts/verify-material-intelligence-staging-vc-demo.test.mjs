@@ -5,6 +5,7 @@ import {
   acceptedGlobalWriteDenial,
   evidenceContainsProtectedValue,
   globalMaterialWriteRoutes,
+  isTrustedStagingWorkspaceUrl,
   parseGeneratedRouteSpecs,
   sanitizedBrowserLocation,
   stableFailureCode,
@@ -67,7 +68,11 @@ describe("Material Intelligence staging VC demo acceptance", () => {
       "https://server-selected.api-beta.labofscents.org@evil.example/v2/workspace",
     ]) {
       expect(() => trustedStagingWorkspaceContext(workspaceUrl)).toThrow("LOGIN_WORKSPACE_URL_INVALID");
+      expect(isTrustedStagingWorkspaceUrl(workspaceUrl)).toBe(false);
     }
+    expect(isTrustedStagingWorkspaceUrl(
+      "https://server-selected.api-beta.labofscents.org/v2/workspace",
+    )).toBe(true);
   });
 
   it("classifies redirect timeouts and records only a sanitized browser location", () => {
@@ -130,10 +135,10 @@ describe("Material Intelligence staging VC demo acceptance", () => {
   });
 
   it("keeps the workflow staging-only, exact-main, browser-backed, sanitized, and fixture-preserving", async () => {
-    const workflow = await readFile(
+    const workflow = (await readFile(
       resolve(".github/workflows/v2-staging-material-intelligence-vc-demo-acceptance.yml"),
       "utf8",
-    );
+    )).replaceAll("\r\n", "\n");
     const script = await readFile(resolve("scripts/verify-material-intelligence-staging-vc-demo.mjs"), "utf8");
 
     expect(workflow).toContain("permissions:\n  contents: read");

@@ -120,6 +120,15 @@ export function trustedStagingWorkspaceContext(workspaceUrl) {
   };
 }
 
+export function isTrustedStagingWorkspaceUrl(value) {
+  try {
+    trustedStagingWorkspaceContext(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function sanitizedBrowserLocation(value, publicOrigin, expectedWorkspaceOrigin) {
   let parsed;
   try {
@@ -353,29 +362,37 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     required(loginResponse.status() === 200, "LOGIN_RESPONSE_NOT_SUCCESSFUL");
     required(loginResponse.headers()["cf-mitigated"] !== "challenge", "CLOUDFLARE_CHALLENGE_PRESENT");
     const loginBody = await loginResponse.json().catch(() => undefined);
-    workspace = trustedStagingWorkspaceContext(loginBody?.workspaceUrl);
-    required(loginBody?.hostname?.hostname === workspace.hostname, "LOGIN_WORKSPACE_HOSTNAME_MISMATCH");
-    required(loginBody?.hostname?.kind === "DEFAULT", "LOGIN_WORKSPACE_HOSTNAME_KIND_INVALID");
-    required(loginBody?.hostname?.status === "ACTIVE", "LOGIN_WORKSPACE_HOSTNAME_NOT_ACTIVE");
-    required(loginBody?.membership?.organizationSlug === workspace.slug, "LOGIN_WORKSPACE_MEMBERSHIP_MISMATCH");
-    required(loginBody?.membership?.status === "ACTIVE", "LOGIN_WORKSPACE_MEMBERSHIP_NOT_ACTIVE");
-    required(loginBody?.membership?.role === "Owner", "LOGIN_WORKSPACE_FIXTURE_ROLE_INVALID");
-    required(loginBody?.user?.verified === true, "LOGIN_WORKSPACE_USER_NOT_VERIFIED");
-    required(
-      typeof loginBody?.membership?.organizationId === "string"
-        && loginBody.membership.organizationId === loginBody?.hostname?.organizationId
-        && loginBody.membership.organizationId === loginBody?.session?.organizationId,
-      "LOGIN_WORKSPACE_ORGANIZATION_MISMATCH",
-    );
-    evidence.checks.authenticatedWorkspaceContract = "PASS";
-    evidence.checks.configuredSlugMatchesAuthenticatedWorkspace = inputs.tenantSlug === workspace.slug ? "YES" : "NO";
+    let loginWorkspace;
+    if (loginBody) {
+      loginWorkspace = trustedStagingWorkspaceContext(loginBody.workspaceUrl);
+      required(loginBody?.hostname?.hostname === loginWorkspace.hostname, "LOGIN_WORKSPACE_HOSTNAME_MISMATCH");
+      required(loginBody?.hostname?.kind === "DEFAULT", "LOGIN_WORKSPACE_HOSTNAME_KIND_INVALID");
+      required(loginBody?.hostname?.status === "ACTIVE", "LOGIN_WORKSPACE_HOSTNAME_NOT_ACTIVE");
+      required(loginBody?.membership?.organizationSlug === loginWorkspace.slug, "LOGIN_WORKSPACE_MEMBERSHIP_MISMATCH");
+      required(loginBody?.membership?.status === "ACTIVE", "LOGIN_WORKSPACE_MEMBERSHIP_NOT_ACTIVE");
+      required(loginBody?.membership?.role === "Owner", "LOGIN_WORKSPACE_FIXTURE_ROLE_INVALID");
+      required(loginBody?.user?.verified === true, "LOGIN_WORKSPACE_USER_NOT_VERIFIED");
+      required(
+        typeof loginBody?.membership?.organizationId === "string"
+          && loginBody.membership.organizationId === loginBody?.hostname?.organizationId
+          && loginBody.membership.organizationId === loginBody?.session?.organizationId,
+        "LOGIN_WORKSPACE_ORGANIZATION_MISMATCH",
+      );
+      evidence.checks.loginResponseWorkspaceContract = "PASS";
+    } else {
+      evidence.checks.loginResponseWorkspaceContract = "UNAVAILABLE_AFTER_CROSS_ORIGIN_NAVIGATION";
+    }
 
     stage = "WORKSPACE_REDIRECT";
     await page.waitForURL(
-      (url) => url.origin === workspace.origin && url.pathname === "/v2/workspace",
+      (url) => isTrustedStagingWorkspaceUrl(url.toString()),
       { timeout: 30_000, waitUntil: "domcontentloaded" },
     );
-    required(new URL(page.url()).origin === workspace.origin, "WORKSPACE_REDIRECT_MISMATCH");
+    workspace = trustedStagingWorkspaceContext(page.url());
+    if (loginWorkspace) {
+      required(loginWorkspace.workspaceUrl === workspace.workspaceUrl, "WORKSPACE_REDIRECT_MISMATCH");
+    }
+    evidence.checks.configuredSlugMatchesAuthenticatedWorkspace = inputs.tenantSlug === workspace.slug ? "YES" : "NO";
     await page.getByTestId("v2-workspace").waitFor({ state: "visible", timeout: 30_000 });
     await page.getByTestId("v2-workspace-home").waitFor({ state: "visible", timeout: 30_000 });
     await assertNoFailedToFetch(page);
@@ -393,8 +410,12 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
         status: response.status,
         contentTypeJson,
         hasUser: typeof body?.user?.id === "string",
+        userVerified: body?.user?.verified === true,
         hasSession: typeof body?.session?.id === "string",
         membershipMatches: body?.membership?.organizationSlug === expectedSlug,
+        ownerMembership: body?.membership?.role === "Owner" && body?.membership?.status === "ACTIVE",
+        organizationMatches: typeof body?.membership?.organizationId === "string"
+          && body.membership.organizationId === body?.session?.organizationId,
       };
     }, {
       url: `${inputs.apiOrigin}/api/v1/v2/platform/me`,
@@ -404,10 +425,14 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
       me.status === 200
         && me.contentTypeJson
         && me.hasUser
+        && me.userVerified
         && me.hasSession
-        && me.membershipMatches,
+        && me.membershipMatches
+        && me.ownerMembership
+        && me.organizationMatches,
       "AUTHENTICATED_ME_FAILURE",
     );
+    evidence.checks.authenticatedWorkspaceContract = "PASS";
     evidence.checks.login = "PASS";
     evidence.checks.authenticatedMe = "PASS";
     evidence.checks.workspaceDashboard = "PASS";
