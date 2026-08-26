@@ -17,6 +17,21 @@ import {
 
 const { Client } = pg
 
+const V2_GLOBAL_MATERIAL_INTELLIGENCE_READER_ROLE = 'v2_global_material_intelligence_reader'
+const V2_GLOBAL_MATERIAL_INTELLIGENCE_TABLES = Object.freeze([
+  'v2_global_material_intelligence_releases',
+  'v2_global_molecular_identities',
+  'v2_global_chemical_entities',
+  'v2_global_chemical_identifiers',
+  'v2_global_identity_evidence',
+  'v2_global_canonical_materials',
+  'v2_global_material_source_observations',
+  'v2_global_physical_property_assertions',
+  'v2_osmo_taxonomy_releases',
+  'v2_osmo_taxonomy_nodes',
+  'v2_osmo_taxonomy_assignments',
+])
+
 const databaseUrl = process.env.STAGING_DATABASE_URL
 const role = process.env.V2_RUNTIME_DB_ROLE ?? 'hyperdrive_user'
 const allowLoopbackTest = process.env.V2_STAGING_ALLOW_LOOPBACK_TEST === 'true' && process.env.V2_QA_ENVIRONMENT === 'test'
@@ -33,6 +48,9 @@ const identifier = `"${role}"`
 const client = new Client({ connectionString: databaseUrl })
 
 const quoteIdentifier = (value) => `"${value.replaceAll('"', '""')}"`
+const globalMaterialTablesSql = V2_GLOBAL_MATERIAL_INTELLIGENCE_TABLES
+  .map((table) => `public.${quoteIdentifier(table)}`)
+  .join(', ')
 
 try {
   await client.connect()
@@ -72,12 +90,13 @@ try {
   try {
     const databaseName = (await client.query('SELECT current_database() AS name')).rows[0].name
     for (const membership of memberships.rows) {
-      if (membership.rolname !== V2_PLATFORM_REGISTRY_READER_ROLE) {
+      if (![V2_PLATFORM_REGISTRY_READER_ROLE, V2_GLOBAL_MATERIAL_INTELLIGENCE_READER_ROLE].includes(membership.rolname)) {
         await client.query(`REVOKE ${quoteIdentifier(membership.rolname)} FROM ${identifier}`)
       }
     }
     if (requiresSafeAttributeHardening(roleState)) await client.query(hostedSafeAlterRoleStatement(identifier))
     await client.query(`GRANT ${quoteIdentifier(V2_PLATFORM_REGISTRY_READER_ROLE)} TO ${identifier}`)
+    await client.query(`GRANT ${quoteIdentifier(V2_GLOBAL_MATERIAL_INTELLIGENCE_READER_ROLE)} TO ${identifier}`)
     await client.query(`GRANT CONNECT ON DATABASE "${databaseName.replaceAll('"', '""')}" TO ${identifier}`)
     await client.query('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
     await client.query(`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM ${identifier}`)
@@ -85,6 +104,8 @@ try {
     await client.query(`REVOKE ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public FROM ${identifier}`)
     await client.query(`GRANT USAGE ON SCHEMA public TO ${identifier}`)
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${identifier}`)
+    await client.query(`REVOKE ALL PRIVILEGES ON TABLE ${globalMaterialTablesSql} FROM ${identifier}`)
+    await client.query(`GRANT SELECT ON TABLE ${globalMaterialTablesSql} TO ${identifier}`)
     await client.query(`REVOKE UPDATE, DELETE ON public.v2_material_intelligence_evidence, public.v2_scientific_eligibility_decisions FROM ${identifier}`)
     await client.query(`REVOKE ALL PRIVILEGES ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins FROM ${identifier}`)
     await client.query(`GRANT SELECT ON public.v2_plans, public.v2_scientific_component_pins, public.v2_model_component_pins TO ${identifier}`)
@@ -137,6 +158,19 @@ try {
     FROM unnest($2::text[]) AS table_name
   `, [role, V2_PLATFORM_REGISTRY_TABLES, V2_PLATFORM_REGISTRY_READER_ROLE])
   assertV2PlatformRegistryRuntimeGrants(platformRegistryGrantRows)
+  const { rows: globalMaterialGrantRows } = await client.query(`
+    SELECT table_name AS "tableName",
+      has_table_privilege($1, format('public.%I', table_name), 'SELECT') AS "canSelect",
+      has_table_privilege($1, format('public.%I', table_name), 'INSERT') AS "canInsert",
+      has_table_privilege($1, format('public.%I', table_name), 'UPDATE') AS "canUpdate",
+      has_table_privilege($1, format('public.%I', table_name), 'DELETE') AS "canDelete",
+      pg_has_role($1, $3, 'MEMBER') AS "readerMembership"
+    FROM unnest($2::text[]) AS table_name
+  `, [role, V2_GLOBAL_MATERIAL_INTELLIGENCE_TABLES, V2_GLOBAL_MATERIAL_INTELLIGENCE_READER_ROLE])
+  if (
+    globalMaterialGrantRows.length !== V2_GLOBAL_MATERIAL_INTELLIGENCE_TABLES.length
+    || globalMaterialGrantRows.some((row) => !row.canSelect || row.canInsert || row.canUpdate || row.canDelete || !row.readerMembership)
+  ) throw new Error('RUNTIME_DB_PRIVILEGES=FAIL global Material Intelligence is not read-only')
   const result = verification.rows[0]
   const { rows: parentRoleRows } = await client.query(`
     SELECT parent.rolname
@@ -145,11 +179,13 @@ try {
     JOIN pg_roles member ON member.oid = membership.member
     WHERE member.rolname = $1
   `, [role])
-  const readerMembershipOnly = parentRoleRows.length === 1 && parentRoleRows[0].rolname === V2_PLATFORM_REGISTRY_READER_ROLE
+  const allowedReaderMemberships = new Set([V2_PLATFORM_REGISTRY_READER_ROLE, V2_GLOBAL_MATERIAL_INTELLIGENCE_READER_ROLE])
+  const readerMembershipOnly = parentRoleRows.length === allowedReaderMemberships.size
+    && parentRoleRows.every((row) => allowedReaderMemberships.has(row.rolname))
   if (!result?.rolcanlogin || result.rolsuper || result.rolcreatedb || result.rolcreaterole || result.rolinherit || result.rolbypassrls || result.rolreplication || !readerMembershipOnly || !result.schema_usage || result.schema_create || !result.table_access || !result.sensory_link_execute || !result.hostname_resolver_execute || !result.platform_role_execute || !result.platform_state_execute || !result.platform_overview_execute || !result.platform_directory_execute || !result.platform_limit_execute || !result.platform_operator_role_execute) {
     throw new Error('RUNTIME_DB_PRIVILEGES=FAIL least-privilege verification failed')
   }
-  console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'PLATFORM_REGISTRY_READER_ONLY' }))
+  console.log(JSON.stringify({ runtimeDbPrivileges: 'PASS', role, loopbackTest: allowLoopbackTest, bypassRls: false, superuser: false, privilegedMembership: 'BOUNDED_READERS_ONLY', globalMaterialIntelligence: 'READ_ONLY' }))
 } finally {
   await client.end().catch(() => undefined)
 }
