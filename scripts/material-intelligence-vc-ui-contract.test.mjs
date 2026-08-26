@@ -4,73 +4,63 @@ import { describe, expect, it } from "vitest";
 const read = (path) => readFile(path, "utf8");
 
 describe("Material Intelligence VC UI contract", () => {
-  it("routes V2 Materials to the dedicated intelligence workspace", async () => {
+  it("routes the global catalog independently from tenant Materials", async () => {
     const app = await read("src/features/v2-platform/V2PlatformApp.tsx");
-    expect(app).toContain("import('./MaterialIntelligenceWorkspace')");
-    expect(app).toContain("if (active === 'materials') return <Suspense");
+    expect(app).toContain("import('./GlobalMaterialIntelligenceWorkspace')");
+    expect(app).toContain("if (active === 'material-intelligence') return <Suspense");
+    expect(app).toContain("if (active === 'materials' || active === 'suppliers'");
+    expect(app).toContain("'/material-intelligence'");
     expect(app).toContain("materialIntelligenceApiBase");
   });
 
-  it("uses real tenant-scoped intelligence list, detail and entity endpoints", async () => {
+  it("uses authenticated global list and dedicated detail endpoints", async () => {
     const source = await read(
-      "src/features/v2-platform/MaterialIntelligenceWorkspace.tsx",
+      "src/features/v2-platform/GlobalMaterialIntelligenceWorkspace.tsx",
     );
-    expect(source).toMatch(/["']\/api\/v1\/v2\/material-intelligence["']/);
     expect(source).toContain("`/materials?${query}`");
-    expect(source).toContain("`/materials/${encodeURIComponent(selectedId)}`");
-    expect(source).toContain(
-      "`/chemical-entities/${encodeURIComponent(material.primaryChemicalEntityId)}`",
-    );
+    expect(source).toContain("`/materials/${encodeURIComponent(materialId)}`");
+    expect(source).toContain("/material-intelligence/materials/${encodeURIComponent(materialId)}");
     expect(source).toMatch(/credentials:\s*["']include["']/);
     expect(source).not.toContain("/api/v1/auth/");
   });
 
-  it("renders every required catalog/detail section and bounded filters", async () => {
+  it("renders the required immutable global catalog and detail evidence", async () => {
     const source = await read(
-      "src/features/v2-platform/MaterialIntelligenceWorkspace.tsx",
+      "src/features/v2-platform/GlobalMaterialIntelligenceWorkspace.tsx",
     );
     for (const label of [
-      "Material Catalog",
-      "Material Product",
-      "Chemical Identity",
-      "Composition / Components",
-      "Scientific Eligibility",
-      "Evidence / Provenance",
-      "AI / Molecular Intelligence",
+      "Global Material Intelligence",
+      "GLOBAL · READ ONLY",
+      "Chemical entity",
+      "InChI",
+      "Physical properties",
+      "Osmo taxonomy",
+      "Scientific eligibility",
+      "AI research prediction eligibility",
+      "Source accounting",
+      "Catalog release",
     ])
       expect(source).toContain(label);
     for (const filter of [
-      "productClassification",
-      "eligibility",
+      "lifecycleStatus",
+      "evidenceStatus",
       "resolutionStatus",
-      "reviewRequired",
+      "taxonomyNode",
     ])
       expect(source).toContain(filter);
     expect(source).toContain("pageSize = 25");
-    expect(source).toContain(
-      "Material Products remain separate from verified Chemical Entities",
-    );
-    expect(source).toMatch(
-      /No\s+molecular\s+structure\s+is\s+inferred\s+from\s+name,\s+formula\s+or\s+CAS\s+alone/,
-    );
+    expect(source).not.toContain("items[0]");
   });
 
-  it("keeps research prediction fail-closed and avoids proprietary Osmo claims", async () => {
+  it("keeps the global surface read-only and prediction eligibility fail-closed", async () => {
     const source = await read(
-      "src/features/v2-platform/MaterialIntelligenceWorkspace.tsx",
+      "src/features/v2-platform/GlobalMaterialIntelligenceWorkspace.tsx",
     );
-    const research = await read(
-      "src/features/v2-platform/OlfactoryResearchPanel.tsx",
-    );
-    expect(source).toMatch(/decision\?\.result\s*===\s*["']ELIGIBLE["']/);
-    expect(source).toContain("predictionAllowed={predictionAllowed}");
-    expect(research).toContain("Run Research Prediction");
-    expect(research).toContain(
-      "disabled={!material || !modelVersionId || !predictionAllowed",
-    );
-    expect(`${source}\n${research}`).not.toMatch(
-      /powered by osmo|proprietary osmo/i,
-    );
+    expect(source).toContain('payload.scope !== "GLOBAL"');
+    expect(source).toContain("payload.readOnly !== true");
+    expect(source).toContain('predictionEligibility?.result ?? "REVIEW_REQUIRED"');
+    expect(source).not.toMatch(/method:\s*["'](?:POST|PUT|PATCH|DELETE)["']/);
+    expect(source).not.toMatch(/>\s*(?:Edit|Delete|Save Changes)\s*</i);
   });
 
   it("provides scoped desktop and mobile layout rules", async () => {

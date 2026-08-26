@@ -5,7 +5,7 @@ describe('V2 scientific creative workspace shell', () => {
   it('keeps the production navigation focused on supported workspace areas', () => {
     expect(workspaceNavigation.map((group) => group.label)).toEqual(['Home', 'R&D', 'Operations', 'Intelligence', 'System'])
     expect(workspaceNavigation.flatMap((group) => group.items.map((item) => item.key))).toEqual([
-      'workspace', 'materials', 'formulas', 'design-studio', 'inventory', 'suppliers', 'procurement', 'agents', 'domains', 'members', 'security', 'observability',
+      'workspace', 'materials', 'material-intelligence', 'formulas', 'design-studio', 'inventory', 'suppliers', 'procurement', 'agents', 'domains', 'members', 'security', 'observability',
     ])
     expect(workspaceNavigation.flatMap((group) => group.items.map((item) => item.key))).not.toContain('trials')
     expect(workspaceNavigation.flatMap((group) => group.items.map((item) => item.key))).not.toContain('advanced')

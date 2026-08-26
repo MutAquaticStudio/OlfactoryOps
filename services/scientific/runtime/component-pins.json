@@ -50,6 +50,18 @@
       "runtimeVersion": "isolated rdkit=2023.09.3",
       "patchStatus": "PACKAGING_README_COPY_ONLY; ISOLATED_RDKIT_2023_09_3_RUNTIME",
       "compatibilityTest": "scientific_runtime.tests.test_osmordred"
+    },
+    "OSMO_SCENT_TAXONOMY": {
+      "repository": "https://github.com/osmoai/taxonomy",
+      "license": "ODbL-1.0",
+      "upstreamRef": "v1.2",
+      "upstreamCommit": "fcd538b578e0a3c6261503380de03d0691b47344",
+      "sourcePath": "data/taxonomy.json",
+      "sourceSha256": "3181c43e9d094235eb2125b3301d6d323b1337acea5eaa4242e2e3d3e3493b2d",
+      "adapterVersion": "osmo-scent-taxonomy-adapter/1.0.0",
+      "runtimeVersion": "reference-data/v1.2",
+      "patchStatus": "NONE",
+      "compatibilityTest": "scripts/osmo-scent-taxonomy.test.ts"
     }
   }
 }

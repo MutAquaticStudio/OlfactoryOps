@@ -1,4 +1,5 @@
 # Osmo Adoption & Provenance Policy
+
 ## Mandatory Scientific Foundation for OlfactoryOps V2
 
 ## 1. Policy
@@ -9,26 +10,24 @@ This is not a claim of partnership, endorsement or official Osmo compatibility.
 
 ## 2. Approved repository set
 
-| Repository | License posture | Integration mode | V2 role |
-|---|---|---|---|
-| `https://github.com/osmoai/molftp` | BSD-3-Clause | runtime scientific dependency | fragment-target prevalence / explainability |
-| `https://github.com/osmoai/bcfp` | BSD-3-Clause | runtime scientific dependency | ECFP/BCFP fingerprints |
-| `https://github.com/osmoai/osmordred` | BSD-3-Clause per repository documentation; verify pinned source | runtime scientific dependency | molecular descriptors |
-| `https://github.com/osmoai/kgcnn-keras-unlocked` | MIT | research/model dependency | GNN backbones |
-| `https://github.com/osmoai/transformer-CNN` | MIT | research/model dependency | SMILES model path |
-| `https://github.com/osmoai/publications` | Apache-2.0 code / CC BY 4.0 datasets | research/data | reproduction, benchmark, training/evaluation |
-| `https://github.com/osmoai/vexo` | Apache-2.0 | optional/planned | chemistry DataOps |
-| `https://github.com/osmoai/genai-toolbox` | Apache-2.0 | infrastructure | MCP/database tooling |
-| `https://github.com/osmoai/rdkit-pypi` | packaging repository; track upstream RDKit license independently | build reference | RDKit wheel/build path |
+| Repository                                       | License posture                                                  | Integration mode              | V2 role                                      |
+| ------------------------------------------------ | ---------------------------------------------------------------- | ----------------------------- | -------------------------------------------- |
+| `https://github.com/osmoai/molftp`               | BSD-3-Clause                                                     | runtime scientific dependency | fragment-target prevalence / explainability  |
+| `https://github.com/osmoai/bcfp`                 | BSD-3-Clause                                                     | runtime scientific dependency | ECFP/BCFP fingerprints                       |
+| `https://github.com/osmoai/osmordred`            | BSD-3-Clause per repository documentation; verify pinned source  | runtime scientific dependency | molecular descriptors                        |
+| `https://github.com/osmoai/kgcnn-keras-unlocked` | MIT                                                              | research/model dependency     | GNN backbones                                |
+| `https://github.com/osmoai/transformer-CNN`      | MIT                                                              | research/model dependency     | SMILES model path                            |
+| `https://github.com/osmoai/publications`         | Apache-2.0 code / CC BY 4.0 datasets                             | research/data                 | reproduction, benchmark, training/evaluation |
+| `https://github.com/osmoai/vexo`                 | Apache-2.0                                                       | optional/planned              | chemistry DataOps                            |
+| `https://github.com/osmoai/genai-toolbox`        | Apache-2.0                                                       | infrastructure                | MCP/database tooling                         |
+| `https://github.com/osmoai/rdkit-pypi`           | packaging repository; track upstream RDKit license independently | build reference               | RDKit wheel/build path                       |
 
-## 3. Explicitly excluded
+## 3. Versioned taxonomy adoption
 
-`https://github.com/osmoai/taxonomy`
+`https://github.com/osmoai/taxonomy` is adopted under ODbL 1.0 by ADR-013. Release `v1.2` is pinned to commit `fcd538b578e0a3c6261503380de03d0691b47344`; the vendored `data/taxonomy.json` SHA-256 is `3181c43e9d094235eb2125b3301d6d323b1337acea5eaa4242e2e3d3e3493b2d`.
 
-Osmo Scent Taxonomy is outside Scope Lock V0.4. This documentation introduces no ODbL database dependency.
+Public use must attribute "The Osmo Scent Taxonomy" and link to the upstream repository. Publicly shared derivative taxonomy databases remain under ODbL 1.0. Application source, tenant data, formulas, and model artifacts remain separate produced works. The official JSON does not define descriptor-to-subfamily edges, so no such hierarchy is inferred.
 
-Future adoption requires:
-- ADR
 - license review
 - attribution plan
 - derivative database analysis
@@ -77,6 +76,7 @@ component:
 ## 6. Fork policy
 
 Prefer:
+
 1. pinned upstream dependency
 2. thin local adapter
 3. upstream contribution for generic fixes
@@ -84,6 +84,7 @@ Prefer:
 Fork only when needed.
 
 If forked:
+
 - preserve license/notices
 - document changes
 - track upstream base commit
@@ -93,6 +94,7 @@ If forked:
 ## 7. Publications datasets
 
 If using Osmo Publications dataset, Dataset Registry stores:
+
 - canonical title
 - source/path
 - authors/citation
@@ -130,8 +132,8 @@ Scientific result contract should identify structure and component versions:
     "rdkitVersion": "..."
   },
   "features": [
-    {"kind": "BCFP", "componentVersion": "...", "artifactHash": "..."},
-    {"kind": "OSMORDRED", "componentVersion": "...", "artifactHash": "..."}
+    { "kind": "BCFP", "componentVersion": "...", "artifactHash": "..." },
+    { "kind": "OSMORDRED", "componentVersion": "...", "artifactHash": "..." }
   ],
   "model": {
     "modelId": "...",
@@ -143,6 +145,7 @@ Scientific result contract should identify structure and component versions:
 ## 10. OlfactoryOps extension/IP layer
 
 OlfactoryOps develops:
+
 - adapter contracts
 - preprocessing standard
 - feature schema
@@ -165,6 +168,7 @@ OlfactoryOps develops:
 ## 11. Commercial release compliance
 
 Before release:
+
 - generate dependency license inventory
 - verify pinned component licenses
 - retain BSD/MIT/Apache notices
@@ -176,9 +180,11 @@ Before release:
 ## 12. Trademark posture
 
 Factual technical notice is acceptable:
+
 - "Uses open-source components released by Osmo Labs under their respective licenses."
 
 Do not market as:
+
 - Powered by Osmo
 - Official Osmo integration
 - Osmo POM

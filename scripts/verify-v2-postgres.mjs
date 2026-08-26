@@ -38,6 +38,7 @@ const migrations = [
   'infra/postgres/migrations/0026_platform_password_resets.sql',
   'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
   'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql',
+  'infra/postgres/migrations/0029_global_material_intelligence_catalog.sql',
 ]
 const localTestDatabaseUrl = 'postgresql://olfactoryops:olfactoryops@127.0.0.1:5432/olfactoryops'
 const prismaCli = path.resolve('node_modules/prisma/build/index.js')

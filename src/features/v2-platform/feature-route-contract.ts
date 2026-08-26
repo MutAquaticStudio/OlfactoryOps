@@ -1,6 +1,7 @@
 export type WorkspaceFeatureKey =
   | 'workspace'
   | 'materials'
+  | 'material-intelligence'
   | 'formulas'
   | 'design-studio'
   | 'trials'
@@ -54,6 +55,12 @@ export const workspaceFeatureRouteContract: readonly WorkspaceFeatureRoute[] = [
     apiClient: 'labRequest', apiBase: '/api/v1/v2/lab', endpoints: ['/materials'], httpMethods: ['GET', 'POST'],
     workerRoutePresent: true, controllerPresent: true, servicePresent: true, rbacCapabilities: ['materials.view'], productionRuntimeAvailable: true,
     expectedProductionState: 'Tenant-scoped lab operations are available.', classification: 'PRODUCTION_SUPPORTED', publicAvailability: 'ENABLED',
+  },
+  {
+    key: 'material-intelligence', feature: 'Material Intelligence', uiComponent: 'GlobalMaterialIntelligenceWorkspace', navPath: '/material-intelligence',
+    apiClient: 'intelligenceRequest', apiBase: '/api/v1/v2/material-intelligence', endpoints: ['/materials', '/materials/:materialId'], httpMethods: ['GET'],
+    workerRoutePresent: true, controllerPresent: true, servicePresent: true, rbacCapabilities: ['materials.view'], productionRuntimeAvailable: true,
+    expectedProductionState: 'Authenticated tenants may read the global canonical catalog without mutating tenant materials.', classification: 'PRODUCTION_SUPPORTED', publicAvailability: 'ENABLED',
   },
   {
     key: 'formulas', feature: 'Formulas', uiComponent: 'FormulaIntelligencePanel', navPath: '/v2/workspace/formulas',

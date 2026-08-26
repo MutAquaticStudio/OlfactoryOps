@@ -1108,3 +1108,27 @@
 @media (max-width: 1180px) { .v2-mi-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); } .v2-mi-toolbar .v2-search-field { grid-column: 1 / -1; } .v2-mi-layout { grid-template-columns: minmax(280px, .7fr) minmax(400px, 1.3fr); } }
 @media (max-width: 880px) { .v2-mi-header { align-items: flex-start; flex-direction: column; } .v2-mi-count { min-width: 0; text-align: left; } .v2-mi-layout { grid-template-columns: 1fr; } .v2-mi-catalog { position: static; } .v2-mi-list { max-height: 430px; } }
 @media (max-width: 620px) { .v2-mi-toolbar { grid-template-columns: 1fr; } .v2-mi-toolbar .v2-search-field { grid-column: auto; } .v2-mi-fields { grid-template-columns: 1fr; } .v2-mi-field:nth-child(odd) { border-right: 0; } .v2-mi-field:nth-child(even) { padding-left: 0; } .v2-mi-components article, .v2-mi-evidence article { grid-template-columns: minmax(0, 1fr) auto; } .v2-mi-components article > div, .v2-mi-evidence article > div { grid-column: 1 / -1; } }
+
+.v2-mi-layout.is-list-route { grid-template-columns: minmax(0, 1fr); }
+.v2-mi-layout.is-list-route .v2-mi-catalog { position: static; }
+.v2-mi-list.is-route-list { max-height: none; }
+.v2-mi-global-row {
+  position: relative;
+  grid-template-columns: minmax(220px, 1.2fr) minmax(220px, 1fr) minmax(220px, 1fr) 20px;
+  align-items: center;
+  gap: 16px;
+}
+.v2-mi-row-metrics { display: grid; min-width: 0; gap: 3px; color: var(--v2-text-muted); font-size: 10px; }
+.v2-mi-row-metrics span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-mi-row-open { color: var(--v2-accent-hover); }
+.v2-mi-back { display: inline-flex; width: fit-content; align-items: center; gap: 5px; }
+.v2-mi-detail.is-route-detail { width: min(100%, 1040px); margin-inline: auto; }
+.v2-mi-taxonomy { display: grid; }
+.v2-mi-taxonomy article {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(110px, .45fr) minmax(120px, .5fr) auto;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--v2-border-subtle);
+  padding: 9px 0;
+}

@@ -14,9 +14,15 @@ const env = {
   RUNNER_TEMP: "/tmp",
 };
 
-function harness({ member = false, unsafe = false, grantFails = false } = {}) {
+function harness({
+  grantorMembership = false,
+  canSet = false,
+  unsafe = false,
+  grantFails = false,
+} = {}) {
   const state = {
-    member,
+    grantorMembership,
+    canSet,
     grants: 0,
     revokes: 0,
     marker: undefined as string | undefined,
@@ -30,7 +36,7 @@ function harness({ member = false, unsafe = false, grantFails = false } = {}) {
       connect: vi.fn(async () => undefined),
       end: vi.fn(async () => undefined),
       query: vi.fn(async (sql: string) => {
-        if (sql.includes("current_user"))
+        if (sql.includes("SELECT current_user::text"))
           return { rows: [{ sessionRole: "staging_admin" }] };
         if (sql.includes("FROM pg_roles"))
           return {
@@ -46,17 +52,23 @@ function harness({ member = false, unsafe = false, grantFails = false } = {}) {
               },
             ],
           };
+        if (sql.includes("FROM pg_auth_members"))
+          return {
+            rows: state.grantorMembership ? [{ setOption: state.canSet }] : [],
+          };
         if (sql.includes("pg_has_role"))
-          return { rows: [{ member: state.member }] };
+          return { rows: [{ canSet: state.canSet }] };
         if (sql.startsWith("GRANT")) {
           state.grants += 1;
           if (grantFails) throw new Error("GRANT_DENIED");
-          state.member = true;
+          state.grantorMembership = true;
+          state.canSet = !sql.includes("SET FALSE");
           return { rows: [] };
         }
         if (sql.startsWith("REVOKE")) {
           state.revokes += 1;
-          state.member = false;
+          state.grantorMembership = false;
+          state.canSet = false;
           return { rows: [] };
         }
         throw new Error("UNEXPECTED_QUERY");
@@ -96,7 +108,12 @@ describe("staging Material Intelligence runtime role bridge", () => {
         runImport: vi.fn(async () => report) as never,
       }),
     ).resolves.toBe(report);
-    expect(test.state).toMatchObject({ member: false, grants: 1, revokes: 1 });
+    expect(test.state).toMatchObject({
+      grantorMembership: false,
+      canSet: false,
+      grants: 1,
+      revokes: 1,
+    });
     expect(test.state.marker).toBeUndefined();
     expect(
       test.clients.every((client) => client.end.mock.calls.length === 1),
@@ -113,19 +130,45 @@ describe("staging Material Intelligence runtime role bridge", () => {
         }) as never,
       }),
     ).rejects.toThrow("IMPORT_FAILED");
-    expect(test.state).toMatchObject({ member: false, grants: 1, revokes: 1 });
+    expect(test.state).toMatchObject({
+      grantorMembership: false,
+      canSet: false,
+      grants: 1,
+      revokes: 1,
+    });
     expect(test.state.marker).toBeUndefined();
   });
 
-  it("fails closed on pre-existing membership without mutating roles", async () => {
-    const test = harness({ member: true });
+  it("temporarily enables SET on a grantor-owned membership and restores it", async () => {
+    const test = harness({ grantorMembership: true, canSet: false });
     await expect(
       runStagingMaterialIntelligenceBulk([], env, {
         ...test.dependencies,
-        runImport: vi.fn() as never,
+        runImport: vi.fn(async () => ({ inputRows: 1986 })) as never,
       }),
-    ).rejects.toThrow("STAGING_ROLE_BRIDGE_PREEXISTING_MEMBERSHIP");
-    expect(test.state).toMatchObject({ member: true, grants: 0, revokes: 0 });
+    ).resolves.toEqual({ inputRows: 1986 });
+    expect(test.state).toMatchObject({
+      grantorMembership: true,
+      canSet: false,
+      grants: 2,
+      revokes: 0,
+    });
+  });
+
+  it("does not mutate a pre-existing SET-capable membership", async () => {
+    const test = harness({ grantorMembership: true, canSet: true });
+    await expect(
+      runStagingMaterialIntelligenceBulk([], env, {
+        ...test.dependencies,
+        runImport: vi.fn(async () => ({ inputRows: 1986 })) as never,
+      }),
+    ).resolves.toEqual({ inputRows: 1986 });
+    expect(test.state).toMatchObject({
+      grantorMembership: true,
+      canSet: true,
+      grants: 0,
+      revokes: 0,
+    });
   });
 
   it("rejects a privileged runtime role before granting membership", async () => {
@@ -156,8 +199,9 @@ describe("staging Material Intelligence runtime role bridge", () => {
     const test = harness();
     await prepareStagingRuntimeRoleBridge(env, test.dependencies);
     expect(JSON.parse(test.state.marker ?? "{}")).toEqual({
-      version: 1,
-      bridgeAdded: true,
+      version: 2,
+      bridgeChanged: true,
+      grantorMembership: false,
     });
     expect(test.state.marker).not.toContain("staging_admin");
     expect(test.state.marker).not.toContain("postgresql");
@@ -173,9 +217,25 @@ describe("staging Material Intelligence runtime role bridge", () => {
         runImport: vi.fn() as never,
       }),
     ).rejects.toThrow("GRANT_DENIED");
-    expect(test.state).toMatchObject({ member: false, grants: 1, revokes: 0 });
+    expect(test.state).toMatchObject({
+      grantorMembership: false,
+      canSet: false,
+      grants: 1,
+      revokes: 1,
+    });
     expect(test.state.marker).toBeUndefined();
   });
+
+  it("checks SET capability rather than treating MEMBER as SET authorization", async () => {
+    const source = await readFile(
+      "scripts/run-material-intelligence-staging-bulk.ts",
+      "utf8",
+    );
+    expect(source).toContain("pg_has_role($1, $2, 'SET')");
+    expect(source).not.toContain("pg_has_role($1, $2, 'MEMBER')");
+    expect(source).toContain("GRANTED BY CURRENT_USER");
+  });
+
   it("keeps the workflow staging-scoped and wraps both apply and replay", async () => {
     const workflow = await readFile(
       ".github/workflows/v2-staging-material-intelligence-bulk.yml",
