@@ -79,6 +79,8 @@ describe("global Material Intelligence catalog", () => {
       .map(([statement]) => String(statement))
       .join("\n");
     expect(sql).toContain("v2_global_canonical_materials");
+    expect(sql).toContain("ESCAPE '\\'");
+    expect(sql).not.toContain("ESCAPE '\\\\'");
     expect(sql).not.toContain("material.organization_id");
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
     expect(tx.$queryRawUnsafe.mock.calls[0]?.slice(1)).toEqual([

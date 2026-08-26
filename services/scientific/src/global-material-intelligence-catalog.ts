@@ -153,11 +153,11 @@ export class GlobalMaterialIntelligenceCatalog {
         clauses.push(
           "(material.canonical_name ILIKE " +
             parameter +
-            " ESCAPE '\\\\' OR entity.preferred_name ILIKE " +
+            " ESCAPE '\\' OR entity.preferred_name ILIKE " +
             parameter +
-            " ESCAPE '\\\\' OR EXISTS (SELECT 1 FROM v2_global_chemical_identifiers identifier WHERE identifier.chemical_entity_id = entity.id AND identifier.normalized_value ILIKE " +
+            " ESCAPE '\\' OR EXISTS (SELECT 1 FROM v2_global_chemical_identifiers identifier WHERE identifier.chemical_entity_id = entity.id AND identifier.normalized_value ILIKE " +
             parameter +
-            " ESCAPE '\\\\'))",
+            " ESCAPE '\\'))",
         );
       }
       if (query.evidenceStatus) {
