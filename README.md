@@ -206,19 +206,19 @@ Scientific AI is a dedicated service layer. The legacy Formula R&D and old Globa
 
 The V2 scientific implementation MUST begin from the approved Osmo open-source components and extend them behind OlfactoryOps-owned adapters:
 
-| Osmo repository | V2 role |
-|---|---|
-| `osmoai/bcfp` | ECFP/BCFP molecular fingerprints |
-| `osmoai/molftp` | fragment-target prevalence features / explainability |
-| `osmoai/osmordred` | dense molecular descriptors |
-| `osmoai/kgcnn-keras-unlocked` | 2D/3D GNN research/model backbone |
-| `osmoai/transformer-CNN` | SMILES Transformer-CNN model path |
-| `osmoai/publications` | research code + licensed datasets / benchmarking |
-| `osmoai/vexo` | optional chemistry DataOps / BigQuery / Sheets connector |
-| `osmoai/genai-toolbox` | MCP/database tool infrastructure |
-| `osmoai/rdkit-pypi` | RDKit wheel/build reference; upstream runtime license separately audited |
+| Osmo repository               | V2 role                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `osmoai/bcfp`                 | ECFP/BCFP molecular fingerprints                                         |
+| `osmoai/molftp`               | fragment-target prevalence features / explainability                     |
+| `osmoai/osmordred`            | dense molecular descriptors                                              |
+| `osmoai/kgcnn-keras-unlocked` | 2D/3D GNN research/model backbone                                        |
+| `osmoai/transformer-CNN`      | SMILES Transformer-CNN model path                                        |
+| `osmoai/publications`         | research code + licensed datasets / benchmarking                         |
+| `osmoai/vexo`                 | optional chemistry DataOps / BigQuery / Sheets connector                 |
+| `osmoai/genai-toolbox`        | MCP/database tool infrastructure                                         |
+| `osmoai/rdkit-pypi`           | RDKit wheel/build reference; upstream runtime license separately audited |
 
-**Not in scope:** `osmoai/taxonomy`. V2 must not introduce an ODbL dependency unless a future approved architecture decision reopens it.
+`osmoai/taxonomy` is adopted as a version-pinned reference database under ODbL 1.0 by [ADR-013](docs/v2/adr/ADR-013-osmo-taxonomy-odbl.md). Its attribution, checksum, adapter, and share-alike boundary are recorded separately from application source and model predictions.
 
 ## Workspace domain convention
 

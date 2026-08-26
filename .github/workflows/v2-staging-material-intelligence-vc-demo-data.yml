@@ -1,0 +1,71 @@
+name: V2 Staging Material Intelligence VC Demo Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of main after the demo PR merge.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type APPLY_VC_DEMO_STAGING to load only the curated demo30 release.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-material-intelligence-vc-demo-data
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: main
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "APPLY_VC_DEMO_STAGING"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  load-curated-demo30:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    env:
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      V2_VC_DEMO_ENVIRONMENT: staging
+      V2_VC_DEMO_APPLY_APPROVED: APPLY_VC_DEMO_STAGING
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Require the protected staging-only database secret
+        shell: bash
+        run: test -n "$STAGING_DATABASE_URL"
+      - name: Validate the exact curated demo30 fixture and pinned Osmo taxonomy
+        run: npx vitest run scripts/load-material-intelligence-vc-demo.test.ts scripts/osmo-scent-taxonomy.test.ts
+      - name: Load and verify only the curated demo30 global release
+        run: npx tsx scripts/load-material-intelligence-vc-demo.ts

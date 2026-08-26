@@ -24,7 +24,7 @@
     "test:material-intelligence-pilot50": "tsx scripts/run-material-intelligence-pilot50.ts",
     "material-intelligence:bulk-precheck": "python scripts/material_intelligence_bulk_precheck.py",
     "material-intelligence:bulk-import": "tsx scripts/material-intelligence-bulk-import.ts",
-    "test:material-intelligence-bulk-precheck": "python -m unittest discover -s scripts -p test_material_intelligence_bulk_precheck.py",
+    "test:material-intelligence-bulk-precheck": "python -m unittest discover -s scripts -p \"test_material_intelligence_*.py\"",
     "test:material-intelligence-postgres": "node scripts/verify-material-intelligence-postgres.mjs",
     "test:material-intelligence-persistence-postgres": "tsx scripts/verify-material-intelligence-persistence-postgres.ts",
     "test:v2:platform-registry-security": "cross-env V2_QA_ENVIRONMENT=test V2_QA_DISPOSABLE_DATABASE=CONFIRMED node scripts/verify-v2-platform-registry-security-postgres.mjs",

@@ -45,6 +45,7 @@ const migrations = [
   'infra/postgres/migrations/0026_platform_password_resets.sql',
   'infra/postgres/migrations/0027_material_intelligence_foundation.sql',
   'infra/postgres/migrations/0028_harden_v2_plans_and_component_pins_rls.sql',
+  'infra/postgres/migrations/0029_global_material_intelligence_catalog.sql',
 ]
 
 const databaseUrl = process.env.STAGING_DATABASE_URL

@@ -192,6 +192,13 @@ export const materialIntelligenceListQuerySchema = z
     page: z.coerce.number().int().min(1).max(100_000).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(50),
     text: z.string().trim().min(1).max(160).optional(),
+    lifecycleStatus: z
+      .enum(["DRAFT", "ACTIVE", "SUPERSEDED", "ARCHIVED"])
+      .default("ACTIVE"),
+    evidenceStatus: materialIntelligenceEvidenceStatusSchema.optional(),
+    taxonomyNode: z.string().trim().min(1).max(160).optional(),
+    // Bounded compatibility filters while callers move from the tenant
+    // Material Product catalog to the global canonical catalog.
     productClassification: materialProductClassificationSchema.optional(),
     eligibility: scientificEligibilityResultSchema.optional(),
     resolutionStatus: identityResolutionStatusSchema.optional(),

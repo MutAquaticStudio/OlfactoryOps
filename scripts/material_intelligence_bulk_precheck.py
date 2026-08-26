@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable
 from xml.etree import ElementTree as ET
 
 
-CONTRACT_VERSION = "material-intelligence-bulk-precheck/1.0.0"
+CONTRACT_VERSION = "material-intelligence-bulk-precheck/1.1.0"
 POLICY_VERSION = "material-intelligence/1.0.0"
 RDKIT_CONTRACT = "olfactoryops-rdkit-standardization/1.0.0"
 DEFAULT_SHEET = "Material Intelligence"
@@ -495,6 +495,47 @@ def structured_dilution(row: SheetRow, fields: dict[str, int | None]) -> dict[st
     }
 
 
+def dilution_source_evidence(
+    row: SheetRow,
+    fields: dict[str, int | None],
+    name: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Preserve how a dilution was extracted without treating it as identity proof."""
+    structured = structured_dilution(row, fields)
+    name_pattern = dilution_from_name(name)
+    selected = structured or name_pattern
+    if selected is None:
+        return None, None
+
+    active_cas_raw = normalized_optional(field_value(row, fields, "active_cas"))
+    carrier_cas_raw = normalized_optional(field_value(row, fields, "carrier_cas"))
+    active_cas_claims, active_cas_malformed = cas_claims(active_cas_raw)
+    carrier_cas_claims, carrier_cas_malformed = cas_claims(carrier_cas_raw)
+
+    claims_agree = True
+    if structured is not None and name_pattern is not None:
+        claims_agree = (
+            normalized_name(structured["activeName"]) == normalized_name(name_pattern["activeName"])
+            and normalized_name(structured["carrierName"]) == normalized_name(name_pattern["carrierName"])
+            and structured["activeConcentration"] == name_pattern["activeConcentration"]
+        )
+
+    return selected, {
+        "extractionMode": "STRUCTURED_COLUMNS" if structured is not None else "NAME_PATTERN",
+        "claimsAgree": claims_agree,
+        "activeName": selected["activeName"],
+        "activeConcentration": selected["activeConcentration"],
+        "activeCasRaw": active_cas_raw,
+        "activeCasClaims": active_cas_claims,
+        "activeCasMalformed": active_cas_malformed,
+        "carrierName": selected["carrierName"],
+        "carrierConcentration": selected["carrierConcentration"],
+        "carrierCasRaw": carrier_cas_raw,
+        "carrierCasClaims": carrier_cas_claims,
+        "carrierCasMalformed": carrier_cas_malformed,
+    }
+
+
 def classify_product(name: str, category: str, dilution: dict[str, Any] | None, has_structured_components: bool = False) -> str:
     upper_name = normalized_name(name)
     upper_category = normalized_name(category)
@@ -635,7 +676,7 @@ def analyze_rows(
         category = normalized_text(field_value(source, fields, "category"))
         supplier = normalized_optional(field_value(source, fields, "supplier")) or normalized_optional(source_supplier)
         supplier_code = normalized_optional(field_value(source, fields, "supplier_product_code"))
-        dilution = structured_dilution(source, fields) or dilution_from_name(name)
+        dilution, dilution_evidence = dilution_source_evidence(source, fields, name)
         classification = classify_product(name, category, dilution, bool(dilution))
         source_cas_value = field_value(source, fields, "cas")
         source_cas_raw = normalized_text(source_cas_value) or None
@@ -719,6 +760,7 @@ def analyze_rows(
             "componentCount": len(components),
             "componentPlan": components,
             "componentAction": "CREATE_EXPLICIT_COMPONENT_PLAN" if components else "NONE",
+            "dilutionSourceEvidence": dilution_evidence,
             "duplicateGroup": None,
             "duplicateCandidateIds": [],
             "conflictCodes": [],

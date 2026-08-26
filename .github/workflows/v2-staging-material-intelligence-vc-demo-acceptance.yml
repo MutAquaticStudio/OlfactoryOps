@@ -1,0 +1,97 @@
+name: V2 Staging Material Intelligence VC Demo Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact currently deployed SHA of current main.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type RUN_MATERIAL_INTELLIGENCE_VC_DEMO_ACCEPTANCE.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-material-intelligence-vc-demo-acceptance
+  cancel-in-progress: false
+
+env:
+  STAGING_BRANCH: main
+  MATERIAL_DEMO_PUBLIC_ORIGIN: https://beta.labofscents.org
+  MATERIAL_DEMO_API_ORIGIN: https://api-beta.labofscents.org
+  MATERIAL_DEMO_SEARCH_MATERIAL: Vanillin
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        name: Validate exact current main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "RUN_MATERIAL_INTELLIGENCE_VC_DEMO_ACCEPTANCE"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin "$STAGING_BRANCH"
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=${STAGING_SHA,,}" >> "$GITHUB_OUTPUT"
+
+  accept-staging-vc-demo:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: staging
+    env:
+      MATERIAL_DEMO_EXPECTED_SHA: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      MATERIAL_DEMO_TENANT_SLUG: ${{ vars.MATERIAL_DEMO_TENANT_SLUG }}
+      MATERIAL_DEMO_LOGIN_EMAIL: ${{ secrets.MATERIAL_DEMO_LOGIN_EMAIL }}
+      MATERIAL_DEMO_LOGIN_PASSWORD: ${{ secrets.MATERIAL_DEMO_LOGIN_PASSWORD }}
+      MATERIAL_DEMO_EVIDENCE_DIR: ${{ runner.temp }}/material-intelligence-vc-demo-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Mask protected staging fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '::add-mask::%s\n' "$MATERIAL_DEMO_TENANT_SLUG"
+          printf '::add-mask::%s\n' "$MATERIAL_DEMO_LOGIN_EMAIL"
+          printf '::add-mask::%s\n' "$MATERIAL_DEMO_LOGIN_PASSWORD"
+      - run: npm ci
+      - name: Install Chromium for real-browser acceptance
+        run: npx playwright install --with-deps chromium
+      - name: Run exact-SHA staging VC demo acceptance
+        run: node scripts/verify-material-intelligence-staging-vc-demo.mjs
+      - name: Upload sanitized VC demo evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: material-intelligence-vc-demo-${{ needs.validate-staging-revision.outputs.staging_sha }}
+          path: ${{ runner.temp }}/material-intelligence-vc-demo-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary browser evidence from the runner
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/material-intelligence-vc-demo-evidence"
+          test "$evidence_dir" = "$RUNNER_TEMP/material-intelligence-vc-demo-evidence"
+          rm -rf -- "$evidence_dir"

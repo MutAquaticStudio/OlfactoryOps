@@ -20,7 +20,7 @@ describe('Material Intelligence bulk precheck contract', () => {
         '-s',
         'scripts',
         '-p',
-        'test_material_intelligence_bulk_precheck.py',
+        'test_material_intelligence_*.py',
       ], { cwd: root, encoding: 'utf8' })).not.toThrow()
   })
 

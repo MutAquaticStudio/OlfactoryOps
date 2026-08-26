@@ -9,7 +9,7 @@ import {
 describe('V2 public workspace feature-route contract', () => {
   it('classifies every workspace navigation surface and leaves no public API route dead', () => {
     expect(workspaceFeatureRouteContract.map((feature) => feature.key)).toEqual([
-      'workspace', 'materials', 'formulas', 'design-studio', 'trials', 'production', 'commerce', 'agents', 'advanced',
+      'workspace', 'materials', 'material-intelligence', 'formulas', 'design-studio', 'trials', 'production', 'commerce', 'agents', 'advanced',
       'suppliers', 'inventory', 'procurement', 'security', 'members', 'domains', 'billing', 'notifications', 'privacy', 'observability',
     ])
     expect(productionVisibleDeadRouteCount()).toBe(0)

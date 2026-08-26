@@ -26,6 +26,12 @@ type BridgeDependencies = {
   removeMarker?: (path: string) => Promise<void>;
 };
 
+type RoleBridgeMarker = {
+  version: 2;
+  bridgeChanged: boolean;
+  grantorMembership: boolean;
+};
+
 function quoteIdentifier(value: string) {
   if (!SAFE_ROLE.test(value))
     throw new Error("STAGING_ROLE_BRIDGE_ROLE_INVALID");
@@ -90,12 +96,20 @@ async function assertRuntimeRole(client: BridgeClient) {
     throw new Error("STAGING_ROLE_BRIDGE_RUNTIME_ROLE_UNSAFE");
 }
 
-async function hasMembership(client: BridgeClient, role: string) {
-  const result = await client.query<{ member: boolean }>(
-    "SELECT pg_has_role($1, $2, 'MEMBER') AS member",
+async function canSetRuntimeRole(client: BridgeClient, role: string) {
+  const result = await client.query<{ canSet: boolean }>(
+    "SELECT pg_has_role($1, $2, 'SET') AS \"canSet\"",
     [role, RUNTIME_ROLE],
   );
-  return result.rows[0]?.member === true;
+  return result.rows[0]?.canSet === true;
+}
+
+async function hasGrantorMembership(client: BridgeClient, role: string) {
+  const result = await client.query<{ setOption: boolean }>(
+    'SELECT membership.set_option AS "setOption" FROM pg_auth_members membership JOIN pg_roles parent ON parent.oid = membership.roleid JOIN pg_roles member ON member.oid = membership.member JOIN pg_roles grantor ON grantor.oid = membership.grantor WHERE parent.rolname = $1 AND member.rolname = $2 AND grantor.rolname = current_user',
+    [RUNTIME_ROLE, role],
+  );
+  return result.rows.length === 1;
 }
 
 export async function prepareStagingRuntimeRoleBridge(
@@ -116,16 +130,42 @@ export async function prepareStagingRuntimeRoleBridge(
     const role = await sessionRole(client);
     await assertRuntimeRole(client);
     if (role === RUNTIME_ROLE) {
-      await write(path, JSON.stringify({ version: 1, bridgeAdded: false }));
+      await write(
+        path,
+        JSON.stringify({
+          version: 2,
+          bridgeChanged: false,
+          grantorMembership: false,
+        } satisfies RoleBridgeMarker),
+      );
       return;
     }
-    if (await hasMembership(client, role))
-      throw new Error("STAGING_ROLE_BRIDGE_PREEXISTING_MEMBERSHIP");
-    await write(path, JSON.stringify({ version: 1, bridgeAdded: true }));
-    await client.query(
-      `GRANT ${quoteIdentifier(RUNTIME_ROLE)} TO ${quoteIdentifier(role)}`,
+    const grantorMembership = await hasGrantorMembership(client, role);
+    if (await canSetRuntimeRole(client, role)) {
+      await write(
+        path,
+        JSON.stringify({
+          version: 2,
+          bridgeChanged: false,
+          grantorMembership,
+        } satisfies RoleBridgeMarker),
+      );
+      return;
+    }
+    await write(
+      path,
+      JSON.stringify({
+        version: 2,
+        bridgeChanged: true,
+        grantorMembership,
+      } satisfies RoleBridgeMarker),
     );
-    if (!(await hasMembership(client, role)))
+    await client.query(
+      grantorMembership
+        ? `GRANT ${quoteIdentifier(RUNTIME_ROLE)} TO ${quoteIdentifier(role)} WITH SET TRUE GRANTED BY CURRENT_USER`
+        : `GRANT ${quoteIdentifier(RUNTIME_ROLE)} TO ${quoteIdentifier(role)} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE GRANTED BY CURRENT_USER`,
+    );
+    if (!(await canSetRuntimeRole(client, role)))
       throw new Error("STAGING_ROLE_BRIDGE_GRANT_UNPROVEN");
   } finally {
     await client.end();
@@ -143,16 +183,20 @@ export async function cleanupStagingRuntimeRoleBridge(
   const remove =
     dependencies.removeMarker ??
     ((target: string) => rm(target, { force: true }));
-  let marker: { version?: number; bridgeAdded?: boolean };
+  let marker: Partial<RoleBridgeMarker>;
   try {
     marker = JSON.parse(await read(path)) as typeof marker;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new Error("STAGING_ROLE_BRIDGE_MARKER_INVALID");
   }
-  if (marker.version !== 1 || typeof marker.bridgeAdded !== "boolean")
+  if (
+    marker.version !== 2 ||
+    typeof marker.bridgeChanged !== "boolean" ||
+    typeof marker.grantorMembership !== "boolean"
+  )
     throw new Error("STAGING_ROLE_BRIDGE_MARKER_INVALID");
-  if (!marker.bridgeAdded) {
+  if (!marker.bridgeChanged) {
     await remove(path);
     return;
   }
@@ -164,12 +208,22 @@ export async function cleanupStagingRuntimeRoleBridge(
   try {
     const role = await sessionRole(client);
     await assertRuntimeRole(client);
-    if (role !== RUNTIME_ROLE && (await hasMembership(client, role))) {
-      await client.query(
-        `REVOKE ${quoteIdentifier(RUNTIME_ROLE)} FROM ${quoteIdentifier(role)}`,
-      );
+    if (role !== RUNTIME_ROLE) {
+      if (marker.grantorMembership) {
+        await client.query(
+          `GRANT ${quoteIdentifier(RUNTIME_ROLE)} TO ${quoteIdentifier(role)} WITH SET FALSE GRANTED BY CURRENT_USER`,
+        );
+      } else {
+        await client.query(
+          `REVOKE ${quoteIdentifier(RUNTIME_ROLE)} FROM ${quoteIdentifier(role)} GRANTED BY CURRENT_USER`,
+        );
+      }
     }
-    if (role !== RUNTIME_ROLE && (await hasMembership(client, role)))
+    if (
+      role !== RUNTIME_ROLE &&
+      ((await canSetRuntimeRole(client, role)) ||
+        (await hasGrantorMembership(client, role)) !== marker.grantorMembership)
+    )
       throw new Error("STAGING_ROLE_BRIDGE_REVOKE_UNPROVEN");
     await remove(path);
   } finally {

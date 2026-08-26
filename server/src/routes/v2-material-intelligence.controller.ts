@@ -10,7 +10,7 @@ import {
   UseFilters,
 } from "@nestjs/common";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { MaterialIntelligenceService } from "../../../services/scientific/src/material-intelligence-service.js";
+import { GlobalMaterialIntelligenceCatalog } from "../../../services/scientific/src/global-material-intelligence-catalog.js";
 import {
   PlatformError,
   PlatformService,
@@ -53,7 +53,7 @@ class MaterialIntelligenceErrorFilter implements ExceptionFilter {
 export class V2MaterialIntelligenceController {
   constructor(
     private readonly platform: PlatformService,
-    private readonly intelligence: MaterialIntelligenceService,
+    private readonly intelligence: GlobalMaterialIntelligenceCatalog,
   ) {}
 
   @Get("materials")
