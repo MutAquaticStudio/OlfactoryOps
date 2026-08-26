@@ -74,6 +74,8 @@ jobs:
           printf '::add-mask::%s\n' "$MATERIAL_DEMO_LOGIN_EMAIL"
           printf '::add-mask::%s\n' "$MATERIAL_DEMO_LOGIN_PASSWORD"
       - run: npm ci
+      - name: Generate the exact controller route matrix
+        run: npm run generate:v2-worker-transport
       - name: Install Chromium for real-browser acceptance
         run: npx playwright install --with-deps chromium
       - name: Run exact-SHA staging VC demo acceptance
