@@ -197,6 +197,18 @@ export function isIntentionalCatalogAbort(failure, apiOrigin) {
   }
 }
 
+export function uniqueExactTextIndex(values, expected) {
+  const target = expected.trim();
+  if (!target) return -1;
+  let match = -1;
+  for (const [index, value] of values.entries()) {
+    if (typeof value !== "string" || value.trim() !== target) continue;
+    if (match !== -1) return -1;
+    match = index;
+  }
+  return match;
+}
+
 export function evidenceContainsProtectedValue(evidence, protectedValues) {
   const serialized = JSON.stringify(evidence);
   return protectedValues.some((value) => typeof value === "string" && value.length > 0 && serialized.includes(value));
@@ -652,7 +664,16 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     required(designSearchResponse.status() === 200, "DESIGN_STUDIO_MATERIAL_SEARCH_API_FAILURE");
 
     const designResults = designStudio.locator('[aria-label="Verified global material results"]');
-    const designResult = designResults.locator(".v2-member-row").filter({ hasText: inputs.searchMaterial }).first();
+    const designResultRows = designResults.locator(".v2-member-row");
+    const designCanonicalNames = [];
+    for (let index = 0; index < await designResultRows.count(); index += 1) {
+      designCanonicalNames.push(
+        (await designResultRows.nth(index).locator("strong").first().textContent()) ?? "",
+      );
+    }
+    const designResultIndex = uniqueExactTextIndex(designCanonicalNames, inputs.searchMaterial);
+    required(designResultIndex >= 0, "DESIGN_STUDIO_MATERIAL_SEARCH_MISMATCH");
+    const designResult = designResultRows.nth(designResultIndex);
     const designCanonicalName = designResult.locator("strong").first();
     await designCanonicalName.waitFor({ state: "visible", timeout: 20_000 });
     required(
