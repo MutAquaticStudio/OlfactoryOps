@@ -6,7 +6,10 @@ import {
   evidenceContainsProtectedValue,
   globalMaterialWriteRoutes,
   parseGeneratedRouteSpecs,
+  sanitizedBrowserLocation,
+  stableFailureCode,
   stagingDemoInputs,
+  trustedStagingWorkspaceContext,
 } from "./verify-material-intelligence-staging-vc-demo.mjs";
 
 const validEnvironment = {
@@ -27,7 +30,6 @@ describe("Material Intelligence staging VC demo acceptance", () => {
       apiOrigin: "https://api-beta.labofscents.org",
       tenantSlug: "vc-demo-fixture",
       searchMaterial: "Vanillin",
-      workspaceOrigin: "https://vc-demo-fixture.api-beta.labofscents.org",
     });
 
     for (const override of [
@@ -41,6 +43,56 @@ describe("Material Intelligence staging VC demo acceptance", () => {
     ]) {
       expect(() => stagingDemoInputs({ ...validEnvironment, ...override })).toThrow("INVALID_INPUT");
     }
+  });
+
+  it("derives the authenticated workspace only from an exact single-label staging URL", () => {
+    expect(trustedStagingWorkspaceContext(
+      "https://server-selected.api-beta.labofscents.org/v2/workspace",
+    )).toEqual({
+      hostname: "server-selected.api-beta.labofscents.org",
+      origin: "https://server-selected.api-beta.labofscents.org",
+      slug: "server-selected",
+      workspaceUrl: "https://server-selected.api-beta.labofscents.org/v2/workspace",
+    });
+
+    for (const workspaceUrl of [
+      "http://server-selected.api-beta.labofscents.org/v2/workspace",
+      "https://api-beta.labofscents.org/v2/workspace",
+      "https://two.labels.api-beta.labofscents.org/v2/workspace",
+      "https://server-selected.api-beta.labofscents.org:444/v2/workspace",
+      "https://server-selected.api-beta.labofscents.org/material-intelligence",
+      "https://server-selected.api-beta.labofscents.org/v2/workspace/",
+      "https://server-selected.api-beta.labofscents.org/v2/workspace?continue=1",
+      "https://server-selected.api-beta.labofscents.org/v2/workspace#fragment",
+      "https://server-selected.api-beta.labofscents.org@evil.example/v2/workspace",
+    ]) {
+      expect(() => trustedStagingWorkspaceContext(workspaceUrl)).toThrow("LOGIN_WORKSPACE_URL_INVALID");
+    }
+  });
+
+  it("classifies redirect timeouts and records only a sanitized browser location", () => {
+    const timeout = Object.assign(new Error("sensitive browser detail"), { name: "TimeoutError" });
+    expect(stableFailureCode(timeout, "WORKSPACE_REDIRECT")).toBe("WORKSPACE_REDIRECT_TIMEOUT");
+    expect(stableFailureCode(timeout, "MATERIAL_DETAIL")).toBe("BROWSER_TIMEOUT");
+    expect(stableFailureCode(new Error("sensitive browser detail"), "WORKSPACE_REDIRECT"))
+      .toBe("UNCLASSIFIED_BROWSER_FAILURE");
+
+    const expectedOrigin = "https://server-selected.api-beta.labofscents.org";
+    expect(sanitizedBrowserLocation(
+      `${expectedOrigin}/v2/workspace?token=must-not-appear#secret`,
+      "https://beta.labofscents.org",
+      expectedOrigin,
+    )).toEqual({ locationClass: "EXPECTED_WORKSPACE", pathname: "/v2/workspace" });
+    expect(sanitizedBrowserLocation(
+      "https://different.api-beta.labofscents.org/v2/workspace",
+      "https://beta.labofscents.org",
+      expectedOrigin,
+    )).toEqual({ locationClass: "OTHER_STAGING_WORKSPACE", pathname: "/v2/workspace" });
+    expect(sanitizedBrowserLocation(
+      "https://beta.labofscents.org/login?email=must-not-appear",
+      "https://beta.labofscents.org",
+      expectedOrigin,
+    )).toEqual({ locationClass: "PUBLIC_LOGIN", pathname: "/login" });
   });
 
   it("proves the generated global catalog surface has no mutation route before live denial probes", async () => {

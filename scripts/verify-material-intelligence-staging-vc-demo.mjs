@@ -11,6 +11,7 @@ export const DILUTION_DEMO_MATERIAL = "Beta-Damascenone";
 
 const GLOBAL_MATERIAL_API_PATH = "/api/v1/v2/material-intelligence/materials";
 const GENERATED_ROUTES_PATH = "worker/v2-api/generated-route-specs.ts";
+const STAGING_WORKSPACE_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const FORBIDDEN_GLOBAL_CONTROLS = /^(?:edit|delete|save changes|change cas|change structure|change chemicalentity|change chemical entity|change physical properties|change taxonomy)$/i;
 const DILUTION_PROVENANCE = /(?:dilution\s+merged\s+to\s+neat|dilution[^\n]{0,80}(?:source|alias|carrier|concentration|neat)|source\s+alias|carrier\s*[:/]?|concentration\s*[:/]?)/i;
 
@@ -63,7 +64,7 @@ export function stagingDemoInputs(environment = process.env) {
   const evidenceDir = environment.MATERIAL_DEMO_EVIDENCE_DIR?.trim() ?? "";
 
   required(/^[0-9a-f]{40}$/.test(expectedSha), "INVALID_INPUT");
-  required(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenantSlug), "INVALID_INPUT");
+  required(STAGING_WORKSPACE_LABEL.test(tenantSlug), "INVALID_INPUT");
   required(email.includes("@") && email.length <= 320, "INVALID_INPUT");
   required(password.length >= 12, "INVALID_INPUT");
   required(searchMaterial.length > 0 && searchMaterial.length <= 160, "INVALID_INPUT");
@@ -78,7 +79,65 @@ export function stagingDemoInputs(environment = process.env) {
     password,
     searchMaterial,
     evidenceDir,
-    workspaceOrigin: `https://${tenantSlug}.${STAGING_WORKSPACE_BASE_DOMAIN}`,
+  };
+}
+
+function stagingWorkspaceSlug(hostname) {
+  const suffix = `.${STAGING_WORKSPACE_BASE_DOMAIN}`;
+  if (!hostname.endsWith(suffix)) return undefined;
+  const slug = hostname.slice(0, -suffix.length);
+  return STAGING_WORKSPACE_LABEL.test(slug) && hostname === `${slug}${suffix}` ? slug : undefined;
+}
+
+export function trustedStagingWorkspaceContext(workspaceUrl) {
+  required(typeof workspaceUrl === "string", "LOGIN_WORKSPACE_URL_INVALID");
+  let parsed;
+  try {
+    parsed = new URL(workspaceUrl);
+  } catch {
+    throw new DemoAcceptanceError("LOGIN_WORKSPACE_URL_INVALID");
+  }
+  const hostname = parsed.hostname;
+  const slug = stagingWorkspaceSlug(hostname);
+  const canonicalUrl = slug ? `https://${hostname}/v2/workspace` : "";
+  required(
+    Boolean(slug)
+      && parsed.protocol === "https:"
+      && !parsed.username
+      && !parsed.password
+      && !parsed.port
+      && parsed.pathname === "/v2/workspace"
+      && !parsed.search
+      && !parsed.hash
+      && workspaceUrl === canonicalUrl,
+    "LOGIN_WORKSPACE_URL_INVALID",
+  );
+  return {
+    hostname,
+    origin: parsed.origin,
+    slug,
+    workspaceUrl: canonicalUrl,
+  };
+}
+
+export function sanitizedBrowserLocation(value, publicOrigin, expectedWorkspaceOrigin) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { locationClass: "INVALID", pathname: "UNAVAILABLE" };
+  }
+  let locationClass = "OTHER";
+  if (expectedWorkspaceOrigin && parsed.origin === expectedWorkspaceOrigin) {
+    locationClass = "EXPECTED_WORKSPACE";
+  } else if (parsed.origin === publicOrigin && parsed.pathname === "/login") {
+    locationClass = "PUBLIC_LOGIN";
+  } else if (stagingWorkspaceSlug(parsed.hostname)) {
+    locationClass = "OTHER_STAGING_WORKSPACE";
+  }
+  return {
+    locationClass,
+    pathname: parsed.pathname.slice(0, 256),
   };
 }
 
@@ -119,8 +178,12 @@ export function evidenceContainsProtectedValue(evidence, protectedValues) {
   return protectedValues.some((value) => typeof value === "string" && value.length > 0 && serialized.includes(value));
 }
 
-function stableFailureCode(error) {
-  return error instanceof DemoAcceptanceError ? error.code : "UNCLASSIFIED_BROWSER_FAILURE";
+export function stableFailureCode(error, stage) {
+  if (error instanceof DemoAcceptanceError) return error.code;
+  if (error && typeof error === "object" && error.name === "TimeoutError") {
+    return stage === "WORKSPACE_REDIRECT" ? "WORKSPACE_REDIRECT_TIMEOUT" : "BROWSER_TIMEOUT";
+  }
+  return "UNCLASSIFIED_BROWSER_FAILURE";
 }
 
 function escapeRegExp(value) {
@@ -138,6 +201,7 @@ async function safeScreenshot(page, inputs, fileName, fullPage = false) {
     animations: "disabled",
     mask: [
       page.getByText(inputs.email, { exact: true }),
+      page.locator('input[type="email"], input[autocomplete="email"]'),
       page.locator('input[type="password"]'),
     ],
   });
@@ -201,6 +265,8 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
   let inputs;
   let browser;
   let context;
+  let page;
+  let workspace;
   let stage = "INVALID_INPUT";
   let failureCode;
   const evidence = {
@@ -240,7 +306,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
       viewport: { width: 1440, height: 1000 },
       colorScheme: "dark",
     });
-    const page = await context.newPage();
+    page = await context.newPage();
     page.on("console", (message) => {
       if (message.type() === "error" && !ignorableConsoleError(message.text())) {
         evidence.runtime.consoleErrorCount += 1;
@@ -250,7 +316,13 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
       evidence.runtime.pageErrorCount += 1;
     });
     page.on("requestfailed", (request) => {
-      if (request.url().startsWith(inputs.apiOrigin) || request.url().startsWith(inputs.publicOrigin)) {
+      let origin;
+      try {
+        origin = new URL(request.url()).origin;
+      } catch {
+        return;
+      }
+      if ([inputs.apiOrigin, inputs.publicOrigin, workspace?.origin].includes(origin)) {
         evidence.runtime.requestFailureCount += 1;
       }
     });
@@ -280,13 +352,30 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     const loginResponse = await loginResponsePromise;
     required(loginResponse.status() === 200, "LOGIN_RESPONSE_NOT_SUCCESSFUL");
     required(loginResponse.headers()["cf-mitigated"] !== "challenge", "CLOUDFLARE_CHALLENGE_PRESENT");
+    const loginBody = await loginResponse.json().catch(() => undefined);
+    workspace = trustedStagingWorkspaceContext(loginBody?.workspaceUrl);
+    required(loginBody?.hostname?.hostname === workspace.hostname, "LOGIN_WORKSPACE_HOSTNAME_MISMATCH");
+    required(loginBody?.hostname?.kind === "DEFAULT", "LOGIN_WORKSPACE_HOSTNAME_KIND_INVALID");
+    required(loginBody?.hostname?.status === "ACTIVE", "LOGIN_WORKSPACE_HOSTNAME_NOT_ACTIVE");
+    required(loginBody?.membership?.organizationSlug === workspace.slug, "LOGIN_WORKSPACE_MEMBERSHIP_MISMATCH");
+    required(loginBody?.membership?.status === "ACTIVE", "LOGIN_WORKSPACE_MEMBERSHIP_NOT_ACTIVE");
+    required(loginBody?.membership?.role === "Owner", "LOGIN_WORKSPACE_FIXTURE_ROLE_INVALID");
+    required(loginBody?.user?.verified === true, "LOGIN_WORKSPACE_USER_NOT_VERIFIED");
+    required(
+      typeof loginBody?.membership?.organizationId === "string"
+        && loginBody.membership.organizationId === loginBody?.hostname?.organizationId
+        && loginBody.membership.organizationId === loginBody?.session?.organizationId,
+      "LOGIN_WORKSPACE_ORGANIZATION_MISMATCH",
+    );
+    evidence.checks.authenticatedWorkspaceContract = "PASS";
+    evidence.checks.configuredSlugMatchesAuthenticatedWorkspace = inputs.tenantSlug === workspace.slug ? "YES" : "NO";
 
     stage = "WORKSPACE_REDIRECT";
     await page.waitForURL(
-      (url) => url.origin === inputs.workspaceOrigin && url.pathname.startsWith("/v2/workspace"),
+      (url) => url.origin === workspace.origin && url.pathname === "/v2/workspace",
       { timeout: 30_000, waitUntil: "domcontentloaded" },
     );
-    required(new URL(page.url()).origin === inputs.workspaceOrigin, "WORKSPACE_REDIRECT_MISMATCH");
+    required(new URL(page.url()).origin === workspace.origin, "WORKSPACE_REDIRECT_MISMATCH");
     await page.getByTestId("v2-workspace").waitFor({ state: "visible", timeout: 30_000 });
     await page.getByTestId("v2-workspace-home").waitFor({ state: "visible", timeout: 30_000 });
     await assertNoFailedToFetch(page);
@@ -309,7 +398,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
       };
     }, {
       url: `${inputs.apiOrigin}/api/v1/v2/platform/me`,
-      expectedSlug: inputs.tenantSlug,
+      expectedSlug: workspace.slug,
     });
     required(
       me.status === 200
@@ -330,7 +419,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     required(await materialNavigation.isVisible(), "MATERIAL_INTELLIGENCE_NAVIGATION_MISSING");
     await materialNavigation.click();
     await page.waitForURL(
-      (url) => url.origin === inputs.workspaceOrigin && url.pathname === "/material-intelligence",
+      (url) => url.origin === workspace.origin && url.pathname === "/material-intelligence",
       { timeout: 20_000 },
     );
     const catalog = page.getByTestId("v2-global-material-intelligence");
@@ -382,7 +471,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     const detailResponse = await detailResponsePromise;
     required(detailResponse.status() === 200, "MATERIAL_DETAIL_API_FAILURE");
     await page.waitForURL(
-      (url) => url.origin === inputs.workspaceOrigin && /^\/material-intelligence\/materials\/[^/]+$/.test(url.pathname),
+      (url) => url.origin === workspace.origin && /^\/material-intelligence\/materials\/[^/]+$/.test(url.pathname),
       { timeout: 20_000 },
     );
     const detail = page.getByTestId("v2-global-material-detail");
@@ -420,7 +509,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     stage = "DILUTION_TO_NEAT_DETAIL";
     await page.getByRole("button", { name: "Back to global catalog", exact: true }).click();
     await page.waitForURL(
-      (url) => url.origin === inputs.workspaceOrigin && url.pathname === "/material-intelligence",
+      (url) => url.origin === workspace.origin && url.pathname === "/material-intelligence",
       { timeout: 20_000 },
     );
     const dilutionSearchResponsePromise = page.waitForResponse((response) => {
@@ -443,7 +532,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     await dilutionResult.waitFor({ state: "visible", timeout: 20_000 });
     await dilutionResult.click();
     await page.waitForURL(
-      (url) => url.origin === inputs.workspaceOrigin && /^\/material-intelligence\/materials\/[^/]+$/.test(url.pathname),
+      (url) => url.origin === workspace.origin && /^\/material-intelligence\/materials\/[^/]+$/.test(url.pathname),
       { timeout: 20_000 },
     );
     const dilutionDetail = page.getByTestId("v2-global-material-detail");
@@ -475,7 +564,7 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          Origin: inputs.workspaceOrigin,
+          Origin: workspace.origin,
         },
       });
       required(acceptedGlobalWriteDenial(response.status()), "GLOBAL_WRITE_NOT_DENIED");
@@ -507,10 +596,16 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     evidence.status = "PASS";
     evidence.stage = "COMPLETE";
   } catch (error) {
-    failureCode = stableFailureCode(error);
+    failureCode = stableFailureCode(error, stage);
     evidence.status = "FAIL";
     evidence.stage = stage;
     evidence.failureCode = failureCode;
+    if (page && inputs) {
+      evidence.browserLocation = sanitizedBrowserLocation(page.url(), inputs.publicOrigin, workspace?.origin);
+      await safeScreenshot(page, inputs, "failure.png", true)
+        .then(() => evidence.screenshots.push("failure.png"))
+        .catch(() => undefined);
+    }
   } finally {
     await context?.close().catch(() => undefined);
     await browser?.close().catch(() => undefined);
