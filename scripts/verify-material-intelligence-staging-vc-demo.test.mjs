@@ -12,6 +12,7 @@ import {
   stableFailureCode,
   stagingDemoInputs,
   trustedStagingWorkspaceContext,
+  uniqueExactTextIndex,
 } from "./verify-material-intelligence-staging-vc-demo.mjs";
 
 const validEnvironment = {
@@ -166,6 +167,13 @@ describe("Material Intelligence staging VC demo acceptance", () => {
     ]) {
       expect(isIntentionalCatalogAbort(failure, apiOrigin)).toBe(false);
     }
+  });
+
+  it("selects one exact canonical name without accepting prefix or duplicate matches", () => {
+    expect(uniqueExactTextIndex(["Ethyl Vanillin", "Vanillin"], "Vanillin")).toBe(1);
+    expect(uniqueExactTextIndex(["Vanillin", "Vanillin"], "Vanillin")).toBe(-1);
+    expect(uniqueExactTextIndex(["Ethyl Vanillin"], "Vanillin")).toBe(-1);
+    expect(uniqueExactTextIndex(["Vanillin"], " ")).toBe(-1);
   });
 
   it("rejects evidence containing any protected fixture value", () => {
