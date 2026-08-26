@@ -182,6 +182,21 @@ export function acceptedGlobalWriteDenial(status) {
   return status === 404 || status === 405;
 }
 
+export function isIntentionalCatalogAbort(failure, apiOrigin) {
+  if (
+    failure?.method !== "GET"
+    || failure?.errorText !== "net::ERR_ABORTED"
+  ) {
+    return false;
+  }
+  try {
+    const url = new URL(failure.url);
+    return url.origin === apiOrigin && url.pathname === GLOBAL_MATERIAL_API_PATH;
+  } catch {
+    return false;
+  }
+}
+
 export function evidenceContainsProtectedValue(evidence, protectedValues) {
   const serialized = JSON.stringify(evidence);
   return protectedValues.some((value) => typeof value === "string" && value.length > 0 && serialized.includes(value));
@@ -325,6 +340,13 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
       evidence.runtime.pageErrorCount += 1;
     });
     page.on("requestfailed", (request) => {
+      if (isIntentionalCatalogAbort({
+        method: request.method(),
+        url: request.url(),
+        errorText: request.failure()?.errorText,
+      }, inputs.apiOrigin)) {
+        return;
+      }
       let origin;
       try {
         origin = new URL(request.url()).origin;
@@ -598,20 +620,72 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
     evidence.checks.globalWriteDenied = "PASS";
     evidence.negativeWriteStatuses = writeStatuses;
 
-    stage = "OPTIONAL_DESIGN_STUDIO_BRIDGE";
-    evidence.checks.designStudioGlobalMaterial = "SKIPPED_NOT_VISIBLE";
+    stage = "DESIGN_STUDIO_GLOBAL_MATERIAL";
     const designNavigation = page.getByRole("button", { name: "Design Studio", exact: true });
-    if (await designNavigation.count() > 0 && await designNavigation.first().isVisible()) {
-      await designNavigation.first().click();
-      const designStudio = page.getByTestId("v2-design-studio");
-      await designStudio.waitFor({ state: "visible", timeout: 20_000 });
-      const bridge = designStudio.getByText(/(?:global material intelligence|canonical global material|global material reference|global · read only)/i).first();
-      if (await bridge.count() > 0 && await bridge.isVisible()) {
-        evidence.checks.designStudioGlobalMaterial = "PASS";
-        await safeScreenshot(page, inputs, "06-design-studio-global-material.png", true);
-        evidence.screenshots.push("06-design-studio-global-material.png");
+    required(await designNavigation.count() > 0 && await designNavigation.first().isVisible(), "DESIGN_STUDIO_NAVIGATION_MISSING");
+    await designNavigation.first().click();
+    await page.waitForURL(
+      (url) => url.origin === workspace.origin && url.pathname === "/v2/workspace/design-studio",
+      { timeout: 20_000 },
+    );
+    const designStudio = page.getByTestId("v2-design-studio");
+    await designStudio.waitFor({ state: "visible", timeout: 20_000 });
+    required(
+      await designStudio.getByText("GLOBAL · READ ONLY", { exact: true }).isVisible(),
+      "DESIGN_STUDIO_GLOBAL_READ_ONLY_MISSING",
+    );
+
+    const designSearchResponsePromise = page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return response.request().method() === "GET"
+          && url.origin === inputs.apiOrigin
+          && url.pathname === GLOBAL_MATERIAL_API_PATH
+          && url.searchParams.get("text") === inputs.searchMaterial;
+      } catch {
+        return false;
       }
-    }
+    }, { timeout: 30_000 });
+    await designStudio.getByLabel("Global material", { exact: true }).fill(inputs.searchMaterial);
+    await designStudio.getByRole("button", { name: "Search global catalog", exact: true }).click();
+    const designSearchResponse = await designSearchResponsePromise;
+    required(designSearchResponse.status() === 200, "DESIGN_STUDIO_MATERIAL_SEARCH_API_FAILURE");
+
+    const designResults = designStudio.locator('[aria-label="Verified global material results"]');
+    const designResult = designResults.locator(".v2-member-row").filter({ hasText: inputs.searchMaterial }).first();
+    await designResult.getByText(inputs.searchMaterial, { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const selectReference = designResult.getByRole("button", { name: "Select reference", exact: true });
+    const designDetailResponsePromise = page.waitForResponse((response) => {
+      try {
+        const url = new URL(response.url());
+        return response.request().method() === "GET"
+          && url.origin === inputs.apiOrigin
+          && new RegExp(`^${GLOBAL_MATERIAL_API_PATH}/[^/]+$`).test(url.pathname);
+      } catch {
+        return false;
+      }
+    }, { timeout: 30_000 });
+    await selectReference.click();
+    const designDetailResponse = await designDetailResponsePromise;
+    required(designDetailResponse.status() === 200, "DESIGN_STUDIO_MATERIAL_DETAIL_API_FAILURE");
+
+    const selectedReference = designStudio.locator('[aria-label="Selected global material reference"]');
+    await selectedReference.waitFor({ state: "visible", timeout: 20_000 });
+    required(
+      await selectedReference.getByText(inputs.searchMaterial, { exact: true }).isVisible(),
+      "DESIGN_STUDIO_SELECTED_MATERIAL_MISMATCH",
+    );
+    const detailLink = selectedReference.getByRole("link", { name: "Open full material detail", exact: true });
+    required(await detailLink.isVisible(), "DESIGN_STUDIO_MATERIAL_DETAIL_LINK_MISSING");
+    const selectedApiPath = new URL(designDetailResponse.url()).pathname;
+    const encodedMaterialId = selectedApiPath.slice(`${GLOBAL_MATERIAL_API_PATH}/`.length);
+    required(
+      await detailLink.getAttribute("href") === `/material-intelligence/materials/${encodedMaterialId}`,
+      "DESIGN_STUDIO_MATERIAL_DETAIL_LINK_INVALID",
+    );
+    evidence.checks.designStudioGlobalMaterial = "PASS";
+    await safeScreenshot(page, inputs, "06-design-studio-global-material.png", true);
+    evidence.screenshots.push("06-design-studio-global-material.png");
 
     stage = "RUNTIME_HEALTH";
     required(evidence.runtime.consoleErrorCount === 0, "BROWSER_CONSOLE_ERROR");

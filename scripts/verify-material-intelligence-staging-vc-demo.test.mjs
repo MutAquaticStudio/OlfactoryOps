@@ -5,6 +5,7 @@ import {
   acceptedGlobalWriteDenial,
   evidenceContainsProtectedValue,
   globalMaterialWriteRoutes,
+  isIntentionalCatalogAbort,
   isTrustedStagingWorkspaceUrl,
   parseGeneratedRouteSpecs,
   sanitizedBrowserLocation,
@@ -128,6 +129,45 @@ describe("Material Intelligence staging VC demo acceptance", () => {
     }
   });
 
+  it("ignores only an exact client-aborted GET for the collection catalog", () => {
+    const apiOrigin = "https://api-beta.labofscents.org";
+    expect(isIntentionalCatalogAbort({
+      method: "GET",
+      url: `${apiOrigin}/api/v1/v2/material-intelligence/materials?text=Vanillin`,
+      errorText: "net::ERR_ABORTED",
+    }, apiOrigin)).toBe(true);
+
+    for (const failure of [
+      {
+        method: "POST",
+        url: `${apiOrigin}/api/v1/v2/material-intelligence/materials?text=Vanillin`,
+        errorText: "net::ERR_ABORTED",
+      },
+      {
+        method: "GET",
+        url: `${apiOrigin}/api/v1/v2/material-intelligence/materials/material-vc-005`,
+        errorText: "net::ERR_ABORTED",
+      },
+      {
+        method: "GET",
+        url: `${apiOrigin}/api/v1/v2/material-intelligence/materials?text=Vanillin`,
+        errorText: "net::ERR_FAILED",
+      },
+      {
+        method: "GET",
+        url: "https://different.api-beta.labofscents.org/api/v1/v2/material-intelligence/materials?text=Vanillin",
+        errorText: "net::ERR_ABORTED",
+      },
+      {
+        method: "GET",
+        url: "not-a-url",
+        errorText: "net::ERR_ABORTED",
+      },
+    ]) {
+      expect(isIntentionalCatalogAbort(failure, apiOrigin)).toBe(false);
+    }
+  });
+
   it("rejects evidence containing any protected fixture value", () => {
     const protectedValues = ["fixture-password-2026", "vc-demo@example.test", "vc-demo-fixture"];
     expect(evidenceContainsProtectedValue({ status: "PASS", checks: { login: "PASS" } }, protectedValues)).toBe(false);
@@ -160,6 +200,10 @@ describe("Material Intelligence staging VC demo acceptance", () => {
     expect(script).toContain('method: "POST"');
     expect(script).toContain('method: "PATCH"');
     expect(script).toContain('method: "DELETE"');
+    expect(script).toContain('name: "Search global catalog", exact: true');
+    expect(script).toContain('name: "Select reference", exact: true');
+    expect(script).toContain('aria-label="Selected global material reference"');
+    expect(script).not.toContain("SKIPPED_NOT_VISIBLE");
     expect(script).not.toMatch(/console\.(?:log|error)\([^\n]*(?:password|email|tenantSlug|workspaceOrigin)/i);
   });
 });
