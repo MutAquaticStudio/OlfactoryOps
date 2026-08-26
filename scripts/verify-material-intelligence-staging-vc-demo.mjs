@@ -653,7 +653,12 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
 
     const designResults = designStudio.locator('[aria-label="Verified global material results"]');
     const designResult = designResults.locator(".v2-member-row").filter({ hasText: inputs.searchMaterial }).first();
-    await designResult.getByText(inputs.searchMaterial, { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+    const designCanonicalName = designResult.locator("strong").first();
+    await designCanonicalName.waitFor({ state: "visible", timeout: 20_000 });
+    required(
+      (await designCanonicalName.textContent())?.trim() === inputs.searchMaterial,
+      "DESIGN_STUDIO_MATERIAL_SEARCH_MISMATCH",
+    );
     const selectReference = designResult.getByRole("button", { name: "Select reference", exact: true });
     const designDetailResponsePromise = page.waitForResponse((response) => {
       try {
@@ -671,8 +676,10 @@ export async function runStagingMaterialVcDemo(environment = process.env, browse
 
     const selectedReference = designStudio.locator('[aria-label="Selected global material reference"]');
     await selectedReference.waitFor({ state: "visible", timeout: 20_000 });
+    const selectedCanonicalName = selectedReference.locator("strong").first();
     required(
-      await selectedReference.getByText(inputs.searchMaterial, { exact: true }).isVisible(),
+      await selectedCanonicalName.isVisible()
+        && (await selectedCanonicalName.textContent())?.trim() === inputs.searchMaterial,
       "DESIGN_STUDIO_SELECTED_MATERIAL_MISMATCH",
     );
     const detailLink = selectedReference.getByRole("link", { name: "Open full material detail", exact: true });

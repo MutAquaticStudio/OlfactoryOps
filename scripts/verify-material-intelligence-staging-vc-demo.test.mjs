@@ -203,6 +203,9 @@ describe("Material Intelligence staging VC demo acceptance", () => {
     expect(script).toContain('name: "Search global catalog", exact: true');
     expect(script).toContain('name: "Select reference", exact: true');
     expect(script).toContain('aria-label="Selected global material reference"');
+    expect(script).toContain('designResult.locator("strong").first()');
+    expect(script).toContain('selectedReference.locator("strong").first()');
+    expect(script).not.toContain('getByText(inputs.searchMaterial, { exact: true })');
     expect(script).not.toContain("SKIPPED_NOT_VISIBLE");
     expect(script).not.toMatch(/console\.(?:log|error)\([^\n]*(?:password|email|tenantSlug|workspaceOrigin)/i);
   });
