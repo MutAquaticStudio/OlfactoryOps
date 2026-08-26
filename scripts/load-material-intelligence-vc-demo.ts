@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import { Client } from "pg";
+import pg from "pg";
+import type { Client as PgClient } from "pg";
 import { loadPinnedOsmoTaxonomy, PINNED_OSMO_TAXONOMY } from "./osmo-scent-taxonomy.js";
+
+const { Client } = pg;
 
 const FIXTURE_PATH = "services/scientific/testdata/material-intelligence-vc-demo30.json";
 const RELEASE_ID = "global-mi-vc-demo-20260826";
@@ -145,7 +148,7 @@ export function validateDemoFixture(fixture: DemoFixture) {
   return { verifiedEntities: entityIds.size, verifiedIdentities: identityIds.size, sourceRows: sourceRows.size, canonicalRowCount, dilutionCount, taxonomyPopulated };
 }
 
-async function insertIdentifier(client: Client, material: DemoMaterial, type: string, value: string, sourceKind: string, sourceRef: string, sourceVersion: string, evidenceStatus: string) {
+async function insertIdentifier(client: PgClient, material: DemoMaterial, type: string, value: string, sourceKind: string, sourceRef: string, sourceVersion: string, evidenceStatus: string) {
   await client.query(
     `INSERT INTO v2_global_chemical_identifiers
       (id, release_id, chemical_entity_id, identifier_type, identifier_value, normalized_value, source_kind, source_ref, source_version, evidence_status, content_hash)
@@ -296,7 +299,7 @@ export async function loadVcDemo(databaseUrl: string, fixtureText: string) {
   }
 }
 
-async function verifyCounts(client: Client) {
+async function verifyCounts(client: PgClient) {
   const result = await client.query(`SELECT
     (SELECT count(*)::int FROM v2_global_chemical_entities entity JOIN v2_global_material_intelligence_releases release ON release.id=entity.release_id WHERE release.status='ACTIVE' AND entity.resolution_status='RESOLVED' AND entity.evidence_status='VERIFIED') AS "verifiedChemicalEntities",
     (SELECT count(*)::int FROM v2_global_molecular_identities identity JOIN v2_global_material_intelligence_releases release ON release.id=identity.release_id WHERE release.status='ACTIVE' AND identity.resolution_status='RESOLVED' AND identity.evidence_status='VERIFIED') AS "verifiedMolecularIdentities",
