@@ -309,7 +309,7 @@ export class GlobalMaterialIntelligenceCatalog {
             chemicalEntityId ?? null,
           ),
           tx.$queryRawUnsafe<Row[]>(
-            'SELECT source_row_number AS "sourceRowNumber", source_record_key AS "sourceRecordKey", source_name AS "sourceName", disposition, disposition_reason AS "dispositionReason", content_hash AS "contentHash" FROM v2_global_material_source_observations WHERE canonical_material_id = $1 ORDER BY source_row_number, id LIMIT 500',
+            'SELECT source_row_number::int AS "sourceRowNumber", source_record_key AS "sourceRecordKey", source_name AS "sourceName", disposition, disposition_reason AS "dispositionReason", content_hash AS "contentHash" FROM v2_global_material_source_observations WHERE canonical_material_id = $1 ORDER BY source_row_number, id LIMIT 500',
             materialId,
           ),
         ]);

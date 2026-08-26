@@ -177,6 +177,7 @@ describe("global Material Intelligence catalog", () => {
     expect(sql).not.toMatch(/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\b/i);
     expect(sql).toContain('numeric_min::float8 AS "numericMin"');
     expect(sql).toContain('numeric_max::float8 AS "numericMax"');
+    expect(sql).toContain('source_row_number::int AS "sourceRowNumber"');
   });
 
   it("normalizes an absent global schema without exposing database detail", async () => {
