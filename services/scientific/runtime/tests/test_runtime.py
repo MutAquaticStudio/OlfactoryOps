@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -40,13 +41,18 @@ class ScientificRuntimeTests(unittest.TestCase):
     def test_component_pins_are_immutable_and_complete(self) -> None:
         pins_path = Path(__file__).resolve().parents[1] / "component-pins.json"
         pins = json.loads(pins_path.read_text(encoding="utf-8"))["components"]
-        self.assertEqual(set(pins), {"RDKIT", "RDKIT_PYPI", "BCFP", "MOLFTP", "OSMORDRED"})
+        self.assertEqual(
+            set(pins),
+            {"RDKIT", "RDKIT_PYPI", "BCFP", "MOLFTP", "OSMORDRED", "OSMO_SCENT_TAXONOMY"},
+        )
         for component in pins.values():
             self.assertTrue(component["repository"].startswith("https://github.com/"))
             self.assertRegex(component["upstreamCommit"], r"^[0-9a-f]{40}$")
             self.assertNotIn("main", component["upstreamRef"].lower())
             self.assertTrue(
-                component["upstreamRef"].startswith("commit:") or component["upstreamRef"].startswith("Release_"),
+                component["upstreamRef"].startswith("commit:")
+                or component["upstreamRef"].startswith("Release_")
+                or re.fullmatch(r"v\d+\.\d+(?:\.\d+)?", component["upstreamRef"]),
                 "Pins must use an immutable commit reference or an immutable upstream release tag.",
             )
             for field in ("license", "adapterVersion", "runtimeVersion", "patchStatus", "compatibilityTest"):
