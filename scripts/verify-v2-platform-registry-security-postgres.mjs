@@ -26,8 +26,10 @@ const migrationDirectory = 'infra/postgres/migrations'
 const migrationFiles = (await readdir(migrationDirectory))
   .filter((file) => /^\d{4}_.+\.sql$/.test(file))
   .sort()
-if (migrationFiles.at(-1) !== '0028_harden_v2_plans_and_component_pins_rls.sql') {
-  throw new Error('V2_PLATFORM_REGISTRY_SECURITY=FAIL migration 0028 is not the repository head')
+const platformRegistryHardeningMigration = '0028_harden_v2_plans_and_component_pins_rls.sql'
+const platformRegistryHardeningIndex = migrationFiles.indexOf(platformRegistryHardeningMigration)
+if (platformRegistryHardeningIndex < 0) {
+  throw new Error('V2_PLATFORM_REGISTRY_SECURITY=FAIL migration 0028 is missing')
 }
 
 const client = new Client({ connectionString: databaseUrl })
@@ -106,7 +108,7 @@ try {
   `)
   await client.query('GRANT USAGE ON SCHEMA public TO anon, authenticated, v2_app, custom_runtime, unapproved_role, registry_owner, plan_reader_owner')
 
-  for (const migrationFile of migrationFiles.slice(0, -1)) {
+  for (const migrationFile of migrationFiles.slice(0, platformRegistryHardeningIndex)) {
     await client.query(await readFile(`${migrationDirectory}/${migrationFile}`, 'utf8'))
   }
 
@@ -122,7 +124,7 @@ try {
       v2_model_component_pins
     TO anon, authenticated, v2_app
   `)
-  await client.query(await readFile(`${migrationDirectory}/${migrationFiles.at(-1)}`, 'utf8'))
+  await client.query(await readFile(`${migrationDirectory}/${platformRegistryHardeningMigration}`, 'utf8'))
 
   await client.query(`
     REVOKE ALL PRIVILEGES ON v2_plans, v2_scientific_component_pins, v2_model_component_pins FROM custom_runtime, unapproved_role;

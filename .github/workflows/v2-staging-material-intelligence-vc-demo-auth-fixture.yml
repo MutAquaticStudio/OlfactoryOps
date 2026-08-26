@@ -1,0 +1,73 @@
+name: V2 Staging Material Intelligence VC Demo Auth Fixture
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_sha:
+        description: Exact current SHA of main for the protected staging demo fixture.
+        required: true
+        type: string
+      confirm_staging:
+        description: Type VERIFY_VC_DEMO_STAGING_FIXTURE to verify only the protected demo owner.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-staging-material-intelligence-vc-demo-auth-fixture
+  cancel-in-progress: false
+
+jobs:
+  validate-staging-revision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      staging_sha: ${{ steps.revision.outputs.staging_sha }}
+    env:
+      STAGING_SHA: ${{ inputs.staging_sha }}
+      CONFIRM_STAGING: ${{ inputs.confirm_staging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_STAGING" = "VERIFY_VC_DEMO_STAGING_FIXTURE"
+          [[ "$STAGING_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$STAGING_SHA" = "$(git rev-parse FETCH_HEAD)"
+          git cat-file -e "${STAGING_SHA}^{commit}"
+          echo "staging_sha=$STAGING_SHA" >> "$GITHUB_OUTPUT"
+
+  verify-protected-demo-owner:
+    needs: validate-staging-revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: staging
+    env:
+      V2_VC_DEMO_FIXTURE_ENVIRONMENT: staging
+      V2_VC_DEMO_FIXTURE_APPROVED: VERIFY_VC_DEMO_STAGING_FIXTURE
+      STAGING_DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      MATERIAL_DEMO_TENANT_SLUG: ${{ vars.MATERIAL_DEMO_TENANT_SLUG }}
+      MATERIAL_DEMO_LOGIN_EMAIL: ${{ secrets.MATERIAL_DEMO_LOGIN_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate-staging-revision.outputs.staging_sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Mask protected fixture inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '::add-mask::%s\n' "$MATERIAL_DEMO_TENANT_SLUG"
+          printf '::add-mask::%s\n' "$MATERIAL_DEMO_LOGIN_EMAIL"
+      - run: npm ci
+      - name: Verify the exact-target transaction contract
+        run: npx vitest run scripts/prepare-material-intelligence-staging-demo-auth.test.mjs
+      - name: Verify only the exact protected staging demo owner
+        run: node scripts/prepare-material-intelligence-staging-demo-auth.mjs
