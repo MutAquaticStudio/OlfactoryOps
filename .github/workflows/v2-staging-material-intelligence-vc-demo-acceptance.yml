@@ -58,7 +58,6 @@ jobs:
       MATERIAL_DEMO_TENANT_SLUG: ${{ vars.MATERIAL_DEMO_TENANT_SLUG }}
       MATERIAL_DEMO_LOGIN_EMAIL: ${{ secrets.MATERIAL_DEMO_LOGIN_EMAIL }}
       MATERIAL_DEMO_LOGIN_PASSWORD: ${{ secrets.MATERIAL_DEMO_LOGIN_PASSWORD }}
-      MATERIAL_DEMO_EVIDENCE_DIR: ${{ runner.temp }}/material-intelligence-vc-demo-evidence
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,6 +77,8 @@ jobs:
       - name: Install Chromium for real-browser acceptance
         run: npx playwright install --with-deps chromium
       - name: Run exact-SHA staging VC demo acceptance
+        env:
+          MATERIAL_DEMO_EVIDENCE_DIR: ${{ runner.temp }}/material-intelligence-vc-demo-evidence
         run: node scripts/verify-material-intelligence-staging-vc-demo.mjs
       - name: Upload sanitized VC demo evidence
         uses: actions/upload-artifact@v4
